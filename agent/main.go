@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -12,16 +17,16 @@ import (
 func main() {
 	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pubCert))
 	if err != nil {
-		panic(err)
+		log.Fatalf("error parsing certificate: %v", err)
 	}
 	cert, ok := pk.(*ssh.Certificate)
 	if !ok {
-		panic("not a certificate!")
+		log.Fatalf("error certificate is not a certificate: %v", err)
 	}
 
 	priv, err := ssh.ParseRawPrivateKey([]byte(privateKey))
 	if err != nil {
-		panic(err)
+		log.Fatalf("error parsing private key: %v", err)
 	}
 
 	keyring := agent.NewKeyring()
@@ -36,17 +41,37 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer os.Remove(path)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		cancel()
+
+		err := sock.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "unable to close %s: %v\n", sock, err)
+		}
+	}()
 
 	fmt.Println("export SSH_AUTH_SOCK=/tmp/epithet-agent")
-	for {
+	for ctx.Err() == nil {
 		conn, err := sock.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
 			panic(err)
 		}
 		go func() {
 			err := agent.ServeAgent(keyring, conn)
 			if err != nil && err != io.EOF {
-				panic(err)
+				log.Printf("error from ssh-agent: %v", err)
+				_ = conn.Close()
+				// ignoring close erros
 			}
 		}()
 	}
