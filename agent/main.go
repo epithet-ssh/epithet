@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 
 	"golang.org/x/crypto/ssh"
@@ -44,7 +45,7 @@ func main() {
 		}
 		go func() {
 			err := agent.ServeAgent(keyring, conn)
-			if err != nil {
+			if err != nil && err != io.EOF {
 				panic(err)
 			}
 		}()
