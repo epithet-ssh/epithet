@@ -1,0 +1,21 @@
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_dsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+SyslogFacility AUTH
+LogLevel INFO
+LoginGraceTime 120
+PermitRootLogin yes
+StrictModes yes
+RSAAuthentication yes
+PubkeyAuthentication yes
+IgnoreRhosts yes
+TCPKeepAlive yes
+AcceptEnv LANG LC_*
+UsePAM no
+
+TrustedUserCAKeys /etc/ssh/ca.pub
+AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
