@@ -3,24 +3,34 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/brianm/epithet/internal/agent"
 )
 
 func main() {
-	err := run()
+	args := os.Args[1:]
+	err := run(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	path := "/tmp/epithet-agent"
+func run(args []string) error {
+	f, err := ioutil.TempFile("", "epithet-agent.*")
+	if err != nil {
+		return err
+	}
+	path := f.Name()
+	f.Close()
 	defer os.Remove(path)
+	os.Remove(path)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sigs := make(chan os.Signal, 1)
@@ -31,7 +41,6 @@ func run() error {
 		cancel()
 	}()
 
-	fmt.Println("export SSH_AUTH_SOCK=/tmp/epithet-agent")
 	a, err := agent.Start(ctx, agent.Config{
 		AuthSocketPath: path,
 	})
@@ -47,10 +56,30 @@ func run() error {
 		return fmt.Errorf("unable to set credential on agent: %w", err)
 	}
 
-	select {
-	case <-ctx.Done():
+	bin, err := exec.LookPath(args[0])
+	if err != nil {
+		return fmt.Errorf("unable to locate command %s", args[0])
 	}
-	return nil
+	cmd := exec.Command(bin, args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	cmd.Env = fixEnv(path, os.Environ())
+
+	err = cmd.Run()
+	cancel()
+	return err
+}
+
+func fixEnv(path string, env []string) []string {
+	newEnv := []string{}
+	for _, line := range env {
+		if !strings.HasPrefix(line, "SSH_AUTH_SOCK=") {
+			newEnv = append(newEnv, line)
+		}
+	}
+	return append(newEnv, fmt.Sprintf("SSH_AUTH_SOCK=%s", path))
 }
 
 const privateKey = `-----BEGIN OPENSSH PRIVATE KEY-----

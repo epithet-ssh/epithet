@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -85,6 +86,12 @@ func Start(ctx context.Context, config Config) (*Agent, error) {
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("unable to listen on %s: %w", config.AuthSocketPath, err)
+	}
+
+	err = os.Chmod(config.AuthSocketPath, 0600)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("unable to set permissions on auth socket: %w", err)
 	}
 
 	keyring := agent.NewKeyring()
