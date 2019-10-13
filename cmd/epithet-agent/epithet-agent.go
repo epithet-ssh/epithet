@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +11,14 @@ import (
 )
 
 func main() {
+	err := run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	path := "/tmp/epithet-agent"
 	defer os.Remove(path)
 
@@ -25,21 +32,25 @@ func main() {
 	}()
 
 	fmt.Println("export SSH_AUTH_SOCK=/tmp/epithet-agent")
-	ctx, creds, err := agent.Start(ctx, agent.Config{
+	a, err := agent.Start(ctx, agent.Config{
 		AuthSocketPath: path,
 	})
 	if err != nil {
-		log.Fatalf("unable to start agent: %v", err)
+		return fmt.Errorf("unable to start agent: %w", err)
 	}
 
-	creds <- agent.Credential{
+	err = a.UseCredential(agent.Credential{
 		PrivateKey:  []byte(privateKey),
 		Certificate: []byte(certificate),
+	})
+	if err != nil {
+		return fmt.Errorf("unable to set credential on agent: %w", err)
 	}
 
 	select {
 	case <-ctx.Done():
 	}
+	return nil
 }
 
 const privateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
