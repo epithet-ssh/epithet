@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,27 +26,18 @@ func main() {
 }
 
 func run(cc *cobra.Command, args []string) error {
-	f, err := ioutil.TempFile("", "epithet-agent.*")
-	if err != nil {
-		return err
-	}
-	path := f.Name()
-	f.Close()
-	defer os.Remove(path)
-	os.Remove(path)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	a, err := agent.Start(agent.WithContext(ctx))
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
 		fmt.Println("exiting")
 		cancel()
+		a.Close()
 	}()
 
-	a, err := agent.Start(ctx, agent.Config{
-		AuthSocketPath: path,
-	})
 	if err != nil {
 		return fmt.Errorf("unable to start agent: %w", err)
 	}
@@ -69,7 +59,7 @@ func run(cc *cobra.Command, args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	cmd.Env = fixEnv(path, os.Environ())
+	cmd.Env = fixEnv(a.AuthSocketPath(), os.Environ())
 
 	err = cmd.Run()
 	cancel()

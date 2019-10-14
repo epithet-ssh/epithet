@@ -9,4 +9,4 @@ COPY auth_principals/* /etc/ssh/auth_principals/
 RUN chmod 0644 /etc/ssh/sshd_config /etc/ssh/ca.pub
 
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-d"]
+CMD ["/usr/sbin/sshd", "-D"]
