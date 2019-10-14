@@ -11,18 +11,22 @@ import (
 	"syscall"
 
 	"github.com/brianm/epithet/internal/agent"
+	"github.com/spf13/cobra"
 )
 
 func main() {
-	args := os.Args[1:]
-	err := run(args)
+	cmd := &cobra.Command{
+		Use:  "epithet-agent COMMAND",
+		RunE: run,
+	}
+	err := cmd.Execute()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+func run(cc *cobra.Command, args []string) error {
 	f, err := ioutil.TempFile("", "epithet-agent.*")
 	if err != nil {
 		return err
