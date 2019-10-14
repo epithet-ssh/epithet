@@ -26,17 +26,18 @@ func main() {
 
 func run(cc *cobra.Command, args []string) error {
 	a, err := agent.Start()
+	if err != nil {
+		return fmt.Errorf("unable to start agent: %w", err)
+	}
+	defer a.Close()
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
 		a.Close()
+		os.Exit(0)
 	}()
-
-	if err != nil {
-		return fmt.Errorf("unable to start agent: %w", err)
-	}
 
 	err = a.UseCredential(agent.Credential{
 		PrivateKey:  []byte(privateKey),
@@ -58,7 +59,6 @@ func run(cc *cobra.Command, args []string) error {
 	cmd.Env = fixEnv(a.AuthSocketPath(), os.Environ())
 
 	err = cmd.Run()
-	a.Close()
 	return err
 }
 
