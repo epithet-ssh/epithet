@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,15 +25,12 @@ func main() {
 }
 
 func run(cc *cobra.Command, args []string) error {
+	a, err := agent.Start()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	a, err := agent.Start(agent.WithContext(ctx))
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
-		fmt.Println("exiting")
-		cancel()
 		a.Close()
 	}()
 
@@ -62,7 +58,7 @@ func run(cc *cobra.Command, args []string) error {
 	cmd.Env = fixEnv(a.AuthSocketPath(), os.Environ())
 
 	err = cmd.Run()
-	cancel()
+	a.Close()
 	return err
 }
 

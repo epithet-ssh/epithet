@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net"
@@ -15,15 +14,12 @@ import (
 )
 
 func TestBasics(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	closer, port, err := startServer()
+	a, err := Start()
 	require.NoError(t, err)
-	defer closer()
 
-	a, err := Start(WithContext(ctx))
+	server, err := startServer()
 	require.NoError(t, err)
+	defer server.Close()
 
 	err = a.UseCredential(Credential{
 		PrivateKey:  []byte(privateKey),
@@ -31,16 +27,14 @@ func TestBasics(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cmd := exec.Command("ssh", "-o", "UserKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-p", port, "root@localhost", "ls", "/etc/ssh/")
-	cmd.Env = fixEnv(a.AuthSocketPath(), os.Environ())
+	out, err := server.ssh(a, "ls", "/etc/ssh/")
 
-	out, err := cmd.CombinedOutput()
-
+	fmt.Printf(out)
 	require.NoError(t, err)
 
-	require.Contains(t, string(out), "sshd_config")
-	require.Contains(t, string(out), "auth_principals")
-	require.Contains(t, string(out), "ca.pub")
+	require.Contains(t, out, "sshd_config")
+	require.Contains(t, out, "auth_principals")
+	require.Contains(t, out, "ca.pub")
 
 	err = a.Close()
 	require.NoError(t, err)
@@ -61,13 +55,32 @@ func fixEnv(path string, env []string) []string {
 	return append(newEnv, fmt.Sprintf("SSH_AUTH_SOCK=%s", path))
 }
 
-func startServer() (closer func(), port string, err error) {
+type sshServer struct {
+	*dockertest.Resource
+}
+
+func (s sshServer) Port() string {
+	return s.GetPort("22/tcp")
+}
+
+func (s sshServer) ssh(a *Agent, args ...string) (string, error) {
+	argv := []string{"-o", "UserKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-p", s.Port(), "root@localhost"}
+	for _, v := range args {
+		argv = append(argv, v)
+	}
+	cmd := exec.Command("ssh", argv...)
+	cmd.Env = fixEnv(a.AuthSocketPath(), os.Environ())
+	bs, err := cmd.CombinedOutput()
+	return string(bs), err
+}
+
+func startServer() (*sshServer, error) {
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
 	// pulls an image, creates a container based on it and runs it
-	resource, err := pool.Run("sshd", "3", []string{})
+	resource, err := pool.Run("brianm/epithet-test-sshd", "4", []string{})
 	if err != nil {
 		log.Fatalf("Could not start resource: %s", err)
 	}
@@ -83,10 +96,10 @@ func startServer() (closer func(), port string, err error) {
 		conn.Close()
 		return nil
 	}); err != nil {
-		return nil, "", fmt.Errorf("Could not connect to docker: %w", err)
+		return nil, fmt.Errorf("Could not connect to docker: %w", err)
 	}
 
-	return func() { resource.Close() }, resource.GetPort("22/tcp"), err
+	return &sshServer{resource}, err
 }
 
 const privateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
