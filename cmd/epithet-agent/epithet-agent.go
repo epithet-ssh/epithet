@@ -9,14 +9,22 @@ import (
 	"syscall"
 
 	"github.com/brianm/epithet/pkg/agent"
+	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
+var verbosity = 0
+
 func main() {
 	cmd := &cobra.Command{
-		Use:  "epithet-agent COMMAND",
-		RunE: run,
+		Use:    "epithet-agent COMMAND",
+		Args:   cobra.MinimumNArgs(1),
+		PreRun: logging,
+		RunE:   run,
 	}
+
+	cmd.Flags().CountVarP(&verbosity, "verbose", "v", "how verbose to be, can use multiple")
 
 	err := cmd.Execute()
 	if err != nil {
@@ -26,6 +34,11 @@ func main() {
 }
 
 func run(cc *cobra.Command, args []string) error {
+	logrus.Debug("this is an debug")
+	logrus.Info("this is an info")
+	logrus.Warn("this is an warn")
+	logrus.Error("this is an error")
+
 	a, err := agent.Start()
 	if err != nil {
 		return fmt.Errorf("unable to start agent: %w", err)
@@ -35,18 +48,18 @@ func run(cc *cobra.Command, args []string) error {
 	trapSignals(a)
 
 	err = a.UseCredential(agent.Credential{
-		PrivateKey:  []byte(privateKey),
-		Certificate: []byte(certificate),
+		PrivateKey:  sshcert.RawPrivateKey(privateKey),
+		Certificate: sshcert.RawCertificate(certificate),
 	})
 
 	if err != nil {
 		return fmt.Errorf("unable to set credential on agent: %w", err)
 	}
 
-	return runCommand(a, args)
+	return runChildProcess(a, args)
 }
 
-func runCommand(a *agent.Agent, args []string) error {
+func runChildProcess(a *agent.Agent, args []string) error {
 	bin, err := exec.LookPath(args[0])
 	if err != nil {
 		return fmt.Errorf("unable to locate command %s", args[0])
@@ -87,6 +100,20 @@ func trapSignals(a *agent.Agent) {
 			syscall.Kill(syscall.Getpid(), syscall.SIGINT)
 		}
 	}()
+}
+
+func logging(cmd *cobra.Command, args []string) {
+	logrus.SetOutput(os.Stdout)
+	switch verbosity {
+	case 0:
+		logrus.SetLevel(logrus.ErrorLevel)
+	case 1:
+		logrus.SetLevel(logrus.WarnLevel)
+	case 2:
+		logrus.SetLevel(logrus.InfoLevel)
+	default:
+		logrus.SetLevel(logrus.DebugLevel)
+	}
 }
 
 const privateKey = `-----BEGIN OPENSSH PRIVATE KEY-----

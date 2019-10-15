@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/brianm/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"
 
 	"go.uber.org/atomic"
@@ -134,18 +135,12 @@ func (a *Agent) UseCredential(c Credential) error {
 		return fmt.Errorf("unable to list current credentials: %w", err)
 	}
 
-	pk, _, _, _, err := ssh.ParseAuthorizedKey(c.Certificate)
+	cert, err := sshcert.Parse(c.Certificate)
 	if err != nil {
 		return fmt.Errorf("error parsing certificate: %w", err)
-
-	}
-	cert, ok := pk.(*ssh.Certificate)
-	if !ok {
-		return fmt.Errorf("error certificate is not a certificate: %w", err)
-
 	}
 
-	priv, err := ssh.ParseRawPrivateKey(c.PrivateKey)
+	priv, err := ssh.ParseRawPrivateKey([]byte(c.PrivateKey))
 	if err != nil {
 		return fmt.Errorf("error parsing private key: %w", err)
 	}
@@ -171,8 +166,8 @@ func (a *Agent) UseCredential(c Credential) error {
 
 // Credential contains the private key and certificate in pem form
 type Credential struct {
-	PrivateKey  []byte
-	Certificate []byte
+	PrivateKey  sshcert.RawPrivateKey
+	Certificate sshcert.RawCertificate
 }
 
 func (a *Agent) loop(listener net.Listener) {
