@@ -34,9 +34,16 @@ func run(cc *cobra.Command, args []string) error {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		rs := <-sigs
+		signal.Stop(sigs)
 		a.Close()
-		os.Exit(0)
+
+		switch rs {
+		case os.Kill:
+			syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
+		default:
+			syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+		}
 	}()
 
 	err = a.UseCredential(agent.Credential{
