@@ -8,7 +8,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/brianm/epithet/internal/agent"
+	"github.com/brianm/epithet/pkg/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +17,7 @@ func main() {
 		Use:  "epithet-agent COMMAND",
 		RunE: run,
 	}
+
 	err := cmd.Execute()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v", err)
@@ -31,29 +32,21 @@ func run(cc *cobra.Command, args []string) error {
 	}
 	defer a.Close()
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		rs := <-sigs
-		signal.Stop(sigs)
-		a.Close()
-
-		switch rs {
-		case os.Kill:
-			syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
-		default:
-			syscall.Kill(syscall.Getpid(), syscall.SIGINT)
-		}
-	}()
+	trapSignals(a)
 
 	err = a.UseCredential(agent.Credential{
 		PrivateKey:  []byte(privateKey),
 		Certificate: []byte(certificate),
 	})
+
 	if err != nil {
 		return fmt.Errorf("unable to set credential on agent: %w", err)
 	}
 
+	return runCommand(a, args)
+}
+
+func runCommand(a *agent.Agent, args []string) error {
 	bin, err := exec.LookPath(args[0])
 	if err != nil {
 		return fmt.Errorf("unable to locate command %s", args[0])
@@ -77,6 +70,23 @@ func fixEnv(path string, env []string) []string {
 		}
 	}
 	return append(newEnv, fmt.Sprintf("SSH_AUTH_SOCK=%s", path))
+}
+
+func trapSignals(a *agent.Agent) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		rs := <-sigs
+		signal.Stop(sigs)
+		a.Close()
+
+		switch rs {
+		case os.Kill:
+			syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
+		default:
+			syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+		}
+	}()
 }
 
 const privateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
