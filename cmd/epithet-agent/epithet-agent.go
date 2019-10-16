@@ -28,17 +28,11 @@ func main() {
 
 	err := cmd.Execute()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v", err)
 		os.Exit(1)
 	}
 }
 
 func run(cc *cobra.Command, args []string) error {
-	logrus.Debug("this is an debug")
-	logrus.Info("this is an info")
-	logrus.Warn("this is an warn")
-	logrus.Error("this is an error")
-
 	a, err := agent.Start()
 	if err != nil {
 		return fmt.Errorf("unable to start agent: %w", err)
