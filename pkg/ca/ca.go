@@ -94,5 +94,4 @@ func (c *CA) SignPublicKey(pubkey sshcert.RawPublicKey, params *CertParams) (ssh
 	}
 
 	return sshcert.RawCertificate(string(b)), nil
-
 }

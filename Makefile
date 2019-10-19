@@ -3,14 +3,11 @@ DOCKER_TEST_SSHD_VERSION := 4
 .PHONY: all
 all: test build		## run tests and build binaries
 
-epithet-agent:
-	go build ./cmd/epithet-agent
-
-epithet-ca:
-	go build ./cmd/epithet-ca
+epithet:
+	go build ./cmd/epithet
 
 .PHONY: build
-build: epithet-agent epithet-ca
+build: epithet
 
 .PHONY: test
 test: test-support	## build and run test plumbing
@@ -25,7 +22,7 @@ test-support: test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
 .PHONY: clean
 clean:			## clean all local resources
 	go clean ./...
-	rm -f epithet-*
+	rm -f epithet
 	
 .PHONY: clean-all
 clean-all: clean
