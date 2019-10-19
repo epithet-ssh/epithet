@@ -100,9 +100,8 @@ func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
 		"-o", fmt.Sprintf("IdentityAgent=%s", a.AuthSocketPath()),
 		"-p", s.Port(),
 		"root@localhost"}
-	for _, v := range args {
-		argv = append(argv, v)
-	}
+
+	argv = append(argv, args...)
 	cmd := exec.Command("ssh", argv...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
