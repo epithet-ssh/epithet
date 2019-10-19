@@ -123,6 +123,12 @@ func (a *Agent) Close() error {
 	return nil
 }
 
+// Credential contains the private key and certificate in pem form
+type Credential struct {
+	PrivateKey  sshcert.RawPrivateKey
+	Certificate sshcert.RawCertificate
+}
+
 // UseCredential the credentials on the agemnt
 func (a *Agent) UseCredential(c Credential) error {
 	if !a.Running() {
@@ -162,12 +168,6 @@ func (a *Agent) UseCredential(c Credential) error {
 	}
 
 	return nil
-}
-
-// Credential contains the private key and certificate in pem form
-type Credential struct {
-	PrivateKey  sshcert.RawPrivateKey
-	Certificate sshcert.RawCertificate
 }
 
 func (a *Agent) loop(listener net.Listener) {
