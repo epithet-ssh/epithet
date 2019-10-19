@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 func TestAgent_WithCA(t *testing.T) {
 	require := require.New(t)
 
-	server, err := startServer()
+	server, err := startSSHD()
 	require.NoError(err)
 	defer server.Close()
 
@@ -58,7 +57,7 @@ func TestBasics(t *testing.T) {
 	a, err := agent.Start()
 	require.NoError(t, err)
 
-	server, err := startServer()
+	server, err := startSSHD()
 	require.NoError(t, err)
 	defer server.Close()
 
@@ -86,16 +85,6 @@ func TestBasics(t *testing.T) {
 	}
 }
 
-func fixEnv(path string, env []string) []string {
-	newEnv := []string{}
-	for _, line := range env {
-		if !strings.HasPrefix(line, "SSH_AUTH_SOCK=") {
-			newEnv = append(newEnv, line)
-		}
-	}
-	return append(newEnv, fmt.Sprintf("SSH_AUTH_SOCK=%s", path))
-}
-
 type sshServer struct {
 	*dockertest.Resource
 }
@@ -105,17 +94,21 @@ func (s sshServer) Port() string {
 }
 
 func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
-	argv := []string{"-o", "UserKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-p", s.Port(), "root@localhost"}
+	argv := []string{
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", fmt.Sprintf("IdentityAgent=%s", a.AuthSocketPath()),
+		"-p", s.Port(),
+		"root@localhost"}
 	for _, v := range args {
 		argv = append(argv, v)
 	}
 	cmd := exec.Command("ssh", argv...)
-	cmd.Env = fixEnv(a.AuthSocketPath(), os.Environ())
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-func startServer() (*sshServer, error) {
+func startSSHD() (*sshServer, error) {
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)
