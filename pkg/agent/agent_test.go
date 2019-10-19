@@ -89,24 +89,6 @@ type sshServer struct {
 	*dockertest.Resource
 }
 
-func (s sshServer) Port() string {
-	return s.GetPort("22/tcp")
-}
-
-func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
-	argv := []string{
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", fmt.Sprintf("IdentityAgent=%s", a.AuthSocketPath()),
-		"-p", s.Port(),
-		"root@localhost"}
-
-	argv = append(argv, args...)
-	cmd := exec.Command("ssh", argv...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
 func startSSHD() (*sshServer, error) {
 	pool, err := dockertest.NewPool("")
 	if err != nil {
@@ -133,6 +115,24 @@ func startSSHD() (*sshServer, error) {
 	}
 
 	return &sshServer{resource}, err
+}
+
+func (s sshServer) Port() string {
+	return s.GetPort("22/tcp")
+}
+
+func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
+	argv := []string{
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", fmt.Sprintf("IdentityAgent=%s", a.AuthSocketPath()),
+		"-p", s.Port(),
+		"root@localhost"}
+
+	argv = append(argv, args...)
+	cmd := exec.Command("ssh", argv...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 const _caPrivKey = `-----BEGIN OPENSSH PRIVATE KEY-----
