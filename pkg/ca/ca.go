@@ -95,3 +95,11 @@ func (c *CA) SignPublicKey(pubkey sshcert.RawPublicKey, params *CertParams) (ssh
 
 	return sshcert.RawCertificate(string(b)), nil
 }
+
+// AuthToken is the token passed from the plugin through to
+// the CA (and to the ca verifier plugin matching Provider)
+// Token is opaque and can hold whatever the plugins need it to
+type AuthToken struct {
+	Provider string
+	Token    string
+}

@@ -43,3 +43,30 @@ This feels like it would be faster to start with, but more limited than having a
 
 Seems critical that an installation needs to run its own CA for security, so we need to make CA setup process as one-click as we can. For v1, seems fine to assume AWS will host, but am sure by v7 we will need to not care, so don't make decisions that lock us in to a single infra, but don't worry about supporting multiple infrastructures yet.
 
+# Agent Workings
+
+```
+agent starts -> generates new keypair
+             -> invokes authenticator to get token
+                <- authToken
+             -> calls CA using authToken to ask for certificate
+                <- (certificate, sessionToken)
+             -> publishes auth socket (and does whatever it is supposed to)
+
+cert expires -> calls CA using sessionToken
+                <- (certificate, sessionToken) 
+             -> replaces cert in agent
+             -> uses the new sessionToken going forward
+
+cert expires -> calls CA using sessionToken
+                <- (authExpired) 
+             -> remove keys from keyring
+             -> IF CAN REAUTH: ask for new authentication
+                ELSE: ???? EXPLOSION ????
+```
+
+The `sessionToken` from the ca is an encrypoted blob with the state the CA needs to
+reestablish the session. In Okta, for example, it would contain the encrypted `sid`.
+
+## Authentication Expiration/Failure
+

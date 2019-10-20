@@ -1,6 +1,10 @@
 package caclient
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/brianm/epithet/pkg/sshcert"
+)
 
 // Client is a CA Client
 type Client struct {
@@ -42,6 +46,6 @@ func WithHTTPClient(httpClient *http.Client) Option {
 }
 
 // ConvertToken converts a token to a cert
-func (c *Client) ConvertToken(token string, pubkey string) (string, error) {
+func (c *Client) ConvertToken(token string, pubkey sshcert.RawPublicKey) (sshcert.RawCertificate, error) {
 	return "", nil
 }

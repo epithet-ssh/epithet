@@ -6,7 +6,7 @@ all: test build		## run tests and build binaries
 epithet:
 	go build ./cmd/epithet
 
-.PHONY: build
+.PHONY: build 
 build: epithet
 
 .PHONY: test
