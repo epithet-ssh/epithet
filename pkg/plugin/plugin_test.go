@@ -1,6 +1,7 @@
 package plugin_test
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -16,6 +17,13 @@ func TestPlugin_BigInput(t *testing.T) {
 
 	assert.Contains(t, string(out), in)
 	assert.Contains(t, string(out), "meow")
+}
+
+func TestPlugin_Error(t *testing.T) {
+	_, err := plugin.Run(nil, "./bad_plug.sh")
+	require.Error(t, err)
+
+	assert.Contains(t, fmt.Sprintf("%s", err), "OH NO!")
 }
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ"

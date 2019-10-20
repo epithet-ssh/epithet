@@ -3,6 +3,7 @@ package plugin
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"os/exec"
 )
@@ -30,7 +31,7 @@ func Run(input []byte, plugin ...string) ([]byte, error) {
 
 	err := cmd.Run()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s", err, string(stderr.Bytes()))
 	}
 	return stderr.Bytes(), nil
 }
