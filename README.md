@@ -70,3 +70,20 @@ reestablish the session. In Okta, for example, it would contain the encrypted `s
 
 ## Authentication Expiration/Failure
 
+# Plugins
+
+Plugins for authentication (or other things eventually) work on a simple
+subprocess model. The input is passed as a base64 encoded command line argument
+to the plugin process, and stderr is returned as the plugin result. This leaves
+stdin and stdout attached to the standard stdin/stdout so that the plugin may
+interract with the user. Exit value of 0 is a success, anything else is an error.
+
+In the case of an error, the stderr output will be the error message.
+
+Simple plugin example from unit tests:
+
+```
+#!/usr/bin/env bash
+out="$(echo $1 | base64 -D)"
+echo "meow $out" >&2
+```
