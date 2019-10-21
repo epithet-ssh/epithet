@@ -20,23 +20,17 @@ Use cert ID to know who did what.
 
 [Facebook style](https://engineering.fb.com/security/scalable-and-secure-access-with-ssh/) ssh handling seems to take this approach. 
 
-# Login Mechanism
+# Auth Mechanism
 
-How do we make sure ssh sends the right cert?
+We must never *trust* the agent to do more than obtain certs on behalf of the person whom it has credentials for -- ie, it must never get the CA private key.
 
-We have a couple options, either one implies we authenticate to a local agent, which is granted credentials to communicate with the CA to obtain short lived certificates. We must never *trust* the agent to do more than obtain certs on behalf of the person whom it has credentials for -- ie, it must never get the CA private key.
+Policy in the CA must control the specific configuration of the cert (principals, duration, name, etc). All the agent may do is ask for the next cert on behalf of the authentication tokens it has, it must not ever specifcy what goes in the certificate.
 
-## Option: custom ssh-agent and `IdentityAgent` directives on host patterns
+## Custom ssh-agent and `IdentityAgent` directives on host patterns
 
 No interest in replacing default openssh ssh-agent, but you can specify a different one for a host block in config. I don't know if there is a mechanism to launch it if missing, but worst case we need to start a daemon.
 
 We then need to have a communication channel between that agent and the CA which we trust. It seems like starting the agent explicitely and doing an auth dance (CLI saml with okta, pop a web browser, etc) that tells the CA to trust the agent can work. Implies we could use short lived TLS certs for Agent -> CA, though this may be overthinking it.
-
-## Option: daemon generate cert file
-
-Instead of asking the agent for the cert, just update contents of `~/.ssh/` to replace a named certificate. A drawback here is that we don't know when it is being used, so refreshing it will need to be out of band.
-
-This feels like it would be faster to start with, but more limited than having an agent proper.
 
 
 # "Installation"
@@ -69,6 +63,18 @@ The `sessionToken` from the ca is an encrypoted blob with the state the CA needs
 reestablish the session. In Okta, for example, it would contain the encrypted `sid`.
 
 ## Authentication Expiration/Failure
+
+UI here is tricky as ssh-agent will generally be a daemon. A native app to request re-auth would work, but we also  need a pure-cli approach. Easiest is probably just train users to re-auth when they start getting ssh failures. We need some affordance to indicate this to them however, as no one reads docs if they can help it.
+
+# CA Workings
+
+CA only offers to functions, retrieve the public key and generate certificate. 
+
+Cert requests will include the authn provider, which will be used to select a corresponding authn provider on the CA side (to convert a sessionToken to a sessionID in an Okta case, for example). Any brokered informatiuon (such as the session in an Okta case) must not be sent back to the agent.
+
+CA, sadly, needs to keeep some state in order to prevent replay attacks. There may be some clever protocol to prevent them by embedding information in refresh tokens, but I doubt it.
+
+When granting a cert, the CA MAY return a refresh token that can be used to generate the next certificate using the built in authn provider `referesh`. The CA must prevent reuse of these tokens, and refresh must be able to tie back to the originating authn.
 
 # Plugins
 
