@@ -68,7 +68,7 @@ UI here is tricky as ssh-agent will generally be a daemon. A native app to reque
 
 # CA Workings
 
-CA only offers to functions, retrieve the public key and generate certificate. 
+CA only offers two functions, retrieve the public key and generate certificate. 
 
 Cert requests will include the authn provider, which will be used to select a corresponding authn provider on the CA side (to convert a sessionToken to a sessionID in an Okta case, for example). Any brokered informatiuon (such as the session in an Okta case) must not be sent back to the agent.
 
