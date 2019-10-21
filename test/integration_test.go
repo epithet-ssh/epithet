@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"net/http/httptest"
-	"net/url"
 	"os/exec"
 	"testing"
 
@@ -31,7 +30,7 @@ func Test_EndToEnd(t *testing.T) {
 	c, err := ca.New(_caPubKey, _caPrivKey)
 	require.NoError(err)
 
-	cad, err := startCA(c)
+	cad, err := startCAServer(c)
 	require.NoError(err)
 	defer cad.Close()
 
@@ -42,9 +41,7 @@ func Test_EndToEnd(t *testing.T) {
 	pubKey, privKey, err := sshcert.GenerateKeys()
 	require.NoError(err)
 
-	caurl, err := url.Parse(cad.srv.URL + "/")
-	require.NoError(err)
-	cac := caclient.New(caurl)
+	cac := caclient.New(cad.srv.URL)
 
 	car, err := cac.GetCert(ctx, &caserver.CreateCertRequest{
 		PublicKey:     pubKey,
@@ -72,7 +69,7 @@ type caServer struct {
 	srv *httptest.Server
 }
 
-func startCA(c *ca.CA) (*caServer, error) {
+func startCAServer(c *ca.CA) (*caServer, error) {
 	handler := caserver.New(c)
 	srv := httptest.NewServer(handler)
 

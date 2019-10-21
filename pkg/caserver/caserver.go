@@ -10,8 +10,6 @@ import (
 
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/sshcert"
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
 	"github.com/sirupsen/logrus"
 )
 
@@ -22,23 +20,20 @@ func New(c *ca.CA) http.Handler {
 	cas := &caServer{
 		c: c,
 	}
-
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-
-	r.Use(middleware.Timeout(60 * time.Second))
-
-	r.Get("/", cas.GetPubKey)
-	r.Post("/", cas.CreateCert)
-
-	return r
+	return cas
 }
 
 type caServer struct {
 	c *ca.CA
+}
+
+func (s *caServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		s.getPubKey(w, r)
+	case "POST":
+		s.createCert(w, r)
+	}
 }
 
 // CreateCertRequest asks for a signed cert
@@ -57,7 +52,7 @@ type CreateCertResponse struct {
 // RequestBodySizeLimit is the maximum request body size
 const RequestBodySizeLimit = 8192
 
-func (s *caServer) CreateCert(w http.ResponseWriter, r *http.Request) {
+func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	ccr := CreateCertRequest{}
 	lr := io.LimitReader(r.Body, RequestBodySizeLimit)
 
@@ -110,7 +105,7 @@ func (s *caServer) CreateCert(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *caServer) GetPubKey(w http.ResponseWriter, r *http.Request) {
+func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))

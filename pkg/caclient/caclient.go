@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 
 	"github.com/brianm/epithet/pkg/caserver"
 )
@@ -15,11 +14,11 @@ import (
 // Client is a CA Client
 type Client struct {
 	httpClient *http.Client
-	caURL      *url.URL
+	caURL      string
 }
 
 // New creates a new CA Client
-func New(url *url.URL, options ...Option) *Client {
+func New(url string, options ...Option) *Client {
 	client := &Client{
 		caURL:      url,
 		httpClient: http.DefaultClient,
@@ -58,7 +57,7 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 		return nil, err
 	}
 
-	rq, err := http.NewRequest("POST", c.caURL.String(), bytes.NewReader(body))
+	rq, err := http.NewRequest("POST", c.caURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
