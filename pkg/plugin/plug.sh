@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 
-out="$(echo $1 | base64 -D)"
+in="$(echo $1 | base64 -D)"
 
-echo "meow $out" >&2
+echo "meow $in" >&2

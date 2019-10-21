@@ -11,7 +11,7 @@ import (
 )
 
 func TestPlugin_BigInput(t *testing.T) {
-	in := randStringBytes(8192)
+	in := randStringBytes(4096)
 	out, err := plugin.Run([]byte(in), "./plug.sh")
 	require.NoError(t, err)
 
