@@ -15,12 +15,12 @@ import (
 // CA performs CA operations
 type CA struct {
 	sshKeygen        string
-	caPublicKeyPath  string
 	caPrivateKeyPath string
+	publicKey        sshcert.RawPublicKey
 }
 
 // New creates a new CA
-func New(privateKey sshcert.RawPrivateKey) (*CA, error) {
+func New(publicKey sshcert.RawPublicKey, privateKey sshcert.RawPrivateKey) (*CA, error) {
 	sshKeygen, err := exec.LookPath("ssh-keygen")
 	if err != nil {
 		return nil, fmt.Errorf("unable to find ssh-keygen: %w", err)
@@ -41,9 +41,24 @@ func New(privateKey sshcert.RawPrivateKey) (*CA, error) {
 	ca := &CA{
 		sshKeygen:        sshKeygen,
 		caPrivateKeyPath: caPrivateKeyFile.Name(),
+		publicKey:        publicKey,
 	}
 
 	return ca, nil
+}
+
+// Close closes down the CA
+func (c *CA) Close() error {
+	err := os.Remove(c.caPrivateKeyPath)
+	c.sshKeygen = ""
+	c.caPrivateKeyPath = ""
+	c.publicKey = ""
+	return err
+}
+
+// PublicKey returns the ssh on-disk format public key for the CA
+func (c *CA) PublicKey() sshcert.RawPublicKey {
+	return c.publicKey
 }
 
 // CertParams are options which can be set on a certificate

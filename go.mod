@@ -11,6 +11,7 @@ require (
 	github.com/containerd/continuity v0.0.0-20190426062206-aaeac12a7ffc // indirect
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.3.3 // indirect
+	github.com/go-chi/chi v4.0.2+incompatible
 	github.com/gotestyourself/gotestyourself v2.2.0+incompatible // indirect
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/lib/pq v1.2.0 // indirect
@@ -30,5 +31,5 @@ require (
 	golang.org/x/net v0.0.0-20191014212845-da9a3fd4c582 // indirect
 	golang.org/x/sys v0.0.0-20191020152052-9984515f0562 // indirect
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
-	gotest.tools v0.0.0-20181223230014-1083505acf35 // indirect
+	gotest.tools v0.0.0-20181223230014-1083505acf35
 )

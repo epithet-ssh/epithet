@@ -19,55 +19,12 @@ import (
 
 var errAgentStopped error = errors.New("agent has been stopped")
 
-// IsAgentStopped lets you test if an error indicates that the agent has been stopped
-func IsAgentStopped(err error) bool {
-	return errors.Is(err, errAgentStopped)
-}
-
-// Option configures the agent
-type Option interface {
-	apply(*Agent) error
-}
-
-type optionFunc func(*Agent) error
-
-func (f optionFunc) apply(a *Agent) error {
-	return f(a)
-}
-
-// WithAuthSocketPath specifies the SSH_AUTH_SOCK path to create
-func WithAuthSocketPath(path string) Option {
-	return optionFunc(func(a *Agent) error {
-		a.authSocketPath = path
-		return nil
-	})
-}
-
-// WithContext specifies a context.Context that agent will use
-// and which can be cancelled, triggering the agent to top
-func WithContext(ctx context.Context) Option {
-	return optionFunc(func(a *Agent) error {
-		go func() {
-			select {
-			case <-ctx.Done():
-				a.Close()
-			}
-		}()
-		return nil
-	})
-}
-
 // Agent represents our agent
 type Agent struct {
 	running        *atomic.Bool
 	keyring        agent.Agent
 	authSocketPath string
 	listener       net.Listener
-}
-
-// AuthSocketPath returns the path for the SSH_AUTH_SOCKET
-func (a *Agent) AuthSocketPath() string {
-	return a.authSocketPath
 }
 
 // Start creates and starts an SSH Agent
@@ -108,6 +65,49 @@ func Start(options ...Option) (*Agent, error) {
 	go a.loop(listener)
 
 	return a, nil
+}
+
+// Option configures the agent
+type Option interface {
+	apply(*Agent) error
+}
+
+type optionFunc func(*Agent) error
+
+func (f optionFunc) apply(a *Agent) error {
+	return f(a)
+}
+
+// WithAuthSocketPath specifies the SSH_AUTH_SOCK path to create
+func WithAuthSocketPath(path string) Option {
+	return optionFunc(func(a *Agent) error {
+		a.authSocketPath = path
+		return nil
+	})
+}
+
+// WithContext specifies a context.Context that agent will use
+// and which can be cancelled, triggering the agent to top
+func WithContext(ctx context.Context) Option {
+	return optionFunc(func(a *Agent) error {
+		go func() {
+			select {
+			case <-ctx.Done():
+				a.Close()
+			}
+		}()
+		return nil
+	})
+}
+
+// AuthSocketPath returns the path for the SSH_AUTH_SOCKET
+func (a *Agent) AuthSocketPath() string {
+	return a.authSocketPath
+}
+
+// IsAgentStopped lets you test if an error indicates that the agent has been stopped
+func IsAgentStopped(err error) bool {
+	return errors.Is(err, errAgentStopped)
 }
 
 // Running reports on whether the current agent is healthy

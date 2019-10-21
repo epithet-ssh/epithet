@@ -1,19 +1,25 @@
 package caclient
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"net/http"
+	"net/url"
 
-	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/brianm/epithet/pkg/caserver"
 )
 
 // Client is a CA Client
 type Client struct {
 	httpClient *http.Client
-	caURL      string
+	caURL      *url.URL
 }
 
 // New creates a new CA Client
-func New(url string, options ...Option) *Client {
+func New(url *url.URL, options ...Option) *Client {
 	client := &Client{
 		caURL:      url,
 		httpClient: http.DefaultClient,
@@ -45,7 +51,37 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	})
 }
 
-// ConvertToken converts a token to a cert
-func (c *Client) ConvertToken(token string, pubkey sshcert.RawPublicKey) (sshcert.RawCertificate, error) {
-	return "", nil
+// GetCert converts a token to a cert
+func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	rq, err := http.NewRequest("POST", c.caURL.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+
+	body, err = ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("%d status from server: %s", res.StatusCode, string(body))
+	}
+
+	resp := caserver.CreateCertResponse{}
+	json.Unmarshal(body, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
 }
