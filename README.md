@@ -74,7 +74,7 @@ Cert requests will include the authn provider, which will be used to select a co
 
 CA, sadly, needs to keeep some state in order to prevent replay attacks. There may be some clever protocol to prevent them by embedding information in refresh tokens, but I doubt it.
 
-When granting a cert, the CA MAY return a refresh token that can be used to generate the next certificate using the built in authn provider `referesh`. The CA must prevent reuse of these tokens, and refresh must be able to tie back to the originating authn.
+When granting a cert, the CA MAY return a refresh token that can be used to generate the next certificate using the built in authn provider `refresh`. The CA must prevent reuse of these tokens, and refresh must be able to tie back to the originating authn.
 
 # Plugins
 
