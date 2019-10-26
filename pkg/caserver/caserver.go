@@ -11,20 +11,51 @@ import (
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
+
+type caServer struct {
+	c          *ca.CA
+	httpClient *http.Client
+}
 
 // New creates a new CA Server which needs to then
 // be atatched to some http server, a la
 // `http.ListenAndServeTLS(...)`
-func New(c *ca.CA) http.Handler {
+func New(c *ca.CA, options ...Option) http.Handler {
 	cas := &caServer{
 		c: c,
 	}
+
+	for _, o := range options {
+		o.apply(cas)
+	}
+
+	if cas.httpClient == nil {
+		cas.httpClient = &http.Client{
+			Timeout: time.Second * 30,
+		}
+	}
+
 	return cas
 }
 
-type caServer struct {
-	c *ca.CA
+// Option configures the agent
+type Option interface {
+	apply(*caServer)
+}
+
+type optionFunc func(*caServer)
+
+func (f optionFunc) apply(a *caServer) {
+	f(a)
+}
+
+// WithHTTPClient specifies the http client to use
+func WithHTTPClient(httpClient *http.Client) Option {
+	return optionFunc(func(s *caServer) {
+		s.httpClient = httpClient
+	})
 }
 
 func (s *caServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -44,14 +75,14 @@ type CreateCertRequest struct {
 
 // CreateCertResponse is response from a CreateCert request
 type CreateCertResponse struct {
-	SessionToken string                 `json:"refreshToken"`
-	Certificate  sshcert.RawCertificate `json:"certificate"`
+	Certificate sshcert.RawCertificate `json:"certificate"`
 }
 
 // RequestBodySizeLimit is the maximum request body size
 const RequestBodySizeLimit = 8192
 
 func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
+	log.Debug("new create cert request")
 	ccr := CreateCertRequest{}
 	lr := io.LimitReader(r.Body, RequestBodySizeLimit)
 
@@ -85,8 +116,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := CreateCertResponse{
-		SessionToken: "abc123",
-		Certificate:  cert,
+		Certificate: cert,
 	}
 	out, err := json.Marshal(&resp)
 	if err != nil {

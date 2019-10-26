@@ -140,8 +140,8 @@ func WithAgentSocketPath(path string) Option {
 	})
 }
 
-// WithAuthenticationSocketPath specifies the SSH_AUTH_SOCK path to create
-func WithAuthenticationSocketPath(path string) Option {
+// WithAuthnSocketPath specifies the SSH_AUTH_SOCK path to create
+func WithAuthnSocketPath(path string) Option {
 	return optionFunc(func(a *Agent) error {
 		a.authnSocketPath = path
 		return nil
@@ -188,6 +188,7 @@ func (a *Agent) Running() bool {
 func (a *Agent) Close() error {
 	a.running.Store(false)
 	_ = a.agentListener.Close() //ignore error
+	_ = a.authnListener.Close() //ignore error
 
 	return nil
 }
@@ -203,7 +204,7 @@ func (a *Agent) UseCredential(c Credential) error {
 	if !a.Running() {
 		return errAgentStopped
 	}
-
+	log.Debug("replacing credentials")
 	oldKeys, err := a.keyring.List()
 	if err != nil {
 		a.Close()
@@ -255,6 +256,7 @@ func (a *Agent) listenAndServeAuthn(listener net.Listener) {
 		}
 		go func() {
 			defer conn.Close()
+			log.Debug("new connection to authn")
 			err := a.serveAuthn(conn)
 			if err != nil {
 				log.Warnf("error serving authn connection: %v", err)
@@ -278,6 +280,7 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 			log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
 		}
 		go func() {
+			log.Debug("new connection to agent")
 			err := agent.ServeAgent(a.keyring, conn)
 			if err != nil && err != io.EOF {
 				log.Warnf("error from ssh-agent: %v", err)

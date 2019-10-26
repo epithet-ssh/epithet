@@ -6,8 +6,14 @@ all: test build		## run tests and build binaries
 epithet-agent:
 	go build ./cmd/epithet-agent
 
+epithet-ca:
+	go build ./cmd/epithet-ca
+
+epithet-auth:
+	go build ./cmd/epithet-auth
+
 .PHONY: build 
-build: epithet-agent
+build: epithet-agent epithet-ca epithet-auth
 
 .PHONY: test
 test: test-support	## build and run test plumbing

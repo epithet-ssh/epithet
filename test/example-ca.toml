@@ -1,0 +1,3 @@
+policy_url = "https://epithet.io/example_policy.json"
+private_key = "./test/ca/ca"
+public_key = "./test/ca/ca.pub"
