@@ -1,7 +1,6 @@
 package test
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net"
@@ -13,15 +12,12 @@ import (
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/caserver"
-	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/ory/dockertest"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
 func Test_EndToEnd(t *testing.T) {
 	require := require.New(t)
-	ctx := context.Background()
 
 	sshd, err := startSSHD()
 	require.NoError(err)
@@ -34,27 +30,18 @@ func Test_EndToEnd(t *testing.T) {
 	require.NoError(err)
 	defer cad.Close()
 
-	a, err := agent.Start()
+	cac := caclient.New(cad.srv.URL)
+
+	a, err := agent.Start(cac)
 	require.NoError(err)
 	defer a.Close()
 
-	pubKey, privKey, err := sshcert.GenerateKeys()
+	conn, err := net.Dial("unix", a.AuthnSocketPath())
 	require.NoError(err)
 
-	cac := caclient.New(cad.srv.URL)
-
-	car, err := cac.GetCert(ctx, &caserver.CreateCertRequest{
-		PublicKey:     pubKey,
-		AuthnProvider: "test",
-		Token:         "test-token",
-	})
+	_, err = conn.Write([]byte("test-token"))
 	require.NoError(err)
-
-	a.UseCredential(agent.Credential{
-		PrivateKey:  privKey,
-		Certificate: car.Certificate,
-	})
-	logrus.Infof("cert: %s", car.Certificate)
+	conn.Close()
 
 	out, err := sshd.ssh(a, "ls", "/etc/ssh/")
 	require.NoError(err)
@@ -126,7 +113,7 @@ func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
 	argv := []string{
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
-		"-o", fmt.Sprintf("IdentityAgent=%s", a.AuthSocketPath()),
+		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
 		"-p", s.Port(),
 		"root@localhost"}
 

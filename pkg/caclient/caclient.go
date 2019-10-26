@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/brianm/epithet/pkg/caserver"
 )
@@ -20,8 +21,10 @@ type Client struct {
 // New creates a new CA Client
 func New(url string, options ...Option) *Client {
 	client := &Client{
-		caURL:      url,
-		httpClient: http.DefaultClient,
+		caURL: url,
+		httpClient: &http.Client{
+			Timeout: time.Second * 30,
+		},
 	}
 
 	for _, o := range options {

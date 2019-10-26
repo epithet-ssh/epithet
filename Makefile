@@ -3,11 +3,11 @@ DOCKER_TEST_SSHD_VERSION := 4
 .PHONY: all
 all: test build		## run tests and build binaries
 
-epithet:
-	go build ./cmd/epithet
+epithet-agent:
+	go build ./cmd/epithet-agent
 
 .PHONY: build 
-build: epithet
+build: epithet-agent
 
 .PHONY: test
 test: test-support	## build and run test plumbing
@@ -22,11 +22,14 @@ test-support: test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
 .PHONY: clean
 clean:			## clean all local resources
 	go clean ./...
-	rm -f epithet
+	go clean -testcache	
+	rm -f epithet-*
 	
 .PHONY: clean-all
 clean-all: clean
 	rm -f test/test_sshd/.built_*
+	go clean -cache
+	go clean -modcache
 	docker rmi -f brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: help

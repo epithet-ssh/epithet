@@ -38,9 +38,8 @@ func (s *caServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // CreateCertRequest asks for a signed cert
 type CreateCertRequest struct {
-	PublicKey     sshcert.RawPublicKey `json:"publicKey"`
-	AuthnProvider string               `json:"authenticationProvider"` // on refresh will be "refresh"
-	Token         string               `json:"token"`
+	PublicKey sshcert.RawPublicKey `json:"publicKey"`
+	Token     string               `json:"token"`
 }
 
 // CreateCertResponse is response from a CreateCert request

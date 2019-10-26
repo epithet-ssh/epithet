@@ -15,7 +15,7 @@ import (
 )
 
 func TestBasics(t *testing.T) {
-	a, err := agent.Start()
+	a, err := agent.Start(nil)
 	require.NoError(t, err)
 
 	server, err := startSSHD()
@@ -40,9 +40,9 @@ func TestBasics(t *testing.T) {
 	err = a.Close()
 	require.NoError(t, err)
 
-	_, err = os.Stat(a.AuthSocketPath())
+	_, err = os.Stat(a.AgentSocketPath())
 	if !os.IsNotExist(err) {
-		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AuthSocketPath())
+		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())
 	}
 }
 
@@ -86,7 +86,7 @@ func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
 	argv := []string{
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
-		"-o", fmt.Sprintf("IdentityAgent=%s", a.AuthSocketPath()),
+		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
 		"-p", s.Port(),
 		"root@localhost"}
 
