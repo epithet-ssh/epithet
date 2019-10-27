@@ -1,7 +1,9 @@
 package agent_test
 
 import (
+	"context"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -9,10 +11,51 @@ import (
 	"testing"
 
 	"github.com/brianm/epithet/pkg/agent"
+	"github.com/brianm/epithet/pkg/authn"
 	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+type authnService struct{}
+
+func (s *authnService) Authenticate(ctx context.Context, req *authn.AuthnRequest) (*authn.AuthnResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "no!")
+}
+
+func TestGRPC_Stuff(t *testing.T) {
+	tmp, err := ioutil.TempFile("", "TestGRPC_Stuff.*")
+	require.NoError(t, err)
+	err = os.Remove(tmp.Name())
+	require.NoError(t, err)
+	defer os.Remove(tmp.Name())
+
+	as := authnService{}
+
+	lis, err := net.Listen("unix", tmp.Name())
+	require.NoError(t, err)
+
+	grpcServer := grpc.NewServer()
+	defer grpcServer.GracefulStop()
+
+	authn.RegisterAuthenticatorServer(grpcServer, &as)
+	go grpcServer.Serve(lis)
+
+	client, err := authn.NewClient(tmp.Name())
+	require.NoError(t, err)
+
+	_, err = client.Authenticate(context.Background(), &authn.AuthnRequest{
+		Token: "hello world",
+	})
+	require.Error(t, err)
+	s, ok := status.FromError(err)
+	require.True(t, ok)
+
+	require.Equal(t, codes.PermissionDenied, s.Code())
+}
 
 func TestBasics(t *testing.T) {
 	a, err := agent.Start(nil)
@@ -37,9 +80,7 @@ func TestBasics(t *testing.T) {
 	require.Contains(t, out, "auth_principals")
 	require.Contains(t, out, "ca.pub")
 
-	err = a.Close()
-	require.NoError(t, err)
-
+	a.Close()
 	_, err = os.Stat(a.AgentSocketPath())
 	if !os.IsNotExist(err) {
 		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())

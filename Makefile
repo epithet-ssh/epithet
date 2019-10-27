@@ -29,8 +29,8 @@ test: test-support	## build and run test plumbing
 test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION):
 	cd test/test_sshd; docker build -t brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION) .; touch .built_$(DOCKER_TEST_SSHD_VERSION)
 
-.PHONY: test-support protoc
-test-support: test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
+.PHONY: test-support 
+test-support: protoc test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: clean
 clean:			## clean all local resources

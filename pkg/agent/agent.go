@@ -10,14 +10,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/brianm/epithet/pkg/authn"
 	"github.com/brianm/epithet/pkg/caclient"
-	"github.com/brianm/epithet/pkg/caserver"
 	"github.com/brianm/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"
-
 	"go.uber.org/atomic"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"google.golang.org/grpc"
 )
 
 var errAgentStopped error = errors.New("agent has been stopped")
@@ -37,7 +37,7 @@ type Agent struct {
 	agentListener   net.Listener
 
 	authnSocketPath string
-	authnListener   net.Listener
+	grpcServer      *grpc.Server
 
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
@@ -135,6 +135,7 @@ func (a *Agent) UseCredential(c Credential) error {
 	if !a.Running() {
 		return errAgentStopped
 	}
+
 	log.Debug("replacing credentials")
 	oldKeys, err := a.keyring.List()
 	if err != nil {
@@ -169,31 +170,6 @@ func (a *Agent) UseCredential(c Credential) error {
 	}
 
 	return nil
-}
-
-func (a *Agent) listenAndServeAuthn(listener net.Listener) {
-	for a.running.Load() {
-		conn, err := listener.Accept()
-		if err != nil {
-			// nothing we can do on this loop
-			if conn != nil {
-				conn.Close()
-			}
-			if !a.running.Load() {
-				// we are shutting down, just return
-				return
-			}
-			log.Warnf("error on accept from authn listener: %v", err)
-		}
-		go func() {
-			defer conn.Close()
-			log.Debug("new connection to authn")
-			err := a.serveAuthn(conn)
-			if err != nil {
-				log.Warnf("error serving authn connection: %v", err)
-			}
-		}()
-	}
 }
 
 func (a *Agent) startAgentListener() error {
@@ -273,40 +249,19 @@ func (a *Agent) startAuthnListener() error {
 		a.Close()
 		return fmt.Errorf("unable to set permissions on authn socket: %w", err)
 	}
-	a.authnListener = authnListener
-	go a.listenAndServeAuthn(authnListener)
+
+	a.grpcServer = grpc.NewServer()
+
+	authn.RegisterAuthenticatorServer(a.grpcServer, &authnServe{
+		a: a,
+	})
+	go a.grpcServer.Serve(authnListener)
+
 	return nil
 }
 
 // TokenSizeLimit is the Authentication token size limit
 const TokenSizeLimit = 4094
-
-func (a *Agent) serveAuthn(conn net.Conn) error {
-	defer conn.Close()
-	rdr := io.LimitReader(conn, TokenSizeLimit)
-	token, err := ioutil.ReadAll(rdr)
-	if err != nil {
-		return err
-	}
-
-	r, err := a.caClient.GetCert(a.ctx, &caserver.CreateCertRequest{
-		PublicKey: a.publicKey,
-		Token:     string(token),
-	})
-	if err != nil {
-		return err
-	}
-
-	err = a.UseCredential(Credential{
-		PrivateKey:  a.privateKey,
-		Certificate: r.Certificate,
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
 
 // AgentSocketPath returns the path for the SSH_AUTH_SOCKET
 func (a *Agent) AgentSocketPath() string {
@@ -329,10 +284,8 @@ func (a *Agent) Running() bool {
 }
 
 // Close stops the agent and cleansup after it
-func (a *Agent) Close() error {
+func (a *Agent) Close() {
 	a.running.Store(false)
+	a.grpcServer.Stop()
 	_ = a.agentListener.Close() //ignore error
-	_ = a.authnListener.Close() //ignore error
-
-	return nil
 }

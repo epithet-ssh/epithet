@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brianm/epithet/pkg/agent"
+	"github.com/brianm/epithet/pkg/authn"
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/caserver"
@@ -36,12 +38,13 @@ func Test_EndToEnd(t *testing.T) {
 	require.NoError(err)
 	defer a.Close()
 
-	conn, err := net.Dial("unix", a.AuthnSocketPath())
+	authnClient, err := authn.NewClient(a.AuthnSocketPath())
 	require.NoError(err)
 
-	_, err = conn.Write([]byte("test-token"))
+	_, err = authnClient.Authenticate(context.Background(), &authn.AuthnRequest{
+		Token: "yes, please!",
+	})
 	require.NoError(err)
-	conn.Close()
 
 	out, err := sshd.ssh(a, "ls", "/etc/ssh/")
 	require.NoError(err)
