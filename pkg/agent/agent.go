@@ -67,56 +67,16 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 		a.ctx = context.Background()
 	}
 
-	if a.agentSocketPath == "" {
-		f, err := ioutil.TempFile("", "epithet-agent.*")
-		if err != nil {
-			a.Close()
-			return nil, fmt.Errorf("unable to create agent socket: %w", err)
-		}
-		a.agentSocketPath = f.Name()
-		f.Close()
-		os.Remove(f.Name())
-	}
-
-	agentListener, err := net.Listen("unix", a.agentSocketPath)
+	err = a.startAgentListener()
 	if err != nil {
-		a.Close()
-		return nil, fmt.Errorf("unable to listen on %s: %w", a.agentSocketPath, err)
+		return nil, err
 	}
-
-	err = os.Chmod(a.agentSocketPath, 0600)
-	if err != nil {
-		a.Close()
-		return nil, fmt.Errorf("unable to set permissions on agent socket: %w", err)
-	}
-	a.agentListener = agentListener
-	go a.listenAndServeAgent(agentListener)
 
 	// todo add authnListener
-	if a.authnSocketPath == "" {
-		f, err := ioutil.TempFile("", "epithet-authn.*")
-		if err != nil {
-			a.Close()
-			return nil, fmt.Errorf("unable to create authn socket: %w", err)
-		}
-		a.authnSocketPath = f.Name()
-		f.Close()
-		os.Remove(f.Name())
-	}
-
-	authnListener, err := net.Listen("unix", a.authnSocketPath)
+	err = a.startAuthnListener()
 	if err != nil {
-		a.Close()
-		return nil, fmt.Errorf("unable to listen on %s: %w", a.authnSocketPath, err)
+		return nil, err
 	}
-
-	err = os.Chmod(a.authnSocketPath, 0600)
-	if err != nil {
-		a.Close()
-		return nil, fmt.Errorf("unable to set permissions on authn socket: %w", err)
-	}
-	a.authnListener = authnListener
-	go a.listenAndServeAuthn(authnListener)
 
 	return a, nil
 }
@@ -162,35 +122,6 @@ func WithContext(ctx context.Context) Option {
 		}()
 		return nil
 	})
-}
-
-// AgentSocketPath returns the path for the SSH_AUTH_SOCKET
-func (a *Agent) AgentSocketPath() string {
-	return a.agentSocketPath
-}
-
-// AuthnSocketPath returns the path for the SSH_AUTH_SOCKET
-func (a *Agent) AuthnSocketPath() string {
-	return a.authnSocketPath
-}
-
-// IsAgentStopped lets you test if an error indicates that the agent has been stopped
-func IsAgentStopped(err error) bool {
-	return errors.Is(err, errAgentStopped)
-}
-
-// Running reports on whether the current agent is healthy
-func (a *Agent) Running() bool {
-	return a.running.Load()
-}
-
-// Close stops the agent and cleansup after it
-func (a *Agent) Close() error {
-	a.running.Store(false)
-	_ = a.agentListener.Close() //ignore error
-	_ = a.authnListener.Close() //ignore error
-
-	return nil
 }
 
 // Credential contains the private key and certificate in pem form
@@ -265,6 +196,34 @@ func (a *Agent) listenAndServeAuthn(listener net.Listener) {
 	}
 }
 
+func (a *Agent) startAgentListener() error {
+	if a.agentSocketPath == "" {
+		f, err := ioutil.TempFile("", "epithet-agent.*")
+		if err != nil {
+			a.Close()
+			return fmt.Errorf("unable to create agent socket: %w", err)
+		}
+		a.agentSocketPath = f.Name()
+		f.Close()
+		os.Remove(f.Name())
+	}
+
+	agentListener, err := net.Listen("unix", a.agentSocketPath)
+	if err != nil {
+		a.Close()
+		return fmt.Errorf("unable to listen on %s: %w", a.agentSocketPath, err)
+	}
+
+	err = os.Chmod(a.agentSocketPath, 0600)
+	if err != nil {
+		a.Close()
+		return fmt.Errorf("unable to set permissions on agent socket: %w", err)
+	}
+	a.agentListener = agentListener
+	go a.listenAndServeAgent(agentListener)
+	return nil
+}
+
 func (a *Agent) listenAndServeAgent(listener net.Listener) {
 	for a.running.Load() {
 		conn, err := listener.Accept()
@@ -289,6 +248,34 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 			}
 		}()
 	}
+}
+
+func (a *Agent) startAuthnListener() error {
+	if a.authnSocketPath == "" {
+		f, err := ioutil.TempFile("", "epithet-authn.*")
+		if err != nil {
+			a.Close()
+			return fmt.Errorf("unable to create authn socket: %w", err)
+		}
+		a.authnSocketPath = f.Name()
+		f.Close()
+		os.Remove(f.Name())
+	}
+
+	authnListener, err := net.Listen("unix", a.authnSocketPath)
+	if err != nil {
+		a.Close()
+		return fmt.Errorf("unable to listen on %s: %w", a.authnSocketPath, err)
+	}
+
+	err = os.Chmod(a.authnSocketPath, 0600)
+	if err != nil {
+		a.Close()
+		return fmt.Errorf("unable to set permissions on authn socket: %w", err)
+	}
+	a.authnListener = authnListener
+	go a.listenAndServeAuthn(authnListener)
+	return nil
 }
 
 // TokenSizeLimit is the Authentication token size limit
@@ -317,6 +304,35 @@ func (a *Agent) serveAuthn(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// AgentSocketPath returns the path for the SSH_AUTH_SOCKET
+func (a *Agent) AgentSocketPath() string {
+	return a.agentSocketPath
+}
+
+// AuthnSocketPath returns the path for the SSH_AUTH_SOCKET
+func (a *Agent) AuthnSocketPath() string {
+	return a.authnSocketPath
+}
+
+// IsAgentStopped lets you test if an error indicates that the agent has been stopped
+func IsAgentStopped(err error) bool {
+	return errors.Is(err, errAgentStopped)
+}
+
+// Running reports on whether the current agent is healthy
+func (a *Agent) Running() bool {
+	return a.running.Load()
+}
+
+// Close stops the agent and cleansup after it
+func (a *Agent) Close() error {
+	a.running.Store(false)
+	_ = a.agentListener.Close() //ignore error
+	_ = a.authnListener.Close() //ignore error
 
 	return nil
 }

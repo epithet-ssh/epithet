@@ -1,0 +1,14 @@
+syntax = "proto3";
+package authn;
+
+service Authenticator {
+  // Sends a greeting
+  rpc Authenticate (AuthnRequest) returns (AuthnResponse) {}
+}
+
+message AuthnRequest {
+  string token = 1;
+}
+
+message AuthnResponse {
+}
