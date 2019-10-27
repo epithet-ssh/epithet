@@ -1,59 +1,33 @@
 package ca
 
 import (
-	"fmt"
-	"io/ioutil"
-	"os"
-	"os/exec"
-	"strings"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"time"
 
 	"github.com/brianm/epithet/pkg/sshcert"
-	log "github.com/sirupsen/logrus"
+	"golang.org/x/crypto/ssh"
 )
 
 // CA performs CA operations
 type CA struct {
-	sshKeygen        string
-	caPrivateKeyPath string
-	publicKey        sshcert.RawPublicKey
+	publicKey sshcert.RawPublicKey
+	signer    ssh.Signer
 }
 
 // New creates a new CA
 func New(publicKey sshcert.RawPublicKey, privateKey sshcert.RawPrivateKey) (*CA, error) {
-	sshKeygen, err := exec.LookPath("ssh-keygen")
-	if err != nil {
-		return nil, fmt.Errorf("unable to find ssh-keygen: %w", err)
-	}
-
-	caPrivateKeyFile, err := ioutil.TempFile("", "cakey*")
+	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
 	if err != nil {
 		return nil, err
 	}
-	defer caPrivateKeyFile.Close()
-
-	_, err = caPrivateKeyFile.WriteString(string(privateKey))
-	if err != nil {
-		return nil, fmt.Errorf("unable to write privkey to tempfile: %w", err)
-	}
-	caPrivateKeyFile.Close()
-
 	ca := &CA{
-		sshKeygen:        sshKeygen,
-		caPrivateKeyPath: caPrivateKeyFile.Name(),
-		publicKey:        publicKey,
+		signer:    signer,
+		publicKey: publicKey,
 	}
 
 	return ca, nil
-}
-
-// Close closes down the CA
-func (c *CA) Close() error {
-	err := os.Remove(c.caPrivateKeyPath)
-	c.sshKeygen = ""
-	c.caPrivateKeyPath = ""
-	c.publicKey = ""
-	return err
 }
 
 // PublicKey returns the ssh on-disk format public key for the CA
@@ -69,46 +43,46 @@ type CertParams struct {
 }
 
 // SignPublicKey signs a key to generate a certificate
-func (c *CA) SignPublicKey(pubkey sshcert.RawPublicKey, params *CertParams) (sshcert.RawCertificate, error) {
+func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (sshcert.RawCertificate, error) {
 	// `ssh-keygen -s test/ca/ca -z 2 -V +15m -I brianm -n brianm,waffle ./id_ed25519.pub`
 
-	pubkeyFile, err := ioutil.TempFile("", "id_*.pub")
+	buf := make([]byte, 8)
+	_, err := rand.Read(buf)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(pubkeyFile.Name())
-	defer pubkeyFile.Close()
-	_, err = pubkeyFile.WriteString(string(pubkey))
-	if err != nil {
-		return "", err
-	}
+	serial := binary.LittleEndian.Uint64(buf)
 
-	args := []string{"-s", c.caPrivateKeyPath, "-I", params.Identity}
-
-	if params.Expiration != 0 {
-		secs := int(params.Expiration.Seconds())
-		interval := fmt.Sprintf("always:+%ds", secs)
-		args = append(args, "-V", interval)
-	}
-
-	names := strings.Join(params.Names, ",")
-	args = append(args, "-n", names)
-
-	args = append(args, pubkeyFile.Name())
-	log.Println(args)
-	cmd := exec.Command(c.sshKeygen, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%s %w", string(out), err)
-	}
-
-	certPath := strings.ReplaceAll(pubkeyFile.Name(), ".pub", "-cert.pub")
-	b, err := ioutil.ReadFile(certPath)
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(rawPubKey))
 	if err != nil {
 		return "", err
 	}
 
-	return sshcert.RawCertificate(string(b)), nil
+	certificate := ssh.Certificate{
+		Serial:          serial,
+		Key:             pubKey,
+		KeyId:           params.Identity,
+		ValidPrincipals: params.Names,
+		ValidAfter:      uint64(time.Now().Unix() - 60),
+		ValidBefore:     uint64(time.Now().Add(params.Expiration).Unix()),
+		CertType:        ssh.UserCert,
+		Permissions: ssh.Permissions{
+			CriticalOptions: map[string]string{},
+			Extensions: map[string]string{
+				"permit-X11-forwarding":   "",
+				"permit-agent-forwarding": "",
+				"permit-port-forwarding":  "",
+				"permit-pty":              "",
+				"permit-user-rc":          "",
+			},
+		},
+	}
+	err = certificate.SignCert(rand.Reader, c.signer)
+	rawCert := ssh.MarshalAuthorizedKey(&certificate)
+	if len(rawCert) == 0 {
+		return "", errors.New("unknown problem marshaling certificate")
+	}
+	return sshcert.RawCertificate(string(rawCert)), nil
 }
 
 // AuthToken is the token passed from the plugin through to

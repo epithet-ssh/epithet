@@ -68,9 +68,8 @@ func startCAServer(c *ca.CA) (*caServer, error) {
 	return &cas, nil
 }
 
-func (c *caServer) Close() error {
+func (c *caServer) Close() {
 	c.srv.Close()
-	return c.c.Close()
 }
 
 type sshServer struct {

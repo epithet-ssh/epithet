@@ -1,13 +1,66 @@
 package ca_test
 
 import (
+	"crypto/rand"
+	"encoding/binary"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
+
+func Test_NativeSign(t *testing.T) {
+	buf := make([]byte, 8)
+	_, err := rand.Read(buf)
+	require.NoError(t, err)
+	serial := binary.LittleEndian.Uint64(buf)
+
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(userPubKey))
+	require.NoError(t, err)
+
+	certificate := ssh.Certificate{
+		Serial:          serial,
+		Key:             pubKey,
+		KeyId:           "hello",
+		ValidPrincipals: []string{"brianm,root"},
+		ValidAfter:      uint64(time.Now().Unix() - 60),
+		ValidBefore:     uint64(time.Now().Unix() + int64(3000)),
+		CertType:        ssh.UserCert,
+		Permissions: ssh.Permissions{
+			CriticalOptions: map[string]string{},
+			Extensions: map[string]string{
+				"permit-X11-forwarding":   "",
+				"permit-agent-forwarding": "",
+				"permit-port-forwarding":  "",
+				"permit-pty":              "",
+				"permit-user-rc":          "",
+			},
+		},
+	}
+
+	signer, err := ssh.ParsePrivateKey([]byte(caPrivKey))
+	require.NoError(t, err)
+
+	err = certificate.SignCert(rand.Reader, signer)
+	require.NoError(t, err)
+}
+
+func ascii(length int) ([]byte, error) {
+	b := make([]byte, length)
+	for i := 0; i < length; i++ {
+		c, err := rand.Int(rand.Reader, big.NewInt(97))
+		if err != nil {
+			return nil, err
+		}
+		b[i] = byte(c.Int64() + 27)
+
+	}
+	return b, nil
+}
 
 func TestCA_Sign(t *testing.T) {
 	require := require.New(t)
