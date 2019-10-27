@@ -49,3 +49,7 @@ clean-all: clean
 .PHONY: help
 help:			## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
+
+.PHONY: sshd
+sshd:		## start dev/test sshd server on port 2222
+	docker run -p 2222:22 --rm -it brianm/epithet-test-sshd:4 /usr/sbin/sshd -d
