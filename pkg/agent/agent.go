@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/brianm/epithet/pkg/authn"
+	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"
@@ -252,7 +252,7 @@ func (a *Agent) startAuthnListener() error {
 
 	a.grpcServer = grpc.NewServer()
 
-	authn.RegisterAuthenticatorServer(a.grpcServer, &authnServe{
+	rpc.RegisterAgentServiceServer(a.grpcServer, &authnServe{
 		a: a,
 	})
 	go a.grpcServer.Serve(authnListener)

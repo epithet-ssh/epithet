@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/authn"
+	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/caserver"
@@ -38,10 +38,10 @@ func Test_EndToEnd(t *testing.T) {
 	require.NoError(err)
 	defer a.Close()
 
-	authnClient, err := authn.NewClient(a.AuthnSocketPath())
+	authnClient, err := agent.NewClient(a.AuthnSocketPath())
 	require.NoError(err)
 
-	_, err = authnClient.Authenticate(context.Background(), &authn.AuthnRequest{
+	_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{
 		Token: "yes, please!",
 	})
 	require.NoError(err)

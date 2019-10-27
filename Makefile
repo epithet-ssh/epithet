@@ -3,12 +3,12 @@ DOCKER_TEST_SSHD_VERSION := 4
 .PHONY: all
 all: test build		## run tests and build binaries
 
-pkg/authn/authn.pb.go:
-	mkdir -p pkg/authn/
-	protoc -I ./proto authn.proto --go_out=plugins=grpc:pkg/authn
+pkg/agent/rpc/agent.pb.go:
+	mkdir -p pkg/agent/rpc/
+	protoc -I ./proto agent.proto --go_out=plugins=grpc:pkg/agent/rpc
 
 .PHONY:protoc
-protoc: pkg/authn/authn.pb.go
+protoc: pkg/agent/rpc/agent.pb.go
 
 epithet-agent: protoc
 	go build ./cmd/epithet-agent

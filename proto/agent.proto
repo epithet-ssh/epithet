@@ -1,8 +1,7 @@
 syntax = "proto3";
-package authn;
 
-service Authenticator {
-  // Sends a greeting
+service AgentService {
+  // Give the agent an authn token with which it can retrieve a new cert
   rpc Authenticate (AuthnRequest) returns (AuthnResponse) {}
 }
 
@@ -11,4 +10,5 @@ message AuthnRequest {
 }
 
 message AuthnResponse {
+
 }

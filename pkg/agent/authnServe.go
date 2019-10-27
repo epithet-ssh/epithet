@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/brianm/epithet/pkg/authn"
+	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/brianm/epithet/pkg/caserver"
 )
 
@@ -11,7 +11,7 @@ type authnServe struct {
 	a *Agent
 }
 
-func (s *authnServe) Authenticate(ctx context.Context, req *authn.AuthnRequest) (*authn.AuthnResponse, error) {
+func (s *authnServe) Authenticate(ctx context.Context, req *rpc.AuthnRequest) (*rpc.AuthnResponse, error) {
 	res, err := s.a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
 		PublicKey: s.a.publicKey,
 		Token:     req.GetToken(),
@@ -29,5 +29,5 @@ func (s *authnServe) Authenticate(ctx context.Context, req *authn.AuthnRequest) 
 		return nil, err
 	}
 
-	return &authn.AuthnResponse{}, nil
+	return &rpc.AuthnResponse{}, nil
 }

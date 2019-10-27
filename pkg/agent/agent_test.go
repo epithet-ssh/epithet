@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/authn"
+	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ import (
 
 type authnService struct{}
 
-func (s *authnService) Authenticate(ctx context.Context, req *authn.AuthnRequest) (*authn.AuthnResponse, error) {
+func (s *authnService) Authenticate(ctx context.Context, req *rpc.AuthnRequest) (*rpc.AuthnResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "no!")
 }
 
@@ -41,13 +41,13 @@ func TestGRPC_Stuff(t *testing.T) {
 	grpcServer := grpc.NewServer()
 	defer grpcServer.GracefulStop()
 
-	authn.RegisterAuthenticatorServer(grpcServer, &as)
+	rpc.RegisterAgentServiceServer(grpcServer, &as)
 	go grpcServer.Serve(lis)
 
-	client, err := authn.NewClient(tmp.Name())
+	client, err := agent.NewClient(tmp.Name())
 	require.NoError(t, err)
 
-	_, err = client.Authenticate(context.Background(), &authn.AuthnRequest{
+	_, err = client.Authenticate(context.Background(), &rpc.AuthnRequest{
 		Token: "hello world",
 	})
 	require.Error(t, err)

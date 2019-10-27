@@ -7,7 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/brianm/epithet/pkg/authn"
+	"github.com/brianm/epithet/pkg/agent"
+	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/spf13/cobra"
 )
 
@@ -42,12 +43,12 @@ func run(cc *cobra.Command, args []string) error {
 		token = string(in)
 	}
 
-	client, err := authn.NewClient(sock)
+	client, err := agent.NewClient(sock)
 	if err != nil {
 		return err
 	}
 
-	_, err = client.Authenticate(context.Background(), &authn.AuthnRequest{
+	_, err = client.Authenticate(context.Background(), &rpc.AuthnRequest{
 		Token: token,
 	})
 	return err
