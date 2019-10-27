@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"os"
+	"strings"
 
+	"github.com/brianm/epithet/pkg/authn"
 	"github.com/spf13/cobra"
 )
 
@@ -13,8 +15,8 @@ var sock = ""
 
 // AgentCommand is an agent command
 var cmd = &cobra.Command{
-	Use:   "epithet-ca",
-	Short: "Run the epithet ca server",
+	Use:   "epithet-auth",
+	Short: "Submit authentication requests to the agent",
 	RunE:  run,
 }
 
@@ -29,21 +31,24 @@ func main() {
 }
 
 func run(cc *cobra.Command, args []string) error {
-	in, err := ioutil.ReadAll(os.Stdin)
+	var token string
+	if len(args) != 0 {
+		token = strings.Join(args, " ")
+	} else {
+		in, err := ioutil.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		token = string(in)
+	}
+
+	client, err := authn.NewClient(sock)
 	if err != nil {
 		return err
 	}
 
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	_, err = conn.Write(in)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = client.Authenticate(context.Background(), &authn.AuthnRequest{
+		Token: token,
+	})
+	return err
 }
