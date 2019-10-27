@@ -14,7 +14,7 @@ import (
 )
 
 var verbosity = 0
-var configPath string = ""
+var configPath string
 var address string = ":12510"
 
 // AgentCommand is an agent command
