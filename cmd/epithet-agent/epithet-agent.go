@@ -13,7 +13,7 @@ import (
 )
 
 var verbosity = 0
-var configPath string = ""
+var configPath string
 
 // AgentCommand is an agent command
 var cmd = &cobra.Command{

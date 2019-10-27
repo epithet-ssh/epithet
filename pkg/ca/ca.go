@@ -78,6 +78,9 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (
 		},
 	}
 	err = certificate.SignCert(rand.Reader, c.signer)
+	if err != nil {
+		return "", err
+	}
 	rawCert := ssh.MarshalAuthorizedKey(&certificate)
 	if len(rawCert) == 0 {
 		return "", errors.New("unknown problem marshaling certificate")
