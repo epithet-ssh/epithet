@@ -1,4 +1,4 @@
-[![Actions Status](https://github.com/brianm/epithet/workflows/Go/badge.svg)](https://github.com/brianm/epithet/actions)
+[![Actions Status](https://github.com/brianm/epithet/workflows/build/badge.svg)](https://github.com/brianm/epithet/actions)
 
 # epithet makes secure ssh certificate AAA easy
 
