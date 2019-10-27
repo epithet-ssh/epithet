@@ -1,6 +1,6 @@
-[![Actions Status](https://github.com/brianm/epithet/workflows/build/badge.svg)](https://github.com/brianm/epithet/actions)
-
 # epithet makes secure ssh certificate AAA easy
+
+[![Actions Status](https://github.com/brianm/epithet/workflows/build/badge.svg)](https://github.com/brianm/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/brianm/epithet)](https://goreportcard.com/report/github.com/brianm/epithet)
 
 ## Authentication
 
