@@ -7,8 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/agent/rpc"
+	rpc "github.com/brianm/epithet/internal/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +42,7 @@ func run(cc *cobra.Command, args []string) error {
 		token = string(in)
 	}
 
-	client, err := agent.NewClient(sock)
+	client, err := rpc.NewClient(sock)
 	if err != nil {
 		return err
 	}

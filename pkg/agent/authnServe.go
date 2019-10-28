@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/brianm/epithet/pkg/agent/rpc"
+	rpc "github.com/brianm/epithet/internal/agent"
 	"github.com/brianm/epithet/pkg/caserver"
 )
 

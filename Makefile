@@ -3,20 +3,20 @@ DOCKER_TEST_SSHD_VERSION := 4
 .PHONY: all
 all: test build		## run tests and build binaries
 
-pkg/agent/rpc/agent.pb.go:
-	mkdir -p pkg/agent/rpc/
-	protoc -I ./proto agent.proto --go_out=plugins=grpc:pkg/agent/rpc
+internal/agent/agent.pb.go:
+	mkdir -p internal/agent
+	protoc -I ./proto agent.proto --go_out=plugins=grpc:internal/agent
 
-.PHONY:protoc
-protoc: pkg/agent/rpc/agent.pb.go
+.PHONY: protoc
+protoc: internal/agent/agent.pb.go
 
-epithet-agent: protoc
+epithet-agent: internal/agent/agent.pb.go
 	go build ./cmd/epithet-agent
 
 epithet-ca: 
 	go build ./cmd/epithet-ca
 
-epithet-auth: protoc
+epithet-auth: internal/agent/agent.pb.go
 	go build ./cmd/epithet-auth
 
 .PHONY: build 
@@ -37,11 +37,11 @@ clean:			## clean all local resources
 	go clean ./...
 	go clean -testcache	
 	rm -f epithet-*
-	rm -f pkg/authn/*.pb.go
 	
 .PHONY: clean-all
 clean-all: clean
 	rm -f test/test_sshd/.built_*
+	rm -rf internal/agent/agent.pb.goma
 	go clean -cache
 	go clean -modcache
 	docker rmi -f brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION)

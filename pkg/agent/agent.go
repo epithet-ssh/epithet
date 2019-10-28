@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/brianm/epithet/pkg/agent/rpc"
+	rpc "github.com/brianm/epithet/internal/agent"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"

@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"testing"
 
+	rpc "github.com/brianm/epithet/internal/agent"
 	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/require"
@@ -44,7 +44,7 @@ func TestGRPC_Stuff(t *testing.T) {
 	rpc.RegisterAgentServiceServer(grpcServer, &as)
 	go grpcServer.Serve(lis)
 
-	client, err := agent.NewClient(tmp.Name())
+	client, err := rpc.NewClient(tmp.Name())
 	require.NoError(t, err)
 
 	_, err = client.Authenticate(context.Background(), &rpc.AuthnRequest{

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	rpc "github.com/brianm/epithet/internal/agent"
 	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/agent/rpc"
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/caserver"
@@ -54,7 +54,7 @@ func Test_EndToEnd(t *testing.T) {
 	require.NoError(err)
 	defer a.Close()
 
-	authnClient, err := agent.NewClient(a.AuthnSocketPath())
+	authnClient, err := rpc.NewClient(a.AuthnSocketPath())
 	require.NoError(err)
 
 	_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{
