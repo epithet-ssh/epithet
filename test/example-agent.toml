@@ -1,4 +1,4 @@
 [testing]
 ca_url = "http://localhost:12510/"
 agent_sock = "./agent.sock"
-authn_sock = "./authn.sock"
+control_sock = "./control.sock"

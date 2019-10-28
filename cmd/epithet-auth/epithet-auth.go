@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var sock = ""
+var sock = "./control.sock"
 
 // AgentCommand is an agent command
 var cmd = &cobra.Command{
@@ -21,7 +21,7 @@ var cmd = &cobra.Command{
 }
 
 func main() {
-	cmd.Flags().StringVarP(&sock, "sock", "s", "./authn.sock", "socket to send to")
+	cmd.Flags().StringVarP(&sock, "sock", "s", sock, "socket to send to")
 
 	err := cmd.Execute()
 	if err != nil {
