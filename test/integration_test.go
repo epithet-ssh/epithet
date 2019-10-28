@@ -54,7 +54,7 @@ func Test_EndToEnd(t *testing.T) {
 	require.NoError(err)
 	defer a.Close()
 
-	authnClient, err := rpc.NewClient(a.AuthnSocketPath())
+	authnClient, err := rpc.NewClient(a.ControlSocketPath())
 	require.NoError(err)
 
 	_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{

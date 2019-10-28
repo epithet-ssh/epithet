@@ -36,8 +36,8 @@ type Agent struct {
 	agentSocketPath string
 	agentListener   net.Listener
 
-	authnSocketPath string
-	grpcServer      *grpc.Server
+	controlSocketPath string
+	grpcServer        *grpc.Server
 
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
@@ -100,10 +100,10 @@ func WithAgentSocketPath(path string) Option {
 	})
 }
 
-// WithAuthnSocketPath specifies the SSH_AUTH_SOCK path to create
-func WithAuthnSocketPath(path string) Option {
+// WithControlSocketPath specifies the control socket (API) for the agent
+func WithControlSocketPath(path string) Option {
 	return optionFunc(func(a *Agent) error {
-		a.authnSocketPath = path
+		a.controlSocketPath = path
 		return nil
 	})
 }
@@ -227,24 +227,24 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 }
 
 func (a *Agent) startAuthnListener() error {
-	if a.authnSocketPath == "" {
+	if a.controlSocketPath == "" {
 		f, err := ioutil.TempFile("", "epithet-authn.*")
 		if err != nil {
 			a.Close()
 			return fmt.Errorf("unable to create authn socket: %w", err)
 		}
-		a.authnSocketPath = f.Name()
+		a.controlSocketPath = f.Name()
 		f.Close()
 		os.Remove(f.Name())
 	}
 
-	authnListener, err := net.Listen("unix", a.authnSocketPath)
+	authnListener, err := net.Listen("unix", a.controlSocketPath)
 	if err != nil {
 		a.Close()
-		return fmt.Errorf("unable to listen on %s: %w", a.authnSocketPath, err)
+		return fmt.Errorf("unable to listen on %s: %w", a.controlSocketPath, err)
 	}
 
-	err = os.Chmod(a.authnSocketPath, 0600)
+	err = os.Chmod(a.controlSocketPath, 0600)
 	if err != nil {
 		a.Close()
 		return fmt.Errorf("unable to set permissions on authn socket: %w", err)
@@ -268,9 +268,9 @@ func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
 }
 
-// AuthnSocketPath returns the path for the SSH_AUTH_SOCKET
-func (a *Agent) AuthnSocketPath() string {
-	return a.authnSocketPath
+// ControlSocketPath returns the path for the SSH_AUTH_SOCKET
+func (a *Agent) ControlSocketPath() string {
+	return a.controlSocketPath
 }
 
 // IsAgentStopped lets you test if an error indicates that the agent has been stopped

@@ -74,10 +74,10 @@ func parse(un unmarshal, body []byte) (map[string]*config, error) {
 }
 
 type config struct {
-	CA        string `json:"ca_url" yaml:"ca_url" toml:"ca_url"`
-	AgentSock string `json:"agent_sock" yaml:"agent_sock" toml:"agent_sock"`
-	AuthnSock string `json:"authn_sock" yaml:"authn_sock" toml:"authn_sock"`
-	Name      string
+	CA          string `json:"ca_url" yaml:"ca_url" toml:"ca_url"`
+	AgentSock   string `json:"agent_sock" yaml:"agent_sock" toml:"agent_sock"`
+	ControlSock string `json:"control_sock" yaml:"control_sock" toml:"control_sock"`
+	Name        string
 }
 
 func (c *config) init(name string) error {
@@ -87,8 +87,8 @@ func (c *config) init(name string) error {
 		c.AgentSock = fmt.Sprintf("~/.epithet/%s.agent.sock", name)
 	}
 
-	if c.AuthnSock == "" {
-		c.AuthnSock = fmt.Sprintf("~/.epithet/%s.authn.sock", name)
+	if c.ControlSock == "" {
+		c.ControlSock = fmt.Sprintf("~/.epithet/%s.control.sock", name)
 	}
 
 	_, err := url.Parse(c.CA)
