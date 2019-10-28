@@ -2,6 +2,7 @@ package sshcert
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/pem"
 	"fmt"
 
@@ -34,7 +35,7 @@ func Parse(raw RawCertificate) (*ssh.Certificate, error) {
 
 // GenerateKeys generates a ed25519 keypair in on-disk format
 func GenerateKeys() (RawPublicKey, RawPrivateKey, error) {
-	pubKey, privKey, err := ed25519.GenerateKey(nil)
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return "", "", err
 	}

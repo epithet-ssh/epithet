@@ -65,7 +65,7 @@ func ascii(length int) ([]byte, error) {
 func TestCA_Sign(t *testing.T) {
 	require := require.New(t)
 
-	c, err := ca.New(caPubKey, caPrivKey)
+	c, err := ca.New(caPubKey, caPrivKey, "")
 	require.NoError(err)
 
 	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{

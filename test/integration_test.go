@@ -2,12 +2,15 @@ package test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/brianm/epithet/pkg/agent"
 	"github.com/brianm/epithet/pkg/agent/rpc"
@@ -19,13 +22,26 @@ import (
 )
 
 func Test_EndToEnd(t *testing.T) {
+	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-type", "application/json")
+		w.WriteHeader(200)
+		out, err := json.Marshal(&ca.CertParams{
+			Names:      []string{"brianm", "root"},
+			Identity:   "brianm@skife.org",
+			Expiration: time.Minute * 5,
+		})
+		require.NoError(t, err)
+		w.Write(out)
+	}))
+	defer policyServer.Close()
+
 	require := require.New(t)
 
 	sshd, err := startSSHD()
 	require.NoError(err)
 	defer sshd.Close()
 
-	c, err := ca.New(_caPubKey, _caPrivKey)
+	c, err := ca.New(_caPubKey, _caPrivKey, policyServer.URL)
 	require.NoError(err)
 
 	cad, err := startCAServer(c)

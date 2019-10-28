@@ -62,7 +62,10 @@ func run(cc *cobra.Command, args []string) error {
 		return fmt.Errorf("unable to load public key %s: %v", cfg.PubKey, err)
 	}
 
-	c, err := ca.New(sshcert.RawPublicKey(string(pubKey)), sshcert.RawPrivateKey(string(privKey)))
+	c, err := ca.New(
+		sshcert.RawPublicKey(string(pubKey)),
+		sshcert.RawPrivateKey(string(privKey)),
+		cfg.PolicyURL)
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
