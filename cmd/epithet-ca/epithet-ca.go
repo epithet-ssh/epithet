@@ -5,10 +5,13 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/caserver"
 	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/middleware"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -70,10 +73,19 @@ func run(cc *cobra.Command, args []string) error {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
 
-	handler := caserver.New(c)
+	r := chi.NewRouter()
+
+	// A good base middleware stack
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(60 * time.Second))
+
+	r.Handle("/", caserver.New(c))
 
 	log.Infof("starting ca at %s", address)
-	err = http.ListenAndServe(address, handler)
+	err = http.ListenAndServe(address, r)
 	if err != nil {
 		return err
 	}

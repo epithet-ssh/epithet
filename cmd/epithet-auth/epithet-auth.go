@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	rpc "github.com/brianm/epithet/internal/agent"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	logrus.Debugf("Authenticate success")
 }
 
 func run(cc *cobra.Command, args []string) error {
@@ -46,7 +48,7 @@ func run(cc *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-
+	logrus.Debugf("invoking Authenticate")
 	_, err = client.Authenticate(context.Background(), &rpc.AuthnRequest{
 		Token: token,
 	})

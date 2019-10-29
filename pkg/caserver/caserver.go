@@ -11,7 +11,6 @@ import (
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/sshcert"
 	"github.com/sirupsen/logrus"
-	log "github.com/sirupsen/logrus"
 )
 
 type caServer struct {
@@ -82,7 +81,6 @@ type CreateCertResponse struct {
 const RequestBodySizeLimit = 8192
 
 func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
-	log.Debug("new create cert request")
 	ccr := CreateCertRequest{}
 	lr := io.LimitReader(r.Body, RequestBodySizeLimit)
 

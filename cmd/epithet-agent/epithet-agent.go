@@ -73,7 +73,7 @@ func run(cc *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("unable to start agent %s: %w", name, err)
 		}
-		log.Infof("started agent [%s] [authn=%s] [agent=%s]", name, a.ControlSocketPath(), a.AgentSocketPath())
+		log.Infof("started agent [%s] [control=%s] [agent=%s]", name, a.ControlSocketPath(), a.AgentSocketPath())
 		defer a.Close()
 	}
 
