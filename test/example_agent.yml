@@ -5,4 +5,9 @@ testing:
     agent_sock: ./agent.sock
     control_sock: ./control.sock
     hooks:
-        need_cert: "echo 'woof' | ./epithet-auth {{control_sock}}"
+        need_auth: "echo 'woof' | ./epithet-auth {{control_sock}}"
+
+example-co:
+    ca_url: https://ca.example.com/ssh/
+    hooks:
+        need_auth: "/usr/local/bin/epithet-oidc {{control_sock}}"
