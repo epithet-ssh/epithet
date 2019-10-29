@@ -11,6 +11,7 @@ import (
 	"time"
 
 	rpc "github.com/brianm/epithet/internal/agent"
+	"github.com/brianm/epithet/pkg/agent/hook"
 	"github.com/brianm/epithet/pkg/caclient"
 	"github.com/brianm/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"
@@ -27,7 +28,8 @@ const DefaultTimeout = time.Second * 30
 
 // Agent represents our agent
 type Agent struct {
-	running *atomic.Bool
+	running     *atomic.Bool
+	certExpires *atomic.Int64
 
 	keyring  agent.Agent
 	caClient *caclient.Client
@@ -41,15 +43,18 @@ type Agent struct {
 
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
+
+	hooks map[string]*hook.Hook
 }
 
 // Start creates and starts an SSH Agent
 func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 	keyring := agent.NewKeyring()
 	a := &Agent{
-		keyring:  keyring,
-		running:  atomic.NewBool(true),
-		caClient: caClient,
+		keyring:     keyring,
+		running:     atomic.NewBool(true),
+		caClient:    caClient,
+		certExpires: atomic.NewInt64(0),
 	}
 
 	for _, o := range options {
@@ -73,7 +78,7 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 	}
 
 	// todo add authnListener
-	err = a.startAuthnListener()
+	err = a.startControlListener()
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +129,18 @@ func WithContext(ctx context.Context) Option {
 	})
 }
 
+// WithHooks registers the named hooks on the agent
+func WithHooks(hooks map[string]string) Option {
+	return optionFunc(func(a *Agent) error {
+		hm := map[string]*hook.Hook{}
+		for k, v := range hooks {
+			hm[k] = hook.New(v)
+		}
+		a.hooks = hm
+		return nil
+	})
+}
+
 // Credential contains the private key and certificate in pem form
 type Credential struct {
 	PrivateKey  sshcert.RawPrivateKey
@@ -168,6 +185,8 @@ func (a *Agent) UseCredential(c Credential) error {
 			return fmt.Errorf("Unable to remove old credential: %w", err)
 		}
 	}
+
+	a.certExpires.Store(int64(cert.ValidBefore))
 
 	return nil
 }
@@ -214,19 +233,35 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 			}
 			log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
 		}
-		go func() {
-			log.Debug("new connection to agent")
-			err := agent.ServeAgent(a.keyring, conn)
-			if err != nil && err != io.EOF {
-				log.Warnf("error from ssh-agent: %v", err)
-				_ = conn.Close()
-				// ignoring close erros
-			}
-		}()
+		go a.serveAgent(conn)
 	}
 }
 
-func (a *Agent) startAuthnListener() error {
+func (a *Agent) serveAgent(conn net.Conn) {
+	log.Debug("new connection to agent")
+	if a.certExpires.Load() < time.Now().Unix() {
+		if h, ok := a.hooks[hook.NeedCert]; ok {
+			err := h.Run(map[string]string{
+				"control_sock": a.ControlSocketPath(),
+				"agent_sock":   a.AgentSocketPath(),
+			})
+			if err != nil {
+				log.Warnf("error evaluating `control_sock` hook: %v", err)
+				conn.Close()
+				return
+			}
+		}
+	}
+
+	err := agent.ServeAgent(a.keyring, conn)
+	if err != nil && err != io.EOF {
+		log.Warnf("error from ssh-agent: %v", err)
+		_ = conn.Close()
+		// ignoring close erros
+	}
+}
+
+func (a *Agent) startControlListener() error {
 	if a.controlSocketPath == "" {
 		f, err := ioutil.TempFile("", "epithet-authn.*")
 		if err != nil {

@@ -1,0 +1,8 @@
+---
+testing:
+    ca_url: http://localhost:12510/
+    unsafe_insecure_ca: true
+    agent_sock: ./agent.sock
+    control_sock: ./control.sock
+    hooks:
+        need_cert: "echo 'woof' | ./epithet-auth {{control_sock}}"
