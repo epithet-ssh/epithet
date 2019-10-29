@@ -19,6 +19,7 @@ func TestSSH_SignArbitrary(t *testing.T) {
 	require.NoError(t, err)
 
 	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(_caPubKey))
+	require.NoError(t, err)
 
 	err = key.Verify([]byte("hello world"), sig)
 	require.NoError(t, err)

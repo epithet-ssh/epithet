@@ -108,6 +108,9 @@ func (c *CA) RequestPolicy(ctx context.Context, token string) (*CertParams, erro
 	}
 	params := &CertParams{}
 	err = json.Unmarshal(buf, params)
+	if err != nil {
+		return nil, err
+	}
 	return params, nil
 }
 
