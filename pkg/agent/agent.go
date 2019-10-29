@@ -13,6 +13,7 @@ import (
 	rpc "github.com/brianm/epithet/internal/agent"
 	"github.com/brianm/epithet/pkg/agent/hook"
 	"github.com/brianm/epithet/pkg/caclient"
+	"github.com/brianm/epithet/pkg/caserver"
 	"github.com/brianm/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"
 	"go.uber.org/atomic"
@@ -29,7 +30,8 @@ const DefaultTimeout = time.Second * 30
 // Agent represents our agent
 type Agent struct {
 	running     *atomic.Bool
-	certExpires *atomic.Int64
+	certExpires *atomic.Uint64
+	lastToken   *atomic.String
 
 	keyring  agent.Agent
 	caClient *caclient.Client
@@ -52,9 +54,10 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 	keyring := agent.NewKeyring()
 	a := &Agent{
 		keyring:     keyring,
-		running:     atomic.NewBool(true),
 		caClient:    caClient,
-		certExpires: atomic.NewInt64(0),
+		running:     atomic.NewBool(true),
+		certExpires: atomic.NewUint64(0),
+		lastToken:   atomic.NewString(""),
 	}
 
 	for _, o := range options {
@@ -186,8 +189,31 @@ func (a *Agent) UseCredential(c Credential) error {
 		}
 	}
 
-	a.certExpires.Store(int64(cert.ValidBefore))
+	a.certExpires.Store(uint64(cert.ValidBefore))
 
+	return nil
+}
+
+// RequestCertificate tries to convert a `{token, pubkey}` into a certificate
+func (a *Agent) RequestCertificate(ctx context.Context, token string) error {
+	a.lastToken.Store(token)
+
+	res, err := a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
+		PublicKey: a.publicKey,
+		Token:     token,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	err = a.UseCredential(Credential{
+		PrivateKey:  a.privateKey,
+		Certificate: res.Certificate,
+	})
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -237,16 +263,32 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 	}
 }
 
+func (a *Agent) hookNeedAuth() error {
+	if h, ok := a.hooks[hook.NeedAuth]; ok {
+		err := h.Run(map[string]string{
+			"hook":         hook.NeedAuth,
+			"control_sock": a.ControlSocketPath(),
+			"agent_sock":   a.AgentSocketPath(),
+		})
+		if err != nil {
+			log.Warnf("error evaluating `need_auth` hook: %v", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// CertExpirationFuzzWindow is the time, in seconds that we ask for a new
+// cert in before the current cert expires.
+const CertExpirationFuzzWindow = 20
+
 func (a *Agent) serveAgent(conn net.Conn) {
 	log.Debug("new connection to agent")
-	if a.certExpires.Load() < time.Now().Unix() {
-		if h, ok := a.hooks[hook.NeedCert]; ok {
-			err := h.Run(map[string]string{
-				"control_sock": a.ControlSocketPath(),
-				"agent_sock":   a.AgentSocketPath(),
-			})
+	if a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow {
+		err := a.RequestCertificate(a.ctx, a.lastToken.Load())
+		if err != nil {
+			err = a.hookNeedAuth()
 			if err != nil {
-				log.Warnf("error evaluating `control_sock` hook: %v", err)
 				conn.Close()
 				return
 			}
