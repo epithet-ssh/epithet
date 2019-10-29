@@ -68,6 +68,7 @@ func run(cc *cobra.Command, args []string) error {
 			caClient,
 			agent.WithAgentSocketPath(cfg.AgentSock),
 			agent.WithControlSocketPath(cfg.ControlSock),
+			agent.WithHooks(cfg.Hooks),
 		)
 		if err != nil {
 			return fmt.Errorf("unable to start agent %s: %w", name, err)

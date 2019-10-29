@@ -74,9 +74,10 @@ func parse(un unmarshal, body []byte) (map[string]*config, error) {
 }
 
 type config struct {
-	CA          string `json:"ca_url" yaml:"ca_url" toml:"ca_url"`
-	AgentSock   string `json:"agent_sock" yaml:"agent_sock" toml:"agent_sock"`
-	ControlSock string `json:"control_sock" yaml:"control_sock" toml:"control_sock"`
+	CA          string            `json:"ca_url" yaml:"ca_url" toml:"ca_url"`
+	AgentSock   string            `json:"agent_sock" yaml:"agent_sock" toml:"agent_sock"`
+	ControlSock string            `json:"control_sock" yaml:"control_sock" toml:"control_sock"`
+	Hooks       map[string]string `json:"hooks" yaml:"hooks" toml:"hooks"`
 	Name        string
 }
 
