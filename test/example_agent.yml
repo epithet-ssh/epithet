@@ -1,13 +1,12 @@
 ---
 testing:
     ca_url: http://localhost:12510/
-    unsafe_insecure_ca: true
     agent_sock: ./agent.sock
     control_sock: ./control.sock
     hooks:
         need_auth: "echo 'woof' | ./epithet-auth {{control_sock}}"
 
-example-co:
+example-com:
     ca_url: https://ca.example.com/ssh/
     hooks:
         need_auth: "epithet-oidc -f /usr/local/etc/epithet/groupon-oidc.yml -s {{control_sock}}"

@@ -103,7 +103,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	cert, err := s.c.SignPublicKey(ccr.PublicKey, &ca.CertParams{
 		Identity:   "brianm",
 		Names:      []string{"root", "brianm"},
-		Expiration: time.Until(time.Now().Add(time.Hour)),
+		Expiration: time.Until(time.Now().Add(time.Minute)),
 	})
 
 	if err != nil {
