@@ -100,12 +100,15 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cert, err := s.c.SignPublicKey(ccr.PublicKey, &ca.CertParams{
-		Identity:   "brianm",
-		Names:      []string{"root", "brianm"},
-		Expiration: time.Until(time.Now().Add(time.Minute)),
-	})
+	params, err := s.c.RequestPolicy(r.Context(), ccr.Token)
+	if err != nil {
+		w.Header().Add("Content-type", "text/plain")
+		w.WriteHeader(400)
+		w.Write([]byte(fmt.Sprintf("error retrieving policy: %s", err)))
+		return
+	}
 
+	cert, err := s.c.SignPublicKey(ccr.PublicKey, params)
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)

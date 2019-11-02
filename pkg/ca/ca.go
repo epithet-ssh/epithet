@@ -18,21 +18,19 @@ import (
 
 // CA performs CA operations
 type CA struct {
-	publicKey  sshcert.RawPublicKey
 	signer     ssh.Signer
 	policyURL  string
 	httpClient *http.Client
 }
 
 // New creates a new CA
-func New(publicKey sshcert.RawPublicKey, privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) (*CA, error) {
+func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) (*CA, error) {
 	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
 	if err != nil {
 		return nil, err
 	}
 	ca := &CA{
 		signer:    signer,
-		publicKey: publicKey,
 		policyURL: policyURL,
 	}
 
@@ -69,15 +67,16 @@ func WithHTTPClient(httpClient *http.Client) Option {
 
 // PublicKey returns the ssh on-disk format public key for the CA
 func (c *CA) PublicKey() sshcert.RawPublicKey {
-	return c.publicKey
+	pk := c.signer.PublicKey()
+	return sshcert.RawPublicKey(string(ssh.MarshalAuthorizedKey(pk)))
 }
 
 // CertParams are options which can be set on a certificate
 type CertParams struct {
-	Identity   string
-	Names      []string
-	Expiration time.Duration
-	Extensions []string
+	Identity   string            `json:"identity"`
+	Names      []string          `json:"principals"`
+	Expiration time.Duration     `json:"expiration"`
+	Extensions map[string]string `json:"extensions"`
 }
 
 // RequestPolicy requests policy from the policy url
@@ -139,13 +138,7 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (
 		CertType:        ssh.UserCert,
 		Permissions: ssh.Permissions{
 			CriticalOptions: map[string]string{},
-			Extensions: map[string]string{
-				"permit-X11-forwarding":   "",
-				"permit-agent-forwarding": "",
-				"permit-port-forwarding":  "",
-				"permit-pty":              "",
-				"permit-user-rc":          "",
-			},
+			Extensions:      params.Extensions,
 		},
 	}
 	err = certificate.SignCert(rand.Reader, c.signer)

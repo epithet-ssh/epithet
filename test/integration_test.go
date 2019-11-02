@@ -41,7 +41,7 @@ func Test_EndToEnd(t *testing.T) {
 	require.NoError(err)
 	defer sshd.Close()
 
-	c, err := ca.New(_caPubKey, _caPrivKey, policyServer.URL)
+	c, err := ca.New(_caPrivKey, policyServer.URL)
 	require.NoError(err)
 
 	cad, err := startCAServer(c)

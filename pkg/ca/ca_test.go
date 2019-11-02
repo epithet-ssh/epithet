@@ -4,11 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/brianm/epithet/pkg/ca"
 	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -65,7 +67,7 @@ func ascii(length int) ([]byte, error) {
 func TestCA_Sign(t *testing.T) {
 	require := require.New(t)
 
-	c, err := ca.New(caPubKey, caPrivKey, "")
+	c, err := ca.New(caPrivKey, "")
 	require.NoError(err)
 
 	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{
@@ -82,9 +84,16 @@ func TestCA_Sign(t *testing.T) {
 	require.Equal([]string{"root", "deployer"}, crt.ValidPrincipals)
 }
 
-const userPubKey = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S brianmn@scuffin`
+func TestCA_GetPublicKey(t *testing.T) {
+	c, err := ca.New(caPrivKey, "")
+	require.NoError(t, err)
 
-const caPubKey = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDNH7zWoDN/0GHOqMq8E4l0xehxI4bqcqp4FmjMoGp1gb1VYl+G/KWoRufzamCvVvX37oGfTlIi/0wW/mCFPtVv9Dg6nWGVRz6rECv4hjF4TcxgXIXbVLw70Lwy0FNhc9bX13D+4Z8UkaP94c0s79nbtfW7w82jvnCXwWYh9odr+PX9tSZOCJvWgoGd0/pMbyLp/7EapGByu+fxqx4Xyb89RVtCpBBZrZ7xOqPV5wD5BjHfrCREqcdeV8jzzQkxDUclPjbFga4WWUMEFz3lr8b14yPl0m5ANCRFz2RX7jp8xKiL8gz7V0K37ZX5vHaGgaDHgQbmRvq7BkaGWRYELyzJ user-ca`
+	logrus.Infof("%s", c.PublicKey())
+
+	require.True(t, strings.HasPrefix(string(c.PublicKey()), "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDNH7"))
+}
+
+const userPubKey = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S brianmn@scuffin`
 
 const caPrivKey = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
