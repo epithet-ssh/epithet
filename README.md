@@ -8,6 +8,34 @@ The Agent will re-use an authentication token until it stops working. A typical 
 
 The Agent generates a new keypair when it starts, and never exposes the private key or writes it to disk. The CA loads the private key, and also never exposes it or writes it to disk.
 
+```
++-------+          +---------------+       +-------+                 +-----+          +---------+
+| User  |          | Authenticator |       | Agent |                 | CA  |          | Policy  |
++-------+          +---------------+       +-------+                 +-----+          +---------+
+    |                      |                   |                        |                  |
+    | Authenticate         |                   |                        |                  |
+    |--------------------->|                   |                        |                  |
+    |                      |                   |                        |                  |
+    |                      | Provide token     |                        |                  |
+    |                      |------------------>|                        |                  |
+    |                      |                   |                        |                  |
+    |                      |                   | Request Certificate    |                  |
+    |                      |                   |----------------------->|                  |
+    |                      |                   |                        |                  |
+    |                      |                   |                        | Authorize        |
+    |                      |                   |                        |----------------->|
+    |                      |                   |                        |                  |
+    |                      |                   |                        |      Cert Params |
+    |                      |                   |                        |<-----------------|
+    |                      |                   |                        |                  |
+    |                      |                   |            Certificate |                  |
+    |                      |                   |<-----------------------|                  |
+    |                      |                   |                        |                  |
+    | Use SSH              |                   |                        |                  |
+    |----------------------------------------->|                        |                  |
+    |                      |                   |                        |                  |
+```
+
 # Setting up clients
 
 Users will typically specify the use of the Epithet SSH Agent for a hostname pattern:
