@@ -34,6 +34,26 @@ The Agent generates a new keypair when it starts, and never exposes the private 
     | Use SSH              |                   |                        |                  |
     |----------------------------------------->|                        |                  |
     |                      |                   |                        |                  |
+    |                      |                   | Cert Expires           |                  |
+    |                      |                   |-------------           |                  |
+    |                      |                   |            |           |                  |
+    |                      |                   |<------------           |                  |
+    |                      |                   |                        |                  |
+    | Use SSH              |                   |                        |                  |
+    |----------------------------------------->|                        |                  |
+    |                      |                   |                        |                  |
+    |                      |                   | Request Certificate    |                  |
+    |                      |                   |----------------------->|                  |
+    |                      |                   |                        |                  |
+    |                      |                   |                        | Authorize        |
+    |                      |                   |                        |----------------->|
+    |                      |                   |                        |                  |
+    |                      |                   |                        |      Cert Params |
+    |                      |                   |                        |<-----------------|
+    |                      |                   |                        |                  |
+    |                      |                   |            Certificate |                  |
+    |                      |                   |<-----------------------|                  |
+    |                      |                   |                        |                  |
 ```
 
 # Setting up clients
