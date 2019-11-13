@@ -14,6 +14,7 @@ require (
 	github.com/go-chi/chi v4.0.2+incompatible
 	github.com/golang/protobuf v1.3.2
 	github.com/gotestyourself/gotestyourself v2.2.0+incompatible // indirect
+	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lib/pq v1.2.0 // indirect
@@ -29,12 +30,15 @@ require (
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/testify v1.4.0
-	go.uber.org/atomic v1.4.0
-	golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550
-	golang.org/x/net v0.0.0-20191021144547-ec77196f6094 // indirect
-	golang.org/x/sys v0.0.0-20191024172528-b4ff53e7a1cb // indirect
-	google.golang.org/grpc v1.24.0
+	go.uber.org/atomic v1.5.0
+	golang.org/x/crypto v0.0.0-20191112222119-e1110fd1c708
+	golang.org/x/net v0.0.0-20191112182307-2180aed22343 // indirect
+	golang.org/x/sys v0.0.0-20191113165036-4c7a9d0fe056 // indirect
+	golang.org/x/text v0.3.2 // indirect
+	golang.org/x/tools v0.0.0-20191113191852-77e3bb0ad9e7 // indirect
+	google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a // indirect
+	google.golang.org/grpc v1.25.1
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
-	gopkg.in/yaml.v2 v2.2.4
+	gopkg.in/yaml.v2 v2.2.5
 	gotest.tools v0.0.0-20181223230014-1083505acf35
 )
