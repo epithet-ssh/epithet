@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"testing"
 
-	rpc "github.com/brianm/epithet/internal/agent"
-	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/sshcert"
+	rpc "github.com/epithet-ssh/epithet/internal/agent"
+	"github.com/epithet-ssh/epithet/pkg/agent"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

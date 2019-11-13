@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/brianm/epithet/pkg/ca"
-	"github.com/brianm/epithet/pkg/caserver"
-	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
 	log "github.com/sirupsen/logrus"

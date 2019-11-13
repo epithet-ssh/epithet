@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/brianm/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/caserver"
 )
 
 // Client is a CA Client

@@ -5,7 +5,7 @@ import (
 	"log"
 	"testing"
 
-	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"

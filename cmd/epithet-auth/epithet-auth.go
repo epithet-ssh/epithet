@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	rpc "github.com/brianm/epithet/internal/agent"
+	rpc "github.com/epithet-ssh/epithet/internal/agent"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )

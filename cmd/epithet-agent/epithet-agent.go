@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/agent"
+	"github.com/epithet-ssh/epithet/pkg/caclient"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )

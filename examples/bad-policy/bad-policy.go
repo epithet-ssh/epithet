@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/brianm/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
 )

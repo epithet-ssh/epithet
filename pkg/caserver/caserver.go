@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/brianm/epithet/pkg/ca"
-	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/sirupsen/logrus"
 )
 

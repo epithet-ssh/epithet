@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	rpc "github.com/brianm/epithet/internal/agent"
+	rpc "github.com/epithet-ssh/epithet/internal/agent"
 )
 
 type authnServe struct {

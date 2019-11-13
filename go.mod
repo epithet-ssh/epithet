@@ -1,4 +1,4 @@
-module github.com/brianm/epithet
+module github.com/epithet-ssh/epithet
 
 go 1.13
 

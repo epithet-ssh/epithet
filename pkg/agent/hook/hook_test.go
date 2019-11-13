@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/brianm/epithet/pkg/agent/hook"
+	"github.com/epithet-ssh/epithet/pkg/agent/hook"
 	"github.com/stretchr/testify/require"
 )
 

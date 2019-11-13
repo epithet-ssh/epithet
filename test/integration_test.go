@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	rpc "github.com/brianm/epithet/internal/agent"
-	"github.com/brianm/epithet/pkg/agent"
-	"github.com/brianm/epithet/pkg/ca"
-	"github.com/brianm/epithet/pkg/caclient"
-	"github.com/brianm/epithet/pkg/caserver"
+	rpc "github.com/epithet-ssh/epithet/internal/agent"
+	"github.com/epithet-ssh/epithet/pkg/agent"
+	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/require"
 )

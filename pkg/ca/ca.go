@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/brianm/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"golang.org/x/crypto/ssh"
 )
 
