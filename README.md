@@ -1,6 +1,6 @@
 # Epithet makes SSH certificates easy
 
-[![Actions Status](https://github.com/epithet-ssh/epithet/workflows/build/badge.svg)](https://github.com/epithet-ssh/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/epithet-ssh/epithet)](https://goreportcard.com/report/github.com/epithet-ssh/epithet) [![Maintainability](https://api.codeclimate.com/v1/badges/3a4020265b38c175bdf0/maintainability)](https://codeclimate.com/github/epithet-ssh/epithet/maintainability)
+[![Actions Status](https://github.com/epithet-ssh/epithet/workflows/build/badge.svg)](https://github.com/epithet-ssh/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/epithet-ssh/epithet)](https://goreportcard.com/report/github.com/epithet-ssh/epithet) [![Maintainability](https://api.codeclimate.com/v1/badges/3a4020265b38c175bdf0/maintainability)](https://codeclimate.com/github/brianm/epithet/maintainability)
 
 Epithet provides an SSH Agent and a CA Service which work together to provide a series of short lived (typically a few minutes) SSH certificates to users. Authentication is (generally) completed on the client, providing an authentication token to the Agent. The Agent then passes the `{token, public-key}` pair to the CA service. The CA service then passes the token to a Policy service which performs authorization and returns certificate parameters (such as the principals, certificate expiration, and allowed extensions) to the CA. The CA then signs the certificate using the parameters from the policy server and returns it to the Agent.
 
