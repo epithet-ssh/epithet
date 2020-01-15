@@ -12,12 +12,14 @@ epithet-ca:
 epithet-auth: internal/agent/agent.pb.go
 	go build ./cmd/epithet-auth
 
-.PHONE: generate
-generate:
+.PHONY: generate
+generate: internal/agent/agent.pb.go
+
+internal/agent/agent.pb.go:
 	go generate ./...
 
 .PHONY: build 
-build: generate epithet-agent epithet-ca epithet-auth
+build: internal/agent/agent.pb.go epithet-agent epithet-ca epithet-auth
 
 .PHONY: test
 test: test-support	## build and run test plumbing
@@ -27,14 +29,13 @@ test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION):
 	cd test/test_sshd; docker build -t brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION) .; touch .built_$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: test-support 
-test-support: generate test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
+test-support: internal/agent/agent.pb.go test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: clean
 clean:			## clean all local resources
 	go clean ./...
 	go clean -testcache	
 	rm -f epithet-*
-	rm -rf internal/agent/agent.pb.go
 	rm -rf dist
 	
 .PHONY: clean-all
@@ -42,6 +43,7 @@ clean-all: clean
 	rm -f test/test_sshd/.built_*
 	go clean -cache
 	go clean -modcache
+	rm -rf internal/agent/agent.pb.go
 	docker rmi -f brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: help
