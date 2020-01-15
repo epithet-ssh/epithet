@@ -3,13 +3,6 @@ DOCKER_TEST_SSHD_VERSION := 5
 .PHONY: all
 all: test build		## run tests and build binaries
 
-internal/agent/agent.pb.go:
-	mkdir -p internal/agent
-	protoc -I ./proto agent.proto --go_out=plugins=grpc:internal/agent
-
-.PHONY: protoc
-protoc: internal/agent/agent.pb.go
-
 epithet-agent: internal/agent/agent.pb.go
 	go build ./cmd/epithet-agent
 
@@ -19,8 +12,12 @@ epithet-ca:
 epithet-auth: internal/agent/agent.pb.go
 	go build ./cmd/epithet-auth
 
+.PHONE: generate
+generate:
+	go generate ./...
+
 .PHONY: build 
-build: epithet-agent epithet-ca epithet-auth protoc
+build: generate epithet-agent epithet-ca epithet-auth
 
 .PHONY: test
 test: test-support	## build and run test plumbing
@@ -30,18 +27,19 @@ test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION):
 	cd test/test_sshd; docker build -t brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION) .; touch .built_$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: test-support 
-test-support: protoc test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
+test-support: generate test/test_sshd/.built_$(DOCKER_TEST_SSHD_VERSION)
 
 .PHONY: clean
 clean:			## clean all local resources
 	go clean ./...
 	go clean -testcache	
 	rm -f epithet-*
+	rm -rf internal/agent/agent.pb.go
+	rm -rf dist
 	
 .PHONY: clean-all
 clean-all: clean
 	rm -f test/test_sshd/.built_*
-	rm -rf internal/agent/agent.pb.goma
 	go clean -cache
 	go clean -modcache
 	docker rmi -f brianm/epithet-test-sshd:$(DOCKER_TEST_SSHD_VERSION)

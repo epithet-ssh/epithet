@@ -1,0 +1,68 @@
+before:
+  hooks:
+    - go mod tidy    
+    - go generate ./...
+builds:
+  - id: epithet-agent
+    binary: epithet-agent
+    main: ./cmd/epithet-agent/
+  - id: epithet-auth
+    binary: epithet-auth
+    main: ./cmd/epithet-auth/
+  - id: epithet-ca
+    binary: epithet-ca
+    main: ./cmd/epithet-ca/
+archives:
+- replacements:
+    darwin: Darwin
+    linux: Linux
+    windows: Windows
+    386: i386
+    amd64: x86_64
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+    - '^docs:'
+    - '^test:'
+brews:
+  -
+    name: epithet
+    # GOARM to specify which 32-bit arm version to use if there are multiple versions
+    # from the build section. Brew formulas support atm only one 32-bit version.
+    # Default is 6 for all artifacts or each id if there a multiple versions.
+    goarm: 6
+    github:
+      owner: epithet-ssh
+      name: homebrew-epithet
+    # Git author used to commit to the repository.
+    # Defaults are shown.
+    commit_author:
+      name: goreleaserbot
+      email: brianm@groupon.com
+    folder: Formula
+
+    # Caveats for the user of your binary.
+    # Default is empty.
+    caveats: "some instructions"
+
+    # Your app's homepage.
+    # Default is empty.
+    homepage: "https://epithet.io/"
+
+    # Setting this will prevent goreleaser to actually try to commit the updated
+    # formula - instead, the formula file will be stored on the dist folder only,
+    # leaving the responsibility of publishing it to the user.
+    # If set to auto, the release will not be uploaded to the homebrew tap
+    # in case there is an indicator for prerelease in the tag e.g. v1.0.0-rc1
+    # Default is false.
+    skip_upload: true
+
+    # So you can `brew test` your formula.
+    # Default is empty.
+    test: |
+      system "#{bin}/epithet-agent --version"      
