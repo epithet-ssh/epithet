@@ -1,7 +1,6 @@
 before:
   hooks:
     - go mod tidy    
-    - go generate ./...
 builds:
   - id: epithet-agent
     binary: epithet-agent
@@ -30,31 +29,15 @@ changelog:
     - '^docs:'
     - '^test:'
 brews:
-  -
-    name: epithet
-    # GOARM to specify which 32-bit arm version to use if there are multiple versions
-    # from the build section. Brew formulas support atm only one 32-bit version.
-    # Default is 6 for all artifacts or each id if there a multiple versions.
-    goarm: 6
+  - name: epithet
     github:
       owner: epithet-ssh
       name: homebrew-epithet
-    # Git author used to commit to the repository.
-    # Defaults are shown.
     commit_author:
       name: goreleaserbot
       email: brianm@groupon.com
     folder: Formula
-
-    # Caveats for the user of your binary.
-    # Default is empty.
-    caveats: "some instructions"
-
-    # Your app's homepage.
-    # Default is empty.
+    caveats: "Installs the binaries, but no configs"    
     homepage: "https://epithet.io/"
-
-    # So you can `brew test` your formula.
-    # Default is empty.
     test: |
       system "#{bin}/epithet-agent --version"      
