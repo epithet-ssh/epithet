@@ -229,6 +229,7 @@ func (a *Agent) startAgentListener() error {
 		os.Remove(f.Name())
 	}
 
+	os.Remove(a.agentSocketPath) //remove socket if it exists
 	agentListener, err := net.Listen("unix", a.agentSocketPath)
 	if err != nil {
 		a.Close()
@@ -315,6 +316,7 @@ func (a *Agent) startControlListener() error {
 		os.Remove(f.Name())
 	}
 
+	os.Remove(a.controlSocketPath)
 	authnListener, err := net.Listen("unix", a.controlSocketPath)
 	if err != nil {
 		a.Close()
