@@ -365,6 +365,10 @@ func (a *Agent) Running() bool {
 // Close stops the agent and cleansup after it
 func (a *Agent) Close() {
 	a.running.Store(false)
-	a.grpcServer.Stop()
-	_ = a.agentListener.Close() //ignore error
+	if a.grpcServer != nil {
+		a.grpcServer.Stop()
+	}
+	if a.agentListener != nil {
+		_ = a.agentListener.Close() //ignore error
+	}
 }
