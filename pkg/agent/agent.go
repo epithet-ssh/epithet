@@ -229,6 +229,7 @@ func (a *Agent) startAgentListener() error {
 		os.Remove(f.Name())
 	}
 
+	os.Remove(a.agentSocketPath) //remove socket if it exists
 	agentListener, err := net.Listen("unix", a.agentSocketPath)
 	if err != nil {
 		a.Close()
@@ -315,6 +316,7 @@ func (a *Agent) startControlListener() error {
 		os.Remove(f.Name())
 	}
 
+	os.Remove(a.controlSocketPath)
 	authnListener, err := net.Listen("unix", a.controlSocketPath)
 	if err != nil {
 		a.Close()
@@ -363,6 +365,10 @@ func (a *Agent) Running() bool {
 // Close stops the agent and cleansup after it
 func (a *Agent) Close() {
 	a.running.Store(false)
-	a.grpcServer.Stop()
-	_ = a.agentListener.Close() //ignore error
+	if a.grpcServer != nil {
+		a.grpcServer.Stop()
+	}
+	if a.agentListener != nil {
+		_ = a.agentListener.Close() //ignore error
+	}
 }
