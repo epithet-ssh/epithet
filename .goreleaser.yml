@@ -34,8 +34,8 @@ brews:
       owner: epithet-ssh
       name: homebrew-epithet
     commit_author:
-      name: goreleaserbot
-      email: brianm@groupon.com
+      name: Epithet Bot
+      email: bot@epithet.io
     folder: Formula
     caveats: "Installs the binaries, but no configs"    
     homepage: "https://epithet.io/"
