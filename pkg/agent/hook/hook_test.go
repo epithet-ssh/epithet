@@ -3,6 +3,7 @@ package hook_test
 import (
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/agent/hook"
@@ -41,7 +42,7 @@ func TestHook_State(t *testing.T) {
 	body, err := ioutil.ReadFile("/tmp/TestHook_State")
 	require.NoError(t, err)
 	// except 0 len recorded
-	require.Equal(t, "       0\n", string(body))
+	require.Equal(t, "0", strings.TrimSpace(string(body)))
 
 	// state should now be "       0\n" so len should be 9
 	err = h.Run(map[string]string{})
@@ -49,5 +50,5 @@ func TestHook_State(t *testing.T) {
 	body, err = ioutil.ReadFile("/tmp/TestHook_State")
 	require.NoError(t, err)
 	// expect len 9 for the state, now that it exists :-)
-	require.Equal(t, "       9\n", string(body))
+	require.Equal(t, "9", strings.TrimSpace(string(body)))
 }
