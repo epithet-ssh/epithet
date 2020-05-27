@@ -5,18 +5,35 @@ builds:
   - id: epithet-agent
     binary: epithet-agent
     main: ./cmd/epithet-agent/
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
   - id: epithet-auth
     binary: epithet-auth
     main: ./cmd/epithet-auth/
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
   - id: epithet-ca
     binary: epithet-ca
     main: ./cmd/epithet-ca/
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
 archives:
 - replacements:
     darwin: Darwin
     linux: Linux
     windows: Windows
-    386: i386
     amd64: x86_64
 checksum:
   name_template: 'checksums.txt'
