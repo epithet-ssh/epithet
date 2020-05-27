@@ -83,9 +83,6 @@ func run(cc *cobra.Command, args []string) error {
 	case rs := <-sigs:
 		signal.Stop(sigs)
 		switch rs {
-		case os.Kill:
-			log.Info("KILL received")
-			syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
 		default:
 			log.Info("INT received")
 			return nil
