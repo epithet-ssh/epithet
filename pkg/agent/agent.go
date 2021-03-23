@@ -311,9 +311,9 @@ func (a *Agent) serveAgent(conn net.Conn) {
 	err := agent.ServeAgent(a.keyring, conn)
 	if err != nil && err != io.EOF {
 		log.Warnf("error from ssh-agent: %v", err)
-		_ = conn.Close()
-		// ignoring close erros
 	}
+	// close the connection after the credential is served
+	conn.Close()
 }
 
 func (a *Agent) startControlListener() error {
