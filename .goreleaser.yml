@@ -1,6 +1,6 @@
 before:
   hooks:
-    - go mod tidy    
+    - go mod tidy
 builds:
   - id: epithet-agent
     binary: epithet-agent
@@ -47,14 +47,14 @@ changelog:
     - '^test:'
 brews:
   - name: epithet
-    github:
+    tap:
       owner: epithet-ssh
       name: homebrew-epithet
     commit_author:
       name: Epithet Bot
       email: bot@epithet.io
     folder: Formula
-    caveats: "Installs the binaries, but no configs"    
+    caveats: "Installs the binaries, but no configs"
     homepage: "https://epithet.io/"
     test: |
-      system "#{bin}/epithet-agent --version"      
+      system "#{bin}/epithet-agent --version"
