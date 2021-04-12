@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	rpc "github.com/epithet-ssh/epithet/internal/agent"
@@ -47,6 +48,7 @@ type Agent struct {
 	privateKey sshcert.RawPrivateKey
 
 	hooks map[string]*hook.Hook
+	lock  sync.Mutex
 }
 
 // Start creates and starts an SSH Agent
@@ -194,6 +196,13 @@ func (a *Agent) UseCredential(c Credential) error {
 	return nil
 }
 
+// CheckCertificate checks if the certificate is expired or invalid
+func (a *Agent) CheckCertificate() bool {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	return a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow
+}
+
 // RequestCertificate tries to convert a `{token, pubkey}` into a certificate
 func (a *Agent) RequestCertificate(ctx context.Context, token string) error {
 	a.lastToken.Store(token)
@@ -285,23 +294,26 @@ const CertExpirationFuzzWindow = 20
 
 func (a *Agent) serveAgent(conn net.Conn) {
 	log.Debug("new connection to agent")
-	if a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow {
+	if a.CheckCertificate() {
+		a.lock.Lock()
 		err := a.RequestCertificate(a.ctx, a.lastToken.Load())
 		if err != nil {
 			err = a.hookNeedAuth()
 			if err != nil {
 				conn.Close()
+				a.lock.Unlock()
 				return
 			}
 		}
+		a.lock.Unlock()
 	}
 
 	err := agent.ServeAgent(a.keyring, conn)
 	if err != nil && err != io.EOF {
 		log.Warnf("error from ssh-agent: %v", err)
-		_ = conn.Close()
-		// ignoring close erros
 	}
+	// close the connection after the credential is served
+	conn.Close()
 }
 
 func (a *Agent) startControlListener() error {
