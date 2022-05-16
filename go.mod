@@ -40,6 +40,6 @@ require (
 	google.golang.org/genproto v0.0.0-20200108215221-bd8f9a0ef82f // indirect
 	google.golang.org/grpc v1.26.0
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
-	gopkg.in/yaml.v2 v2.2.7
+	gopkg.in/yaml.v2 v2.2.8
 	gotest.tools v0.0.0-20181223230014-1083505acf35
 )
