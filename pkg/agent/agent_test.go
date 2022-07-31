@@ -59,7 +59,7 @@ func TestBasics(t *testing.T) {
 	a, err := agent.Start(nil)
 	require.NoError(t, err)
 
-	server, err := sshd.StartSSHD()
+	server, err := sshd.StartSSHD(_caPubKey)
 	require.NoError(t, err)
 	defer server.Close()
 
@@ -84,6 +84,8 @@ func TestBasics(t *testing.T) {
 		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())
 	}
 }
+
+const _caPubKey = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDNH7zWoDN/0GHOqMq8E4l0xehxI4bqcqp4FmjMoGp1gb1VYl+G/KWoRufzamCvVvX37oGfTlIi/0wW/mCFPtVv9Dg6nWGVRz6rECv4hjF4TcxgXIXbVLw70Lwy0FNhc9bX13D+4Z8UkaP94c0s79nbtfW7w82jvnCXwWYh9odr+PX9tSZOCJvWgoGd0/pMbyLp/7EapGByu+fxqx4Xyb89RVtCpBBZrZ7xOqPV5wD5BjHfrCREqcdeV8jzzQkxDUclPjbFga4WWUMEFz3lr8b14yPl0m5ANCRFz2RX7jp8xKiL8gz7V0K37ZX5vHaGgaDHgQbmRvq7BkaGWRYELyzJ user-ca`
 
 const _caPrivKey = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn

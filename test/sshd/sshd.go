@@ -2,32 +2,106 @@ package sshd
 
 import (
 	"fmt"
+	"io/ioutil"
+	"net"
+	"os"
 	"os/exec"
+	"os/user"
+	"text/template"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 )
 
 type sshServer struct {
+	dir  string
+	port int
+	user string
 }
 
-func StartSSHD() (*sshServer, error) {
-	panic("start sshd")
+func StartSSHD(caPubKey string) (*sshServer, error) {
+	// make a temp dir
+	dir, err := os.MkdirTemp("", "epithet_test_sshd")
+	if err != nil {
+		return nil, fmt.Errorf("unable to start sshd: %w", err)
+	}
+
+	// generate host key
+	cmd := exec.Command("ssh-keygen", "-q", "-N", `""`, "-t", "rsa", "-b", "4096", "-f", "ssh_host_rsa_key")
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return nil, fmt.Errorf("unable to generate hostkey: %w", err)
+	}
+
+	// find username to use
+	user, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("unable to find current user: %w", err)
+	}
+
+	// find available high port
+	port, err := availablePort()
+	if err != nil {
+		return nil, fmt.Errorf("unable to find available port: %w", err)
+	}
+
+	// write CA pubkey
+	ioutil.WriteFile(fmt.Sprintf("%s/ca.pub", dir), []byte(caPubKey), 0644)
+
+	// generate and write sshd config
+	tmpl := template.Must(template.New("sshdConfig").Parse(sshdConfigTemplate))
+	sshd_config, err := os.Create(fmt.Sprintf("%s/sshd_config", dir))
+	if err != nil {
+		return nil, fmt.Errorf("unable to create sshd_config: %w", err)
+	}
+	defer sshd_config.Close()
+
+	err = tmpl.Execute(sshd_config, map[string]string{"Prefix": dir, "Port": fmt.Sprintf("%d", port)})
+	if err != nil {
+		return nil, fmt.Errorf("error generating sshd_config: %w", err)
+	}
+
+	// make auth principals
+
+	// start sshd
+
+	// save reference to child sshd process
+
+	return &sshServer{
+		dir:  dir,
+		port: port,
+		user: user.Username,
+	}, nil
 }
 
-func (s sshServer) Port() string {
-	panic("get port")
+func (s *sshServer) Port() int {
+	return s.port
 }
 
-func (s sshServer) Close() {
-	panic("close")
+func (s *sshServer) Dir() string {
+	return s.dir
 }
 
-func (s sshServer) Ssh(a *agent.Agent, args ...string) (string, error) {
+func (s *sshServer) User() string {
+	return s.user
+}
+
+func (s *sshServer) Close() error {
+	err := os.RemoveAll(s.dir)
+	if err != nil {
+		return fmt.Errorf("unable to cleanup: %w", err)
+	}
+	return nil
+}
+
+func (s *sshServer) Ssh(a *agent.Agent, args ...string) (string, error) {
 	argv := []string{
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
-		"-p", s.Port(),
+		"-p", fmt.Sprintf("%d", s.Port()),
 		"root@localhost"}
 
 	argv = append(argv, args...)
@@ -39,33 +113,31 @@ func (s sshServer) Ssh(a *agent.Agent, args ...string) (string, error) {
 	return string(out), err
 }
 
-const _caPubKey = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDNH7zWoDN/0GHOqMq8E4l0xehxI4bqcqp4FmjMoGp1gb1VYl+G/KWoRufzamCvVvX37oGfTlIi/0wW/mCFPtVv9Dg6nWGVRz6rECv4hjF4TcxgXIXbVLw70Lwy0FNhc9bX13D+4Z8UkaP94c0s79nbtfW7w82jvnCXwWYh9odr+PX9tSZOCJvWgoGd0/pMbyLp/7EapGByu+fxqx4Xyb89RVtCpBBZrZ7xOqPV5wD5BjHfrCREqcdeV8jzzQkxDUclPjbFga4WWUMEFz3lr8b14yPl0m5ANCRFz2RX7jp8xKiL8gz7V0K37ZX5vHaGgaDHgQbmRvq7BkaGWRYELyzJ user-ca`
+func availablePort() (int, error) {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return 0, err
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	err = listener.Close()
+	if err != nil {
+		return 0, err
+	}
 
-const _caPrivKey = `-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
-NhAAAAAwEAAQAAAQEAzR+81qAzf9BhzqjKvBOJdMXocSOG6nKqeBZozKBqdYG9VWJfhvyl
-qEbn82pgr1b19+6Bn05SIv9MFv5ghT7Vb/Q4Op1hlUc+qxAr+IYxeE3MYFyF21S8O9C8Mt
-BTYXPW19dw/uGfFJGj/eHNLO/Z27X1u8PNo75wl8FmIfaHa/j1/bUmTgib1oKBndP6TG8i
-6f+xGqRgcrvn8aseF8m/PUVbQqQQWa2e8Tqj1ecA+QYx36wkRKnHXlfI880JMQ1HJT42xY
-GuFllDBBc95a/G9eMj5dJuQDQkRc9kV+46fMSoi/IM+1dCt+2V+bx2hoGgx4EG5kb6uwZG
-hlkWBC8syQAAA8DxizNB8YszQQAAAAdzc2gtcnNhAAABAQDNH7zWoDN/0GHOqMq8E4l0xe
-hxI4bqcqp4FmjMoGp1gb1VYl+G/KWoRufzamCvVvX37oGfTlIi/0wW/mCFPtVv9Dg6nWGV
-Rz6rECv4hjF4TcxgXIXbVLw70Lwy0FNhc9bX13D+4Z8UkaP94c0s79nbtfW7w82jvnCXwW
-Yh9odr+PX9tSZOCJvWgoGd0/pMbyLp/7EapGByu+fxqx4Xyb89RVtCpBBZrZ7xOqPV5wD5
-BjHfrCREqcdeV8jzzQkxDUclPjbFga4WWUMEFz3lr8b14yPl0m5ANCRFz2RX7jp8xKiL8g
-z7V0K37ZX5vHaGgaDHgQbmRvq7BkaGWRYELyzJAAAAAwEAAQAAAQEAx28PJEG4MJIDNnHI
-Q1pfb8in+bCIEVSRR5bKKAHj4AHXerfdlxn3WoguJu2LuY68MWWUY7Y7h8leSpDieUqhLG
-tvbBXudbxCQwHDLqwSVxyVFC+A+cIGDcYh5OnF199PyKWwODBXgiEkJ8ituv4sfEEK/Zcf
-Tg/v2qxvx5+xBRjZOMclfhFvtv+QxsE+yFH9+KZvrtv0GsEHTnCD1FsY1Vh6vZhBBjFNFo
-JtKw5KIiXGdmMv9s6cUT4DClG31M2QnvbppQhLrxxdLAGTB0Dr7ldtBZdauhKhPo1TaJMg
-3EQZ7IYoyBeCedOagAKb0GW68FW0Tmy73HaRfU8dZgnaDQAAAIAncC8GP72UgX7zxJ19Go
-/tpmKyQvtrOjtmZAja0/y+bePYwHllvTfPLEo5NOeiLv8fDTTIPETUMmihywstyU2TPbWq
-pgRjXCv36QGYlviKfjja1uIwd9KLJRKavI3kp+0uz6ZJFxrez0i7GCR0Tu2rX+RGrjLj2V
-mY+eCroW+y5AAAAIEA5+Hl9hU2Sbx8j6Ohgeyn9eFfVTafRttMg2wMQVNW0MzMj0DibSKT
-Fi55TwSANSXMQ/uL3eW6ZcHcxKQCxT2KzTz7QiR3qE2uad9EQx3N6XWKxDoPlDgrlUktcH
-nYy4rmJe7HVL7FpBuFUxsfrlgVclrxClA/lZq8mP9CutlZBYcAAACBAOJ1XnwElJpDxwWY
-HEM250mpK26m4oxkjBMIx/lLC1DST+vMU2k/N801xi6Rb1MravliiuK0jHZlJO4DL816GV
-lTe2/oE0W4DNt/J1ypylVLVL2E2EKqQqHbYmXQ87EFdp8OanAu6F29pRdKstTbYkGk6lET
-lYB3IqmowLJ7ac8vAAAAB3VzZXItY2EBAgM=
------END OPENSSH PRIVATE KEY-----
+	return port, nil
+}
+
+const sshdConfigTemplate = `
+ListenAddress 127.0.0.1
+Port {{ .Port }}
+HostKey {{ .Prefix }}/ssh_host_rsa_key
+LogLevel DEBUG3
+ChallengeResponseAuthentication no
+UsePAM no
+PrintMotd no
+PidFile {{ .Prefix }}/sshd.pid
+AcceptEnv LANG LC_*
+
+TrustedUserCAKeys {{ .Prefix }}/ca.pub
+AuthorizedPrincipalsFile {{ .Prefix }}/auth_principals/%u
 `

@@ -33,7 +33,7 @@ func Test_EndToEnd(t *testing.T) {
 
 	require := require.New(t)
 
-	sshd, err := sshd.StartSSHD()
+	sshd, err := sshd.StartSSHD(_caPubKey)
 	require.NoError(err)
 	defer sshd.Close()
 
