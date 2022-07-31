@@ -4,16 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
-	"os/exec"
 	"testing"
 
 	rpc "github.com/epithet-ssh/epithet/internal/agent"
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/ory/dockertest"
+	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -61,7 +59,7 @@ func TestBasics(t *testing.T) {
 	a, err := agent.Start(nil)
 	require.NoError(t, err)
 
-	server, err := startSSHD()
+	server, err := sshd.StartSSHD()
 	require.NoError(t, err)
 	defer server.Close()
 
@@ -71,7 +69,7 @@ func TestBasics(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	out, err := server.ssh(a, "ls", "/etc/ssh/")
+	out, err := server.Ssh(a, "ls", "/etc/ssh/")
 
 	fmt.Printf(out)
 	require.NoError(t, err)
@@ -85,56 +83,6 @@ func TestBasics(t *testing.T) {
 	if !os.IsNotExist(err) {
 		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())
 	}
-}
-
-type sshServer struct {
-	*dockertest.Resource
-}
-
-func startSSHD() (*sshServer, error) {
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
-	}
-	// pulls an image, creates a container based on it and runs it
-	resource, err := pool.Run("brianm/epithet-test-sshd", "4", []string{})
-	if err != nil {
-		log.Fatalf("Could not start resource: %s", err)
-	}
-
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
-	if err := pool.Retry(func() error {
-		port := resource.GetPort("22/tcp")
-
-		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%s", port))
-		if err != nil {
-			return err
-		}
-		conn.Close()
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("Could not connect to docker: %w", err)
-	}
-
-	return &sshServer{resource}, err
-}
-
-func (s sshServer) Port() string {
-	return s.GetPort("22/tcp")
-}
-
-func (s sshServer) ssh(a *agent.Agent, args ...string) (string, error) {
-	argv := []string{
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
-		"-p", s.Port(),
-		"root@localhost"}
-
-	argv = append(argv, args...)
-	cmd := exec.Command("ssh", argv...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
 }
 
 const _caPrivKey = `-----BEGIN OPENSSH PRIVATE KEY-----

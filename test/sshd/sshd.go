@@ -1,90 +1,42 @@
-package test
+package sshd
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
+	"fmt"
+	"os/exec"
 
-	rpc "github.com/epithet-ssh/epithet/internal/agent"
 	"github.com/epithet-ssh/epithet/pkg/agent"
-	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/test/sshd"
-	"github.com/stretchr/testify/require"
 )
 
-func Test_EndToEnd(t *testing.T) {
-	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Content-type", "application/json")
-		w.WriteHeader(200)
-		out, err := json.Marshal(&ca.CertParams{
-			Names:      []string{"brianm", "root"},
-			Identity:   "brianm@skife.org",
-			Expiration: time.Minute * 5,
-		})
-		require.NoError(t, err)
-		w.Write(out)
-	}))
-	defer policyServer.Close()
-
-	require := require.New(t)
-
-	sshd, err := sshd.StartSSHD()
-	require.NoError(err)
-	defer sshd.Close()
-
-	c, err := ca.New(_caPrivKey, policyServer.URL)
-	require.NoError(err)
-
-	cad, err := startCAServer(c)
-	require.NoError(err)
-	defer cad.Close()
-
-	cac := caclient.New(cad.srv.URL)
-
-	a, err := agent.Start(cac)
-	require.NoError(err)
-	defer a.Close()
-
-	authnClient, err := rpc.NewClient(a.ControlSocketPath())
-	require.NoError(err)
-
-	_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{
-		Token: "yes, please!",
-	})
-	require.NoError(err)
-
-	out, err := sshd.Ssh(a, "ls", "/etc/ssh/")
-	require.NoError(err)
-
-	require.Contains(out, "sshd_config")
-	require.Contains(out, "auth_principals")
-	require.Contains(out, "ca.pub")
+type sshServer struct {
 }
 
-type caServer struct {
-	c   *ca.CA
-	srv *httptest.Server
+func StartSSHD() (*sshServer, error) {
+	panic("start sshd")
 }
 
-func startCAServer(c *ca.CA) (*caServer, error) {
-	handler := caserver.New(c)
-	srv := httptest.NewServer(handler)
+func (s sshServer) Port() string {
+	panic("get port")
+}
 
-	cas := caServer{
-		c:   c,
-		srv: srv,
+func (s sshServer) Close() {
+	panic("close")
+}
+
+func (s sshServer) Ssh(a *agent.Agent, args ...string) (string, error) {
+	argv := []string{
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
+		"-p", s.Port(),
+		"root@localhost"}
+
+	argv = append(argv, args...)
+	cmd := exec.Command("ssh", argv...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, out)
 	}
-
-	return &cas, nil
-}
-
-func (c *caServer) Close() {
-	c.srv.Close()
+	return string(out), err
 }
 
 const _caPubKey = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDNH7zWoDN/0GHOqMq8E4l0xehxI4bqcqp4FmjMoGp1gb1VYl+G/KWoRufzamCvVvX37oGfTlIi/0wW/mCFPtVv9Dg6nWGVRz6rECv4hjF4TcxgXIXbVLw70Lwy0FNhc9bX13D+4Z8UkaP94c0s79nbtfW7w82jvnCXwWYh9odr+PX9tSZOCJvWgoGd0/pMbyLp/7EapGByu+fxqx4Xyb89RVtCpBBZrZ7xOqPV5wD5BjHfrCREqcdeV8jzzQkxDUclPjbFga4WWUMEFz3lr8b14yPl0m5ANCRFz2RX7jp8xKiL8gz7V0K37ZX5vHaGgaDHgQbmRvq7BkaGWRYELyzJ user-ca`
