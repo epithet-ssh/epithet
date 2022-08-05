@@ -2,7 +2,6 @@ package agent_test
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
@@ -69,9 +68,7 @@ func TestBasics(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	out, err := server.Ssh(a, "ls", "/etc/ssh/")
-
-	fmt.Printf(out)
+	out, err := server.Ssh(a, "ls")
 	require.NoError(t, err)
 
 	require.Contains(t, out, "sshd_config")

@@ -2,6 +2,7 @@ package sshd_test
 
 import (
 	"fmt"
+	"os/user"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/test/sshd"
@@ -15,9 +16,13 @@ func Test_Basics(t *testing.T) {
 	port := sshd.Port()
 	require.Greater(t, port, 1023)
 
-	require.FileExists(t, fmt.Sprintf("%s/ssh_host_rsa_key", sshd.Dir))
-	require.FileExists(t, fmt.Sprintf("%s/ca.pub", sshd.Dir))
-	require.FileExists(t, fmt.Sprintf("%s/sshd_config", sshd.Dir))
+	require.FileExists(t, fmt.Sprintf("%s/ssh_host_key", sshd.Dir()))
+	require.FileExists(t, fmt.Sprintf("%s/ca.pub", sshd.Dir()))
+	require.FileExists(t, fmt.Sprintf("%s/sshd_config", sshd.Dir()))
+
+	currentUser, err := user.Current()
+	require.NoError(t, err)
+	require.Equal(t, sshd.User(), currentUser.Username)
 
 	err = sshd.Close()
 	require.NoError(t, err)
