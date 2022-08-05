@@ -55,12 +55,13 @@ func TestGRPC_Stuff(t *testing.T) {
 }
 
 func TestBasics(t *testing.T) {
+	ctx := context.Background()
 	a, err := agent.Start(nil)
 	require.NoError(t, err)
 
-	server, err := sshd.StartSSHD(_caPubKey)
+	server, err := sshd.StartSSHD(ctx)
 	require.NoError(t, err)
-	defer server.Close()
+	defer server.Close(ctx)
 
 	err = a.UseCredential(agent.Credential{
 		PrivateKey:  sshcert.RawPrivateKey(_userPrivateKey),
@@ -68,7 +69,7 @@ func TestBasics(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	out, err := server.Ssh(a, "ls")
+	out, err := server.Ssh(ctx, a, "ls")
 	require.NoError(t, err)
 
 	require.Contains(t, out, "sshd_config")

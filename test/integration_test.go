@@ -33,9 +33,10 @@ func Test_EndToEnd(t *testing.T) {
 
 	require := require.New(t)
 
-	sshd, err := sshd.StartSSHD(_caPubKey)
+	ctx := context.Background()
+	sshd, err := sshd.StartSSHD(ctx)
 	require.NoError(err)
-	defer sshd.Close()
+	defer sshd.Close(ctx)
 
 	c, err := ca.New(_caPrivKey, policyServer.URL)
 	require.NoError(err)
@@ -58,7 +59,7 @@ func Test_EndToEnd(t *testing.T) {
 	})
 	require.NoError(err)
 
-	out, err := sshd.Ssh(a, "ls", "/etc/ssh/")
+	out, err := sshd.Ssh(ctx, a, "ls", "/etc/ssh/")
 	require.NoError(err)
 
 	require.Contains(out, "sshd_config")
