@@ -22,5 +22,5 @@ COPY sshd_config /etc/ssh/sshd_config
 COPY auth_principals/* /etc/ssh/auth_principals/
 RUN chmod 0644 /etc/ssh/sshd_config /etc/ssh/ca.pub
 
-EXPOSE 22
+EXPOSE 2222
 CMD ["/usr/sbin/sshd", "-D"]

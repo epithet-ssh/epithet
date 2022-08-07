@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 
@@ -31,8 +32,8 @@ func StartSSHD(ctx context.Context) (*sshServer, error) {
 		FromDockerfile: testcontainers.FromDockerfile{
 			Context: dockerContext(),
 		},
-		ExposedPorts: []string{"22/tcp"},
-		WaitingFor:   wait.ForListeningPort("22/tcp"),
+		ExposedPorts: []string{"2222/tcp"},
+		WaitingFor:   wait.ForListeningPort("2222/tcp"),
 	}
 
 	server, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -49,15 +50,19 @@ func StartSSHD(ctx context.Context) (*sshServer, error) {
 }
 
 func (s *sshServer) Port(ctx context.Context) (string, error) {
-	port, err := s.container.MappedPort(ctx, "22")
+	port, err := s.container.MappedPort(ctx, "2222/tcp")
 	if err != nil {
 		return "", fmt.Errorf("unable to find mapped port: %w", err)
 	}
 	return port.Port(), nil
 }
 
-func (s *sshServer) User() string {
-	return "root"
+func (s *sshServer) Host(ctx context.Context) (string, error) {
+	host, err := s.container.Host(ctx)
+	if err != nil {
+		return "", fmt.Errorf("unable to find host: %w", err)
+	}
+	return host, nil
 }
 
 func (s *sshServer) Close(ctx context.Context) error {
@@ -69,14 +74,21 @@ func (s *sshServer) Ssh(ctx context.Context, a *agent.Agent, args ...string) (st
 	if err != nil {
 		return "", err
 	}
+	host, err := s.Host(ctx)
+	if err != nil {
+		return "", err
+	}
+
 	argv := []string{
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
 		"-p", port,
-		// "-vv",
-		fmt.Sprintf("%s@localhost", s.User())}
-
+		"-vv",
+		fmt.Sprintf("root@%s", host),
+	}
+	ss := strings.Join(argv, " ")
+	fmt.Println(ss)
 	argv = append(argv, args...)
 	cmd := exec.Command("ssh", argv...)
 	out, err := cmd.CombinedOutput()
