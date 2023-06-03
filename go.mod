@@ -12,7 +12,6 @@ require (
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/go-chi/chi v4.1.2+incompatible
-	github.com/golang/protobuf v1.5.3
 	github.com/gotestyourself/gotestyourself v2.2.0+incompatible // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lib/pq v1.2.0 // indirect
@@ -30,6 +29,7 @@ require (
 	golang.org/x/tools v0.9.3 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230530153820-e85fd2cbaebc // indirect
 	google.golang.org/grpc v1.55.0
+	google.golang.org/protobuf v1.30.0
 	gopkg.in/yaml.v2 v2.4.0
 	gotest.tools v0.0.0-20181223230014-1083505acf35
 )

@@ -1,4 +1,5 @@
 syntax = "proto3";
+option go_package = "/agent";
 
 service AgentService {
   // Give the agent an authn token with which it can retrieve a new cert
