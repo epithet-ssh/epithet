@@ -20,7 +20,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type authnService struct{}
+type authnService struct {
+	rpc.UnimplementedAgentServiceServer
+}
 
 func (s *authnService) Authenticate(ctx context.Context, req *rpc.AuthnRequest) (*rpc.AuthnResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "no!")
