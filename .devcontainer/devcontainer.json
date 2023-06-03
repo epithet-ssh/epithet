@@ -12,7 +12,8 @@
 			"moby": "true"
 		},
 		"ghcr.io/devcontainers/features/go:1": {},
-		"ghcr.io/devcontainers/features/github-cli:1":{}
+		"ghcr.io/devcontainers/features/github-cli:1":{},
+		"ghcr.io/guiyomh/features/goreleaser:0":{}
 	}
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.

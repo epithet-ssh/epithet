@@ -6,3 +6,5 @@
 .vscode
 tmp
 *.exe
+
+dist/
