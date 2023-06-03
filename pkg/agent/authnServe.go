@@ -7,6 +7,8 @@ import (
 )
 
 type authnServe struct {
+	rpc.UnimplementedAgentServiceServer
+
 	a *Agent
 }
 
