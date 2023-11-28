@@ -1,0 +1,14 @@
+
+Port {{.Port}}
+PasswordAuthentication no
+Protocol 2
+IgnoreRhosts yes
+AcceptEnv LANG LC_*
+UsePAM no 
+LoginGraceTime 120
+PubkeyAuthentication yes
+
+ForceCommand {{.Path}}/command.sh
+HostKey {{.Path}}/ssh_host_rsa_key
+TrustedUserCAKeys {{.Path}}/ca.pub
+AuthorizedPrincipalsFile {{.Path}}/auth_principals/%u

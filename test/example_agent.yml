@@ -9,4 +9,5 @@ testing:
 example-com:
     ca_url: https://ca.example.com/ssh/
     hooks:
+        start: "say 'Epithet is ready to go'"
         need_auth: "epithet-oidc -f /usr/local/etc/epithet/groupon-oidc.yml -s {{control_sock}}"

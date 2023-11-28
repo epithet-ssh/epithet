@@ -99,7 +99,7 @@ func startSSHD() (*sshServer, error) {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
 	// pulls an image, creates a container based on it and runs it
-	resource, err := pool.Run("brianm/epithet-test-sshd", "4", []string{})
+	resource, err := pool.Run("brianm/epithet-test-sshd", "6", []string{})
 	if err != nil {
 		log.Fatalf("Could not start resource: %s", err)
 	}

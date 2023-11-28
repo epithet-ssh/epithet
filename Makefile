@@ -1,4 +1,4 @@
-DOCKER_TEST_SSHD_VERSION := 5
+DOCKER_TEST_SSHD_VERSION := 6
 
 .PHONY: all
 all: test build		## run tests and build binaries

@@ -88,6 +88,9 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 		return nil, err
 	}
 
+	// todo run Start hooks
+	a.hookStart()
+
 	return a, nil
 }
 
@@ -282,6 +285,21 @@ func (a *Agent) hookNeedAuth() error {
 		})
 		if err != nil {
 			log.Warnf("error evaluating `need_auth` hook: %v", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Agent) hookStart() error {
+	if h, ok := a.hooks[hook.Start]; ok {
+		err := h.Run(map[string]string{
+			"hook":         hook.Start,
+			"control_sock": a.ControlSocketPath(),
+			"agent_sock":   a.AgentSocketPath(),
+		})
+		if err != nil {
+			log.Warnf("error evaluating `start` hook: %v", err)
 			return err
 		}
 	}
