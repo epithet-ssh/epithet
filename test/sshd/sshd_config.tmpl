@@ -7,6 +7,7 @@ AcceptEnv LANG LC_*
 UsePAM no 
 LoginGraceTime 120
 PubkeyAuthentication yes
+StrictModes no
 
 ForceCommand {{.Path}}/command.sh
 HostKey {{.Path}}/ssh_host_ed25519_key
