@@ -26,10 +26,10 @@ func Test_EndToEnd_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policyServer := startPolicyServer("a")
-	defer policyServer.Close()
+	policy_server := startPolicyServer("a")
+	defer policy_server.Close()
 
-	ca, err := ca.New(caPrivKey, policyServer.URL)
+	ca, err := ca.New(caPrivKey, policy_server.URL)
 	require.NoError(t, err)
 
 	ca_server, err := startCAServer(ca)
@@ -61,10 +61,10 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policyServer := startPolicyServer("c")
-	defer policyServer.Close()
+	policy_server := startPolicyServer("c")
+	defer policy_server.Close()
 
-	ca, err := ca.New(caPrivKey, policyServer.URL)
+	ca, err := ca.New(caPrivKey, policy_server.URL)
 	require.NoError(t, err)
 
 	cad, err := startCAServer(ca)
