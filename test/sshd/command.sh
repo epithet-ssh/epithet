@@ -1,3 +1,3 @@
 #!/bin/sh
 
-echo "hello from ssh!"
+echo "hello from sshd!"

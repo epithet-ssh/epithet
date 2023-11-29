@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
@@ -120,6 +122,34 @@ func (s *Server) Close() error {
 	log.Print("sshd exited")
 
 	return nil
+}
+
+func (s *Server) Ssh(a *agent.Agent) (string, error) {
+	// ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityFile=/path/to/ca.key -p 2222 -i /path/to/agent.sock -l user localhost
+	ssh_path, err := exec.LookPath("ssh")
+	if err != nil {
+		return "", fmt.Errorf("could not find ssh: %w", err)
+	}
+
+	argv := []string{
+		"-v",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
+		"-p", strconv.Itoa(s.Port),
+		s.User + "@localhost"}
+
+	cmd := exec.Command(ssh_path, argv...)
+	out := bytes.Buffer{}
+	cmd.Stderr = &out
+	cmd.Stdout = &out
+
+	err = cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("could not run ssh: %w", err)
+	}
+	log.Print(out.String())
+	return out.String(), nil
 }
 
 //go:embed sshd_config.tmpl
