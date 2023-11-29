@@ -26,39 +26,29 @@ func Test_EndToEnd_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Content-type", "application/json")
-		w.WriteHeader(200)
-		out, err := json.Marshal(&ca.CertParams{
-			Names:      []string{"a"},
-			Identity:   "tester@example.org",
-			Expiration: time.Minute * 5,
-		})
-		require.NoError(t, err)
-		w.Write(out)
-	}))
+	policyServer := startPolicyServer("a")
 	defer policyServer.Close()
 
 	ca, err := ca.New(caPrivKey, policyServer.URL)
 	require.NoError(t, err)
 
-	cad, err := startCAServer(ca)
+	ca_server, err := startCAServer(ca)
 	require.NoError(t, err)
-	defer cad.Close()
+	defer ca_server.Close()
 
-	cac := caclient.New(cad.srv.URL)
-	a, err := agent.Start(cac)
+	ca_client := caclient.New(ca_server.URL)
+	agent, err := agent.Start(ca_client)
 	require.NoError(t, err)
-	defer a.Close()
+	defer agent.Close()
 
-	authnClient, err := rpc.NewClient(a.ControlSocketPath())
+	authn_client, err := rpc.NewClient(agent.ControlSocketPath())
 	require.NoError(t, err)
-	_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{
-		Token: "yes, please!",
+	_, err = authn_client.Authenticate(context.Background(), &rpc.AuthnRequest{
+		Token: "This token is ignored by our policy server",
 	})
 	require.NoError(t, err)
 
-	out, err := sshd.Ssh(a)
+	out, err := sshd.Ssh(agent)
 	require.NoError(t, err)
 	require.Contains(t, out, "hello from sshd")
 }
@@ -71,17 +61,7 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Content-type", "application/json")
-		w.WriteHeader(200)
-		out, err := json.Marshal(&ca.CertParams{
-			Names:      []string{"not_allowed"},
-			Identity:   "tester@example.org",
-			Expiration: time.Minute * 5,
-		})
-		require.NoError(t, err)
-		w.Write(out)
-	}))
+	policyServer := startPolicyServer("c")
 	defer policyServer.Close()
 
 	ca, err := ca.New(caPrivKey, policyServer.URL)
@@ -91,7 +71,7 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	require.NoError(t, err)
 	defer cad.Close()
 
-	cac := caclient.New(cad.srv.URL)
+	cac := caclient.New(cad.URL)
 	a, err := agent.Start(cac)
 	require.NoError(t, err)
 	defer a.Close()
@@ -108,23 +88,27 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	require.Contains(t, out, "Permission denied")
 }
 
-type caServer struct {
-	c   *ca.CA
-	srv *httptest.Server
-}
-
-func startCAServer(c *ca.CA) (*caServer, error) {
+func startCAServer(c *ca.CA) (*httptest.Server, error) {
 	handler := caserver.New(c)
-	srv := httptest.NewServer(handler)
-
-	cas := caServer{
-		c:   c,
-		srv: srv,
-	}
-
-	return &cas, nil
+	return httptest.NewServer(handler), nil
 }
 
-func (c *caServer) Close() {
-	c.srv.Close()
+func startPolicyServer(principals ...string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := json.Marshal(&ca.CertParams{
+			Names:      principals,
+			Identity:   "tester@example.org",
+			Expiration: time.Minute * 5,
+		})
+		if err != nil {
+			w.Header().Add("Content-type", "text/plain")
+
+			w.WriteHeader(500)
+			w.Write([]byte(err.Error()))
+			return
+		}
+		w.Header().Add("Content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write(out)
+	}))
 }
