@@ -146,9 +146,8 @@ func (s *Server) Ssh(a *agent.Agent) (string, error) {
 
 	err = cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("could not run ssh: %w", err)
+		return out.String(), fmt.Errorf("could not run ssh: %w", err)
 	}
-	log.Print(out.String())
 	return out.String(), nil
 }
 

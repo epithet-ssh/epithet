@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_EndToEnd2(t *testing.T) {
+func Test_EndToEnd_Success(t *testing.T) {
 	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
@@ -61,6 +61,51 @@ func Test_EndToEnd2(t *testing.T) {
 	out, err := sshd.Ssh(a)
 	require.NoError(t, err)
 	require.Contains(t, out, "hello from sshd")
+}
+
+func Test_EndToEnd_Failure(t *testing.T) {
+	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+
+	sshd, err := sshd.Start(caPubKey)
+	require.NoError(t, err)
+	defer sshd.Close()
+
+	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-type", "application/json")
+		w.WriteHeader(200)
+		out, err := json.Marshal(&ca.CertParams{
+			Names:      []string{"not_allowed"},
+			Identity:   "tester@example.org",
+			Expiration: time.Minute * 5,
+		})
+		require.NoError(t, err)
+		w.Write(out)
+	}))
+	defer policyServer.Close()
+
+	ca, err := ca.New(caPrivKey, policyServer.URL)
+	require.NoError(t, err)
+
+	cad, err := startCAServer(ca)
+	require.NoError(t, err)
+	defer cad.Close()
+
+	cac := caclient.New(cad.srv.URL)
+	a, err := agent.Start(cac)
+	require.NoError(t, err)
+	defer a.Close()
+
+	authnClient, err := rpc.NewClient(a.ControlSocketPath())
+	require.NoError(t, err)
+	_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{
+		Token: "yes, please!",
+	})
+	require.NoError(t, err)
+
+	out, err := sshd.Ssh(a)
+	require.Error(t, err)
+	require.Contains(t, out, "Permission denied")
 }
 
 type caServer struct {
