@@ -1,20 +1,28 @@
 package sshd
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"os/user"
+	"strings"
 	"text/template"
+	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
 type Server struct {
-	bin  string
-	User string
-	Path string
-	Port int
+	User     string
+	Path     string
+	Port     int
+	caPubKey sshcert.RawPublicKey
+	cmd      *exec.Cmd
+	Output   bytes.Buffer
 }
 
 // Start starts an sshd server as the current user, and returns a Server.
@@ -22,12 +30,7 @@ type Server struct {
 // requests on a random port.
 //
 // It will only process a single ssh connection before terminating.
-func Start() (*Server, error) {
-	sshd_path, err := exec.LookPath("sshd")
-	if err != nil {
-		return nil, fmt.Errorf("could not find sshd: %w", err)
-	}
-
+func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
 	user, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("could not get current user: %w", err)
@@ -44,11 +47,15 @@ func Start() (*Server, error) {
 	}
 
 	s := &Server{
-		sshd_path,
 		user.Username,
 		tmp_dir,
 		port,
+		caPubKey,
+		nil,
+		bytes.Buffer{},
 	}
+
+	log.Printf("Starting sshd in %s", tmp_dir)
 
 	err = generateConfigs(s)
 	if err != nil {
@@ -65,8 +72,34 @@ func Start() (*Server, error) {
 
 func (s *Server) start() error {
 	// /path/to/sshd -d -D -f /path/to/sshd_config
-	// cmd := exec.Command(sshd_path, "-D", "-d", "-f", "0")
-	// fmt.Println(cmd.String())
+	sshd_path, err := exec.LookPath("sshd")
+	if err != nil {
+		return fmt.Errorf("could not find sshd: %w", err)
+	}
+
+	cmd := exec.Command(sshd_path, "-D", "-d", "-f", s.Path+"/sshd_config")
+	s.cmd = cmd
+	cmd.Stderr = &s.Output
+	cmd.Stdout = &s.Output
+
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("could not start sshd: %w", err)
+	}
+
+	// Wait for "Server listening on" to be written to errb
+	for i := 0; i < 100; i++ {
+		if strings.Contains(s.Output.String(), "Server listening on") {
+			i = 1000
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+	if !strings.Contains(s.Output.String(), "Server listening on") {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return fmt.Errorf("sshd did not start: %s", s.Output.String())
+	}
+
 	return nil
 }
 
@@ -75,11 +108,25 @@ func (s *Server) Close() error {
 	if err != nil {
 		return fmt.Errorf("could not remove temp dir: %w", err)
 	}
+	err = s.cmd.Process.Signal(os.Interrupt)
+	if err != nil {
+		return fmt.Errorf("could not interrupt sshd: %w", err)
+	}
+	err = s.cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("could not wait for sshd to exit: %w", err)
+	}
+
+	log.Print("sshd exited")
+
 	return nil
 }
 
 //go:embed sshd_config.tmpl
 var sshd_config string
+
+//go:embed command.sh
+var command_sh []byte
 
 func generateConfigs(s *Server) error {
 	sshd_config := template.Must(template.New("sshd_config").Parse(sshd_config))
@@ -87,13 +134,41 @@ func generateConfigs(s *Server) error {
 	if err != nil {
 		return fmt.Errorf("could not create sshd_config: %w", err)
 	}
+	defer sshd_config_file.Close()
+	sshd_config.Execute(sshd_config_file, s)
 
 	err = os.Mkdir(s.Path+"/auth_principals", 0700)
 	if err != nil {
 		return fmt.Errorf("could not create auth_principals dir: %w", err)
 	}
 
-	sshd_config.Execute(sshd_config_file, s)
+	err = os.WriteFile(s.Path+"/auth_principals/"+s.User, []byte("a\nb"), 0600)
+	if err != nil {
+		return fmt.Errorf("could not create authorized_keys file: %w", err)
+	}
+
+	err = os.WriteFile(s.Path+"/ca.pub", []byte(s.caPubKey), 0600)
+	if err != nil {
+		return fmt.Errorf("could not create ca.pub file: %w", err)
+	}
+
+	hostPubKey, hostPrivKey, err := sshcert.GenerateKeys()
+	if err != nil {
+		return fmt.Errorf("could not generate host keys: %w", err)
+	}
+	err = os.WriteFile(s.Path+"/ssh_host_ed25519_key.pub", []byte(hostPubKey), 0600)
+	if err != nil {
+		return fmt.Errorf("could not create ssh_host_ed25519_key.pub file: %w", err)
+	}
+	err = os.WriteFile(s.Path+"/ssh_host_ed25519_key", []byte(hostPrivKey), 0600)
+	if err != nil {
+		return fmt.Errorf("could not create ssh_host_ed25519_key file: %w", err)
+	}
+
+	err = os.WriteFile(s.Path+"/command.sh", command_sh, 0700)
+	if err != nil {
+		return fmt.Errorf("could not create command.sh file: %w", err)
+	}
 
 	return nil
 }

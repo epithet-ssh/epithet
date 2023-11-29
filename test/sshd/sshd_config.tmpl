@@ -9,6 +9,6 @@ LoginGraceTime 120
 PubkeyAuthentication yes
 
 ForceCommand {{.Path}}/command.sh
-HostKey {{.Path}}/ssh_host_rsa_key
+HostKey {{.Path}}/ssh_host_ed25519_key
 TrustedUserCAKeys {{.Path}}/ca.pub
 AuthorizedPrincipalsFile {{.Path}}/auth_principals/%u
