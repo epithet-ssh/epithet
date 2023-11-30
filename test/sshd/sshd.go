@@ -135,6 +135,7 @@ func (s *Server) Ssh(a *agent.Agent) (string, error) {
 		"-v",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
+		"-F", "/dev/null",
 		"-o", fmt.Sprintf("IdentityAgent=%s", a.AgentSocketPath()),
 		"-p", strconv.Itoa(s.Port),
 		s.User + "@localhost"}
