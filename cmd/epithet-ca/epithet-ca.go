@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"time"
@@ -55,7 +54,7 @@ func run(cc *cobra.Command, args []string) error {
 		}
 	}
 
-	privKey, err := ioutil.ReadFile(cfg.PrivKey)
+	privKey, err := os.ReadFile(cfg.PrivKey)
 	if err != nil {
 		return fmt.Errorf("unable to load private key %s: %w", cfg.PrivKey, err)
 	}
