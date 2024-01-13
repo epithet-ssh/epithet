@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,7 +32,7 @@ func findAndLoadConfig() (*config, error) {
 }
 
 func loadConfigFile(path string) (*config, error) {
-	body, err := ioutil.ReadFile(path)
+	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("unable to load config file: %w", err)
 	}

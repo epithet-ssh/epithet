@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"strings"
 
@@ -17,7 +17,7 @@ var sock = "./control.sock"
 // AgentCommand is an agent command
 var cmd = &cobra.Command{
 	Use:   "epithet-auth",
-	Short: "Submit authentication requests to the agent",
+	Short: "Submit authentication tokens to the agent. Takes token on stdin or as args.",
 	RunE:  run,
 }
 
@@ -37,7 +37,7 @@ func run(cc *cobra.Command, args []string) error {
 	if len(args) != 0 {
 		token = strings.Join(args, " ")
 	} else {
-		in, err := ioutil.ReadAll(os.Stdin)
+		in, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return err
 		}
