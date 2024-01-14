@@ -52,10 +52,12 @@ func run(cc *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("unable to load ca key: %w", err)
 	}
+	log.Infof("ca_key\t%s", caPrivateKeyPath)
 
 	if policyURL == DEFAULT_POLICY {
 		policyURL = os.Getenv("POLICY_URL")
 	}
+	log.Infof("policy_url\t%s", policyURL)
 
 	c, err := ca.New(
 		sshcert.RawPrivateKey(string(privKey)),
@@ -79,7 +81,7 @@ func run(cc *cobra.Command, args []string) error {
 		address = fmt.Sprintf("0.0.0.0:%s", os.Getenv("PORT"))
 	}
 
-	log.Infof("starting ca at %s", address)
+	log.Infof("listening\t %s", address)
 	err = http.ListenAndServe(address, r)
 	if err != nil {
 		return err
