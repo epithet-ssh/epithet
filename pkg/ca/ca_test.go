@@ -15,6 +15,19 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func Test_RekorSign(t *testing.T) {
+	require := require.New(t)
+
+	c, err := ca.New(caPrivKey, "https://example.com")
+	require.NoError(err)
+
+	sig, err := c.Sign("woofles")
+	require.NoError(err)
+
+	err = ca.Verify(c.PublicKey(), "woofles", sig)
+	require.NoError(err)
+}
+
 func Test_NativeSign(t *testing.T) {
 	buf := make([]byte, 8)
 	_, err := rand.Read(buf)

@@ -4,23 +4,31 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	rekor "github.com/sigstore/rekor/pkg/pki/ssh"
 	"golang.org/x/crypto/ssh"
 )
 
 // CA performs CA operations
 type CA struct {
 	signer     ssh.Signer
+	privateKey sshcert.RawPrivateKey
 	policyURL  string
 	httpClient *http.Client
+}
+
+// get the URL of the Policy Server
+func (c *CA) PolicyURL() string {
+	return c.policyURL
 }
 
 // New creates a new CA
@@ -30,8 +38,9 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 		return nil, err
 	}
 	ca := &CA{
-		signer:    signer,
-		policyURL: policyURL,
+		signer:     signer,
+		privateKey: privateKey,
+		policyURL:  policyURL,
 	}
 
 	for _, o := range options {
@@ -79,36 +88,60 @@ type CertParams struct {
 	Extensions map[string]string `json:"extensions"`
 }
 
+func Verify(pubkey sshcert.RawPublicKey, token, signature string) error {
+	s, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		return fmt.Errorf("error decoding signature: %w", err)
+	}
+
+	return rekor.Verify(bytes.NewReader([]byte(token)), s, []byte(pubkey))
+}
+
+func (c *CA) Sign(value string) (signature string, err error) {
+	sig, err := rekor.Sign(string(c.privateKey), bytes.NewReader([]byte(value)))
+	if err != nil {
+		return "", fmt.Errorf("error signing value: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(sig), nil
+}
+
 // RequestPolicy requests policy from the policy url
 func (c *CA) RequestPolicy(ctx context.Context, token string) (*CertParams, error) {
+	sig, err := c.Sign(token)
+	if err != nil {
+		return nil, fmt.Errorf("error creating signed nonce: %w", err)
+	}
+
 	body, err := json.Marshal(&map[string]string{
-		"token": token,
+		"token":     token,
+		"signature": sig,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error parsing input: %w", err)
 	}
 	req, err := http.NewRequest("POST", c.policyURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Add("Content-type", "application/json")
 
 	res, err := c.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error executing request: %w", err)
 	}
 	defer res.Body.Close()
 
 	lim := io.LimitReader(res.Body, 8196)
-	buf, err := ioutil.ReadAll(lim)
+	buf, err := io.ReadAll(lim)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading response: %w", err)
 	}
 	params := &CertParams{}
 	err = json.Unmarshal(buf, params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
 	return params, nil
 }

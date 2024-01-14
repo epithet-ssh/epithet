@@ -16,8 +16,13 @@ import (
 )
 
 var verbosity = 0
-var configPath string
-var address string = ":12510"
+
+const DEFAULT_ADDRESS = "0.0.0.0:${PORT:-8080}"
+const DEFAULT_POLICY = "${POLICY_URL}"
+
+var address string = DEFAULT_ADDRESS
+var caPrivateKeyPath = "/etc/epithet/ca.key"
+var policyURL string = DEFAULT_POLICY
 
 // AgentCommand is an agent command
 var cmd = &cobra.Command{
@@ -29,7 +34,8 @@ var cmd = &cobra.Command{
 
 func main() {
 	cmd.Flags().CountVarP(&verbosity, "verbose", "v", "how verbose to be, can use multiple")
-	cmd.Flags().StringVarP(&configPath, "config", "F", "CONFIG_FILE", "config file to use")
+	cmd.Flags().StringVarP(&policyURL, "policy", "p", policyURL, "URL for policy service")
+	cmd.Flags().StringVarP(&caPrivateKeyPath, "key", "k", caPrivateKeyPath, "path to ca private key")
 	cmd.Flags().StringVarP(&address, "address", "a", address, "address to bind to, ie :12510")
 
 	err := cmd.Execute()
@@ -41,27 +47,19 @@ func main() {
 
 func run(cc *cobra.Command, args []string) error {
 	var err error
-	var cfg *config
-	if configPath != "" {
-		cfg, err = loadConfigFile(configPath)
-		if err != nil {
-			return err
-		}
-	} else {
-		cfg, err = findAndLoadConfig()
-		if err != nil {
-			return err
-		}
-	}
 
-	privKey, err := os.ReadFile(cfg.PrivKey)
+	privKey, err := os.ReadFile(caPrivateKeyPath)
 	if err != nil {
-		return fmt.Errorf("unable to load private key %s: %w", cfg.PrivKey, err)
+		return fmt.Errorf("unable to load ca key: %w", err)
 	}
+	log.Infof("ca_key\t%s", caPrivateKeyPath)
 
-	c, err := ca.New(
-		sshcert.RawPrivateKey(string(privKey)),
-		cfg.PolicyURL)
+	if policyURL == DEFAULT_POLICY {
+		policyURL = os.Getenv("POLICY_URL")
+	}
+	log.Infof("policy_url\t%s", policyURL)
+
+	c, err := ca.New(sshcert.RawPrivateKey(string(privKey)), policyURL)
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
@@ -77,7 +75,16 @@ func run(cc *cobra.Command, args []string) error {
 
 	r.Handle("/", caserver.New(c))
 
-	log.Infof("starting ca at %s", address)
+	if address == DEFAULT_ADDRESS {
+		port, present := os.LookupEnv("PORT")
+		if !present {
+			port = "8080"
+		}
+
+		address = fmt.Sprintf("0.0.0.0:%s", port)
+	}
+
+	log.Infof("listening\t %s", address)
 	err = http.ListenAndServe(address, r)
 	if err != nil {
 		return err
@@ -88,6 +95,8 @@ func run(cc *cobra.Command, args []string) error {
 
 func logging(cmd *cobra.Command, args []string) {
 	log.SetOutput(os.Stdout)
+	// log.SetLevel(log.InfoLevel)
+
 	switch verbosity {
 	case 0:
 		log.SetLevel(log.WarnLevel)
@@ -96,4 +105,5 @@ func logging(cmd *cobra.Command, args []string) {
 	default: // 2+
 		log.SetLevel(log.DebugLevel)
 	}
+
 }

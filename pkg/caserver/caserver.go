@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"time"
 
@@ -84,7 +83,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	ccr := CreateCertRequest{}
 	lr := io.LimitReader(r.Body, RequestBodySizeLimit)
 
-	body, err := ioutil.ReadAll(lr)
+	body, err := io.ReadAll(lr)
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
@@ -104,7 +103,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		w.Write([]byte(fmt.Sprintf("error retrieving policy: %s", err)))
+		w.Write([]byte(fmt.Sprintf("%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)))
 		return
 	}
 
