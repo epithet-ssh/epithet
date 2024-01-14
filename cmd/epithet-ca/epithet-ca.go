@@ -17,7 +17,7 @@ import (
 
 var verbosity = 0
 
-const DEFAULT_ADDRESS = "0.0.0.0:${PORT}"
+const DEFAULT_ADDRESS = "0.0.0.0:${PORT:-8080}"
 const DEFAULT_POLICY = "${POLICY_URL}"
 
 var address string = DEFAULT_ADDRESS
@@ -78,7 +78,12 @@ func run(cc *cobra.Command, args []string) error {
 	r.Handle("/", caserver.New(c))
 
 	if address == DEFAULT_ADDRESS {
-		address = fmt.Sprintf("0.0.0.0:%s", os.Getenv("PORT"))
+		port, present := os.LookupEnv("PORT")
+		if !present {
+			port = "8080"
+		}
+
+		address = fmt.Sprintf("0.0.0.0:%s", port)
 	}
 
 	log.Infof("listening\t %s", address)
@@ -92,6 +97,8 @@ func run(cc *cobra.Command, args []string) error {
 
 func logging(cmd *cobra.Command, args []string) {
 	log.SetOutput(os.Stdout)
+	// log.SetLevel(log.InfoLevel)
+
 	switch verbosity {
 	case 0:
 		log.SetLevel(log.WarnLevel)
@@ -100,4 +107,5 @@ func logging(cmd *cobra.Command, args []string) {
 	default: // 2+
 		log.SetLevel(log.DebugLevel)
 	}
+
 }
