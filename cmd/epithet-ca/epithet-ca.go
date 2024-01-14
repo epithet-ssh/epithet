@@ -16,8 +16,9 @@ import (
 )
 
 var verbosity = 0
-var configPath string
 var address string = ":12510"
+var caPrivateKeyPath = "/etc/epithet/ca.key"
+var policyURL string = "https://example.com/epithet-policy"
 
 // AgentCommand is an agent command
 var cmd = &cobra.Command{
@@ -29,7 +30,8 @@ var cmd = &cobra.Command{
 
 func main() {
 	cmd.Flags().CountVarP(&verbosity, "verbose", "v", "how verbose to be, can use multiple")
-	cmd.Flags().StringVarP(&configPath, "config", "F", "CONFIG_FILE", "config file to use")
+	cmd.Flags().StringVarP(&policyURL, "policy", "p", policyURL, "URL for policy service")
+	cmd.Flags().StringVarP(&caPrivateKeyPath, "key", "k", caPrivateKeyPath, "path to ca private key")
 	cmd.Flags().StringVarP(&address, "address", "a", address, "address to bind to, ie :12510")
 
 	err := cmd.Execute()
@@ -41,27 +43,15 @@ func main() {
 
 func run(cc *cobra.Command, args []string) error {
 	var err error
-	var cfg *config
-	if configPath != "" {
-		cfg, err = loadConfigFile(configPath)
-		if err != nil {
-			return err
-		}
-	} else {
-		cfg, err = findAndLoadConfig()
-		if err != nil {
-			return err
-		}
-	}
 
-	privKey, err := os.ReadFile(cfg.PrivKey)
+	privKey, err := os.ReadFile(caPrivateKeyPath)
 	if err != nil {
-		return fmt.Errorf("unable to load private key %s: %w", cfg.PrivKey, err)
+		return fmt.Errorf("unable to load ca key: %w", err)
 	}
 
 	c, err := ca.New(
 		sshcert.RawPrivateKey(string(privKey)),
-		cfg.PolicyURL)
+		policyURL)
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}

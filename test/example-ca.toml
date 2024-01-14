@@ -1,3 +1,0 @@
-policy_url = "http://localhost:9999/"
-private_key = "./test/ca/ca"
-public_key = "./test/ca/ca.pub"
