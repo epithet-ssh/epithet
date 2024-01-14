@@ -45,3 +45,10 @@ clean-all: clean
 .PHONY: help
 help:			## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
+
+docker: 		## build docker image for epithet-ca
+	docker build -t ghcr.io/epithet-ssh/epithet-ca:latest .
+
+docker-push: docker	## push docker image for epithet-ca
+	docker push ghcr.io/epithet-ssh/epithet-ca:latest
+	
