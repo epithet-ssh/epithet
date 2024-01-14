@@ -34,7 +34,7 @@ clean:			## clean all local resources
 	go clean -testcache	
 	rm -f epithet-*
 	rm -rf dist
-	
+
 .PHONY: clean-all
 clean-all: clean
 	rm -f test/test_sshd/.built_*
@@ -47,8 +47,7 @@ help:			## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
 
 docker: 		## build docker image for epithet-ca
-	docker build -t ghcr.io/epithet-ssh/epithet-ca:latest .
+	docker buildx build --platform linux/amd64 -t ghcr.io/epithet-ssh/epithet-ca:latest .
 
 docker-push: docker	## push docker image for epithet-ca
 	docker push ghcr.io/epithet-ssh/epithet-ca:latest
-	
