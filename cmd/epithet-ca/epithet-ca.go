@@ -16,9 +16,13 @@ import (
 )
 
 var verbosity = 0
-var address string = ":12510"
+
+const DEFAULT_ADDRESS = "0.0.0.0:${PORT}"
+const DEFAULT_POLICY = "${POLICY_URL}"
+
+var address string = DEFAULT_ADDRESS
 var caPrivateKeyPath = "/etc/epithet/ca.key"
-var policyURL string = "https://example.com/epithet-policy"
+var policyURL string = DEFAULT_POLICY
 
 // AgentCommand is an agent command
 var cmd = &cobra.Command{
@@ -49,6 +53,10 @@ func run(cc *cobra.Command, args []string) error {
 		return fmt.Errorf("unable to load ca key: %w", err)
 	}
 
+	if policyURL == DEFAULT_POLICY {
+		policyURL = os.Getenv("POLICY_URL")
+	}
+
 	c, err := ca.New(
 		sshcert.RawPrivateKey(string(privKey)),
 		policyURL)
@@ -66,6 +74,10 @@ func run(cc *cobra.Command, args []string) error {
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Handle("/", caserver.New(c))
+
+	if address == DEFAULT_ADDRESS {
+		address = fmt.Sprintf("0.0.0.0:%s", os.Getenv("PORT"))
+	}
 
 	log.Infof("starting ca at %s", address)
 	err = http.ListenAndServe(address, r)
