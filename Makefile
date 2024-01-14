@@ -47,7 +47,4 @@ help:			## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
 
 docker: 		## build docker image for epithet-ca
-	docker buildx build --platform linux/amd64 -t ghcr.io/epithet-ssh/epithet-ca:latest .
-
-docker-push: docker	## push docker image for epithet-ca
-	docker push ghcr.io/epithet-ssh/epithet-ca:latest
+	docker buildx build --push --platform linux/amd64 -t ghcr.io/epithet-ssh/epithet-ca:latest .

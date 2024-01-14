@@ -13,4 +13,4 @@ WORKDIR /
 COPY --from=build-stage /epithet-ca /epithet-ca
 USER nonroot:nonroot
 
-ENTRYPOINT ["/epithet-ca", "-k", "/ca.key"]
+ENTRYPOINT ["/epithet-ca"]
