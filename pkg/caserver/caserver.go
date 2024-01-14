@@ -103,7 +103,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		w.Write([]byte(fmt.Sprintf("error retrieving policy: %s", err)))
+		w.Write([]byte(fmt.Sprintf("%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)))
 		return
 	}
 

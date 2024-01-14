@@ -59,9 +59,7 @@ func run(cc *cobra.Command, args []string) error {
 	}
 	log.Infof("policy_url\t%s", policyURL)
 
-	c, err := ca.New(
-		sshcert.RawPrivateKey(string(privKey)),
-		policyURL)
+	c, err := ca.New(sshcert.RawPrivateKey(string(privKey)), policyURL)
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
