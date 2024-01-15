@@ -25,7 +25,6 @@ var cmd = &cobra.Command{
 
 func main() {
 	cmd.Flags().CountVarP(&verbosity, "verbose", "v", "how verbose to be, can use multiple")
-
 	cmd.Flags().StringVarP(&configPath, "config", "F", "CONFIG_FILE", "config file to use")
 	err := cmd.Execute()
 	if err != nil {

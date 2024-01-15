@@ -377,7 +377,7 @@ func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
 }
 
-// ControlSocketPath returns the path for the SSH_AUTH_SOCKET
+// ControlSocketPath returns the path for the agent control socket
 func (a *Agent) ControlSocketPath() string {
 	return a.controlSocketPath
 }
