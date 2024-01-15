@@ -41,7 +41,7 @@ changelog:
     - '^test:'
 brews:
   - name: epithet
-    tap:
+    repository:
       owner: epithet-ssh
       name: homebrew-epithet
     commit_author:
