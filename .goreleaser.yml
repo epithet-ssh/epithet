@@ -18,8 +18,10 @@ builds:
       - linux
       - darwin
       - windows
+      - freebsd
     goarch:
       - amd64
+      - arm64
   - id: epithet-ca
     binary: epithet-ca
     main: ./cmd/epithet-ca/
