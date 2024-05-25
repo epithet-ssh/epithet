@@ -9,8 +9,10 @@ builds:
       - linux
       - darwin
       - windows
+      - freebsd
     goarch:
       - amd64
+      - arm64
   - id: epithet-auth
     binary: epithet-auth
     main: ./cmd/epithet-auth/
@@ -29,8 +31,10 @@ builds:
       - linux
       - darwin
       - windows
+      - freebsd
     goarch:
       - amd64
+      - arm64
 checksum:
   name_template: 'checksums.txt'
 snapshot:

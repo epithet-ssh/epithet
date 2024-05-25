@@ -83,9 +83,8 @@ func run(cc *cobra.Command, args []string) error {
 		signal.Stop(sigs)
 		switch rs {
 		default:
-			log.Info("INT received")
+			log.Info("stopping")
 			return nil
 		}
 	}
-	return nil
 }
