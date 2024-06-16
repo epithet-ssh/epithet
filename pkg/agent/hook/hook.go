@@ -9,8 +9,8 @@ import (
 	"github.com/cbroglie/mustache"
 )
 
-// NeedAuth is the `need_cert` hook
-const NeedAuth = "need_auth"
+// Authenticate is the `authenticate` hook
+const Authenticate = "authenticate"
 
 // Start is the `start` hook
 const Start = "start"

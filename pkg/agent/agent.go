@@ -277,9 +277,9 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 }
 
 func (a *Agent) hookNeedAuth() error {
-	if h, ok := a.hooks[hook.NeedAuth]; ok {
+	if h, ok := a.hooks[hook.Authenticate]; ok {
 		err := h.Run(map[string]string{
-			"hook":         hook.NeedAuth,
+			"hook":         hook.Authenticate,
 			"control_sock": a.ControlSocketPath(),
 			"agent_sock":   a.AgentSocketPath(),
 		})
