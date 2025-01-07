@@ -1,7 +1,6 @@
 package hook_test
 
 import (
-	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -39,7 +38,7 @@ func TestHook_State(t *testing.T) {
 	// run the hook, passing empty array in as stdin, so 0 len
 	err := h.Run(map[string]string{})
 	require.NoError(t, err)
-	body, err := ioutil.ReadFile("/tmp/TestHook_State")
+	body, err := os.ReadFile("/tmp/TestHook_State")
 	require.NoError(t, err)
 	// except 0 len recorded
 	require.Equal(t, "0", strings.TrimSpace(string(body)))
@@ -47,7 +46,7 @@ func TestHook_State(t *testing.T) {
 	// state should now be "       0\n" so len should be 9
 	err = h.Run(map[string]string{})
 	require.NoError(t, err)
-	body, err = ioutil.ReadFile("/tmp/TestHook_State")
+	body, err = os.ReadFile("/tmp/TestHook_State")
 	require.NoError(t, err)
 	// expect len 1 or 9 (linux or osx), so "not 0" for the state, now that it exists :-)
 	require.NotEqual(t, "0", strings.TrimSpace(string(body)))

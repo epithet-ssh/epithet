@@ -1,65 +1,19 @@
 package agent_test
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"io/ioutil"
-	"net"
 	"os"
 	"testing"
 	"time"
 
-	rpc "github.com/epithet-ssh/epithet/internal/agent"
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
-
-type authnService struct {
-	rpc.UnimplementedAgentServiceServer
-}
-
-func (s *authnService) Authenticate(ctx context.Context, req *rpc.AuthnRequest) (*rpc.AuthnResponse, error) {
-	return nil, status.Error(codes.PermissionDenied, "no!")
-}
-
-func TestGRPC_Stuff(t *testing.T) {
-	tmp, err := ioutil.TempFile("", "TestGRPC_Stuff.*")
-	require.NoError(t, err)
-	err = os.Remove(tmp.Name())
-	require.NoError(t, err)
-	defer os.Remove(tmp.Name())
-
-	as := authnService{}
-
-	lis, err := net.Listen("unix", tmp.Name())
-	require.NoError(t, err)
-
-	grpcServer := grpc.NewServer()
-	defer grpcServer.GracefulStop()
-
-	rpc.RegisterAgentServiceServer(grpcServer, &as)
-	go grpcServer.Serve(lis)
-
-	client, err := rpc.NewClient(tmp.Name())
-	require.NoError(t, err)
-
-	_, err = client.Authenticate(context.Background(), &rpc.AuthnRequest{
-		Token: "hello world",
-	})
-	require.Error(t, err)
-	s, ok := status.FromError(err)
-	require.True(t, ok)
-
-	require.Equal(t, codes.PermissionDenied, s.Code())
-}
 
 func TestBasics(t *testing.T) {
 	caPub, caPriv, err := sshcert.GenerateKeys()
