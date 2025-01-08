@@ -76,12 +76,6 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 		return nil, err
 	}
 
-	// todo add authnListener
-	err = a.startControlListener()
-	if err != nil {
-		return nil, err
-	}
-
 	// todo run Start hooks
 	a.hookStart()
 
@@ -103,14 +97,6 @@ func (f optionFunc) apply(a *Agent) error {
 func WithAgentSocketPath(path string) Option {
 	return optionFunc(func(a *Agent) error {
 		a.agentSocketPath = path
-		return nil
-	})
-}
-
-// WithControlSocketPath specifies the control socket (API) for the agent
-func WithControlSocketPath(path string) Option {
-	return optionFunc(func(a *Agent) error {
-		a.controlSocketPath = path
 		return nil
 	})
 }

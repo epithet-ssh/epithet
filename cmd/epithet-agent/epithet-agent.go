@@ -66,26 +66,19 @@ func run(cc *cobra.Command, args []string) error {
 		a, err := agent.Start(
 			caClient,
 			agent.WithAgentSocketPath(cfg.AgentSock),
-			agent.WithControlSocketPath(cfg.ControlSock),
 			agent.WithHooks(cfg.Hooks),
 		)
 		if err != nil {
 			return fmt.Errorf("unable to start agent %s: %w", name, err)
 		}
-		log.Infof("started agent [%s] [control=%s] [agent=%s]", name, a.ControlSocketPath(), a.AgentSocketPath())
+		log.Infof("started agent [%s] [agent=%s]", name, a.AgentSocketPath())
 		defer a.Close()
 	}
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case rs := <-sigs:
-		signal.Stop(sigs)
-		switch rs {
-		default:
-			log.Info("INT received")
-			return nil
-		}
-	}
+	<-sigs
+	signal.Stop(sigs)
+	log.Info("INT received")
 	return nil
 }
