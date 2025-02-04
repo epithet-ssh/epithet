@@ -15,7 +15,7 @@ import (
 
 type unmarshal func([]byte, interface{}) error
 
-func findAndLoadConfig() (map[string]*config, error) {
+func findAndLoadConfig() (*config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("error looking for user home (maybe specify config file): %w", err)
@@ -34,7 +34,7 @@ func findAndLoadConfig() (map[string]*config, error) {
 	return nil, errors.New("no config file found")
 }
 
-func loadConfigFile(path string) (map[string]*config, error) {
+func loadConfigFile(path string) (*config, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("unable to load config file: %w", err)
@@ -55,45 +55,38 @@ func loadConfigFile(path string) (map[string]*config, error) {
 	}
 }
 
-func parse(un unmarshal, body []byte) (map[string]*config, error) {
-	agents := map[string]*config{}
-
-	if err := un(body, &agents); err != nil {
+func parse(un unmarshal, body []byte) (*config, error) {
+	c := &config{}
+	if err := un(body, c); err != nil {
+		return nil, err
+	}
+	err := c.init()
+	if err != nil {
 		return nil, err
 	}
 
-	for name, cfg := range agents {
-		err := cfg.init(name)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return agents, nil
+	return c, nil
 }
 
 type config struct {
-	CA          string            `json:"ca_url" yaml:"ca_url" toml:"ca_url"`
-	AgentSock   string            `json:"agent_sock" yaml:"agent_sock" toml:"agent_sock"`
-	ControlSock string            `json:"control_sock" yaml:"control_sock" toml:"control_sock"`
-	Hooks       map[string]string `json:"hooks" yaml:"hooks" toml:"hooks"`
-	Name        string
+	CA          string `json:"ca_url" yaml:"ca_url" toml:"ca_url"`
+	AgentSock   string `json:"ssh_auth_sock" yaml:"ssh_auth_sock" toml:"ssh_auth_sock"`
+	AuthCommand string `json:"auth_command" yaml:"auth_command" toml:"auth_command"`
 }
 
-func (c *config) init(name string) error {
-	c.Name = name
-
+func (c *config) init() error {
 	if c.AgentSock == "" {
-		c.AgentSock = fmt.Sprintf("~/.epithet/%s.agent.sock", name)
-	}
-
-	if c.ControlSock == "" {
-		c.ControlSock = fmt.Sprintf("~/.epithet/%s.control.sock", name)
+		c.AgentSock = "~/.epithet/ssh_auth.sock"
 	}
 
 	_, err := url.Parse(c.CA)
 	if err != nil {
 		return fmt.Errorf("invalid ca_url: %w", err)
 	}
+
+	if c.AuthCommand == "" {
+		return errors.New("auth_command must be set")
+	}
+
 	return nil
 }

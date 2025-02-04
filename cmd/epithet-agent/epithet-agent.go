@@ -47,33 +47,31 @@ func logging(cmd *cobra.Command, args []string) {
 
 func run(cc *cobra.Command, args []string) error {
 	var err error
-	var configs map[string]*config
+	var cfg *config
 
 	if configPath != "" {
-		configs, err = loadConfigFile(configPath)
+		cfg, err = loadConfigFile(configPath)
 		if err != nil {
 			return fmt.Errorf("unable to load config %s: %w", configPath, err)
 		}
 	} else {
-		configs, err = findAndLoadConfig()
+		cfg, err = findAndLoadConfig()
 		if err != nil {
 			return fmt.Errorf("unable to load config: %w", err)
 		}
 	}
 
-	for name, cfg := range configs {
-		caClient := caclient.New(cfg.CA)
-		a, err := agent.Start(
-			caClient,
-			agent.WithAgentSocketPath(cfg.AgentSock),
-			agent.WithHooks(cfg.Hooks),
-		)
-		if err != nil {
-			return fmt.Errorf("unable to start agent %s: %w", name, err)
-		}
-		log.Infof("started agent [%s] [agent=%s]", name, a.AgentSocketPath())
-		defer a.Close()
+	caClient := caclient.New(cfg.CA)
+	a, err := agent.Start(
+		caClient,
+		agent.WithAgentSocketPath(cfg.AgentSock),
+		agent.WithAuthCommand(cfg.AuthCommand),
+	)
+	if err != nil {
+		return fmt.Errorf("unable to start agent: %w", err)
 	}
+	log.Infof("started agent at [%s]", a.AgentSocketPath())
+	defer a.Close()
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)

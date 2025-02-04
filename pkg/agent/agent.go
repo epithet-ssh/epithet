@@ -41,8 +41,8 @@ type Agent struct {
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
 
-	hooks map[string]*hook.Hook
-	lock  sync.Mutex
+	authCommand *hook.Hook
+	lock        sync.Mutex
 }
 
 // Start creates and starts an SSH Agent
@@ -75,10 +75,6 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// todo run Start hooks
-	a.hookStart()
-
 	return a, nil
 }
 
@@ -101,6 +97,14 @@ func WithAgentSocketPath(path string) Option {
 	})
 }
 
+// WithAgentSocketPath specifies the SSH_AUTH_SOCK path to create
+func WithAuthCommand(path string) Option {
+	return optionFunc(func(a *Agent) error {
+		a.authCommand = hook.New(path)
+		return nil
+	})
+}
+
 // WithContext specifies a context.Context that agent will use
 // and which can be cancelled, triggering the agent to stop.
 // This context will also be used for outgoing requests to the
@@ -113,18 +117,6 @@ func WithContext(ctx context.Context) Option {
 				a.Close()
 			}
 		}()
-		return nil
-	})
-}
-
-// WithHooks registers the named hooks on the agent
-func WithHooks(hooks map[string]string) Option {
-	return optionFunc(func(a *Agent) error {
-		hm := map[string]*hook.Hook{}
-		for k, v := range hooks {
-			hm[k] = hook.New(v)
-		}
-		a.hooks = hm
 		return nil
 	})
 }
@@ -257,29 +249,13 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 }
 
 func (a *Agent) hookNeedAuth() error {
-	if h, ok := a.hooks[hook.NeedAuth]; ok {
-		err := h.Run(map[string]string{
-			"hook":       hook.NeedAuth,
-			"agent_sock": a.AgentSocketPath(),
-		})
-		if err != nil {
-			log.Warnf("error evaluating `need_auth` hook: %v", err)
-			return err
-		}
-	}
-	return nil
-}
-
-func (a *Agent) hookStart() error {
-	if h, ok := a.hooks[hook.Start]; ok {
-		err := h.Run(map[string]string{
-			"hook":       hook.Start,
-			"agent_sock": a.AgentSocketPath(),
-		})
-		if err != nil {
-			log.Warnf("error evaluating `start` hook: %v", err)
-			return err
-		}
+	err := a.authCommand.Run(map[string]string{
+		"hook":       hook.NeedAuth,
+		"agent_sock": a.AgentSocketPath(),
+	})
+	if err != nil {
+		log.Warnf("error evaluating `need_auth` hook: %v", err)
+		return err
 	}
 	return nil
 }

@@ -1,7 +1,3 @@
-[testing]
 ca_url = "http://localhost:12510/"
-agent_sock = "./agent.sock"
-control_sock = "./control.sock"
-
-[testing.hooks]
-need_auth = "echo 'woof' | ./epithet-auth {{control_sock}}"
+ssh_auth_sock = "./agent.sock"
+auth_command = "echo 'yes'"
