@@ -1,4 +1,5 @@
 .envrc
+.idea
 /dist
 /epithet-ca
 /epithet-agent

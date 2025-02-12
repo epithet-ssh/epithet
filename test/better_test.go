@@ -67,15 +67,6 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	require.NoError(t, err)
 	defer a.Close()
 
-	/*
-		authnClient, err := rpc.NewClient(a.ControlSocketPath())
-		require.NoError(t, err)
-		_, err = authnClient.Authenticate(context.Background(), &rpc.AuthnRequest{
-			Token: "yes, please!",
-		})
-		require.NoError(t, err)
-	*/
-	// require.FailNow(t, "fix this test")
 	out, err := sshd.Ssh(a)
 	require.Error(t, err)
 	require.Contains(t, out, "Permission denied")
