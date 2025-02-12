@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -63,7 +64,9 @@ func run(cc *cobra.Command, args []string) error {
 
 	caClient := caclient.New(cfg.CA)
 	a, err := agent.Start(
+		context.Background(),
 		caClient,
+		cfg.AuthCommand,
 		agent.WithAgentSocketPath(cfg.AgentSock),
 		agent.WithAuthCommand(cfg.AuthCommand),
 	)

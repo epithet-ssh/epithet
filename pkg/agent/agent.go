@@ -26,9 +26,6 @@ const DefaultTimeout = time.Second * 30
 
 // Agent represents our agent
 type Agent struct {
-	agent.Agent
-	agent.ExtendedAgent
-
 	running     *atomic.Bool
 	certExpires *atomic.Uint64
 	lastToken   *atomic.String
@@ -49,6 +46,11 @@ type Agent struct {
 
 // Implement agent.Agent and agent.ExtendedAgent
 
+func (a *Agent) Signers() ([]ssh.Signer, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 // List returns the identities known to the agent.
 func (a *Agent) List() ([]*agent.Key, error) {
 	return a.keyring.List()
@@ -63,7 +65,7 @@ func (a *Agent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
 
 // Add adds a private key to the agent.
 func (a *Agent) Add(key agent.AddedKey) error {
-	return a.Add(key)
+	return a.keyring.Add(key)
 }
 
 // Remove removes all identities with the given public key.
@@ -98,19 +100,20 @@ func (a *Agent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.Signat
 // End implement agent.Agent and agent.ExtendedAgent
 
 // Start creates and starts an SSH Agent
-func Start(ctx context.Context, caClient *caclient.Client, authCmd string) (*Agent, error) {
+func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath string, authCmd string) (*Agent, error) {
 	keyring := agent.NewKeyring()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	a := &Agent{
-		keyring:     keyring,
-		caClient:    caClient,
-		running:     atomic.NewBool(true),
-		certExpires: atomic.NewUint64(0),
-		lastToken:   atomic.NewString(""),
-		authCommand: authCmd,
-		ctx:         ctx,
+		keyring:         keyring,
+		caClient:        caClient,
+		running:         atomic.NewBool(true),
+		certExpires:     atomic.NewUint64(0),
+		lastToken:       atomic.NewString(""),
+		authCommand:     authCmd,
+		agentSocketPath: agentSocketPath,
+		ctx:             ctx,
 	}
 
 	pub, priv, err := sshcert.GenerateKeys()
@@ -127,11 +130,22 @@ func Start(ctx context.Context, caClient *caclient.Client, authCmd string) (*Age
 			return nil, fmt.Errorf("unable to create agent socket: %w", err)
 		}
 		a.agentSocketPath = f.Name()
-		f.Close()
-		os.Remove(f.Name())
+		err = f.Close()
+		if err != nil {
+			a.Close()
+			return nil, fmt.Errorf("unable to close existing agent socket: %w", err)
+		}
+		err = os.Remove(f.Name())
+		if err != nil && !os.IsNotExist(err) {
+			a.Close()
+			return nil, fmt.Errorf("unable to remove existing agent socket: %w", err)
+		}
 	}
 
-	os.Remove(a.agentSocketPath) //remove socket if it exists
+	err = os.Remove(a.agentSocketPath) //remove socket if it exists
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("unable to remove existing agent socket: %w", err)
+	}
 	agentListener, err := net.Listen("unix", a.agentSocketPath)
 	if err != nil {
 		a.Close()
@@ -147,11 +161,6 @@ func Start(ctx context.Context, caClient *caclient.Client, authCmd string) (*Age
 	go a.listenAndServeAgent(agentListener)
 
 	return a, nil
-}
-
-// Option configures the agent
-type Option interface {
-	apply(*Agent) error
 }
 
 // Credential contains the private key and certificate in pem form
