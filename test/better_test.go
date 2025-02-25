@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,22 +25,29 @@ func Test_EndToEnd_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policy_server := startPolicyServer("a")
-	defer policy_server.Close()
+	policyServer := startPolicyServer("a")
+	defer policyServer.Close()
 
-	ca, err := ca.New(caPrivKey, policy_server.URL)
+	authority, err := ca.New(caPrivKey, policyServer.URL)
 	require.NoError(t, err)
 
-	ca_server, err := startCAServer(ca)
+	caServer, err := startCAServer(authority)
 	require.NoError(t, err)
-	defer ca_server.Close()
+	defer caServer.Close()
 
-	ca_client := caclient.New(ca_server.URL)
-	agent, err := agent.Start(ca_client)
+	caClient := caclient.New(caServer.URL)
+	ag, err := agent.Create(caClient, "", "echo yes")
 	require.NoError(t, err)
-	defer agent.Close()
 
-	out, err := sshd.Ssh(agent)
+	err = ag.EnsureCertificate(context.Background())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.Run(ctx, ag)
+
+	out, err := sshd.Ssh(ag)
+	t.Log("client out:", string(out))
 	require.NoError(t, err)
 	require.Contains(t, out, "hello from sshd")
 }
@@ -63,9 +71,12 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	defer cad.Close()
 
 	cac := caclient.New(cad.URL)
-	a, err := agent.Start(cac)
+	a, err := agent.Create(cac, "", "")
+	// a, err := agent.Start(context.Background(), cac, "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.Run(ctx, a)
 	require.NoError(t, err)
-	defer a.Close()
+	defer cancel()
 
 	out, err := sshd.Ssh(a)
 	require.Error(t, err)

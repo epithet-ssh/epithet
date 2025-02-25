@@ -63,23 +63,22 @@ func run(cc *cobra.Command, args []string) error {
 	}
 
 	caClient := caclient.New(cfg.CA)
-	a, err := agent.Start(
-		context.Background(),
-		caClient,
-		cfg.AuthCommand,
-		agent.WithAgentSocketPath(cfg.AgentSock),
-		agent.WithAuthCommand(cfg.AuthCommand),
-	)
+	a, err := agent.Create(caClient, cfg.AgentSock, cfg.AuthCommand)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		<-sigs
+		signal.Stop(sigs)
+		cancel()
+		log.Info("INT received")
+	}()
+
+	err = agent.Run(ctx, a)
 	if err != nil {
 		return fmt.Errorf("unable to start agent: %w", err)
 	}
-	log.Infof("started agent at [%s]", a.AgentSocketPath())
-	defer a.Close()
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	<-sigs
-	signal.Stop(sigs)
-	log.Info("INT received")
 	return nil
 }

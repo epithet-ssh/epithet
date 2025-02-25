@@ -101,6 +101,9 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	params, err := s.c.RequestPolicy(r.Context(), ccr.Token)
 	if err != nil {
+		// TODO determine difference between error on policy and token needing refresh
+		// 401 (Unauthorized) -> need new token
+		// 403 -> Not allowed to get a cert
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
 		w.Write([]byte(fmt.Sprintf("%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)))
@@ -111,7 +114,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		w.Write([]byte(fmt.Sprintf("error generating crt: %s", err)))
+		w.Write([]byte(fmt.Sprintf("error generating cert: %s", err)))
 		return
 	}
 

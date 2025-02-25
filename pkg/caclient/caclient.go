@@ -80,7 +80,7 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 	}
 
 	resp := caserver.CreateCertResponse{}
-	json.Unmarshal(body, &resp)
+	err = json.Unmarshal(body, &resp)
 	if err != nil {
 		return nil, err
 	}

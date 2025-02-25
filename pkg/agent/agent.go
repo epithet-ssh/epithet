@@ -2,9 +2,7 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"sync"
@@ -19,36 +17,30 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
-var errAgentStopped error = errors.New("agent has been stopped")
-
 // DefaultTimeout is the default timeout for http calls to the CA
 const DefaultTimeout = time.Second * 30
 
 // Agent represents our agent
 type Agent struct {
-	running     *atomic.Bool
 	certExpires *atomic.Uint64
 	lastToken   *atomic.String
 
 	keyring  agent.Agent
 	caClient *caclient.Client
-	ctx      context.Context
 
+	authCommand     string
 	agentSocketPath string
-	agentListener   net.Listener
 
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
 
-	authCommand string
-	lock        sync.Mutex
+	lock sync.Mutex
 }
 
 // Implement agent.Agent and agent.ExtendedAgent
 
 func (a *Agent) Signers() ([]ssh.Signer, error) {
-	//TODO implement me
-	panic("implement me")
+	panic("Should not be used for now")
 }
 
 // List returns the identities known to the agent.
@@ -59,7 +51,12 @@ func (a *Agent) List() ([]*agent.Key, error) {
 // Sign has the agent sign the data using a protocol 2 key as defined
 // in [PROTOCOL.agent] section 2.6.2.
 func (a *Agent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
-	// TODO check if cert has expired
+	// TODO figure out how to get the right context here
+	err := a.EnsureCertificate(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("error obtaining certificate: %w", err)
+	}
+
 	return a.keyring.Sign(key, data)
 }
 
@@ -99,68 +96,90 @@ func (a *Agent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.Signat
 
 // End implement agent.Agent and agent.ExtendedAgent
 
-// Start creates and starts an SSH Agent
-func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath string, authCmd string) (*Agent, error) {
+// Create an Agent
+func Create(caClient *caclient.Client, agentSocketPath string, authCmd string) (*Agent, error) {
 	keyring := agent.NewKeyring()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	a := &Agent{
-		keyring:         keyring,
-		caClient:        caClient,
-		running:         atomic.NewBool(true),
-		certExpires:     atomic.NewUint64(0),
-		lastToken:       atomic.NewString(""),
-		authCommand:     authCmd,
-		agentSocketPath: agentSocketPath,
-		ctx:             ctx,
-	}
 
 	pub, priv, err := sshcert.GenerateKeys()
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate keypair: %w", err)
 	}
-	a.privateKey = priv
-	a.publicKey = pub
+
+	a := &Agent{
+		privateKey: priv,
+		publicKey:  pub,
+		keyring:    keyring,
+
+		caClient: caClient,
+
+		certExpires: atomic.NewUint64(0),
+		lastToken:   atomic.NewString(""),
+
+		authCommand:     authCmd,
+		agentSocketPath: agentSocketPath,
+	}
 
 	if a.agentSocketPath == "" {
 		f, err := os.CreateTemp("", "epithet-agent.*")
 		if err != nil {
-			a.Close()
 			return nil, fmt.Errorf("unable to create agent socket: %w", err)
 		}
 		a.agentSocketPath = f.Name()
 		err = f.Close()
 		if err != nil {
-			a.Close()
 			return nil, fmt.Errorf("unable to close existing agent socket: %w", err)
 		}
 		err = os.Remove(f.Name())
 		if err != nil && !os.IsNotExist(err) {
-			a.Close()
 			return nil, fmt.Errorf("unable to remove existing agent socket: %w", err)
 		}
 	}
 
-	err = os.Remove(a.agentSocketPath) //remove socket if it exists
+	return a, nil
+}
+
+// Run runs an ssh agent
+func Run(ctx context.Context, a *Agent) error {
+	err := os.Remove(a.agentSocketPath) //remove socket if it exists
 	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("unable to remove existing agent socket: %w", err)
+		return fmt.Errorf("unable to remove existing agent socket: %w", err)
 	}
-	agentListener, err := net.Listen("unix", a.agentSocketPath)
+	listener, err := net.Listen("unix", a.agentSocketPath)
 	if err != nil {
-		a.Close()
-		return nil, fmt.Errorf("unable to listen on %s: %w", a.agentSocketPath, err)
+		return fmt.Errorf("unable to listen on %s: %w", a.agentSocketPath, err)
 	}
 
 	err = os.Chmod(a.agentSocketPath, 0600)
 	if err != nil {
-		a.Close()
-		return nil, fmt.Errorf("unable to set permissions on agent socket: %w", err)
+		return fmt.Errorf("unable to set permissions on agent socket: %w", err)
 	}
-	a.agentListener = agentListener
-	go a.listenAndServeAgent(agentListener)
 
-	return a, nil
+	for {
+		select {
+		case <-ctx.Done():
+			err := listener.Close()
+			if err != nil {
+				log.Debugf("error closing SSH_AUTH_SOCK listener: %v", err)
+			}
+			return nil
+		default:
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
+				continue
+			}
+			go func() {
+				err := agent.ServeAgent(a, conn)
+				if err != nil {
+					log.Debugf("error serving ssh agent: %v", err)
+				}
+				err = conn.Close()
+				if err != nil {
+					log.Debugf("error closing ssh agent connection: %v", err)
+				}
+			}()
+		}
+	}
 }
 
 // Credential contains the private key and certificate in pem form
@@ -169,45 +188,41 @@ type Credential struct {
 	Certificate sshcert.RawCertificate
 }
 
-// UseCredential the credentials on the agemnt
+// UseCredential the credentials on the agent
 func (a *Agent) UseCredential(c Credential) error {
-	if !a.Running() {
-		return errAgentStopped
-	}
+	a.lock.Lock()
+	defer a.lock.Unlock()
 
 	log.Debug("replacing credentials")
-	oldKeys, err := a.keyring.List()
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to list current credentials: %w", err)
-	}
 
 	cert, err := sshcert.Parse(c.Certificate)
 	if err != nil {
 		return fmt.Errorf("error parsing certificate: %w", err)
 	}
 
-	priv, err := ssh.ParseRawPrivateKey([]byte(c.PrivateKey))
+	privateKey, err := ssh.ParseRawPrivateKey([]byte(c.PrivateKey))
 	if err != nil {
 		return fmt.Errorf("error parsing private key: %w", err)
 	}
-	err = a.keyring.Add(agent.AddedKey{
-		PrivateKey:  priv,
-		Certificate: cert,
-	})
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to add new credential: %w", err)
-	}
 
+	oldKeys, err := a.keyring.List()
+	if err != nil {
+		return fmt.Errorf("unable to list current credentials: %w", err)
+	}
 	for _, k := range oldKeys {
 		err = a.keyring.Remove(k)
 		if err != nil {
-			a.Close()
-			return fmt.Errorf("Unable to remove old credential: %w", err)
+			return fmt.Errorf("unable to remove old credential: %w", err)
 		}
 	}
 
+	err = a.keyring.Add(agent.AddedKey{
+		PrivateKey:  privateKey,
+		Certificate: cert,
+	})
+	if err != nil {
+		return fmt.Errorf("unable to add new credential: %w", err)
+	}
 	a.certExpires.Store(uint64(cert.ValidBefore))
 
 	return nil
@@ -215,11 +230,9 @@ func (a *Agent) UseCredential(c Credential) error {
 
 // EnsureCertificate checks if the certificate is expired or invalid
 func (a *Agent) EnsureCertificate(ctx context.Context) error {
-	a.lock.Lock()
-	defer a.lock.Unlock()
 	if a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow {
 		// cert is expired, or close to expiration, so refresh it
-		err := a.RequestCertificate(ctx, a.lastToken.Load())
+		err := a.ObtainNewCertificate(ctx, a.lastToken.Load())
 		if err != nil {
 			return fmt.Errorf("error requesting certificate: %w", err)
 		}
@@ -227,10 +240,8 @@ func (a *Agent) EnsureCertificate(ctx context.Context) error {
 	return nil
 }
 
-// RequestCertificate tries to convert a `{token, pubkey}` into a certificate
-func (a *Agent) RequestCertificate(ctx context.Context, token string) error {
-	a.lastToken.Store(token)
-
+// ObtainNewCertificate tries to convert a `{token, pubkey}` into a certificate
+func (a *Agent) ObtainNewCertificate(ctx context.Context, token string) error {
 	res, err := a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
 		PublicKey: a.publicKey,
 		Token:     token,
@@ -250,44 +261,9 @@ func (a *Agent) RequestCertificate(ctx context.Context, token string) error {
 	return nil
 }
 
-func (a *Agent) listenAndServeAgent(listener net.Listener) {
-	for a.running.Load() {
-		conn, err := listener.Accept()
-		if err != nil {
-			// nothing we can do on this loop
-			if conn != nil {
-				conn.Close()
-			}
-			if !a.running.Load() {
-				// we are shutting down, just return
-				return
-			}
-			log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
-		}
-		go a.serveAgent(conn)
-	}
-}
-
 // CertExpirationFuzzWindow is the time, in seconds that we ask for a new
 // cert in before the current cert expires.
 const CertExpirationFuzzWindow = 20
-
-func (a *Agent) serveAgent(conn net.Conn) {
-	log.Debug("new connection to agent")
-	// close the connection after the credential is served
-	defer conn.Close()
-
-	err := a.EnsureCertificate(a.ctx)
-	if err != nil {
-		log.Warnf("error obtaining certificate: %v", err)
-		return
-	}
-
-	err = agent.ServeAgent(a, conn)
-	if err != nil && err != io.EOF {
-		log.Warnf("error from ssh-agent: %v", err)
-	}
-}
 
 // TokenSizeLimit is the Authentication token size limit
 const TokenSizeLimit = 4094
@@ -295,22 +271,4 @@ const TokenSizeLimit = 4094
 // AgentSocketPath returns the path for the SSH_AUTH_SOCKET
 func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
-}
-
-// IsAgentStopped lets you test if an error indicates that the agent has been stopped
-func IsAgentStopped(err error) bool {
-	return errors.Is(err, errAgentStopped)
-}
-
-// Running reports on whether the current agent is healthy
-func (a *Agent) Running() bool {
-	return a.running.Load()
-}
-
-// Close stops the agent and cleansup after it
-func (a *Agent) Close() {
-	a.running.Store(false)
-	if a.agentListener != nil {
-		_ = a.agentListener.Close() //ignore error
-	}
 }

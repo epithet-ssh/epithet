@@ -56,7 +56,7 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 	return ca, nil
 }
 
-// Option configures the agent
+// Option configures the CA
 type Option interface {
 	apply(*CA)
 }
