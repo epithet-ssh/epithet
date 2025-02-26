@@ -106,44 +106,63 @@ func (c *CA) Sign(value string) (signature string, err error) {
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
 
+type PolicyRequest struct {
+	Token     string `json:"token"`
+	Signature string `json:"signature"`
+}
+
+type Status int
+
+const (
+	StatusOk         Status = 200
+	StatusNeedToken  Status = 401
+	StatusNotAllowed Status = 403
+	StatusError      Status = 500
+)
+
 // RequestPolicy requests policy from the policy url
-func (c *CA) RequestPolicy(ctx context.Context, token string) (*CertParams, error) {
+func (c *CA) RequestPolicy(ctx context.Context, token string) (*CertParams, Status, error) {
 	sig, err := c.Sign(token)
 	if err != nil {
-		return nil, fmt.Errorf("error creating signed nonce: %w", err)
+		return nil, StatusOk, fmt.Errorf("error creating signed nonce: %w", err)
 	}
 
-	body, err := json.Marshal(&map[string]string{
-		"token":     token,
-		"signature": sig,
+	body, err := json.Marshal(PolicyRequest{
+		Token:     token,
+		Signature: sig,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("error parsing input: %w", err)
+		return nil, StatusError, fmt.Errorf("error parsing input: %w", err)
 	}
 	req, err := http.NewRequest("POST", c.policyURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
+		return nil, StatusError, fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Add("Content-type", "application/json")
 
 	res, err := c.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("error executing request: %w", err)
+		return nil, StatusError, fmt.Errorf("error executing request: %w", err)
 	}
 	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusUnauthorized {
+		// token not valid!
+		return nil, StatusNeedToken, nil
+	}
 
 	lim := io.LimitReader(res.Body, 8196)
 	buf, err := io.ReadAll(lim)
 	if err != nil {
-		return nil, fmt.Errorf("error reading response: %w", err)
+		return nil, StatusError, fmt.Errorf("error reading response: %w", err)
 	}
 	params := &CertParams{}
 	err = json.Unmarshal(buf, params)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
+		return nil, StatusError, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
-	return params, nil
+	return params, StatusOk, nil
 }
 
 // SignPublicKey signs a key to generate a certificate

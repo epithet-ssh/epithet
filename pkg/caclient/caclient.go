@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"github.com/epithet-ssh/epithet/pkg/ca"
+	"io"
 	"net/http"
 	"time"
 
@@ -54,36 +56,45 @@ func WithHTTPClient(httpClient *http.Client) Option {
 }
 
 // GetCert converts a token to a cert
-func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
+func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, ca.Status, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, ca.StatusError, err
 	}
 
 	rq, err := http.NewRequest("POST", c.caURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, ca.StatusError, err
 	}
 
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
 	if err != nil {
-		return nil, err
+		return nil, ca.StatusError, err
 	}
 
-	body, err = ioutil.ReadAll(res.Body)
+	body, err = io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, ca.StatusError, err
 	}
 
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("%d status from server: %s", res.StatusCode, string(body))
-	}
+	status := ca.Status(res.StatusCode)
 
-	resp := caserver.CreateCertResponse{}
-	err = json.Unmarshal(body, &resp)
-	if err != nil {
-		return nil, err
-	}
+	switch status {
+	case ca.StatusOk:
+		resp := caserver.CreateCertResponse{}
+		err = json.Unmarshal(body, &resp)
+		if err != nil {
+			return nil, ca.StatusError, err
+		}
 
-	return &resp, nil
+		return &resp, ca.StatusOk, nil
+	case ca.StatusNeedToken:
+		return nil, status, nil
+	case ca.StatusNotAllowed:
+		return nil, status, nil
+	case ca.StatusError:
+		return nil, status, errors.New(string(body))
+	default:
+		return nil, status, fmt.Errorf("unexpected status from server: %d", res.StatusCode)
+	}
 }

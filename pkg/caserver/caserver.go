@@ -99,41 +99,48 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params, err := s.c.RequestPolicy(r.Context(), ccr.Token)
+	params, status, err := s.c.RequestPolicy(r.Context(), ccr.Token)
 	if err != nil {
-		// TODO determine difference between error on policy and token needing refresh
-		// 401 (Unauthorized) -> need new token
-		// 403 -> Not allowed to get a cert
 		w.Header().Add("Content-type", "text/plain")
-		w.WriteHeader(400)
+		w.WriteHeader(500)
 		w.Write([]byte(fmt.Sprintf("%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)))
 		return
 	}
+	switch status {
+	case ca.StatusOk:
+		cert, err := s.c.SignPublicKey(ccr.PublicKey, params)
+		if err != nil {
+			w.Header().Add("Content-type", "text/plain")
+			w.WriteHeader(400)
+			w.Write([]byte(fmt.Sprintf("error generating cert: %s", err)))
+			return
+		}
 
-	cert, err := s.c.SignPublicKey(ccr.PublicKey, params)
-	if err != nil {
-		w.Header().Add("Content-type", "text/plain")
-		w.WriteHeader(400)
-		w.Write([]byte(fmt.Sprintf("error generating cert: %s", err)))
-		return
-	}
+		resp := CreateCertResponse{
+			Certificate: cert,
+		}
+		out, err := json.Marshal(&resp)
+		if err != nil {
+			w.WriteHeader(500)
+			logrus.Warn("unable to jsonify response: %w", err)
+			return
+		}
 
-	resp := CreateCertResponse{
-		Certificate: cert,
-	}
-	out, err := json.Marshal(&resp)
-	if err != nil {
-		w.WriteHeader(500)
-		logrus.Warn("unable to jsonify response: %w", err)
-		return
-	}
+		w.Header().Add("Content-type", "application/json")
+		w.WriteHeader(200)
+		_, err = w.Write(out)
+		if err != nil {
+			logrus.Warn("unable to write response: %w", err)
+			return
+		}
+	case ca.StatusError:
+		w.WriteHeader(http.StatusInternalServerError)
+	case ca.StatusNeedToken:
+		w.WriteHeader(http.StatusUnauthorized)
+	case ca.StatusNotAllowed:
+		w.WriteHeader(http.StatusForbidden)
+	default:
 
-	w.Header().Add("Content-type", "application/json")
-	w.WriteHeader(200)
-	_, err = w.Write(out)
-	if err != nil {
-		logrus.Warn("unable to write response: %w", err)
-		return
 	}
 }
 

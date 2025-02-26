@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/epithet-ssh/epithet/pkg/agent/hook"
+	"github.com/epithet-ssh/epithet/pkg/ca"
 	"net"
 	"os"
 	"sync"
@@ -99,7 +100,10 @@ func (a *Agent) Extension(extensionType string, contents []byte) ([]byte, error)
 }
 
 func (a *Agent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
-	// TODO check if cert has expired
+	err := a.EnsureCertificate(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("error obtaining certificate: %w", err)
+	}
 	return a.keyring.(agent.ExtendedAgent).SignWithFlags(key, data, flags)
 }
 
@@ -239,29 +243,44 @@ func (a *Agent) UseCredential(c Credential) error {
 
 // EnsureCertificate checks if the certificate is expired or invalid
 func (a *Agent) EnsureCertificate(ctx context.Context) error {
-	if a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow {
+	if a.certExpires.Load() > uint64(time.Now().Unix())+CertExpirationFuzzWindow {
+		// cert expires in the future, short circuit
+		return nil
+	}
+
+	tries := 0
+	for tries < 3 {
+		tries++
 		// cert is expired, or close to expiration, so refresh it
 		credential, tokenExpired, err := a.obtainNewCertificate(ctx, a.authCommand.State())
 		if err != nil {
 			return fmt.Errorf("error requesting certificate: %w", err)
 		}
 
-		if tokenExpired {
+		switch tokenExpired {
+		case ca.StatusOk:
+			err = a.UseCredential(*credential)
+			if err != nil {
+				return fmt.Errorf("error using obtained credential: %w", err)
+			}
+			return nil
+		case ca.StatusNeedToken:
 			// obtain a new token and recur
 			newToken, err := a.requestNewToken(ctx)
 			if err != nil {
 				return fmt.Errorf("error requesting new token: %w", err)
 			}
 			a.token.Store(newToken)
-			return a.EnsureCertificate(ctx)
-		} else {
-			err = a.UseCredential(*credential)
-			if err != nil {
-				return fmt.Errorf("error using obtained credential: %w", err)
-			}
+			continue
+		case ca.StatusNotAllowed:
+			return fmt.Errorf("user not allowed to get certificate")
+		case ca.StatusError:
+			return fmt.Errorf("unexpected error")
+		default:
+			panic("unreachable")
 		}
 	}
-	return nil
+	return fmt.Errorf("gave up trying to get new certificate")
 }
 
 func (a *Agent) requestNewToken(ctx context.Context) (string, error) {
@@ -273,20 +292,26 @@ func (a *Agent) requestNewToken(ctx context.Context) (string, error) {
 }
 
 // obtainNewCertificate tries to convert a `{token, pubkey}` into a certificate
-func (a *Agent) obtainNewCertificate(ctx context.Context, token string) (*Credential, bool, error) {
-	res, err := a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
+func (a *Agent) obtainNewCertificate(ctx context.Context, token string) (*Credential, ca.Status, error) {
+	res, status, err := a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
 		PublicKey: a.publicKey,
 		Token:     token,
 	})
-
 	if err != nil {
-		return nil, false, err
+		return nil, status, err
 	}
 
-	return &Credential{
-		PrivateKey:  a.privateKey,
-		Certificate: res.Certificate,
-	}, false, nil
+	switch status {
+	case ca.StatusOk:
+		return &Credential{
+			PrivateKey:  a.privateKey,
+			Certificate: res.Certificate,
+		}, status, nil
+	case ca.StatusNeedToken, ca.StatusNotAllowed:
+		return nil, status, nil
+	default:
+		return nil, status, fmt.Errorf("unexpected status from server: %d", status)
+	}
 }
 
 // CertExpirationFuzzWindow is the time, in seconds that we ask for a new

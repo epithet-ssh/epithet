@@ -3,8 +3,10 @@ package test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,11 +38,8 @@ func Test_EndToEnd_Success(t *testing.T) {
 	defer caServer.Close()
 
 	caClient := caclient.New(caServer.URL)
-	ag, err := agent.Create(caClient, "", "echo '1234'")
+	ag, err := agent.Create(caClient, "", "echo 'yes'")
 	require.NoError(t, err)
-
-	//err = ag.EnsureCertificate(context.Background())
-	//require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -71,8 +70,7 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	defer cad.Close()
 
 	cac := caclient.New(cad.URL)
-	a, err := agent.Create(cac, "", "")
-	// a, err := agent.Start(context.Background(), cac, "", "")
+	a, err := agent.Create(cac, "", "echo 'yes'")
 	ctx, cancel := context.WithCancel(context.Background())
 	go agent.Run(ctx, a)
 	require.NoError(t, err)
@@ -90,11 +88,7 @@ func startCAServer(c *ca.CA) (*httptest.Server, error) {
 
 func startPolicyServer(principals ...string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		out, err := json.Marshal(&ca.CertParams{
-			Names:      principals,
-			Identity:   "tester@example.org",
-			Expiration: time.Minute * 5,
-		})
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.Header().Add("Content-type", "text/plain")
 
@@ -102,8 +96,35 @@ func startPolicyServer(principals ...string) *httptest.Server {
 			w.Write([]byte(err.Error()))
 			return
 		}
-		w.Header().Add("Content-type", "application/json")
-		w.WriteHeader(200)
-		w.Write(out)
+
+		pr := ca.PolicyRequest{}
+		err = json.Unmarshal(body, &pr)
+		if err != nil {
+			w.Header().Add("Content-type", "text/plain")
+
+			w.WriteHeader(500)
+			w.Write([]byte(err.Error()))
+			return
+		}
+
+		if strings.Contains(pr.Token, "yes") {
+			out, err := json.Marshal(&ca.CertParams{
+				Names:      principals,
+				Identity:   "tester@example.org",
+				Expiration: time.Minute * 5,
+			})
+			if err != nil {
+				w.Header().Add("Content-type", "text/plain")
+
+				w.WriteHeader(500)
+				w.Write([]byte(err.Error()))
+				return
+			}
+			w.Header().Add("Content-type", "application/json")
+			w.WriteHeader(200)
+			w.Write(out)
+		} else {
+			w.WriteHeader(401)
+		}
 	}))
 }
