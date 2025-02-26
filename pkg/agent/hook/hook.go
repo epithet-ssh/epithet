@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/cbroglie/mustache"
@@ -19,7 +20,7 @@ const Start = "start"
 type Hook struct {
 	cmdLine string
 	lock    sync.Mutex
-	state   []byte
+	state   string
 }
 
 // New creates a new hook with an unparsed command line. The line
@@ -27,8 +28,13 @@ type Hook struct {
 func New(cmdLine string) *Hook {
 	return &Hook{
 		cmdLine: cmdLine,
-		state:   []byte{},
+		state:   "",
 	}
+}
+
+// State returns the current token/state
+func (a *Hook) State() string {
+	return a.state
 }
 
 // Run the hook. if an exit value other than 0 occurs, the combined
@@ -46,7 +52,7 @@ func (h *Hook) Run(attrs interface{}) error {
 	stderr := bytes.Buffer{}
 
 	cmd := exec.Command("sh", "-c", out)
-	cmd.Stdin = bytes.NewReader(h.state)
+	cmd.Stdin = strings.NewReader(h.state)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -54,7 +60,7 @@ func (h *Hook) Run(attrs interface{}) error {
 	if err != nil {
 		return errors.New(string(stderr.Bytes()))
 	}
-	h.state = stdout.Bytes()
+	h.state = string(stdout.Bytes())
 
 	return nil
 }

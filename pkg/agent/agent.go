@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"github.com/epithet-ssh/epithet/pkg/agent/hook"
 	"net"
 	"os"
 	"sync"
@@ -23,12 +24,12 @@ const DefaultTimeout = time.Second * 30
 // Agent represents our agent
 type Agent struct {
 	certExpires *atomic.Uint64
-	lastToken   *atomic.String
+	token       *atomic.String
 
 	keyring  agent.Agent
 	caClient *caclient.Client
 
-	authCommand     string
+	authCommand     *hook.Hook
 	agentSocketPath string
 
 	publicKey  sshcert.RawPublicKey
@@ -40,11 +41,19 @@ type Agent struct {
 // Implement agent.Agent and agent.ExtendedAgent
 
 func (a *Agent) Signers() ([]ssh.Signer, error) {
-	panic("Should not be used for now")
+	err := a.EnsureCertificate(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("error obtaining certificate: %w", err)
+	}
+	return a.keyring.Signers()
 }
 
 // List returns the identities known to the agent.
 func (a *Agent) List() ([]*agent.Key, error) {
+	err := a.EnsureCertificate(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("error obtaining certificate: %w", err)
+	}
 	return a.keyring.List()
 }
 
@@ -113,9 +122,9 @@ func Create(caClient *caclient.Client, agentSocketPath string, authCmd string) (
 		caClient: caClient,
 
 		certExpires: atomic.NewUint64(0),
-		lastToken:   atomic.NewString(""),
+		token:       atomic.NewString(""),
 
-		authCommand:     authCmd,
+		authCommand:     hook.New(authCmd),
 		agentSocketPath: agentSocketPath,
 	}
 
@@ -232,33 +241,52 @@ func (a *Agent) UseCredential(c Credential) error {
 func (a *Agent) EnsureCertificate(ctx context.Context) error {
 	if a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow {
 		// cert is expired, or close to expiration, so refresh it
-		err := a.ObtainNewCertificate(ctx, a.lastToken.Load())
+		credential, tokenExpired, err := a.obtainNewCertificate(ctx, a.authCommand.State())
 		if err != nil {
 			return fmt.Errorf("error requesting certificate: %w", err)
+		}
+
+		if tokenExpired {
+			// obtain a new token and recur
+			newToken, err := a.requestNewToken(ctx)
+			if err != nil {
+				return fmt.Errorf("error requesting new token: %w", err)
+			}
+			a.token.Store(newToken)
+			return a.EnsureCertificate(ctx)
+		} else {
+			err = a.UseCredential(*credential)
+			if err != nil {
+				return fmt.Errorf("error using obtained credential: %w", err)
+			}
 		}
 	}
 	return nil
 }
 
-// ObtainNewCertificate tries to convert a `{token, pubkey}` into a certificate
-func (a *Agent) ObtainNewCertificate(ctx context.Context, token string) error {
+func (a *Agent) requestNewToken(ctx context.Context) (string, error) {
+	err := a.authCommand.Run(map[string]string{})
+	if err != nil {
+		return "", fmt.Errorf("error requesting new token: %w", err)
+	}
+	return a.authCommand.State(), nil
+}
+
+// obtainNewCertificate tries to convert a `{token, pubkey}` into a certificate
+func (a *Agent) obtainNewCertificate(ctx context.Context, token string) (*Credential, bool, error) {
 	res, err := a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
 		PublicKey: a.publicKey,
 		Token:     token,
 	})
 
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 
-	err = a.UseCredential(Credential{
+	return &Credential{
 		PrivateKey:  a.privateKey,
 		Certificate: res.Certificate,
-	})
-	if err != nil {
-		return err
-	}
-	return nil
+	}, false, nil
 }
 
 // CertExpirationFuzzWindow is the time, in seconds that we ask for a new

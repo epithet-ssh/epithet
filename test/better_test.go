@@ -18,17 +18,17 @@ import (
 )
 
 func Test_EndToEnd_Success(t *testing.T) {
-	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
+	caPubKey, caPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	sshd, err := sshd.Start(caPubKey)
+	server, err := sshd.Start(caPubKey)
 	require.NoError(t, err)
-	defer sshd.Close()
+	defer server.Close()
 
 	policyServer := startPolicyServer("a")
 	defer policyServer.Close()
 
-	authority, err := ca.New(caPrivKey, policyServer.URL)
+	authority, err := ca.New(caPrivateKey, policyServer.URL)
 	require.NoError(t, err)
 
 	caServer, err := startCAServer(authority)
@@ -36,20 +36,20 @@ func Test_EndToEnd_Success(t *testing.T) {
 	defer caServer.Close()
 
 	caClient := caclient.New(caServer.URL)
-	ag, err := agent.Create(caClient, "", "echo yes")
+	ag, err := agent.Create(caClient, "", "echo '1234'")
 	require.NoError(t, err)
 
-	err = ag.EnsureCertificate(context.Background())
-	require.NoError(t, err)
+	//err = ag.EnsureCertificate(context.Background())
+	//require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go agent.Run(ctx, ag)
 
-	out, err := sshd.Ssh(ag)
+	out, err := server.Ssh(ag)
 	t.Log("client out:", string(out))
 	require.NoError(t, err)
-	require.Contains(t, out, "hello from sshd")
+	require.Contains(t, out, "hello from sshd!")
 }
 
 func Test_EndToEnd_Failure(t *testing.T) {
