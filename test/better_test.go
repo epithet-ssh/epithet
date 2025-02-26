@@ -51,7 +51,7 @@ func Test_EndToEnd_Success(t *testing.T) {
 	require.Contains(t, out, "hello from sshd!")
 }
 
-func Test_EndToEnd_Failure(t *testing.T) {
+func Test_EndToEnd_DenyCertificate(t *testing.T) {
 	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
@@ -71,6 +71,68 @@ func Test_EndToEnd_Failure(t *testing.T) {
 
 	cac := caclient.New(cad.URL)
 	a, err := agent.Create(cac, "", "echo 'no'")
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.Run(ctx, a)
+	require.NoError(t, err)
+	defer cancel()
+
+	out, err := sshd.Ssh(a)
+	t.Log("client out:", string(out))
+	require.Error(t, err)
+	require.Contains(t, out, "Permission denied")
+}
+
+func Test_EndToEnd_WrongPrincipal(t *testing.T) {
+	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+
+	sshd, err := sshd.Start(caPubKey)
+	require.NoError(t, err)
+	defer sshd.Close()
+
+	policy_server := startPolicyServer("c")
+	defer policy_server.Close()
+
+	ca, err := ca.New(caPrivKey, policy_server.URL)
+	require.NoError(t, err)
+
+	cad, err := startCAServer(ca)
+	require.NoError(t, err)
+	defer cad.Close()
+
+	cac := caclient.New(cad.URL)
+	a, err := agent.Create(cac, "", "echo 'yes'")
+	ctx, cancel := context.WithCancel(context.Background())
+	go agent.Run(ctx, a)
+	require.NoError(t, err)
+	defer cancel()
+
+	out, err := sshd.Ssh(a)
+	t.Log("client out:", string(out))
+	require.Error(t, err)
+	require.Contains(t, out, "Permission denied")
+}
+
+func Test_EndToEnd_InvalidToken(t *testing.T) {
+	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+
+	sshd, err := sshd.Start(caPubKey)
+	require.NoError(t, err)
+	defer sshd.Close()
+
+	policy_server := startPolicyServer("a")
+	defer policy_server.Close()
+
+	ca, err := ca.New(caPrivKey, policy_server.URL)
+	require.NoError(t, err)
+
+	cad, err := startCAServer(ca)
+	require.NoError(t, err)
+	defer cad.Close()
+
+	cac := caclient.New(cad.URL)
+	a, err := agent.Create(cac, "", "echo 'wheee'")
 	ctx, cancel := context.WithCancel(context.Background())
 	go agent.Run(ctx, a)
 	require.NoError(t, err)
