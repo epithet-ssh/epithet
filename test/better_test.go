@@ -59,7 +59,7 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policy_server := startPolicyServer("c")
+	policy_server := startPolicyServer("a")
 	defer policy_server.Close()
 
 	ca, err := ca.New(caPrivKey, policy_server.URL)
@@ -70,13 +70,14 @@ func Test_EndToEnd_Failure(t *testing.T) {
 	defer cad.Close()
 
 	cac := caclient.New(cad.URL)
-	a, err := agent.Create(cac, "", "echo 'yes'")
+	a, err := agent.Create(cac, "", "echo 'no'")
 	ctx, cancel := context.WithCancel(context.Background())
 	go agent.Run(ctx, a)
 	require.NoError(t, err)
 	defer cancel()
 
 	out, err := sshd.Ssh(a)
+	t.Log("client out:", string(out))
 	require.Error(t, err)
 	require.Contains(t, out, "Permission denied")
 }
@@ -123,6 +124,8 @@ func startPolicyServer(principals ...string) *httptest.Server {
 			w.Header().Add("Content-type", "application/json")
 			w.WriteHeader(200)
 			w.Write(out)
+		} else if strings.Contains(pr.Token, "no") {
+			w.WriteHeader(403)
 		} else {
 			w.WriteHeader(401)
 		}
