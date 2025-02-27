@@ -2,9 +2,7 @@ package test
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -27,7 +25,7 @@ func Test_EndToEnd_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer server.Close()
 
-	policyServer := startPolicyServer("a")
+	policyServer := startPolicyServer(caPubKey, "a")
 	defer policyServer.Close()
 
 	authority, err := ca.New(caPrivateKey, policyServer.URL)
@@ -51,6 +49,40 @@ func Test_EndToEnd_Success(t *testing.T) {
 	require.Contains(t, out, "hello from sshd!")
 }
 
+func Test_EndToEnd_SignatureFailure(t *testing.T) {
+	caPubKey, caPrivateKey, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	otherPubKey, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+
+	server, err := sshd.Start(caPubKey)
+	require.NoError(t, err)
+	defer server.Close()
+
+	policyServer := startPolicyServer(otherPubKey, "a")
+	defer policyServer.Close()
+
+	authority, err := ca.New(caPrivateKey, policyServer.URL)
+	require.NoError(t, err)
+
+	caServer, err := startCAServer(authority)
+	require.NoError(t, err)
+	defer caServer.Close()
+
+	caClient := caclient.New(caServer.URL)
+	ag, err := agent.Create(caClient, "", "echo 'yes'")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.Run(ctx, ag)
+
+	out, err := server.Ssh(ag)
+	t.Log("client out:", string(out))
+	require.Error(t, err)
+	require.Contains(t, out, "Permission denied")
+}
+
 func Test_EndToEnd_DenyCertificate(t *testing.T) {
 	caPubKey, caPrivKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
@@ -59,7 +91,7 @@ func Test_EndToEnd_DenyCertificate(t *testing.T) {
 	require.NoError(t, err)
 	defer sshd.Close()
 
-	policy_server := startPolicyServer("a")
+	policy_server := startPolicyServer(caPubKey, "a")
 	defer policy_server.Close()
 
 	ca, err := ca.New(caPrivKey, policy_server.URL)
@@ -149,47 +181,18 @@ func startCAServer(c *ca.CA) (*httptest.Server, error) {
 	return httptest.NewServer(handler), nil
 }
 
-func startPolicyServer(principals ...string) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.Header().Add("Content-type", "text/plain")
-
-			w.WriteHeader(500)
-			w.Write([]byte(err.Error()))
-			return
-		}
-
-		pr := ca.PolicyRequest{}
-		err = json.Unmarshal(body, &pr)
-		if err != nil {
-			w.Header().Add("Content-type", "text/plain")
-
-			w.WriteHeader(500)
-			w.Write([]byte(err.Error()))
-			return
-		}
-
-		if strings.Contains(pr.Token, "yes") {
-			out, err := json.Marshal(&ca.CertParams{
+func startPolicyServer(caPubKey sshcert.RawPublicKey, principals ...string) *httptest.Server {
+	return httptest.NewServer(policy.NewHandlerFunc(caPubKey, func(ctx context.Context, token string) (policy.Status, *ca.CertParams, error) {
+		if strings.Contains(token, "yes") {
+			return policy.Ok, &ca.CertParams{
 				Names:      principals,
 				Identity:   "tester@example.org",
 				Expiration: time.Minute * 5,
-			})
-			if err != nil {
-				w.Header().Add("Content-type", "text/plain")
-
-				w.WriteHeader(500)
-				w.Write([]byte(err.Error()))
-				return
-			}
-			w.Header().Add("Content-type", "application/json")
-			w.WriteHeader(200)
-			w.Write(out)
-		} else if strings.Contains(pr.Token, "no") {
-			w.WriteHeader(403)
+			}, nil
+		} else if strings.Contains(token, "no") {
+			return policy.NotAuthorized, nil, nil
 		} else {
-			w.WriteHeader(401)
+			return policy.InvalidToken, nil, nil
 		}
 	}))
 }
