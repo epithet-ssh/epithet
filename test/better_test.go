@@ -132,7 +132,7 @@ func Test_EndToEnd_InvalidToken(t *testing.T) {
 	defer cad.Close()
 
 	cac := caclient.New(cad.URL)
-	a, err := agent.Create(cac, "", "echo 'wheee'")
+	a, err := agent.Create(cac, "", "echo 'whe\"ee'")
 	ctx, cancel := context.WithCancel(context.Background())
 	go agent.Run(ctx, a)
 	require.NoError(t, err)
