@@ -1,3 +1,0 @@
-ca_url = "http://localhost:12510/"
-ssh_auth_sock = "./agent.sock"
-auth_command = "echo 'yes'"

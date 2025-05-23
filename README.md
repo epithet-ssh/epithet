@@ -1,86 +1,36 @@
 # Epithet makes SSH certificates easy
 
-[![Actions Status](https://github.com/epithet-ssh/epithet/workflows/build/badge.svg)](https://github.com/epithet-ssh/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/epithet-ssh/epithet)](https://goreportcard.com/report/github.com/epithet-ssh/epithet) [![Maintainability](https://api.codeclimate.com/v1/badges/3a4020265b38c175bdf0/maintainability)](https://codeclimate.com/github/brianm/epithet/maintainability)
-
-Epithet provides an SSH Agent and a CA Service which work together to provide a series of short lived (typically a few minutes) SSH certificates to users. Authentication is (generally) completed on the client, providing an authentication token to the Agent. The Agent then passes the `{token, public-key}` pair to the CA service. The CA service then passes the token to a Policy service which performs authorization and returns certificate parameters (such as the principals, certificate expiration, and allowed extensions) to the CA. The CA then signs the certificate using the parameters from the policy server and returns it to the Agent.
-
-The Agent will re-use an authentication token until it stops working. A typical deployment might use OIDC or SAML to authenticate users, in which case the token will be a JWT access token (or SAML analogue), but could just be a username/password/mfa challenge, or even a shared secret.
-
-The Agent generates a new keypair when it starts, and never exposes the private key or writes it to disk. The CA loads the private key, and also never exposes it or writes it to disk.
+V2 Changes Everything (for the better!). We keep the agent, but it is no longer an ssh agent. 
 
 ```
-+-------+          +---------------+ +-------+           +-----+          +---------+ +-------+
-| User  |          | Authenticator | | Agent |           | CA  |          | Policy  | | Host  |
-+-------+          +---------------+ +-------+           +-----+          +---------+ +-------+
-    |                      |             |                  |                  |          |
-    | Authenticate         |             |                  |                  |          |
-    |--------------------->|             |                  |                  |          |
-    |                      |             |                  |                  |          |
-    |                      | Token       |                  |                  |          |
-    |                      |------------>|                  |                  |          |
-    |                      |             |                  |                  |          |
-    |                      |             | Token, PubKey    |                  |          |
-    |                      |             |----------------->|                  |          |
-    |                      |             |                  |                  |          |
-    |                      |             |                  | Token            |          |
-    |                      |             |                  |----------------->|          |
-    |                      |             |                  |                  |          |
-    |                      |             |                  |      Cert Params |          |
-    |                      |             |                  |<-----------------|          |
-    |                      |             |                  |                  |          |
-    |                      |             |      Certificate |                  |          |
-    |                      |             |<-----------------|                  |          |
-    |                      |             |                  |                  |          |
-    | Use SSH              |             |                  |                  |          |
-    |----------------------------------->|                  |                  |          |
-    |                      |             |                  |                  |          |
-    |         Sign stuff for SSH session |                  |                  |          |
-    |<-----------------------------------|                  |                  |          |
-    |                      |             |                  |                  |          |
-    | SSH session          |             |                  |                  |          |
-    |------------------------------------------------------------------------------------>|
-    |                      |             |                  |                  |          |
-    |                      |             | Cert Expires     |                  |          |
-    |                      |             |-------------     |                  |          |
-    |                      |             |            |     |                  |          |
-    |                      |             |<------------     |                  |          |
-    |                      |             |                  |                  |          |
-    | Use SSH              |             |                  |                  |          |
-    |----------------------------------->|                  |                  |          |
-    |                      |             |                  |                  |          |
-    |                      |             | Token, PubKey    |                  |          |
-    |                      |             |----------------->|                  |          |
-    |                      |             |                  |                  |          |
-    |                      |             |                  | Token            |          |
-    |                      |             |                  |----------------->|          |
-    |                      |             |                  |                  |          |
-    |                      |             |                  |      Cert Params |          |
-    |                      |             |                  |<-----------------|          |
-    |                      |             |                  |                  |          |
-    |                      |             |      Certificate |                  |          |
-    |                      |             |<-----------------|                  |          |
-    |                      |             |                  |                  |          |
-    |         Sign stuff for SSH session |                  |                  |          |
-    |<-----------------------------------|                  |                  |          |
-    |                      |             |                  |                  |          |
-    | SSH session          |             |                  |                  |          |
-    |------------------------------------------------------------------------------------>|
-    |                      |             |                  |                  |          |
+┌───────────────────────────────┐                  
+│┌───────┐    ┌───────────────┐ │     ┌────────┐
+││  ssh  │───▶│ epithet proxy │─┼────▶│  host  │
+│└───────┘    └───────────────┘ │     └────────┘
+└─────────────────────┼─────────┘                  
+                      │                            
+                      ▼                            
+              ┌───────────────┐                    
+              │ epithet agent │                    
+              └───────────────┘                    
+                      │                            
+                      ▼                            
+              ┌───────────────┐                    
+              │      CA       │                    
+              └───────────────┘                    
+                      │                            
+                      ▼                            
+              ┌───────────────┐                    
+              │ policy server │                    
+              └───────────────┘                    
 ```
 
-# Setting up clients
+Using a proxy lets us send things like the target user and host, so we can arrange for different certs for different hosts, or different users on a host.
 
-Users will typically specify the use of the Epithet SSH Agent for a hostname pattern:
+Policy server now responds with both the cert params and a policy to apply to the cert, indicating to the agent which hosts the cert should be used for. Returning the policy allows us to decide whether or not to request a new cert by matching the policy to the outgoing ssh request. For example, sshing as `deployer@` can use a generic longer lived cert, but sshing as `root@` will *always* generate a new, 1m TTL cert. It can also thusly support naming schemes: `ssh root@dev324g.example.com` can use a shared cert if it matches a policy like: `host =~ /^dev[.*]\.example\.com$/`. The policy is solely a *certificate matching policy* and does not offer any additional security, but it allows us to reuse certificates more efficiently. Access to prod hosts, `root` (or a user with `sudo` access), etc, can be granted on a host by host basis, and with very short TTL. The very short TTL allows the policy server to do some heuristics, for instance "is the deploy host actually running a deployment?" before granting a cert for an ssh based deploy tool.
 
-```
-Host *.example.com
-     User brianm
-     IdentityAgent ~/.epithet/example-agent.sock
-```
+## Notes
 
-# Running a CA
-
-# Creating a Policy Service
-
-
-
+* Discussion about [using ssh-keygen without files](https://gist.github.com/kraftb/9918106) to avoid needing to muck about with keys
+* Use [daemonize](https://github.com/knsd/daemonize/) behind `epithet proxy` to start the agent? Maybe have that as an option anyway.
+* Agent probably *is* actually going to be an ssh agent as well, as we need to feed certificates to the ssh process. If we want to avoid writing keys to disk (and we do) we'll need to generate keys and stash them in the agent. We can just have it spin up an SSH_AUTH_SOCK per new connection, and tear it down when the connection ends. Doing so implies we should not `exec` the child ssh from the agent, as we'll want to know when it closes/terminates.
