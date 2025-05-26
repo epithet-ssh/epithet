@@ -9,3 +9,8 @@ tmp
 *.exe
 
 dist/
+
+
+# Added by cargo
+
+/target
