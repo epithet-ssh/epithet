@@ -28,6 +28,7 @@ fn main() {
         }
     } else {
         // When no command is provided, print the help message and exit
+        // TODO Seems like a hack, but works :-)
         let _ = Cli::parse_from(&["epithet", "--help"]);
         process::exit(1);
     }
