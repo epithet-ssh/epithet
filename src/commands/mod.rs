@@ -1,24 +1,24 @@
 pub mod agent;
-pub mod proxy;
+pub mod auth;
 
 use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Greet someone by name
-    #[command(name = "proxy")]
-    Greet(proxy::ProxyArgs),
+    #[command(name = "auth", alias = "match")]
+    Auth(auth::AuthArgs),
 
     /// Display information about the system
     #[command(name = "agent")]
-    Info(agent::AgentArgs),
+    Agent(agent::AgentArgs),
 }
 
 impl Command {
     pub fn execute(self) -> Result<(), String> {
         match self {
-            Command::Greet(args) => proxy::execute(args),
-            Command::Info(args) => agent::execute(args),
+            Command::Auth(args) => auth::execute(args),
+            Command::Agent(args) => agent::execute(args),
         }
     }
 }

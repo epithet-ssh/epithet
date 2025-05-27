@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
+directories = "6.0.0"
 gethostname = "0.4.3"
