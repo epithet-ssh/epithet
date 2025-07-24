@@ -15,7 +15,7 @@ pub enum Command {
     #[command(name = "agent")]
     Agent(agent::AgentArgs),
 
-    /// Start the agent
+    /// Run proxy for ProxyCommand
     #[command(name = "proxy")]
     Proxy(proxy::ProxyArgs),
 }

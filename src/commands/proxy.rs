@@ -2,7 +2,7 @@ use clap::Args;
 use std::error::Error;
 use tokio::net::TcpStream;
 
-/// Start the epithet agent
+/// invoked for ProxyCommand
 #[derive(Debug, Args)]
 pub struct ProxyArgs {}
 
