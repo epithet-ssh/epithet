@@ -1,5 +1,6 @@
 use clap::Args;
 use directories::ProjectDirs;
+use std::error::Error;
 
 #[derive(Debug, Args)]
 pub struct AuthArgs {
@@ -16,7 +17,7 @@ pub struct AuthArgs {
     socket: String,
 }
 
-pub fn execute(args: AuthArgs) -> Result<(), String> {
+pub fn execute(args: AuthArgs) -> Result<(), Box<dyn Error>> {
     if let Some(proj_dirs) = ProjectDirs::from("dev", "epithet", "epithet-agent") {
         println!("{}", proj_dirs.config_dir().display());
         let agent_dir = proj_dirs.data_dir().join("agent").join(args.socket);
