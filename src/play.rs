@@ -1,26 +1,18 @@
-pub fn wheee() -> i16 {
-    return 7;
-}
-
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-
-    use super::*;
+    use anyhow::Result;
     use assertor::*;
 
     use ssh_key::rand_core::OsRng;
     use ssh_key::{Algorithm, PrivateKey};
 
     #[test]
-    fn test_foo() -> Result<(), Box<dyn Error>> {
-        let mut csprng = OsRng;
-
+    fn test_key_generation() -> Result<()> {
         // Generate SSH Ed25519 private key
-        let private_key = PrivateKey::random(&mut csprng, Algorithm::Ed25519)?;
+        let private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
 
         // Convert to OpenSSH format
-        let openssh_private_key = private_key.to_openssh(ssh_key::LineEnding::LF)?;
+        let openssh_private_key = private_key.to_openssh(ssh_key::LineEnding::CRLF)?;
         let openssh_public_key = private_key.public_key().to_openssh()?;
 
         // Get the string content for assertions and printing
@@ -49,6 +41,17 @@ mod tests {
         // Test that we can parse the generated key back
         let parsed_private_key = PrivateKey::from_openssh(private_key_str)?;
         assert_that!(parsed_private_key.algorithm()).is_equal_to(Algorithm::Ed25519);
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_pubkey_from_privkey() -> Result<()> {
+        let private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+
+        let pubkey = private_key.public_key();
+        let ossh_pubkey = pubkey.to_openssh()?;
+
+        assert_that!(ossh_pubkey).starts_with("ssh-ed25519");
         Ok(())
     }
 }
