@@ -17,7 +17,7 @@ impl Server {
 
         // obtain local user
 
-        return Ok(Server { addr });
+        Ok(Server { addr })
     }
 
     pub fn addr(&self) -> SocketAddr {

@@ -34,9 +34,9 @@ mod tests {
         let fingerprint_str = fingerprint.to_string();
         assert_that!(fingerprint_str.len()).is_greater_than(0);
 
-        println!("Generated SSH Ed25519 private key:\n{}", private_key_str);
-        println!("Generated SSH Ed25519 public key:\n{}", public_key_str);
-        println!("Key fingerprint (SHA256): {}", fingerprint_str);
+        println!("Generated SSH Ed25519 private key:\n{private_key_str}");
+        println!("Generated SSH Ed25519 public key:\n{public_key_str}");
+        println!("Key fingerprint (SHA256): {fingerprint_str}");
 
         // Test that we can parse the generated key back
         let parsed_private_key = PrivateKey::from_openssh(private_key_str)?;

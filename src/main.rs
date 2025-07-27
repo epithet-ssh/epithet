@@ -21,17 +21,17 @@ fn main() {
 
     if let Some(command) = cli.command {
         if cli.verbose {
-            println!("Executing command: {:?}", command);
+            println!("Executing command: {command:?}");
         }
 
         if let Err(err) = command.execute() {
-            eprintln!("Error: {}", err);
+            eprintln!("Error: {err}");
             process::exit(1);
         }
     } else {
         // When no command is provided, print the help message and exit
         // TODO Seems like a hack, but works :-)
-        let _ = Cli::parse_from(&["epithet", "--help"]);
+        let _ = Cli::parse_from(["epithet", "--help"]);
         process::exit(1);
     }
 }
