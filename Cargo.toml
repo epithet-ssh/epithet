@@ -7,7 +7,12 @@ license = "Apache-2.0"
 
 
 [dependencies]
+anyhow = "1.0.98"
+assertor = { version = "0.0.4", features = ["anyhow"] }
 clap = { version = "4.4", features = ["derive"] }
 directories = "6.0.0"
 futures = "0.3.31"
+minijinja = "2.11.0"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+ssh-key = { version = "0.6.7", features = ["ed25519", "rand_core"] }
 tokio = { version = "1", features = ["full"] }

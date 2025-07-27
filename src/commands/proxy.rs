@@ -25,3 +25,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let _ = futures::try_join!(f1, f2);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use assertor::*;
+
+    #[test]
+    fn test_sanity() {
+        assert_that!(4).is_equal_to(4);
+    }
+}

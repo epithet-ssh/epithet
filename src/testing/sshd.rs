@@ -1,0 +1,41 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+use tokio::net::TcpListener;
+
+#[derive(Debug)]
+pub struct Server {
+    addr: SocketAddr,
+}
+
+impl Server {
+    pub async fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        // obtain a random ephemeral port to listen on
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
+        let listener = TcpListener::bind(addr).await?;
+        let addr = listener.local_addr()?;
+        drop(listener);
+
+        // obtain local user
+
+        return Ok(Server { addr });
+    }
+
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assertor::*;
+
+    #[tokio::test]
+    async fn test_server_start() {
+        let s = Server::start().await;
+        assert_that!(s).is_ok();
+        let srv = s.unwrap();
+        assert_that!(srv.addr().port()).is_greater_than(1023);
+        assert_that!(srv.addr().port()).is_less_than(65535);
+    }
+}
