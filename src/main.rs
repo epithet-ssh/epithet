@@ -2,6 +2,7 @@ use clap::Parser;
 use std::process;
 
 mod commands;
+mod ssh;
 mod testing;
 
 #[derive(Parser)]
