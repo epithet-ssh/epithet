@@ -14,9 +14,5 @@ futures = "0.3.31"
 minijinja = "2.11.0"
 rand = "0.9.2"
 rand_core = { version = "0.9.3", features = ["os_rng"] }
-ssh-key = { version = "0.7.0-rc.1", features = [
-    "ed25519",
-    "rand_core",
-] } #rand_core = { version = "0.6.4", features = ["getrandom"] }
-#ssh-key = { version = "0.6.7", features =  }
+ssh-key = { version = "0.7.0-rc.1", features = ["ed25519", "rand_core"] }
 tokio = { version = "1", features = ["full"] }
