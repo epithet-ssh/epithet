@@ -1,8 +1,8 @@
-use ssh_key::rand_core::OsRng;
+use rand::rng;
 use ssh_key::{Algorithm, PrivateKey};
 
 pub fn generate_private_key() -> Result<PrivateKey, ssh_key::Error> {
-    PrivateKey::random(&mut OsRng, Algorithm::Ed25519)
+    PrivateKey::random(&mut rng(), Algorithm::Ed25519)
 }
 
 #[cfg(test)]
@@ -11,7 +11,7 @@ mod tests {
     use anyhow::Result;
     use assertor::*;
 
-    use ssh_key::rand_core::OsRng;
+    use rand::rng;
     use ssh_key::{Algorithm, PrivateKey};
 
     #[test]
@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn test_generate_pubkey_from_privkey() -> Result<()> {
-        let private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+        let private_key = PrivateKey::random(&mut rng(), Algorithm::Ed25519)?;
 
         let pubkey = private_key.public_key();
         let ossh_pubkey = pubkey.to_openssh()?;
