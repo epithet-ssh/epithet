@@ -2,7 +2,6 @@ use clap::Parser;
 use std::process;
 
 mod commands;
-mod play;
 mod ssh;
 mod testing;
 
