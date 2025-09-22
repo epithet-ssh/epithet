@@ -8,7 +8,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub async fn start(_: &ssh_key::PublicKey) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn start(_ca_key: &ssh_key::PublicKey) -> Result<Self, Box<dyn std::error::Error>> {
         // obtain a random ephemeral port to listen on
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
         let listener = TcpListener::bind(addr).await?;
