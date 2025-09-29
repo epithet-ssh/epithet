@@ -1,40 +1,42 @@
 # Epithet makes SSH certificates easy
 
-V2 Changes Everything (for the better!). We keep the agent, but it is no longer an ssh agent. 
+## Plan for v2
+
+The Epithet Agent is an ssh agent which runs on the endpoint. Rather than exposing a single agent socket, however, it will create a socket on demand for a given outbound connection.
+
+To know if it needs to do it it will need to do something like:
 
 ```
-┌───────────────────────────────┐                  
-│┌───────┐    ┌───────────────┐ │     ┌────────┐
-││  ssh  │───▶│ epithet proxy │─┼────▶│  host  │
-│└───────┘    └───────────────┘ │     └────────┘
-└─────────────────────┼─────────┘                  
-                      │                            
-                      ▼                            
-              ┌───────────────┐                    
-              │ epithet agent │                    
-              └───────────────┘                    
-                      │                            
-                      ▼                            
-              ┌───────────────┐                    
-              │      CA       │                    
-              └───────────────┘                    
-                      │                            
-                      ▼                            
-              ┌───────────────┐                    
-              │ policy server │                    
-              └───────────────┘                    
+Match exec epithet auth --host %h --port %p --user %r --socket %C
+    IdentityAgent ~/.epithet/sockets/%C
 ```
 
-Using a proxy lets us send things like the target user and host, so we can arrange for different certs for different hosts, or different users on a host.
+The `epithet auth` invocation will do several things:
 
-Policy server now responds with both the cert params and a policy to apply to the cert, indicating to the agent which hosts the cert should be used for. Returning the policy allows us to decide whether or not to request a new cert by matching the policy to the outgoing ssh request. For example, sshing as `deployer@` can use a generic longer lived cert, but sshing as `root@` will *always* generate a new, 1m TTL cert. It can also thusly support naming schemes: `ssh root@dev324g.example.com` can use a shared cert if it matches a policy like: `host =~ /^dev[.*]\.example\.com$/`. The policy is solely a *certificate matching policy* and does not offer any additional security, but it allows us to reuse certificates more efficiently. Access to prod hosts, `root` (or a user with `sudo` access), etc, can be granted on a host by host basis, and with very short TTL. The very short TTL allows the policy server to do some heuristics, for instance "is the deploy host actually running a deployment?" before granting a cert for an ssh based deploy tool.
+1. Check to see if the host (`%h`) should be handled by epithet at all, abort early if not
+2. See if there is an existing, unexpired, certificate for the targeted user/host
+3. If there is an existing cert, set up an identity socket at %C with only that cert
+4. If there is not an existing cert, request one, including doing any need authentication, then if receive one, GOTO 3
+5. When the certificate expires, delete the socket at %C
 
-## Alternate v2 Approach
+Step 5 is kind of questionable, but I think correct. In theory if a given cert if bound to a %C then it should be reusable directly as long as the socket/cert is there. Two catches -- this creates a race condition where it is unexpried when checked but before being used. This is a small window, so honestly is probably solvable by just having a 1-2 second "oh, this cert is going to expire, let's go fetch a new one" before allowing the connection. When the new one is established, just swizzle the cert into the agent on that socket and don't change the socket.
 
-Use `Match exec ... %C`, `IdentitySocket ... %C` to open a socket for a specific host/user setup before the socket attempts to be used. 
+## `epithet auth` details
 
-## Notes
+The `epithet auth` invocation probably needs to receive all the components of `%C` as well as the %C hash itself.
+```
+%C    Hash of %l%h%p%r%j.
 
-* Discussion about [using ssh-keygen without files](https://gist.github.com/kraftb/9918106) to avoid needing to muck about with keys
-* Use [daemonize](https://github.com/knsd/daemonize/) behind `epithet proxy` to start the agent? Maybe have that as an option anyway.
-* Agent probably *is* actually going to be an ssh agent as well, as we need to feed certificates to the ssh process. If we want to avoid writing keys to disk (and we do) we'll need to generate keys and stash them in the agent. We can just have it spin up an SSH_AUTH_SOCK per new connection, and tear it down when the connection ends. Doing so implies we should not `exec` the child ssh from the agent, as we'll want to know when it closes/terminates.
+%l    The local hostname, including the domain name.
+%h    The remote hostname.
+%p    The remote port.
+%r    The remote username.
+%j    The contents of the ProxyJump option, or the empty string if this option is unset.
+```
+The `%C` hash can be used as a key to find the specific agent for that "connection", which probably needs to be a map of `connection -> agent` where the agent exposes the ability to find the expiration of the cert it is currently using, the public key it is currently using, and the ability to atomically replace the cert it is using with a new one. The public key needs to be retrievable so that `epithet auth` can go get new certificates to recplace then in the agent in question.
+
+Actually, interestingly, we might be able to use openssh's ssh-agent to do this, and not need to develop our own ssh-agent protocol at all. basically we set up a tree:
+
+`epithet-agent` -> `[ssh-agent]` where it invokes ssh-agent commands on the agent as needed. We can optimize a number of things by keeping track of the certificates they are issued, so we can query the cert (and keys) without spawning a child process. Communication with the agent can be done via [ssh-agent-client-rs](https://github.com/nresare/ssh-agent-client-rs) which seems very fit for purpose.
+
+We should consider destination constraining the target host for these agents. Need to think about abuse vectors if we don't do that.
