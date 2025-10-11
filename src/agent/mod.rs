@@ -8,7 +8,8 @@ use std::sync::Arc;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{Identity, SignRequest};
-use ssh_agent_lib::ssh_key::{Certificate, HashAlg, PrivateKey, Signature};
+use ssh_agent_lib::ssh_key::public::{KeyData, OpaquePublicKey};
+use ssh_agent_lib::ssh_key::{Algorithm, Certificate, HashAlg, PrivateKey, Signature};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -50,16 +51,34 @@ impl Session for AgentSession {
 
         match credential.as_ref() {
             Some(cred) => {
-                // Return the certificate as an identity
-                // Identity expects KeyData (which is what public_key() returns)
-                let key_data = cred.certificate.public_key().clone();
+                // Encode the certificate as an opaque public key
+                // SSH certificates have their own algorithm type (e.g., ssh-ed25519-cert-v01@openssh.com)
+                let cert_bytes = cred.certificate.to_bytes().map_err(|e| {
+                    AgentError::other(e)
+                })?;
+
+                // Get the certificate algorithm (e.g., Ed25519)
+                let base_algorithm = cred.certificate.algorithm();
+
+                // Create certificate algorithm string
+                let cert_algorithm_str =
+                    format!("{}-cert-v01@openssh.com", base_algorithm.as_str());
+                let cert_algorithm = Algorithm::new(&cert_algorithm_str).map_err(|e| {
+                    AgentError::other(e)
+                })?;
+
+                // Create an opaque public key with the certificate data
+                let opaque_key = OpaquePublicKey::new(cert_bytes, cert_algorithm);
+                let key_data = KeyData::Other(opaque_key);
 
                 Ok(vec![Identity {
                     pubkey: key_data,
                     comment: "epithet certificate".to_string(),
                 }])
             }
-            None => Ok(vec![]),
+            None => {
+                Ok(vec![])
+            }
         }
     }
 

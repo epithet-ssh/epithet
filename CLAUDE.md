@@ -103,7 +103,36 @@ epithet auth --host HOST --user USER --socket SOCKET
 - **Configuration**: Uses `directories` crate for cross-platform config/data directories
 - **Socket Management**: *Planned* - per-connection agent sockets using SSH connection hash (%C)
 - **CLI Framework**: Uses clap with derive macros for command-line parsing
-- **Agent Integration**: *Planned* - ssh-agent process management, possibly using ssh-agent-client-rs
+- **Agent Integration**: Using `russh-keys` crate for SSH agent protocol and certificate support (see below)
+
+#### SSH Certificate Library Decision (October 2025)
+
+**Decision: Use `russh-keys` for SSH agent and certificate handling**
+
+After investigation, we determined that `ssh-agent-lib` does not support SSH certificates in its `KeyData` enum. We evaluated `russh-keys` as an alternative and confirmed it **fully supports SSH certificates**.
+
+**russh-keys Certificate Support (Verified via tests in `tests/russh_cert_test.rs`):**
+- ✅ `russh_keys::load_openssh_certificate()` successfully loads certificate files
+- ✅ `russh_keys::Certificate` provides full certificate metadata:
+  - `key_id()` - certificate identity
+  - `cert_type()` - User or Host
+  - `algorithm()` - base algorithm type
+  - Full access to validity periods, principals, etc.
+- ✅ `russh_keys::agent::client::AgentClient` can communicate with SSH agents
+- ✅ `request_identities()` correctly handles certificates from the agent
+- ✅ `Algorithm` type parses certificate variants (e.g., `ssh-ed25519-cert-v01@openssh.com`)
+- ✅ Re-exports types from `ssh-key` crate, compatible with existing code
+
+**Dependencies:**
+- `russh-keys = "0.49"` - SSH agent protocol and certificate handling
+- `ssh-key = "0.7.0-rc.1"` - SSH key and certificate types (used by both our code and russh-keys)
+
+**Note:** russh-keys internally uses `ssh-key` v0.6.7, while we use v0.7.0-rc.1. Both versions support certificates. The `Algorithm` enum normalizes certificate types to their base algorithm (e.g., `ssh-ed25519-cert-v01@openssh.com` → `ssh-ed25519`), but the `Certificate` type retains all certificate-specific metadata.
+
+**Migration Path:**
+- Replace `ssh-agent-lib::agent` usage with `russh_keys::agent::client::AgentClient`
+- Use `russh_keys::Certificate` for certificate operations
+- Keep existing `ssh-key` usage for key generation
 
 ### Integration with OpenSSH
 
