@@ -1,6 +1,5 @@
 pub mod agent;
 pub mod auth;
-pub mod proxy;
 
 use clap::Subcommand;
 use std::error::Error;
@@ -14,10 +13,6 @@ pub enum Command {
     /// Start the agent
     #[command(name = "agent")]
     Agent(agent::AgentArgs),
-
-    /// Run proxy for ProxyCommand
-    #[command(name = "proxy")]
-    Proxy(proxy::ProxyArgs),
 }
 
 impl Command {
@@ -25,7 +20,6 @@ impl Command {
         match self {
             Command::Auth(args) => auth::execute(args),
             Command::Agent(args) => agent::execute(args),
-            Command::Proxy(args) => proxy::execute(args),
         }
     }
 }

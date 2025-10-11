@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::process;
 
+mod agent;
 mod commands;
 mod ssh;
 mod testing;
