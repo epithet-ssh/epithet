@@ -29,9 +29,9 @@ pub struct Agent {
 
 /// A certificate paired with its private key for signing
 #[derive(Clone)]
-struct Credential {
-    certificate: Certificate,
-    private_key: PrivateKey,
+pub struct Credential {
+    pub certificate: Certificate,
+    pub private_key: PrivateKey,
 }
 
 /// Session implementation for the SSH agent protocol
@@ -139,18 +139,10 @@ impl Agent {
     /// the agent or changing its socket path.
     ///
     /// # Arguments
-    /// * `certificate` - The new SSH certificate
-    /// * `private_key` - The private key corresponding to the certificate
-    pub async fn set_certificate(
-        &self,
-        certificate: Certificate,
-        private_key: PrivateKey,
-    ) -> Result<(), AgentError> {
+    /// * `credential` - The new certificate and private key pair
+    pub async fn set_certificate(&self, credential: Credential) -> Result<(), AgentError> {
         let mut cred = self.credential.write().await;
-        *cred = Some(Credential {
-            certificate,
-            private_key,
-        });
+        *cred = Some(credential);
         Ok(())
     }
 
