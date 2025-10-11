@@ -12,7 +12,10 @@ use ssh_agent_lib::ssh_key::{Certificate, HashAlg, PrivateKey, Signature};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
+pub mod error;
 pub mod socket;
+
+pub use error::Error;
 
 /// An SSH agent that holds a single certificate and listens on a Unix socket.
 ///
@@ -40,18 +43,6 @@ struct AgentSession {
     credential: Arc<RwLock<Option<Credential>>>,
 }
 
-// Custom error type that implements std::error::Error
-#[derive(Debug)]
-struct StringError(String);
-
-impl std::fmt::Display for StringError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for StringError {}
-
 #[ssh_agent_lib::async_trait]
 impl Session for AgentSession {
     async fn request_identities(&mut self) -> Result<Vec<Identity>, AgentError> {
@@ -75,16 +66,14 @@ impl Session for AgentSession {
     async fn sign(&mut self, request: SignRequest) -> Result<Signature, AgentError> {
         let credential = self.credential.read().await;
 
-        let cred = credential
-            .as_ref()
-            .ok_or_else(|| AgentError::other(StringError("no certificate loaded".to_string())))?;
+        let cred = credential.as_ref().ok_or(Error::NoCertificate)?;
 
         // Sign the data using the private key
         // The namespace is typically "file" for SSH signatures
         let ssh_sig = cred
             .private_key
             .sign("file", HashAlg::Sha256, request.data.as_ref())
-            .map_err(AgentError::other)?;
+            .map_err(Error::Signing)?;
 
         // Convert SshSig to Signature
         // SshSig contains the algorithm and signature data
@@ -92,7 +81,7 @@ impl Session for AgentSession {
             ssh_sig.algorithm().clone(),
             ssh_sig.signature_bytes().to_vec(),
         )
-        .map_err(AgentError::other)?;
+        .map_err(|e| Error::SignatureCreation(e.to_string()))?;
 
         Ok(signature)
     }
@@ -109,7 +98,7 @@ impl Agent {
     ///
     /// # Returns
     /// A new Agent instance that is listening for connections
-    pub async fn start(socket_path: PathBuf) -> Result<Self, AgentError> {
+    pub async fn start(socket_path: PathBuf) -> Result<Self, Error> {
         // Remove existing socket if present
         let _ = std::fs::remove_file(&socket_path);
 
@@ -140,10 +129,9 @@ impl Agent {
     ///
     /// # Arguments
     /// * `credential` - The new certificate and private key pair
-    pub async fn set_certificate(&self, credential: Credential) -> Result<(), AgentError> {
+    pub async fn set_certificate(&self, credential: Credential) {
         let mut cred = self.credential.write().await;
         *cred = Some(credential);
-        Ok(())
     }
 
     /// Get a copy of the current certificate, if one is loaded.

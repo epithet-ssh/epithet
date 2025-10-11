@@ -17,6 +17,7 @@ rand_core = { version = "0.9.3", features = ["os_rng"] }
 ssh-agent-lib = "0.5.1"
 ssh-key = { version = "0.7.0-rc.1", features = ["ed25519", "rand_core"] }
 tempfile = "3.14.0"
+thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
 which = "7.0.1"
 whoami = "1.5.2"
