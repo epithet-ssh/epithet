@@ -6,5 +6,7 @@
 .vscode
 tmp
 *.exe
-
+.claude/
+.idea/ 
+target/
 dist/
