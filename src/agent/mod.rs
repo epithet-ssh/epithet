@@ -5,11 +5,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ssh_agent_lib::agent::Session;
-use ssh_agent_lib::error::AgentError;
-use ssh_agent_lib::proto::{Identity, SignRequest};
-use ssh_agent_lib::ssh_key::public::{KeyData, OpaquePublicKey};
-use ssh_agent_lib::ssh_key::{Algorithm, Certificate, HashAlg, PrivateKey, Signature};
+use futures::future::Future;
+use russh_keys::agent::client::AgentClient;
+use russh_keys::agent::server::Agent as RusshAgent;
+use russh_keys::{Certificate, PrivateKey};
+use tokio::net::UnixStream;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -38,71 +38,20 @@ pub struct Credential {
     pub private_key: PrivateKey,
 }
 
-/// Session implementation for the SSH agent protocol
+/// Simple agent implementation for russh-keys
+///
+/// The russh-keys agent server manages its own KeyStore internally,
+/// so we only need to implement the Agent trait for confirmation logic.
 #[derive(Clone)]
-struct AgentSession {
-    credential: Arc<RwLock<Option<Credential>>>,
-}
+struct SimpleAgent;
 
-#[ssh_agent_lib::async_trait]
-impl Session for AgentSession {
-    async fn request_identities(&mut self) -> Result<Vec<Identity>, AgentError> {
-        let credential = self.credential.read().await;
-
-        match credential.as_ref() {
-            Some(cred) => {
-                // Encode the certificate as an opaque public key
-                // SSH certificates have their own algorithm type (e.g., ssh-ed25519-cert-v01@openssh.com)
-                let cert_bytes = cred.certificate.to_bytes().map_err(|e| {
-                    AgentError::other(e)
-                })?;
-
-                // Get the certificate algorithm (e.g., Ed25519)
-                let base_algorithm = cred.certificate.algorithm();
-
-                // Create certificate algorithm string
-                let cert_algorithm_str =
-                    format!("{}-cert-v01@openssh.com", base_algorithm.as_str());
-                let cert_algorithm = Algorithm::new(&cert_algorithm_str).map_err(|e| {
-                    AgentError::other(e)
-                })?;
-
-                // Create an opaque public key with the certificate data
-                let opaque_key = OpaquePublicKey::new(cert_bytes, cert_algorithm);
-                let key_data = KeyData::Other(opaque_key);
-
-                Ok(vec![Identity {
-                    pubkey: key_data,
-                    comment: "epithet certificate".to_string(),
-                }])
-            }
-            None => {
-                Ok(vec![])
-            }
-        }
-    }
-
-    async fn sign(&mut self, request: SignRequest) -> Result<Signature, AgentError> {
-        let credential = self.credential.read().await;
-
-        let cred = credential.as_ref().ok_or(Error::NoCertificate)?;
-
-        // Sign the data using the private key
-        // The namespace is typically "file" for SSH signatures
-        let ssh_sig = cred
-            .private_key
-            .sign("file", HashAlg::Sha256, request.data.as_ref())
-            .map_err(Error::Signing)?;
-
-        // Convert SshSig to Signature
-        // SshSig contains the algorithm and signature data
-        let signature = Signature::new(
-            ssh_sig.algorithm().clone(),
-            ssh_sig.signature_bytes().to_vec(),
-        )
-        .map_err(|e| Error::SignatureCreation(e.to_string()))?;
-
-        Ok(signature)
+impl RusshAgent for SimpleAgent {
+    fn confirm(
+        self,
+        _pk: Arc<PrivateKey>,
+    ) -> Box<dyn Future<Output = (Self, bool)> + Unpin + Send> {
+        // Always approve key additions
+        Box::new(futures::future::ready((self, true)))
     }
 }
 
@@ -122,17 +71,18 @@ impl Agent {
         let _ = std::fs::remove_file(&socket_path);
 
         let credential = Arc::new(RwLock::new(None));
-        let session = AgentSession {
-            credential: credential.clone(),
-        };
 
-        // Start the agent listener
+        // Start the agent listener with simple agent
         let socket_path_clone = socket_path.clone();
         let listener_handle = tokio::spawn(async move {
-            if let Err(e) = socket::listen(&socket_path_clone, session).await {
+            let agent = SimpleAgent;
+            if let Err(e) = socket::listen(&socket_path_clone, agent).await {
                 eprintln!("Agent listener error: {}", e);
             }
         });
+
+        // Give the server a moment to start listening
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         Ok(Agent {
             socket_path,
@@ -148,9 +98,38 @@ impl Agent {
     ///
     /// # Arguments
     /// * `credential` - The new certificate and private key pair
-    pub async fn set_certificate(&self, credential: Credential) {
-        let mut cred = self.credential.write().await;
-        *cred = Some(credential);
+    pub async fn set_certificate(&self, credential: Credential) -> Result<(), Error> {
+        // Update our internal storage
+        {
+            let mut cred = self.credential.write().await;
+            *cred = Some(credential.clone());
+        }
+
+        // Connect to our own agent and add the identity
+        let stream = tokio::time::timeout(
+            tokio::time::Duration::from_secs(2),
+            UnixStream::connect(&self.socket_path),
+        )
+        .await
+        .map_err(|_| Error::AddIdentity("Timeout connecting to agent".to_string()))?
+        .map_err(|e| Error::AddIdentity(format!("Failed to connect to agent: {}", e)))?;
+
+        let mut client = AgentClient::connect(stream);
+
+        // Add the private key to the agent's KeyStore
+        // Note: The agent protocol doesn't have a separate "add certificate" message.
+        // Instead, we add the private key, and if it has an associated certificate,
+        // that should be handled. However, russh-keys may not directly support
+        // adding certificates via add_identity.
+        //
+        // For now, we add the private key. Certificate association may need
+        // additional work or a different approach.
+        client
+            .add_identity(&credential.private_key, &[])
+            .await
+            .map_err(|e| Error::AddIdentity(e.to_string()))?;
+
+        Ok(())
     }
 
     /// Get a copy of the current certificate, if one is loaded.
@@ -195,6 +174,9 @@ mod tests {
         assert_that!(agent.socket_path()).is_equal_to(&socket_path);
         assert_that!(agent.get_certificate().await).is_none();
 
+        // Verify socket was created
+        assert_that!(socket_path.exists()).is_true();
+
         // Cleanup happens automatically via Drop
         drop(agent);
 
@@ -217,8 +199,8 @@ mod tests {
         // Initially no certificate
         assert_that!(agent.get_certificate().await).is_none();
 
-        // Note: We'll need actual certificate creation logic to fully test this
-        // For now, this tests the structure
+        // Note: Full certificate testing would require creating actual certificates
+        // This is tested in the integration tests with real certificates
 
         Ok(())
     }

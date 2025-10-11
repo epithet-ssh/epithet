@@ -15,23 +15,17 @@ pub enum Error {
 
     /// Error signing data with the private key
     #[error("signing error: {0}")]
-    Signing(#[from] ssh_agent_lib::ssh_key::Error),
+    Signing(#[from] ssh_key::Error),
 
     /// Error creating signature from signed data
     #[error("signature creation error: {0}")]
     SignatureCreation(String),
 
-    /// Error from the SSH agent protocol library
-    #[error("agent protocol error: {0}")]
-    Protocol(#[from] ssh_agent_lib::error::AgentError),
-}
+    /// Error from the russh-keys agent library
+    #[error("agent error: {0}")]
+    Agent(#[from] russh_keys::Error),
 
-// Conversion from our Error type to AgentError for the Session trait
-impl From<Error> for ssh_agent_lib::error::AgentError {
-    fn from(err: Error) -> Self {
-        match err {
-            Error::Protocol(e) => e,
-            other => ssh_agent_lib::error::AgentError::other(other),
-        }
-    }
+    /// Error adding identity to agent
+    #[error("failed to add identity: {0}")]
+    AddIdentity(String),
 }
