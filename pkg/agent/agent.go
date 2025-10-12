@@ -168,10 +168,6 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 	}
 }
 
-// CertExpirationFuzzWindow is the time, in seconds that we ask for a new
-// cert in before the current cert expires.
-const CertExpirationFuzzWindow = 20
-
 func (a *Agent) serveAgent(conn net.Conn) {
 	log.Debug("new connection to agent")
 
