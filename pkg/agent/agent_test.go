@@ -52,8 +52,15 @@ func TestBasics(t *testing.T) {
 	require.Contains(t, out, "hello from sshd")
 
 	cancel()
-	// stopping agent runs in its own goroutine :-(
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for agent to complete cleanup using Done() channel
+	select {
+	case <-a.Done():
+		// Agent has been closed and cleanup is complete
+	case <-time.After(1 * time.Second):
+		t.Fatal("agent did not complete cleanup within timeout")
+	}
+
 	_, err = os.Stat(a.AgentSocketPath())
 	if !os.IsNotExist(err) {
 		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())

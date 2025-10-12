@@ -11,10 +11,8 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	log "github.com/sirupsen/logrus"
-	"go.uber.org/atomic"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -26,10 +24,6 @@ const DefaultTimeout = time.Second * 30
 
 // Agent represents our agent
 type Agent struct {
-	running     *atomic.Bool
-	certExpires *atomic.Uint64
-	lastToken   *atomic.String
-
 	keyring  agent.Agent
 	caClient *caclient.Client
 	ctx      context.Context
@@ -40,7 +34,9 @@ type Agent struct {
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
 
-	lock sync.Mutex
+	lock      sync.Mutex
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // Start creates and starts an SSH Agent
@@ -51,9 +47,7 @@ func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath strin
 		agentSocketPath: agentSocketPath,
 		keyring:         keyring,
 		caClient:        caClient,
-		running:         atomic.NewBool(true),
-		certExpires:     atomic.NewUint64(0),
-		lastToken:       atomic.NewString(""),
+		done:            make(chan struct{}),
 	}
 
 	pub, priv, err := sshcert.GenerateKeys()
@@ -123,39 +117,6 @@ func (a *Agent) UseCredential(c Credential) error {
 			return fmt.Errorf("Unable to remove old credential: %w", err)
 		}
 	}
-
-	a.certExpires.Store(uint64(cert.ValidBefore))
-
-	return nil
-}
-
-// CheckCertificate checks if the certificate is expired or invalid
-func (a *Agent) CheckCertificate() bool {
-	a.lock.Lock()
-	defer a.lock.Unlock()
-	return a.certExpires.Load() < uint64(time.Now().Unix())+CertExpirationFuzzWindow
-}
-
-// RequestCertificate tries to convert a `{token, pubkey}` into a certificate
-func (a *Agent) RequestCertificate(ctx context.Context, token string) error {
-	a.lastToken.Store(token)
-
-	res, err := a.caClient.GetCert(ctx, &caserver.CreateCertRequest{
-		PublicKey: a.publicKey,
-		Token:     token,
-	})
-
-	if err != nil {
-		return err
-	}
-
-	err = a.UseCredential(Credential{
-		PrivateKey:  a.privateKey,
-		Certificate: res.Certificate,
-	})
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -189,18 +150,19 @@ func (a *Agent) startAgentListener() error {
 }
 
 func (a *Agent) listenAndServeAgent(listener net.Listener) {
-	for a.running.Load() {
+	for a.Running() {
 		conn, err := listener.Accept()
 		if err != nil {
 			// nothing we can do on this loop
 			if conn != nil {
 				conn.Close()
 			}
-			if !a.running.Load() {
+			if !a.Running() {
 				// we are shutting down, just return
 				return
 			}
 			log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
+			continue
 		}
 		go a.serveAgent(conn)
 	}
@@ -221,9 +183,6 @@ func (a *Agent) serveAgent(conn net.Conn) {
 	conn.Close()
 }
 
-// TokenSizeLimit is the Authentication token size limit
-const TokenSizeLimit = 4094
-
 // AgentSocketPath returns the path for the SSH_AUTH_SOCKET
 func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
@@ -236,13 +195,26 @@ func IsAgentStopped(err error) bool {
 
 // Running reports on whether the current agent is healthy
 func (a *Agent) Running() bool {
-	return a.running.Load()
+	select {
+	case <-a.Done():
+		return false
+	default:
+		return true
+	}
+}
+
+// Done returns a channel that is closed when the agent has been closed and cleanup is complete.
+// This can be used with select statements or waitgroups to know when the agent is fully stopped.
+func (a *Agent) Done() <-chan struct{} {
+	return a.done
 }
 
 // Close stops the agent and cleansup after it
 func (a *Agent) Close() {
-	a.running.Store(false)
-	if a.agentListener != nil {
-		_ = a.agentListener.Close() //ignore error
-	}
+	a.closeOnce.Do(func() {
+		if a.agentListener != nil {
+			_ = a.agentListener.Close() //ignore error
+		}
+		close(a.done)
+	})
 }
