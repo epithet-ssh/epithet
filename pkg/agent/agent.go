@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -17,12 +16,9 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
-var errAgentStopped error = errors.New("agent has been stopped")
+var errAgentStopped = errors.New("agent has been stopped")
 
-// DefaultTimeout is the default timeout for http calls to the CA
-const DefaultTimeout = time.Second * 30
-
-// Agent represents our agent
+// Agent represents an SSH agent that manages certificates
 type Agent struct {
 	keyring  agent.Agent
 	caClient *caclient.Client
@@ -39,7 +35,9 @@ type Agent struct {
 	closeOnce sync.Once
 }
 
-// Start creates and starts an SSH Agent
+// Start creates and starts an SSH agent that listens on the specified socket path.
+// If agentSocketPath is empty, a temporary socket will be created.
+// The agent will automatically close when the context is cancelled.
 func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
 	keyring := agent.NewKeyring()
 	a := &Agent{
@@ -73,13 +71,13 @@ func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath strin
 	return a, nil
 }
 
-// Credential contains the private key and certificate in pem form
+// Credential contains the private key and certificate in PEM format
 type Credential struct {
 	PrivateKey  sshcert.RawPrivateKey
 	Certificate sshcert.RawCertificate
 }
 
-// UseCredential the credentials on the agemnt
+// UseCredential replaces the current credentials in the agent with the provided credential
 func (a *Agent) UseCredential(c Credential) error {
 	if !a.Running() {
 		return errAgentStopped
@@ -114,7 +112,7 @@ func (a *Agent) UseCredential(c Credential) error {
 		err = a.keyring.Remove(k)
 		if err != nil {
 			a.Close()
-			return fmt.Errorf("Unable to remove old credential: %w", err)
+			return fmt.Errorf("unable to remove old credential: %w", err)
 		}
 	}
 	return nil
@@ -132,7 +130,7 @@ func (a *Agent) startAgentListener() error {
 		os.Remove(f.Name())
 	}
 
-	os.Remove(a.agentSocketPath) //remove socket if it exists
+	os.Remove(a.agentSocketPath) // Remove socket if it exists
 	agentListener, err := net.Listen("unix", a.agentSocketPath)
 	if err != nil {
 		a.Close()
@@ -153,12 +151,11 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 	for a.Running() {
 		conn, err := listener.Accept()
 		if err != nil {
-			// nothing we can do on this loop
 			if conn != nil {
 				conn.Close()
 			}
 			if !a.Running() {
-				// we are shutting down, just return
+				// Agent is shutting down
 				return
 			}
 			log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
@@ -169,27 +166,26 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 }
 
 func (a *Agent) serveAgent(conn net.Conn) {
-	log.Debug("new connection to agent")
+	defer conn.Close()
 
+	log.Debug("new connection to agent")
 	err := agent.ServeAgent(a.keyring, conn)
 	if err != nil && err != io.EOF {
 		log.Warnf("error from ssh-agent: %v", err)
 	}
-	// close the connection after the credential is served
-	conn.Close()
 }
 
-// AgentSocketPath returns the path for the SSH_AUTH_SOCKET
+// AgentSocketPath returns the path to the agent's Unix socket
 func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
 }
 
-// IsAgentStopped lets you test if an error indicates that the agent has been stopped
+// IsAgentStopped returns true if the error indicates that the agent has been stopped
 func IsAgentStopped(err error) bool {
 	return errors.Is(err, errAgentStopped)
 }
 
-// Running reports on whether the current agent is healthy
+// Running returns true if the agent is currently running and accepting connections
 func (a *Agent) Running() bool {
 	select {
 	case <-a.Done():
@@ -205,11 +201,11 @@ func (a *Agent) Done() <-chan struct{} {
 	return a.done
 }
 
-// Close stops the agent and cleansup after it
+// Close stops the agent and cleans up resources. Safe to call multiple times.
 func (a *Agent) Close() {
 	a.closeOnce.Do(func() {
 		if a.agentListener != nil {
-			_ = a.agentListener.Close() //ignore error
+			_ = a.agentListener.Close() // Ignore error
 		}
 		close(a.done)
 	})
