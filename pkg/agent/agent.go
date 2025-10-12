@@ -71,6 +71,11 @@ func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath strin
 	if err != nil {
 		return nil, err
 	}
+
+	context.AfterFunc(ctx, func() {
+		a.Close()
+	})
+
 	return a, nil
 }
 

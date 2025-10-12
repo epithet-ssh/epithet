@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -28,7 +29,9 @@ func TestBasics(t *testing.T) {
 	userCert, err := sign(signer, userPub)
 	require.NoError(t, err)
 
-	a, err := agent.Start(t.Context(), nil, "")
+	ctx, cancel := context.WithCancel(t.Context())
+
+	a, err := agent.Start(ctx, nil, "")
 	require.NoError(t, err)
 
 	server, err := sshd.Start(caPub)
@@ -48,7 +51,9 @@ func TestBasics(t *testing.T) {
 
 	require.Contains(t, out, "hello from sshd")
 
-	a.Close()
+	cancel()
+	// stopping agent runs in its own goroutine :-(
+	time.Sleep(50 * time.Millisecond)
 	_, err = os.Stat(a.AgentSocketPath())
 	if !os.IsNotExist(err) {
 		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())
