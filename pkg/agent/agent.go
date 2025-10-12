@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"sync"
 	"time"
 
-	rpc "github.com/epithet-ssh/epithet/internal/agent"
-	"github.com/epithet-ssh/epithet/pkg/agent/hook"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -20,7 +17,6 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
-	"google.golang.org/grpc"
 )
 
 var errAgentStopped error = errors.New("agent has been stopped")
@@ -41,29 +37,23 @@ type Agent struct {
 	agentSocketPath string
 	agentListener   net.Listener
 
-	controlSocketPath string
-	grpcServer        *grpc.Server
-
 	publicKey  sshcert.RawPublicKey
 	privateKey sshcert.RawPrivateKey
 
-	hooks map[string]*hook.Hook
-	lock  sync.Mutex
+	lock sync.Mutex
 }
 
 // Start creates and starts an SSH Agent
-func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
+func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
 	keyring := agent.NewKeyring()
 	a := &Agent{
-		keyring:     keyring,
-		caClient:    caClient,
-		running:     atomic.NewBool(true),
-		certExpires: atomic.NewUint64(0),
-		lastToken:   atomic.NewString(""),
-	}
-
-	for _, o := range options {
-		o.apply(a)
+		ctx:             ctx,
+		agentSocketPath: agentSocketPath,
+		keyring:         keyring,
+		caClient:        caClient,
+		running:         atomic.NewBool(true),
+		certExpires:     atomic.NewUint64(0),
+		lastToken:       atomic.NewString(""),
 	}
 
 	pub, priv, err := sshcert.GenerateKeys()
@@ -81,72 +71,7 @@ func Start(caClient *caclient.Client, options ...Option) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// todo add authnListener
-	err = a.startControlListener()
-	if err != nil {
-		return nil, err
-	}
-
-	// todo run Start hooks
-	a.hookStart()
-
 	return a, nil
-}
-
-// Option configures the agent
-type Option interface {
-	apply(*Agent) error
-}
-
-type optionFunc func(*Agent) error
-
-func (f optionFunc) apply(a *Agent) error {
-	return f(a)
-}
-
-// WithAgentSocketPath specifies the SSH_AUTH_SOCK path to create
-func WithAgentSocketPath(path string) Option {
-	return optionFunc(func(a *Agent) error {
-		a.agentSocketPath = path
-		return nil
-	})
-}
-
-// WithControlSocketPath specifies the control socket (API) for the agent
-func WithControlSocketPath(path string) Option {
-	return optionFunc(func(a *Agent) error {
-		a.controlSocketPath = path
-		return nil
-	})
-}
-
-// WithContext specifies a context.Context that agent will use
-// and which can be cancelled, triggering the agent to stop.
-// This context will also be used for outgoing requests to the
-// CA
-func WithContext(ctx context.Context) Option {
-	return optionFunc(func(a *Agent) error {
-		go func() {
-			select {
-			case <-ctx.Done():
-				a.Close()
-			}
-		}()
-		return nil
-	})
-}
-
-// WithHooks registers the named hooks on the agent
-func WithHooks(hooks map[string]string) Option {
-	return optionFunc(func(a *Agent) error {
-		hm := map[string]*hook.Hook{}
-		for k, v := range hooks {
-			hm[k] = hook.New(v)
-		}
-		a.hooks = hm
-		return nil
-	})
 }
 
 // Credential contains the private key and certificate in pem form
@@ -231,7 +156,7 @@ func (a *Agent) RequestCertificate(ctx context.Context, token string) error {
 
 func (a *Agent) startAgentListener() error {
 	if a.agentSocketPath == "" {
-		f, err := ioutil.TempFile("", "epithet-agent.*")
+		f, err := os.CreateTemp("", "epithet-agent.*")
 		if err != nil {
 			a.Close()
 			return fmt.Errorf("unable to create agent socket: %w", err)
@@ -276,55 +201,12 @@ func (a *Agent) listenAndServeAgent(listener net.Listener) {
 	}
 }
 
-func (a *Agent) hookNeedAuth() error {
-	if h, ok := a.hooks[hook.NeedAuth]; ok {
-		err := h.Run(map[string]string{
-			"hook":         hook.NeedAuth,
-			"control_sock": a.ControlSocketPath(),
-			"agent_sock":   a.AgentSocketPath(),
-		})
-		if err != nil {
-			log.Warnf("error evaluating `need_auth` hook: %v", err)
-			return err
-		}
-	}
-	return nil
-}
-
-func (a *Agent) hookStart() error {
-	if h, ok := a.hooks[hook.Start]; ok {
-		err := h.Run(map[string]string{
-			"hook":         hook.Start,
-			"control_sock": a.ControlSocketPath(),
-			"agent_sock":   a.AgentSocketPath(),
-		})
-		if err != nil {
-			log.Warnf("error evaluating `start` hook: %v", err)
-			return err
-		}
-	}
-	return nil
-}
-
 // CertExpirationFuzzWindow is the time, in seconds that we ask for a new
 // cert in before the current cert expires.
 const CertExpirationFuzzWindow = 20
 
 func (a *Agent) serveAgent(conn net.Conn) {
 	log.Debug("new connection to agent")
-	if a.CheckCertificate() {
-		a.lock.Lock()
-		err := a.RequestCertificate(a.ctx, a.lastToken.Load())
-		if err != nil {
-			err = a.hookNeedAuth()
-			if err != nil {
-				conn.Close()
-				a.lock.Unlock()
-				return
-			}
-		}
-		a.lock.Unlock()
-	}
 
 	err := agent.ServeAgent(a.keyring, conn)
 	if err != nil && err != io.EOF {
@@ -334,52 +216,12 @@ func (a *Agent) serveAgent(conn net.Conn) {
 	conn.Close()
 }
 
-func (a *Agent) startControlListener() error {
-	if a.controlSocketPath == "" {
-		f, err := ioutil.TempFile("", "epithet-authn.*")
-		if err != nil {
-			a.Close()
-			return fmt.Errorf("unable to create authn socket: %w", err)
-		}
-		a.controlSocketPath = f.Name()
-		f.Close()
-		os.Remove(f.Name())
-	}
-
-	os.Remove(a.controlSocketPath)
-	authnListener, err := net.Listen("unix", a.controlSocketPath)
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to listen on %s: %w", a.controlSocketPath, err)
-	}
-
-	err = os.Chmod(a.controlSocketPath, 0600)
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to set permissions on authn socket: %w", err)
-	}
-
-	a.grpcServer = grpc.NewServer()
-
-	rpc.RegisterAgentServiceServer(a.grpcServer, &authnServe{
-		a: a,
-	})
-	go a.grpcServer.Serve(authnListener)
-
-	return nil
-}
-
 // TokenSizeLimit is the Authentication token size limit
 const TokenSizeLimit = 4094
 
 // AgentSocketPath returns the path for the SSH_AUTH_SOCKET
 func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
-}
-
-// ControlSocketPath returns the path for the agent control socket
-func (a *Agent) ControlSocketPath() string {
-	return a.controlSocketPath
 }
 
 // IsAgentStopped lets you test if an error indicates that the agent has been stopped
@@ -395,9 +237,6 @@ func (a *Agent) Running() bool {
 // Close stops the agent and cleansup after it
 func (a *Agent) Close() {
 	a.running.Store(false)
-	if a.grpcServer != nil {
-		a.grpcServer.Stop()
-	}
 	if a.agentListener != nil {
 		_ = a.agentListener.Close() //ignore error
 	}

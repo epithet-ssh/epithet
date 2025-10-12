@@ -1,7 +1,0 @@
-[testing]
-ca_url = "http://localhost:12510/"
-agent_sock = "./agent.sock"
-control_sock = "./control.sock"
-
-[testing.hooks]
-need_auth = "echo 'woof' | ./epithet-auth {{control_sock}}"
