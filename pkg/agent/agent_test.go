@@ -1,7 +1,6 @@
 package agent_test
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -29,10 +28,7 @@ func TestBasics(t *testing.T) {
 	userCert, err := sign(signer, userPub)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	a, err := agent.Start(ctx, nil, "")
+	a, err := agent.Start(t.Context(), nil, "")
 	require.NoError(t, err)
 
 	server, err := sshd.Start(caPub)
