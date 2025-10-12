@@ -9,7 +9,7 @@ The Epithet Agent is an ssh agent which runs on the endpoint. Rather than exposi
 To know if it needs to do it it will need to do something like:
 
 ```
-Match exec epithet auth --host %h --port %p --user %r --socket %C
+Match exec "epithet auth --host %h --port %p --user %r --hash %C"
     IdentityAgent ~/.epithet/sockets/%C
 ```
 
