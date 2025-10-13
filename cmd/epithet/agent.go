@@ -1,22 +1,35 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 
+	"github.com/peterbourgon/ff/v3"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
 )
 
-var (
-	agentMatchPatterns []string
-	agentCaURL         string
-	agentConfigFile    string
-)
+func runAgentCmd(args []string) error {
+	// Create flag set for agent command
+	fs := flag.NewFlagSet("epithet agent", flag.ExitOnError)
 
-var agentCmd = &cobra.Command{
-	Use:   "agent",
-	Short: "Run the epithet agent process",
-	Long: `The agent command runs the main epithet agent process that manages
+	var (
+		configFile = fs.String("config", "", "config file path (optional)")
+		caURL      = fs.String("ca-url", "", "URL of the certificate authority")
+		verbose    = fs.Int("v", 0, "log verbosity (0=warn, 1=info, 2=debug)")
+	)
+
+	// StringSlice for repeated match flags
+	matchPatterns := &StringSliceFlag{}
+	fs.Var(matchPatterns, "match", "hostname pattern to handle (repeatable)")
+
+	// Create ffcli command
+	cmd := &ffcli.Command{
+		Name:       "agent",
+		ShortUsage: "epithet agent [flags]",
+		ShortHelp:  "Run the epithet agent process",
+		LongHelp: `The agent command runs the main epithet agent process that manages
 per-connection SSH agents.
 
 The agent process:
@@ -26,59 +39,59 @@ The agent process:
 - Handles communication from 'epithet auth' commands
 - Creates agent sockets in ~/.epithet/sockets/
 
-This process should typically run in the background as a daemon.`,
-	RunE: runAgent,
-}
+Configuration precedence (highest to lowest):
+1. Command-line flags
+2. Environment variables (EPITHET_CA_URL, EPITHET_MATCH)
+3. Config file
 
-func init() {
-	agentCmd.Flags().StringVar(&agentConfigFile, "config", "",
-		"path to config file (if set, --match and --ca-url are optional)")
+Config file format (one directive per line):
+  match <pattern>
+  ca-url <url>
 
-	agentCmd.Flags().StringArrayVar(&agentMatchPatterns, "match", []string{},
-		"hostname pattern to handle (can be repeated, additive with config file)")
-
-	agentCmd.Flags().StringVar(&agentCaURL, "ca-url", "",
-		"URL of the certificate authority (overrides config file if set)")
-
-	// Future flags might include:
-	// - socket directory location
-	// - communication socket path
-	// - daemon mode flags
-
-	rootCmd.AddCommand(agentCmd)
-}
-
-func runAgent(cmd *cobra.Command, args []string) error {
-	var cfg *SimpleConfig
-
-	// Load config file if specified
-	if agentConfigFile != "" {
-		var err error
-		cfg, err = LoadSimpleConfig(agentConfigFile)
-		if err != nil {
-			return fmt.Errorf("error loading config file: %w", err)
-		}
-		log.Infof("loaded config from: %s", agentConfigFile)
-	} else {
-		cfg = &SimpleConfig{Match: []string{}}
+Flags:
+`,
+		FlagSet: fs,
+		Options: []ff.Option{
+			ff.WithEnvVarPrefix("EPITHET"),
+			ff.WithConfigFileFlag("config"),
+			ff.WithConfigFileParser(ff.PlainParser),
+			ff.WithAllowMissingConfigFile(true),
+		},
+		Exec: func(ctx context.Context, args []string) error {
+			// Set log level based on -v flag
+			switch *verbose {
+			case 0:
+				log.SetLevel(log.WarnLevel)
+			case 1:
+				log.SetLevel(log.InfoLevel)
+			default:
+				log.SetLevel(log.DebugLevel)
+			}
+			return runAgent(*configFile, *caURL, matchPatterns.Values)
+		},
 	}
 
-	// Merge command-line flags with config
-	cfg.MergeWithFlags(agentMatchPatterns, agentCaURL)
+	return cmd.ParseAndRun(context.Background(), args)
+}
 
+func runAgent(configFile, caURL string, matchPatterns []string) error {
 	// Validate we have required configuration
-	if len(cfg.Match) == 0 {
-		return fmt.Errorf("no match patterns specified (use --match or config file)")
+	// Note: ff/v3 has already merged flags, env vars, and config file at this point
+	if len(matchPatterns) == 0 {
+		return fmt.Errorf("no match patterns specified (use -match flag, EPITHET_MATCH env var, or config file)")
 	}
-	if cfg.CaURL == "" {
-		return fmt.Errorf("no CA URL specified (use --ca-url or config file)")
+	if caURL == "" {
+		return fmt.Errorf("no CA URL specified (use -ca-url flag, EPITHET_CA_URL env var, or config file)")
 	}
 
 	log.Infof("starting epithet agent")
-	log.Infof("  ca_url: %s", cfg.CaURL)
-	log.Infof("  match patterns: %d", len(cfg.Match))
+	if configFile != "" {
+		log.Infof("  config: %s", configFile)
+	}
+	log.Infof("  ca_url: %s", caURL)
+	log.Infof("  match patterns: %d", len(matchPatterns))
 
-	for _, pattern := range cfg.Match {
+	for _, pattern := range matchPatterns {
 		log.Infof("    - %s", pattern)
 	}
 
@@ -90,4 +103,18 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	// - Clean up expired certificates and sockets
 
 	return fmt.Errorf("agent command not yet implemented")
+}
+
+// StringSliceFlag implements flag.Value for repeated string flags
+type StringSliceFlag struct {
+	Values []string
+}
+
+func (s *StringSliceFlag) String() string {
+	return fmt.Sprintf("%v", s.Values)
+}
+
+func (s *StringSliceFlag) Set(value string) error {
+	s.Values = append(s.Values, value)
+	return nil
 }

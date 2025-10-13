@@ -1,35 +1,69 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
 )
 
-var verbosity = 0
-
-var rootCmd = &cobra.Command{
-	Use:   "epithet",
-	Short: "Epithet SSH certificate authentication system",
-	Long: `Epithet manages SSH certificates with per-connection agents.
-
-It integrates with OpenSSH to provide seamless certificate-based authentication
-by creating on-demand agent sockets for each unique connection.`,
-	PersistentPreRun: setupLogging,
-}
+var verbosity int
 
 func main() {
-	rootCmd.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "increase verbosity (can be used multiple times)")
+	// Create root flag set
+	fs := flag.NewFlagSet("epithet", flag.ExitOnError)
+	fs.IntVar(&verbosity, "v", 0, "log verbosity (0=warn, 1=info, 2=debug)")
 
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	// Define subcommands
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	// Setup logging
+	setupLogging()
+
+	// Route to subcommands
+	switch os.Args[1] {
+	case "agent":
+		if err := runAgentCmd(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "auth":
+		if err := runAuthCmd(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "help", "-h", "--help":
+		printUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
+		printUsage()
 		os.Exit(1)
 	}
 }
 
-func setupLogging(cmd *cobra.Command, args []string) {
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `epithet - SSH certificate authentication system
+
+Usage:
+  epithet <command> [flags]
+
+Commands:
+  agent       Run the epithet agent process
+  auth        Handle SSH authentication for a connection
+  help        Show this help message
+
+Flags:
+  -v int      Log verbosity (0=warn, 1=info, 2=debug)
+
+Use "epithet <command> -h" for more information about a command.
+`)
+}
+
+func setupLogging() {
 	log.SetOutput(os.Stdout)
 
 	switch verbosity {
