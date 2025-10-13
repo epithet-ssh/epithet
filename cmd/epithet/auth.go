@@ -24,7 +24,7 @@ func runAuthCmd(args []string) error {
 	// Create ffcli command
 	cmd := &ffcli.Command{
 		Name:       "auth",
-		ShortUsage: "epithet auth -host <host> -port <port> -user <user> -hash <hash>",
+		ShortUsage: "epithet auth --host <host> --port <port> --user <user> --hash <hash>",
 		ShortHelp:  "Handle SSH authentication for a connection",
 		LongHelp: `The auth command is invoked by OpenSSH via Match exec to handle
 certificate-based authentication for a specific connection.
@@ -37,7 +37,7 @@ It implements the 5-step workflow:
 5. Manage certificate lifecycle
 
 Example OpenSSH configuration:
-  Match exec "epithet auth -host %h -port %p -user %r -hash %C"
+  Match exec "epithet auth --host %h --port %p --user %r --hash %C"
       IdentityAgent ~/.epithet/sockets/%C
 
 Flags:
@@ -63,16 +63,16 @@ Flags:
 func runAuth(host, port, user, hash string) error {
 	// Validate required flags
 	if host == "" {
-		return fmt.Errorf("-host is required")
+		return fmt.Errorf("--host is required")
 	}
 	if port == "" {
-		return fmt.Errorf("-port is required")
+		return fmt.Errorf("--port is required")
 	}
 	if user == "" {
-		return fmt.Errorf("-user is required")
+		return fmt.Errorf("--user is required")
 	}
 	if hash == "" {
-		return fmt.Errorf("-hash is required")
+		return fmt.Errorf("--hash is required")
 	}
 
 	log.Debugf("auth called for %s@%s:%s (hash: %s)", user, host, port, hash)

@@ -8,12 +8,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var verbosity int
+var verbose bool
 
 func main() {
 	// Create root flag set
 	fs := flag.NewFlagSet("epithet", flag.ExitOnError)
-	fs.IntVar(&verbosity, "v", 0, "log verbosity (0=warn, 1=info, 2=debug)")
+	fs.BoolVar(&verbose, "v", false, "log more")
 
 	// Define subcommands
 	if len(os.Args) < 2 {
@@ -47,7 +47,6 @@ func main() {
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `epithet - SSH certificate authentication system
-
 Usage:
   epithet <command> [flags]
 
@@ -65,13 +64,7 @@ Use "epithet <command> -h" for more information about a command.
 
 func setupLogging() {
 	log.SetOutput(os.Stdout)
-
-	switch verbosity {
-	case 0:
-		log.SetLevel(log.WarnLevel)
-	case 1:
-		log.SetLevel(log.InfoLevel)
-	default: // 2+
+	if verbose {
 		log.SetLevel(log.DebugLevel)
 	}
 }

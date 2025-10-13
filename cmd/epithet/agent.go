@@ -44,11 +44,11 @@ Configuration precedence (highest to lowest):
 2. Environment variables (EPITHET_CA_URL, EPITHET_MATCH)
 3. Config file
 
-Config file format (one directive per line):
-  match <pattern>
-  ca-url <url>
+## Config file format (one directive per line):
 
-Flags:
+match <pattern>
+match <pattern>
+ca-url <url>
 `,
 		FlagSet: fs,
 		Options: []ff.Option{
@@ -78,10 +78,10 @@ func runAgent(configFile, caURL string, matchPatterns []string) error {
 	// Validate we have required configuration
 	// Note: ff/v3 has already merged flags, env vars, and config file at this point
 	if len(matchPatterns) == 0 {
-		return fmt.Errorf("no match patterns specified (use -match flag, EPITHET_MATCH env var, or config file)")
+		return fmt.Errorf("no match patterns specified (use --match flag, EPITHET_MATCH env var, or config file)")
 	}
 	if caURL == "" {
-		return fmt.Errorf("no CA URL specified (use -ca-url flag, EPITHET_CA_URL env var, or config file)")
+		return fmt.Errorf("no CA URL specified (use --ca-url flag, EPITHET_CA_URL env var, or config file)")
 	}
 
 	log.Infof("starting epithet agent")
