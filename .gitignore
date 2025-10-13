@@ -1,8 +1,7 @@
 .envrc
 /dist
+/epithet
 /epithet-ca
-/epithet-agent
-/epithet-auth
 .vscode
 tmp
 *.exe

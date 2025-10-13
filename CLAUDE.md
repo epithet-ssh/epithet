@@ -6,6 +6,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Epithet is an SSH certificate authority system that makes SSH certificates easy to use. The project is currently undergoing a v2 rewrite (see README.md for v2 architecture details).
 
+## High-Level Architecture
+
+**IMPORTANT**: The current codebase contains placeholder implementations that do not yet match the v2 plan described in README.md. Future development will align the code with this architectural vision.
+
+Epithet is an SSH certificate management tool that creates on-demand SSH agents for outbound connections. The core concept is to replace traditional SSH key-based authentication with certificate-based authentication using per-connection agents.
+
+### Target v2 Architecture (from README.md)
+
+The planned `epithet auth` workflow involves 5 key steps:
+1. Check if the host should be handled by epithet at all (abort early if not)
+2. Check for existing, unexpired certificate for the target user/host
+3. If certificate exists, set up an identity socket at %C with only that certificate
+4. If no certificate exists, request one (including authentication), then go to step 3
+5. When certificate expires, delete the socket at %C
+
+Step 5 may be refined - rather than deleting on expiration, certificates near expiration (1-2 seconds) could be renewed and swapped into the existing agent without changing the socket path.
+
+### Command Structure (Planned)
+
+- **`epithet auth --host %h --port %p --user %r --hash %C`**:
+  - Main authentication handler invoked by OpenSSH Match exec
+  - Implements 5-step certificate/agent workflow
+  - Communicates with `epithet-agent` to manage per-connection agents
+
+- **`epithet-agent`**:
+  - Main agent process managing tree of per-connection ssh-agent instances
+  - Maintains map of connection hash → agent process
+  - Spawns OpenSSH ssh-agent processes for each unique connection
+  - Tracks certificate expiration and public keys
+
 ### Core Architecture
 
 The system consists of three main components:
@@ -86,17 +116,56 @@ The project includes test support infrastructure in `test/sshd/` for running int
 - Uses Go 1.25.0 with modules
 - Dependencies include SSH libraries (`golang.org/x/crypto/ssh`), gRPC, protobuf, and Sigstore/Rekor for signing
 
-## Configuration and Deployment
-
-The `epithet-ca` server can be configured via flags or environment variables:
-- `-p/--policy`: Policy server URL (or `POLICY_URL` env var)
-- `-k/--key`: Path to CA private key (default: `/etc/epithet/ca.key`)
-- `-a/--address`: Bind address (default: `0.0.0.0:${PORT:-8080}`)
-- `-v`: Verbosity level (can be repeated)
-
 ## Important Constants
 
-- `agent.CertExpirationFuzzWindow = 20`: Seconds before expiration to request new cert
-- `agent.TokenSizeLimit = 4094`: Maximum authentication token size
 - `caserver.RequestBodySizeLimit = 8192`: Maximum HTTP request body size
-- `agent.DefaultTimeout = 30s`: Default HTTP timeout for CA requests
+
+### Integration with OpenSSH
+
+Epithet is designed to integrate with OpenSSH client configuration:
+
+```ssh_config
+Match exec "epithet auth --host %h --port %p --user %r --hash %C"
+    IdentityAgent ~/.epithet/sockets/%C
+```
+
+The `%C` token represents a hash of the connection parameters (`%l%h%p%r%j`: local hostname, remote hostname, port, username, and ProxyJump), ensuring each unique connection gets its own agent socket.
+
+### Current Development Status
+
+This is v2 of the project with significant architectural changes planned (see README.md for detailed v2 vision). The current implementation is in a transitional state - the agent has been simplified and cleaned up as a base for v2 work.
+
+**What exists now:**
+- Working CA server (`epithet-ca`) with policy validation
+- Simplified SSH agent (`pkg/agent`) with certificate management
+- SSH certificate utilities (`pkg/sshcert`) for Ed25519 key generation
+- CA client library for requesting certificates
+- Test infrastructure with real sshd integration tests
+- Only `epithet-ca` command is currently buildable
+
+**Major development needed to align with README.md v2 plan:**
+
+1. **`epithet auth` command implementation:**
+   - Create command structure accepting `--host`, `--port`, `--user`, `--hash` arguments
+   - Implement 5-step certificate validation and agent creation workflow
+   - Add host eligibility checking
+   - Implement certificate lifecycle management with expiration handling
+
+2. **`epithet-agent` command implementation:**
+   - Build connection → agent mapping system using %C hash
+   - Spawn per-connection ssh-agent processes (OpenSSH's ssh-agent)
+   - Implement per-connection agent socket creation in ~/.epithet/sockets/%C
+   - Add certificate swapping/renewal without changing socket paths
+   - Track certificate expiration and public keys for each agent
+
+3. **Agent coordination:**
+   - Communication between `epithet auth` and `epithet-agent` (likely using protobuf/gRPC)
+   - Socket management and cleanup
+   - Destination constraining for security
+
+4. **Infrastructure improvements:**
+   - Configuration system for which hosts epithet should handle
+   - Proper error handling throughout the certificate workflow
+   - Socket cleanup on certificate expiration
+
+The current `pkg/agent` code is simplified and ready to be adapted for the v2 per-connection agent architecture.
