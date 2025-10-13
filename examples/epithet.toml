@@ -1,0 +1,7 @@
+[home.xn.io]
+match = ["m0001", "m0002", "m0003", "m0004"]
+ca_url = "https://ca.home.skife.org/epithet"
+
+[skife.org]
+match = ["**.skife.org"]
+ca_url = "https://ca/skife.rg/epithet"
