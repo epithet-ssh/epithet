@@ -25,16 +25,22 @@ Step 5 may be refined - rather than deleting on expiration, certificates near ex
 
 ### Command Structure (Planned)
 
+**Current Implementation**: The `epithet` binary currently uses `peterbourgon/ff/v3` with `ffcli` for command-line parsing, config file support, and environment variable handling.
+
+**PLANNED PORT TO KONG**: After investigation, the decision has been made to port from ff/v3 to `alecthomas/kong` for CLI parsing. Kong provides better ergonomics, more powerful flag parsing, and cleaner command structure. This port should be done before implementing the actual agent and auth functionality.
+
 - **`epithet auth --host %h --port %p --user %r --hash %C`**:
   - Main authentication handler invoked by OpenSSH Match exec
   - Implements 5-step certificate/agent workflow
-  - Communicates with `epithet-agent` to manage per-connection agents
+  - Communicates with `epithet agent` to manage per-connection agents
 
-- **`epithet-agent`**:
+- **`epithet agent`**:
   - Main agent process managing tree of per-connection ssh-agent instances
   - Maintains map of connection hash → agent process
   - Spawns OpenSSH ssh-agent processes for each unique connection
   - Tracks certificate expiration and public keys
+  - Configuration via `--match` (repeatable) and `--ca-url` flags
+  - Supports config file and environment variables (EPITHET_MATCH, EPITHET_CA_URL)
 
 ### Core Architecture
 
@@ -66,10 +72,9 @@ The CA uses cryptographic signing (via Rekor/Sigstore SSH signing) to authentica
 
 ### Building
 ```bash
-make build          # Build all binaries (epithet-agent, epithet-ca, epithet-auth)
+make build          # Build all binaries (epithet, epithet-ca)
 make epithet-ca     # Build only the CA server
-make epithet-agent  # Build only the agent
-make epithet-auth   # Build only the auth helper
+go build ./cmd/epithet  # Build the epithet CLI
 ```
 
 ### Testing
@@ -141,9 +146,15 @@ This is v2 of the project with significant architectural changes planned (see RE
 - SSH certificate utilities (`pkg/sshcert`) for Ed25519 key generation
 - CA client library for requesting certificates
 - Test infrastructure with real sshd integration tests
-- Only `epithet-ca` command is currently buildable
+- `epithet` CLI with scaffolded `agent` and `auth` subcommands (currently using ff/v3, to be ported to kong)
 
 **Major development needed to align with README.md v2 plan:**
+
+0. **Port CLI from ff/v3 to kong:**
+   - Replace ff/v3/ffcli with alecthomas/kong for command parsing
+   - Maintain existing flag structure (--match, --ca-url for agent; --host, --port, --user, --hash for auth)
+   - Preserve config file support and environment variable handling
+   - Keep long-form flag style (--flag not -flag) in all documentation
 
 1. **`epithet auth` command implementation:**
    - Create command structure accepting `--host`, `--port`, `--user`, `--hash` arguments
