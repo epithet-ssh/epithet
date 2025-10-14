@@ -20,6 +20,7 @@ require (
 )
 
 require (
+	github.com/alecthomas/kong v1.12.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
@@ -30,6 +31,7 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/letsencrypt/boulder v0.20251007.0 // indirect
 	github.com/lithammer/dedent v1.1.0 // indirect
+	github.com/lmittmann/tint v1.1.2 // indirect
 	github.com/naoina/go-stringutil v0.1.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect

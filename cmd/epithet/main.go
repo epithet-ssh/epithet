@@ -1,70 +1,46 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"log/slog"
 	"os"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/alecthomas/kong"
+	"github.com/lmittmann/tint"
 )
 
-var verbose bool
+var cli struct {
+	Verbose int      `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
+	Agent   AgentCLI `cmd:"agent" help:"start the epithet agent"`
+	Match   MatchCLI `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
+}
 
 func main() {
-	// Create root flag set
-	fs := flag.NewFlagSet("epithet", flag.ExitOnError)
-	fs.BoolVar(&verbose, "v", false, "log more")
-
-	// Define subcommands
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	// Setup logging
-	setupLogging()
-
-	// Route to subcommands
-	switch os.Args[1] {
-	case "agent":
-		if err := runAgentCmd(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	case "auth":
-		if err := runAuthCmd(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-	case "help", "-h", "--help":
-		printUsage()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
-		printUsage()
+	ktx := kong.Parse(&cli)
+	logger := setupLogger()
+	ktx.Bind(logger)
+	err := ktx.Run()
+	if err != nil {
+		logger.Error("error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func printUsage() {
-	fmt.Fprintf(os.Stderr, `epithet - SSH certificate authentication system
-Usage:
-  epithet <command> [flags]
-
-Commands:
-  agent       Run the epithet agent process
-  auth        Handle SSH authentication for a connection
-  help        Show this help message
-
-Flags:
-  -v int      Log verbosity (0=warn, 1=info, 2=debug)
-
-Use "epithet <command> -h" for more information about a command.
-`)
-}
-
-func setupLogging() {
-	log.SetOutput(os.Stdout)
-	if verbose {
-		log.SetLevel(log.DebugLevel)
+func setupLogger() *slog.Logger {
+	// Determine log level based on verbosity
+	level := slog.LevelWarn
+	switch cli.Verbose {
+	case 0:
+		level = slog.LevelWarn
+	case 1:
+		level = slog.LevelInfo
+	default: // 2 or more
+		level = slog.LevelDebug
 	}
+
+	logger := slog.New(tint.NewHandler(os.Stderr, &tint.Options{
+		Level:      level,
+		TimeFormat: "15:04:05",
+	}))
+
+	return logger
 }
