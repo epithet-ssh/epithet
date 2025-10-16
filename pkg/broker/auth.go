@@ -3,21 +3,37 @@ package broker
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"os/exec"
 	"sync"
 
 	"github.com/cbroglie/mustache"
+	"github.com/markdingo/netstring"
 )
 
-// Auth represents a configured hook
+// Protocol keys for keyed netstrings
+const (
+	KeyState = 's' // State blob (opaque, managed by auth plugin)
+	KeyToken = 't' // Authentication token (to be sent to CA)
+	KeyError = 'e' // Error message (human-readable auth failure reason)
+)
+
+// AuthOutput represents the result of an auth command invocation
+type AuthOutput struct {
+	Token []byte // Authentication token (mutually exclusive with Error)
+	State []byte // Updated state blob (optional)
+	Error string // Auth failure message (mutually exclusive with Token)
+}
+
+// Auth represents a configured authentication command
 type Auth struct {
 	cmdLine string
 	lock    sync.Mutex
 	state   []byte
 }
 
-// New creates a new hook with an unparsed command line. The line
-// will be
+// New creates a new Auth with an unparsed command line.
 func New(cmdLine string) *Auth {
 	return &Auth{
 		cmdLine: cmdLine,
@@ -25,30 +41,126 @@ func New(cmdLine string) *Auth {
 	}
 }
 
-// Run the hook. if an exit value other than 0 occurs, the combined
-// output will be returned in the error.
-func (h *Auth) Run(attrs any) error {
+// EncodeAuthInput encodes state for auth command stdin.
+// If state is empty, returns empty netstring "0:,"
+// Otherwise returns state with 's' key as keyed netstring
+func EncodeAuthInput(state []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+
+	if len(state) == 0 {
+		// Empty netstring for initial authentication (no key)
+		if err := enc.Encode(netstring.NoKey, []byte{}); err != nil {
+			return nil, fmt.Errorf("failed to encode empty state: %w", err)
+		}
+	} else {
+		// State with 's' key
+		if err := enc.EncodeBytes(KeyState, state); err != nil {
+			return nil, fmt.Errorf("failed to encode state: %w", err)
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeAuthOutput parses auth command stdout.
+// Reads keyed netstrings until EOF, validating protocol rules.
+func DecodeAuthOutput(stdout []byte) (*AuthOutput, error) {
+	if len(stdout) == 0 {
+		return nil, errors.New("auth command returned empty output")
+	}
+
+	dec := netstring.NewDecoder(bytes.NewReader(stdout))
+	output := &AuthOutput{}
+	hasToken := false
+	hasError := false
+
+	for {
+		key, value, err := dec.DecodeKeyed()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("invalid netstring format: %w", err)
+		}
+
+		switch key {
+		case KeyState:
+			output.State = value
+
+		case KeyToken:
+			if hasToken {
+				return nil, errors.New("protocol violation: multiple token fields")
+			}
+			if hasError {
+				return nil, errors.New("protocol violation: cannot have both token and error")
+			}
+			output.Token = value
+			hasToken = true
+
+		case KeyError:
+			if hasError {
+				return nil, errors.New("protocol violation: multiple error fields")
+			}
+			if hasToken {
+				return nil, errors.New("protocol violation: cannot have both token and error")
+			}
+			output.Error = string(value)
+			hasError = true
+
+		default:
+			// Unknown keys are ignored for forward compatibility
+		}
+	}
+
+	// Validate that we got either a token or an error
+	if !hasToken && !hasError {
+		return nil, errors.New("protocol violation: must have either token or error field")
+	}
+
+	return output, nil
+}
+
+// Run executes the auth command with the current state and updates state based on output.
+// Returns AuthOutput containing token/error and updated state.
+// The command line is rendered as a mustache template with the provided attrs.
+func (h *Auth) Run(attrs any) (*AuthOutput, error) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 
-	out, err := mustache.Render(h.cmdLine, attrs)
+	// Render the command line template
+	cmdLine, err := mustache.Render(h.cmdLine, attrs)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to render command template: %w", err)
 	}
 
-	stdout := bytes.Buffer{}
-	stderr := bytes.Buffer{}
+	// Encode input (current state)
+	input, err := EncodeAuthInput(h.state)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode auth input: %w", err)
+	}
 
-	cmd := exec.Command("sh", "-c", out)
-	cmd.Stdin = bytes.NewReader(h.state)
+	// Execute the auth command
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("sh", "-c", cmdLine)
+	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err = cmd.Run()
 	if err != nil {
-		return errors.New(stderr.String())
+		// Non-zero exit is an unexpected error (not auth failure)
+		return nil, fmt.Errorf("auth command failed: %w: %s", err, stderr.String())
 	}
-	h.state = stdout.Bytes()
 
-	return nil
+	// Decode the output
+	output, err := DecodeAuthOutput(stdout.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode auth output: %w", err)
+	}
+
+	// Update stored state (even if empty - plugin might be clearing state)
+	h.state = output.State
+
+	return output, nil
 }
