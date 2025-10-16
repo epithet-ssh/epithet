@@ -70,28 +70,56 @@ The broker uses an external **auth command** to obtain authentication tokens. Th
 
 #### Auth Command Protocol
 
-**Invocation:**
-```bash
-echo "<state-blob-or-empty>" | /path/to/auth-command
+The broker communicates with auth plugins using **keyed netstrings** (Type-Length-Value encoding). This protocol is language-agnostic, handles binary data without encoding overhead, and is self-describing.
+
+**Netstring Format:** `<length>:<key><value>,`
+- `<length>`: Decimal ASCII digits (no leading zeros except `0:,`)
+- `<key>`: Single ASCII byte identifying field type
+- `<value>`: Arbitrary bytes (length-1 bytes, since key takes 1 byte)
+- Whitespace (spaces, tabs, `\n`, `\r`) between netstrings is **ignored** for debugging convenience
+
+**Defined Keys:**
+- `s` = State blob (opaque, managed by auth plugin)
+- `t` = Authentication token (to be sent to CA)
+- `e` = Error message (human-readable auth failure reason)
+
+**Protocol Flow:**
+
+**INPUT (stdin):**
+```
+# Initial authentication (no prior state)
+0:,
+
+# Token refresh (with existing state)
+85:s{"refresh_token":"abc123","expires_at":"2025-10-14T15:00:00Z"},
 ```
 
-**Input (via stdin):**
-- Empty or no input: Initial authentication (user may need to interact, e.g., browser login)
-- State blob: Subsequent authentication (auth command uses refresh tokens from state)
+**OUTPUT (stdout) - Success:**
+```
+218:teyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...,
+92:s{"refresh_token":"xyz789","expires_at":"2025-10-14T16:00:00Z"},
+```
 
-**Output (via stdout):**
-- Line 1: Authentication token (opaque to broker, will be sent to CA)
-- Remaining lines: State blob (opaque to broker, will be passed to next invocation)
+**OUTPUT (stdout) - Failure:**
+```
+58:eRefresh token expired, full re-authentication required,
+```
 
 **Exit codes:**
-- 0: Success
-- Non-zero: Error (broker may retry or force re-authentication)
+- `0` with `t` key: Authentication successful
+- `0` with `e` key: Authentication failed (user-facing error message)
+- Non-zero exit: Unexpected error (stderr contains technical details)
 
 **Design Properties:**
 - Tokens and state are **completely opaque** to the broker (arbitrary byte blobs)
 - Auth command owns session management (refresh tokens, token expiry, etc)
-- Broker just stores state and passes it back on next invocation
-- Auth command can externalize state storage to the broker between invocations
+- Broker stores state and passes it to next invocation
+- Self-describing format allows future protocol extensions without breaking existing plugins
+- Whitespace tolerance allows use of `println()` for debugging
+
+**Helper Libraries:**
+- Bash: `examples/bash_plugin_helper.bash` provides `read_netstring()` and `write_netstring()` functions
+- Go: Use `github.com/markdingo/netstring` library (note: requires manual whitespace handling between netstrings)
 
 #### Certificate Lifecycle with Short-Lived Certificates
 

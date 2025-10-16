@@ -11,7 +11,6 @@ type AgentCLI struct {
 }
 
 func (a *AgentCLI) Run(logger *slog.Logger) error {
-	logger.Info("agent command starting")
 	logger.Debug("agent command received", "match", a.Match, "ca-url", a.CaURL, "auth", a.Auth)
 	return nil
 }
