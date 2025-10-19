@@ -143,13 +143,13 @@ func (a *Agent) startAgentListener() error {
 		return fmt.Errorf("unable to set permissions on agent socket: %w", err)
 	}
 	a.agentListener = agentListener
-	go a.listenAndServeAgent(agentListener)
+	go a.listenAndServeAgent()
 	return nil
 }
 
-func (a *Agent) listenAndServeAgent(listener net.Listener) {
+func (a *Agent) listenAndServeAgent() {
 	for a.Running() {
-		conn, err := listener.Accept()
+		conn, err := a.agentListener.Accept()
 		if err != nil {
 			if conn != nil {
 				conn.Close()

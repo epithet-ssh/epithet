@@ -176,7 +176,7 @@ func TestDecodeAuthOutput_NeitherTokenNorError(t *testing.T) {
 }
 
 func TestAuth_New(t *testing.T) {
-	auth := New("my-auth-command --flag")
+	auth := NewAuth("my-auth-command --flag")
 	require.NotNil(t, auth)
 	require.Equal(t, "my-auth-command --flag", auth.cmdLine)
 	require.Empty(t, auth.state)
@@ -192,7 +192,7 @@ cat > /dev/null
 printf '%s' "11:tmy-token-1,"
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "my-token-1", token)
@@ -209,7 +209,7 @@ printf '%s' "11:tmy-token-2,"
 printf '%s' "18:s{\"refresh\":\"xyz\"},"
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "my-token-2", token)
@@ -224,7 +224,7 @@ printf '%s' "6:ttoken,"
 printf '%s' "12:s{\"count\":1},"
 `)
 
-	auth := New(script1)
+	auth := NewAuth(script1)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "token", token)
@@ -255,7 +255,7 @@ cat > /dev/null
 printf '%s' "22:eAuthentication failed,"
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Equal(t, "Authentication failed", err.Error())
@@ -267,7 +267,7 @@ echo "Something went wrong" >&2
 exit 1
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "auth command failed")
@@ -280,7 +280,7 @@ cat > /dev/null
 printf '%s' "not a valid netstring"
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to decode auth output")
@@ -289,14 +289,14 @@ printf '%s' "not a valid netstring"
 func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 	// Test that mustache template is rendered in command line
 	// Template renders "ok" (2 chars) so "token-ok" is 8 chars, plus 't' key = 9 total
-	auth := New(`printf '%s' "9:ttoken-{{host}},"`)
+	auth := NewAuth(`printf '%s' "9:ttoken-{{host}},"`)
 	token, err := auth.Run(map[string]string{"host": "ok"})
 	require.NoError(t, err)
 	require.Equal(t, "token-ok", token)
 }
 
 func TestAuth_Run_MustacheTemplateError(t *testing.T) {
-	auth := New("echo {{unclosed}")
+	auth := NewAuth("echo {{unclosed}")
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to render command template")
@@ -311,7 +311,7 @@ printf '%s' "6:ttoken,"
 printf '%s' "12:s{\"count\":1},"
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 
 	// Run two calls concurrently
 	done := make(chan bool, 2)
@@ -355,7 +355,7 @@ else
 fi
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "first-call-token", token)
@@ -369,7 +369,7 @@ printf '%s' "6:ttoken,"
 # No state field - should clear existing state
 `)
 
-	auth := New(script)
+	auth := NewAuth(script)
 	auth.state = []byte("old-state") // Set some initial state
 
 	token, err := auth.Run(nil)
@@ -418,7 +418,7 @@ else
 fi
 `)
 
-	auth := New(script1)
+	auth := NewAuth(script1)
 	token, err := auth.Run(map[string]string{"user": "alice"})
 	require.NoError(t, err)
 	require.Equal(t, "initial-auth-token", token)

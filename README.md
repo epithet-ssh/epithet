@@ -43,6 +43,43 @@ Actually, interestingly, we might be able to use openssh's ssh-agent to do this,
 
 We should consider destination constraining the target host for these agents. Need to think about abuse vectors if we don't do that.
 
+## Notes
+```mermaid
+sequenceDiagram
+    box ssh invocation on a client
+        participant ssh
+        participant match
+        participant broker
+    end
+
+    box out on the internet
+        participant ca
+        participant policy
+    end
+
+    ssh ->> match: Match exec ...
+    match ->> broker: {matchdata}
+
+    create participant auth
+    broker ->> auth: {state}
+
+    destroy auth
+    auth ->> broker: {token, state, error}
+
+    broker ->> ca: {token, pubkey}
+    ca ->> policy: {token, pubkey}
+    policy ->> ca: {cert-params}
+    ca ->> broker: {cert}
+
+    create participant agent
+    broker ->> agent: create agent
+    broker ->> match: {true/false, error}
+    match ->> ssh: {true/false}
+    ssh ->> agent: list keys
+    agent ->> ssh: {cert, pubkey}
+    ssh ->> agent: sign-with-cert
+```
+
 ## TODO
 
 - **Implement a less strict netstring parser**: The current auth plugin protocol uses the `markdingo/netstring` library which strictly rejects whitespace between netstrings. This makes debugging auth plugins difficult since developers can't use `println()` for debugging output. We should implement a custom netstring parser that tolerates whitespace (spaces, tabs, `\n`, `\r`) between netstrings while still being strict about the netstring format itself. This would maintain protocol compatibility while significantly improving developer experience when writing auth plugins.

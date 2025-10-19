@@ -33,8 +33,8 @@ type Auth struct {
 	state   []byte
 }
 
-// New creates a new Auth with an unparsed command line.
-func New(cmdLine string) *Auth {
+// NewAuth creates a new Auth with an unparsed command line.
+func NewAuth(cmdLine string) *Auth {
 	return &Auth{
 		cmdLine: cmdLine,
 		state:   []byte{},
