@@ -42,3 +42,7 @@ Actually, interestingly, we might be able to use openssh's ssh-agent to do this,
 `epithet-agent` -> `[ssh-agent]` where it invokes ssh-agent commands on the agent as needed. We can optimize a number of things by keeping track of the certificates they are issued, so we can query the cert (and keys) without spawning a child process. Communication with the agent can be done via [ssh-agent-client-rs](https://github.com/nresare/ssh-agent-client-rs) which seems very fit for purpose.
 
 We should consider destination constraining the target host for these agents. Need to think about abuse vectors if we don't do that.
+
+## TODO
+
+- **Implement a less strict netstring parser**: The current auth plugin protocol uses the `markdingo/netstring` library which strictly rejects whitespace between netstrings. This makes debugging auth plugins difficult since developers can't use `println()` for debugging output. We should implement a custom netstring parser that tolerates whitespace (spaces, tabs, `\n`, `\r`) between netstrings while still being strict about the netstring format itself. This would maintain protocol compatibility while significantly improving developer experience when writing auth plugins.

@@ -1,6 +1,9 @@
 package broker
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,280 +25,442 @@ func Test_NetString_StrictMode(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestEncodeAuthInput tests encoding of auth input (stdin to auth command)
-func TestEncodeAuthInput(t *testing.T) {
-	tests := []struct {
-		name     string
-		state    []byte
-		expected string
-	}{
-		{
-			name:     "empty state",
-			state:    []byte{},
-			expected: "0:,", // Empty netstring
-		},
-		{
-			name:     "nil state",
-			state:    nil,
-			expected: "0:,", // Empty netstring
-		},
-		{
-			name:     "simple state",
-			state:    []byte("refresh_token_123"),
-			expected: "18:srefresh_token_123,",
-		},
-		{
-			name:     "json state",
-			state:    []byte(`{"refresh":"abc"}`),
-			expected: `18:s{"refresh":"abc"},`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := EncodeAuthInput(tt.state)
-			require.NoError(t, err)
-			require.Equal(t, tt.expected, string(result))
-		})
-	}
+func TestEncodeAuthInput_EmptyState(t *testing.T) {
+	encoded, err := EncodeAuthInput([]byte{})
+	require.NoError(t, err)
+	require.Equal(t, "0:,", string(encoded))
 }
 
-// TestDecodeAuthOutput tests decoding of auth output (stdout from auth command)
-func TestDecodeAuthOutput(t *testing.T) {
-	tests := []struct {
-		name           string
-		input          string
-		expectedToken  []byte
-		expectedState  []byte
-		expectedError  string
-		expectParseErr bool
-	}{
-		{
-			name:          "token only",
-			input:         "15:tjwt_token_here,",
-			expectedToken: []byte("jwt_token_here"),
-		},
-		{
-			name:          "token with state",
-			input:         "15:tjwt_token_here,16:snew_refresh_123,",
-			expectedToken: []byte("jwt_token_here"),
-			expectedState: []byte("new_refresh_123"),
-		},
-		{
-			name:          "error only",
-			input:         "22:eauthentication failed,",
-			expectedError: "authentication failed",
-		},
-		{
-			name:          "error with state",
-			input:         "14:etoken expired,10:sold_state,",
-			expectedError: "token expired",
-			expectedState: []byte("old_state"),
-		},
-		{
-			name:           "both token and error - protocol violation",
-			input:          "10:tsome_token,20:esome error message,",
-			expectParseErr: true,
-		},
-		{
-			name:           "neither token nor error - protocol violation",
-			input:          "10:ssome_state,",
-			expectParseErr: true,
-		},
-		{
-			name:           "empty output",
-			input:          "",
-			expectParseErr: true,
-		},
-		{
-			name:           "multiple tokens - protocol violation",
-			input:          "7:ttoken1,7:ttoken2,",
-			expectParseErr: true,
-		},
-		{
-			name:           "multiple errors - protocol violation",
-			input:          "7:eerror1,7:eerror2,",
-			expectParseErr: true,
-		},
-	}
+func TestEncodeAuthInput_WithState(t *testing.T) {
+	state := []byte(`{"refresh_token":"abc123"}`)
+	encoded, err := EncodeAuthInput(state)
+	require.NoError(t, err)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			output, err := DecodeAuthOutput([]byte(tt.input))
-
-			if tt.expectParseErr {
-				require.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			require.Equal(t, tt.expectedToken, output.Token)
-			require.Equal(t, tt.expectedState, output.State)
-			require.Equal(t, tt.expectedError, output.Error)
-		})
-	}
+	// Verify it's a valid keyed netstring with 's' key
+	dec := netstring.NewDecoder(bytes.NewReader(encoded))
+	key, value, err := dec.DecodeKeyed()
+	require.NoError(t, err)
+	require.Equal(t, byte(KeyState), byte(key))
+	require.Equal(t, state, value)
 }
 
-// TestAuth_Run_ProtocolValidation tests protocol-level validation
-func TestAuth_Run_ProtocolValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		script      string
-		expectError string
-	}{
-		{
-			name: "both token and error - protocol violation",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '11:tsome_token,19:esome error message,'
-`,
-			expectError: "protocol violation: cannot have both token and error",
-		},
-		{
-			name: "neither token nor error - protocol violation",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '11:ssome_state,'
-`,
-			expectError: "protocol violation: must have either token or error field",
-		},
-		{
-			name: "malformed netstring",
-			script: `#!/bin/sh
-cat > /dev/null
-printf 'not-a-netstring'
-`,
-			expectError: "failed to decode auth output",
-		},
-		{
-			name: "non-zero exit code",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '11:tsome_token,'
-exit 1
-`,
-			expectError: "auth command failed",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			auth := New(tt.script)
-			output, err := auth.Run(nil)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), tt.expectError)
-			require.Nil(t, output)
-		})
-	}
+func TestEncodeAuthInput_NilState(t *testing.T) {
+	// nil state should behave like empty state
+	encoded, err := EncodeAuthInput(nil)
+	require.NoError(t, err)
+	require.Equal(t, "0:,", string(encoded))
 }
 
-// TestAuth_Run_Success tests successful auth flows
-func TestAuth_Run_Success(t *testing.T) {
-	tests := []struct {
-		name          string
-		script        string
-		expectedToken []byte
-		expectedState []byte
-		expectedError string
-	}{
-		{
-			name: "initial auth - returns token",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '15:tnew_auth_token,15:snew_state_data,'
-`,
-			expectedToken: []byte("new_auth_token"),
-			expectedState: []byte("new_state_data"),
-		},
-		{
-			name: "auth failure - returns error",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '26:eRefresh token has expired,'
-`,
-			expectedError: "Refresh token has expired",
-		},
-		{
-			name: "token without state update",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '11:tsome_token,'
-`,
-			expectedToken: []byte("some_token"),
-		},
-		{
-			name: "order doesn't matter - state then token",
-			script: `#!/bin/sh
-cat > /dev/null
-printf '11:ssome_state,11:tsome_token,'
-`,
-			expectedToken: []byte("some_token"),
-			expectedState: []byte("some_state"),
-		},
-	}
+func TestDecodeAuthOutput_TokenOnly(t *testing.T) {
+	// Token without state - build with encoder to ensure correct format
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyToken, []byte("my-token-1")))
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			auth := New(tt.script)
-			output, err := auth.Run(nil)
-			require.NoError(t, err)
-			require.NotNil(t, output)
-
-			if tt.expectedToken != nil {
-				require.Equal(t, tt.expectedToken, output.Token)
-				require.Empty(t, output.Error)
-			}
-			if tt.expectedError != "" {
-				require.Empty(t, output.Token)
-				require.Equal(t, tt.expectedError, output.Error)
-			}
-			if tt.expectedState != nil {
-				require.Equal(t, tt.expectedState, output.State)
-			}
-		})
-	}
+	output, err := DecodeAuthOutput(buf.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, "my-token-1", output.Token)
+	require.Empty(t, output.State)
+	require.Empty(t, output.Error)
 }
 
-// TestAuth_Run_StatePersistence tests that state persists across multiple Run calls
-func TestAuth_Run_StatePersistence(t *testing.T) {
-	// This script reads input, extracts count from state, increments it, and returns it
-	script := `#!/bin/sh
-# Read the netstring input
+func TestDecodeAuthOutput_TokenWithState(t *testing.T) {
+	// Token with state
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyToken, []byte("my-token")))
+	require.NoError(t, enc.EncodeBytes(KeyState, []byte(`{"refresh":"xyz"}`)))
+
+	output, err := DecodeAuthOutput(buf.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, "my-token", output.Token)
+	require.Equal(t, []byte(`{"refresh":"xyz"}`), output.State)
+	require.Empty(t, output.Error)
+}
+
+func TestDecodeAuthOutput_ErrorOnly(t *testing.T) {
+	// Error without state - build with encoder to ensure correct format
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyError, []byte("Authentication failed, sorry")))
+
+	output, err := DecodeAuthOutput(buf.Bytes())
+	require.NoError(t, err)
+	require.Empty(t, output.Token)
+	require.Empty(t, output.State)
+	require.Equal(t, "Authentication failed, sorry", output.Error)
+}
+
+func TestDecodeAuthOutput_ErrorWithState(t *testing.T) {
+	// Error with state (state preserved on error)
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyError, []byte("Token expired")))
+	require.NoError(t, enc.EncodeBytes(KeyState, []byte(`{"attempts":3}`)))
+
+	output, err := DecodeAuthOutput(buf.Bytes())
+	require.NoError(t, err)
+	require.Empty(t, output.Token)
+	require.Equal(t, []byte(`{"attempts":3}`), output.State)
+	require.Equal(t, "Token expired", output.Error)
+}
+
+func TestDecodeAuthOutput_UnknownKeysIgnored(t *testing.T) {
+	// Unknown keys should be ignored for forward compatibility
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes('x', []byte("unknown")))
+	require.NoError(t, enc.EncodeBytes(KeyToken, []byte("my-token")))
+	require.NoError(t, enc.EncodeBytes('y', []byte("also unknown")))
+
+	output, err := DecodeAuthOutput(buf.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, "my-token", output.Token)
+	require.Empty(t, output.Error)
+}
+
+func TestDecodeAuthOutput_EmptyOutput(t *testing.T) {
+	_, err := DecodeAuthOutput([]byte{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty output")
+}
+
+func TestDecodeAuthOutput_InvalidNetstring(t *testing.T) {
+	_, err := DecodeAuthOutput([]byte("not a netstring"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid netstring")
+}
+
+func TestDecodeAuthOutput_MultipleTokens(t *testing.T) {
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyToken, []byte("token1")))
+	require.NoError(t, enc.EncodeBytes(KeyToken, []byte("token2")))
+
+	_, err := DecodeAuthOutput(buf.Bytes())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple token fields")
+}
+
+func TestDecodeAuthOutput_MultipleErrors(t *testing.T) {
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyError, []byte("error1")))
+	require.NoError(t, enc.EncodeBytes(KeyError, []byte("error2")))
+
+	_, err := DecodeAuthOutput(buf.Bytes())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple error fields")
+}
+
+func TestDecodeAuthOutput_BothTokenAndError(t *testing.T) {
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyToken, []byte("token")))
+	require.NoError(t, enc.EncodeBytes(KeyError, []byte("error")))
+
+	_, err := DecodeAuthOutput(buf.Bytes())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot have both token and error")
+}
+
+func TestDecodeAuthOutput_NeitherTokenNorError(t *testing.T) {
+	// Only state, no token or error - build with encoder to ensure correct format
+	var buf bytes.Buffer
+	enc := netstring.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeBytes(KeyState, []byte("some-state")))
+
+	_, err := DecodeAuthOutput(buf.Bytes())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must have either token or error")
+}
+
+func TestAuth_New(t *testing.T) {
+	auth := New("my-auth-command --flag")
+	require.NotNil(t, auth)
+	require.Equal(t, "my-auth-command --flag", auth.cmdLine)
+	require.Empty(t, auth.state)
+}
+
+func TestAuth_Run_Success_InitialAuth(t *testing.T) {
+	// Create a test auth script that returns a token
+	script := writeTestScript(t, `#!/bin/sh
+# Read and ignore stdin
+cat > /dev/null
+
+# Return token (using printf to avoid newline issues)
+printf '%s' "11:tmy-token-1,"
+`)
+
+	auth := New(script)
+	token, err := auth.Run(nil)
+	require.NoError(t, err)
+	require.Equal(t, "my-token-1", token)
+	require.Empty(t, auth.state) // No state returned
+}
+
+func TestAuth_Run_Success_WithStateUpdate(t *testing.T) {
+	script := writeTestScript(t, `#!/bin/sh
+# Read and ignore stdin
+cat > /dev/null
+
+# Return token and new state
+printf '%s' "11:tmy-token-2,"
+printf '%s' "18:s{\"refresh\":\"xyz\"},"
+`)
+
+	auth := New(script)
+	token, err := auth.Run(nil)
+	require.NoError(t, err)
+	require.Equal(t, "my-token-2", token)
+	require.Equal(t, []byte(`{"refresh":"xyz"}`), auth.state)
+}
+
+func TestAuth_Run_Success_StatePreservedAcrossCalls(t *testing.T) {
+	// First call returns token and state
+	script1 := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:ttoken,"
+printf '%s' "12:s{\"count\":1},"
+`)
+
+	auth := New(script1)
+	token, err := auth.Run(nil)
+	require.NoError(t, err)
+	require.Equal(t, "token", token)
+	require.Equal(t, []byte(`{"count":1}`), auth.state)
+
+	// Second call uses the state from first call
+	script2 := writeTestScript(t, `#!/bin/sh
+# Verify we received state on stdin
 input=$(cat)
+if echo "$input" | grep -q "count"; then
+    printf '%s' "12:ttoken-fresh,"
+    printf '%s' "12:s{\"count\":2},"
+else
+    printf '%s' "17:eExpected state!,"
+fi
+`)
 
-# Extract count if present (simple grep for this test)
-count=$(echo "$input" | grep -o 'count:[0-9]*' | cut -d: -f2 || echo "0")
+	auth.cmdLine = script2
+	token, err = auth.Run(nil)
+	require.NoError(t, err)
+	require.Equal(t, "token-fresh", token)
+	require.Equal(t, []byte(`{"count":2}`), auth.state)
+}
 
-# Increment count
-count=$((count + 1))
+func TestAuth_Run_AuthFailure(t *testing.T) {
+	script := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "22:eAuthentication failed,"
+`)
 
-# Output token and new state
-# Calculate netstring lengths carefully
-state="count:$count"
-state_len=$((${#state} + 1))  # +1 for 's' key
-token="token_$count"
-token_len=$((${#token} + 1))  # +1 for 't' key
+	auth := New(script)
+	_, err := auth.Run(nil)
+	require.Error(t, err)
+	require.Equal(t, "Authentication failed", err.Error())
+}
 
-printf "${token_len}:t${token},${state_len}:s${state},"
-`
+func TestAuth_Run_CommandExecutionError(t *testing.T) {
+	script := writeTestScript(t, `#!/bin/sh
+echo "Something went wrong" >&2
+exit 1
+`)
+
+	auth := New(script)
+	_, err := auth.Run(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "auth command failed")
+	require.Contains(t, err.Error(), "Something went wrong")
+}
+
+func TestAuth_Run_InvalidOutput(t *testing.T) {
+	script := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "not a valid netstring"
+`)
+
+	auth := New(script)
+	_, err := auth.Run(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to decode auth output")
+}
+
+func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
+	// Test that mustache template is rendered in command line
+	// Template renders "ok" (2 chars) so "token-ok" is 8 chars, plus 't' key = 9 total
+	auth := New(`printf '%s' "9:ttoken-{{host}},"`)
+	token, err := auth.Run(map[string]string{"host": "ok"})
+	require.NoError(t, err)
+	require.Equal(t, "token-ok", token)
+}
+
+func TestAuth_Run_MustacheTemplateError(t *testing.T) {
+	auth := New("echo {{unclosed}")
+	_, err := auth.Run(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to render command template")
+}
+
+func TestAuth_Run_Concurrent(t *testing.T) {
+	// Test that concurrent calls are properly serialized by the lock
+	script := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+sleep 0.05
+printf '%s' "6:ttoken,"
+printf '%s' "12:s{\"count\":1},"
+`)
 
 	auth := New(script)
 
-	// First run - no prior state (will receive 0:,)
-	output1, err := auth.Run(nil)
-	require.NoError(t, err)
-	require.Equal(t, []byte("token_1"), output1.Token)
-	require.Equal(t, []byte("count:1"), output1.State)
+	// Run two calls concurrently
+	done := make(chan bool, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := auth.Run(nil)
+			require.NoError(t, err)
+			done <- true
+		}()
+	}
 
-	// Second run - should have state from first run
-	output2, err := auth.Run(nil)
-	require.NoError(t, err)
-	require.Equal(t, []byte("token_2"), output2.Token)
-	require.Equal(t, []byte("count:2"), output2.State)
+	// Wait for both to complete
+	<-done
+	<-done
 
-	// Third run - should have state from second run
-	output3, err := auth.Run(nil)
+	// State should be consistent (last write wins)
+	require.Equal(t, []byte(`{"count":1}`), auth.state)
+}
+
+// Helper function to write a test script to a temporary file
+func writeTestScript(t *testing.T, content string) string {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "test-script.sh")
+
+	err := os.WriteFile(scriptPath, []byte(content), 0755)
 	require.NoError(t, err)
-	require.Equal(t, []byte("token_3"), output3.Token)
-	require.Equal(t, []byte("count:3"), output3.State)
+
+	return scriptPath
+}
+
+func TestAuth_Run_EmptyStateHandling(t *testing.T) {
+	// Test that empty state is sent as "0:," on first call
+	script := writeTestScript(t, `#!/bin/sh
+input=$(cat)
+if [ "$input" = "0:," ]; then
+    printf '%s' "17:tfirst-call-token,"
+else
+    printf '%s' "19:eExpected empty state,"
+fi
+`)
+
+	auth := New(script)
+	token, err := auth.Run(nil)
+	require.NoError(t, err)
+	require.Equal(t, "first-call-token", token)
+}
+
+func TestAuth_Run_StateClearing(t *testing.T) {
+	// Test that plugin can clear state by returning empty state
+	script := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:ttoken,"
+# No state field - should clear existing state
+`)
+
+	auth := New(script)
+	auth.state = []byte("old-state") // Set some initial state
+
+	token, err := auth.Run(nil)
+	require.NoError(t, err)
+	require.Equal(t, "token", token)
+	require.Empty(t, auth.state) // State should be cleared
+}
+
+func TestRoundTrip_EncodeDecodeEmpty(t *testing.T) {
+	// Test roundtrip: empty state -> encode -> decode
+	encoded, err := EncodeAuthInput([]byte{})
+	require.NoError(t, err)
+
+	// Can't decode "0:," as it has no token/error, but verify the encoding
+	require.Equal(t, "0:,", string(encoded))
+}
+
+func TestRoundTrip_EncodeDecodeWithState(t *testing.T) {
+	// Test roundtrip: state -> encode -> use in output -> decode
+	originalState := []byte(`{"token":"refresh123","exp":1234567890}`)
+
+	// Encode as input
+	encoded, err := EncodeAuthInput(originalState)
+	require.NoError(t, err)
+
+	// Verify it decodes correctly
+	dec := netstring.NewDecoder(bytes.NewReader(encoded))
+	key, value, err := dec.DecodeKeyed()
+	require.NoError(t, err)
+	require.Equal(t, byte(KeyState), byte(key))
+	require.Equal(t, originalState, value)
+}
+
+func TestIntegration_FullAuthFlow(t *testing.T) {
+	// Integration test: simulate a full auth flow with state management
+
+	// First auth call - no state, returns token and state
+	script1 := writeTestScript(t, `#!/bin/sh
+input=$(cat)
+if [ "$input" = "0:," ]; then
+    # Initial auth - return token and state
+    printf '%s' "19:tinitial-auth-token,"
+    printf '%s' "27:s{\"refresh\":\"r1\",\"exp\":100},"
+else
+    printf '%s' "29:eExpected initial empty state,"
+fi
+`)
+
+	auth := New(script1)
+	token, err := auth.Run(map[string]string{"user": "alice"})
+	require.NoError(t, err)
+	require.Equal(t, "initial-auth-token", token)
+	require.NotEmpty(t, auth.state)
+
+	// Second auth call - uses state from first call
+	script2 := writeTestScript(t, `#!/bin/sh
+input=$(cat)
+# Check that we got state with refresh token
+if echo "$input" | grep -q "refresh.*r1"; then
+    # Token refresh - return new token and updated state
+    printf '%s' "20:trefreshed-token-123,"
+    printf '%s' "27:s{\"refresh\":\"r2\",\"exp\":200},"
+else
+    printf '%s' "23:eExpected refresh state,"
+fi
+`)
+
+	auth.cmdLine = script2
+	token, err = auth.Run(map[string]string{"user": "alice"})
+	require.NoError(t, err)
+	require.Equal(t, "refreshed-token-123", token)
+	require.Contains(t, string(auth.state), "r2")
+
+	// Third auth call - simulate token expiration, auth fails
+	script3 := writeTestScript(t, `#!/bin/sh
+input=$(cat)
+if echo "$input" | grep -q "refresh.*r2"; then
+    # Simulate refresh token expired
+    printf '%s' "45:eRefresh token expired, full re-auth required,"
+    # State could be preserved or cleared - plugin's choice
+    printf '%s' "1:s,"
+else
+    printf '%s' "23:eExpected refresh state,"
+fi
+`)
+
+	auth.cmdLine = script3
+	_, err = auth.Run(nil)
+	require.Error(t, err)
+	require.Equal(t, "Refresh token expired, full re-auth required", err.Error())
+	// State should NOT be updated on error - the code returns early before state update
+	// So the state from the previous successful call should still be present
+	require.Equal(t, []byte(`{"refresh":"r2","exp":200}`), auth.state)
 }

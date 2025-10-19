@@ -20,8 +20,8 @@ const (
 )
 
 // AuthOutput represents the result of an auth command invocation
-type AuthOutput struct {
-	Token []byte // Authentication token (mutually exclusive with Error)
+type authOutput struct {
+	Token string // Authentication token (mutually exclusive with Error)
 	State []byte // Updated state blob (optional)
 	Error string // Auth failure message (mutually exclusive with Token)
 }
@@ -65,13 +65,13 @@ func EncodeAuthInput(state []byte) ([]byte, error) {
 
 // DecodeAuthOutput parses auth command stdout.
 // Reads keyed netstrings until EOF, validating protocol rules.
-func DecodeAuthOutput(stdout []byte) (*AuthOutput, error) {
+func DecodeAuthOutput(stdout []byte) (*authOutput, error) {
 	if len(stdout) == 0 {
 		return nil, errors.New("auth command returned empty output")
 	}
 
 	dec := netstring.NewDecoder(bytes.NewReader(stdout))
-	output := &AuthOutput{}
+	output := &authOutput{}
 	hasToken := false
 	hasError := false
 
@@ -95,7 +95,7 @@ func DecodeAuthOutput(stdout []byte) (*AuthOutput, error) {
 			if hasError {
 				return nil, errors.New("protocol violation: cannot have both token and error")
 			}
-			output.Token = value
+			output.Token = string(value)
 			hasToken = true
 
 		case KeyError:
@@ -115,7 +115,7 @@ func DecodeAuthOutput(stdout []byte) (*AuthOutput, error) {
 
 	// Validate that we got either a token or an error
 	if !hasToken && !hasError {
-		return nil, errors.New("protocol violation: must have either token or error field")
+		return nil, errors.New("protocol violation: must have either token or error field and not both")
 	}
 
 	return output, nil
@@ -124,20 +124,20 @@ func DecodeAuthOutput(stdout []byte) (*AuthOutput, error) {
 // Run executes the auth command with the current state and updates state based on output.
 // Returns AuthOutput containing token/error and updated state.
 // The command line is rendered as a mustache template with the provided attrs.
-func (h *Auth) Run(attrs any) (*AuthOutput, error) {
+func (h *Auth) Run(attrs any) (string, error) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 
 	// Render the command line template
 	cmdLine, err := mustache.Render(h.cmdLine, attrs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to render command template: %w", err)
+		return "", fmt.Errorf("failed to render command template: %w", err)
 	}
 
 	// Encode input (current state)
 	input, err := EncodeAuthInput(h.state)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode auth input: %w", err)
+		return "", fmt.Errorf("failed to encode auth input: %w", err)
 	}
 
 	// Execute the auth command
@@ -150,17 +150,22 @@ func (h *Auth) Run(attrs any) (*AuthOutput, error) {
 	err = cmd.Run()
 	if err != nil {
 		// Non-zero exit is an unexpected error (not auth failure)
-		return nil, fmt.Errorf("auth command failed: %w: %s", err, stderr.String())
+		return "", fmt.Errorf("auth command failed: %w: %s", err, stderr.String())
 	}
 
 	// Decode the output
 	output, err := DecodeAuthOutput(stdout.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode auth output: %w", err)
+		return "", fmt.Errorf("failed to decode auth output: %w", err)
+	}
+
+	if output.Error != "" {
+		// error reported from auth plugin!
+		return "", errors.New(output.Error)
 	}
 
 	// Update stored state (even if empty - plugin might be clearing state)
 	h.state = output.State
 
-	return output, nil
+	return output.Token, nil
 }
