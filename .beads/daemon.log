@@ -1,0 +1,105 @@
+[2025-10-22 15:56:38] Daemon started (interval: 5m0s, auto-commit: false, auto-push: false)
+[2025-10-22 15:56:38] Using database: /home/brianm/src/github.com/epithet-ssh/epithet/.beads/epithet.db
+[2025-10-22 15:56:38] Database opened: /home/brianm/src/github.com/epithet-ssh/epithet/.beads/epithet.db
+[2025-10-22 15:56:38] Starting RPC server: /home/brianm/src/github.com/epithet-ssh/epithet/.beads/bd.sock
+[2025-10-22 15:56:38] RPC server ready (socket listening)
+[2025-10-22 15:56:38] Starting sync cycle...
+[2025-10-22 15:56:38] Exported to JSONL
+[2025-10-22 15:56:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:01:38] Starting sync cycle...
+[2025-10-22 16:01:38] Exported to JSONL
+[2025-10-22 16:01:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:06:38] Starting sync cycle...
+[2025-10-22 16:06:38] Exported to JSONL
+[2025-10-22 16:06:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:11:38] Starting sync cycle...
+[2025-10-22 16:11:38] Exported to JSONL
+[2025-10-22 16:11:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:16:38] Starting sync cycle...
+[2025-10-22 16:16:38] Exported to JSONL
+[2025-10-22 16:16:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:21:38] Starting sync cycle...
+[2025-10-22 16:21:38] Exported to JSONL
+[2025-10-22 16:21:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:26:38] Starting sync cycle...
+[2025-10-22 16:26:38] Exported to JSONL
+[2025-10-22 16:26:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:31:38] Starting sync cycle...
+[2025-10-22 16:31:38] Exported to JSONL
+[2025-10-22 16:31:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:36:38] Starting sync cycle...
+[2025-10-22 16:36:38] Exported to JSONL
+[2025-10-22 16:36:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+
+[2025-10-22 16:41:38] Starting sync cycle...
+[2025-10-22 16:41:38] Exported to JSONL
+[2025-10-22 16:41:38] Pull failed: git pull failed: exit status 1
+You are not currently on a branch.
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+

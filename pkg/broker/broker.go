@@ -43,6 +43,7 @@ func New(ctx context.Context, log slog.Logger, socketPath string, authCommand st
 		auth:             NewAuth(authCommand),
 		brokerSocketPath: socketPath,
 		done:             make(chan struct{}),
+		log:              log,
 	}
 
 	err := b.startBrokerListener()
