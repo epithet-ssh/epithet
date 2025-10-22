@@ -12,15 +12,16 @@ import (
 func Test_RpcBasics(t *testing.T) {
 	ctx := t.Context()
 	authCommand := "echo '6:thello,'"
+	socketPath := t.TempDir() + "/broker.sock"
 	b, err := New(
 		ctx,
 		*testLogger(t),
-		"/tmp/foooo", // TODO replace with a tempfile location which we cleanup
+		socketPath,
 		authCommand)
 	require.NoError(t, err)
 	defer b.Close()
 
-	client, err := rpc.Dial("unix", "/tmp/foooo")
+	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
 
 	resp := MatchResponse{}
