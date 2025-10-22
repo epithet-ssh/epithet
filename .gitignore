@@ -7,6 +7,12 @@ tmp
 tmp
 *.exe
 .claude/
-.idea/ 
+.idea/
 target/
 dist/
+/.beads/bd.sock
+/.beads/daemon.log
+/.beads/daemon.pid
+/.beads/epithet.db
+/.beads/epithet.db-shm
+/.beads/epithet.db-wal

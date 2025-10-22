@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -26,8 +27,9 @@ type MatchRequest struct {
 	LocalUser      string
 	RemoteHost     string
 	RemoteUser     string
+	Port           string
+	ProxyJump      string
 	ConnectionHash string
-	// TODO fill in the rest of the %C fields
 }
 
 type MatchResponse struct {
@@ -81,13 +83,17 @@ func (b *Broker) listenAndServe() {
 	for {
 		conn, err := b.brokerListener.Accept()
 		if err != nil {
-			b.log.Warn("Unable to accept connection", "error", err)
-			if b.Running() {
-				continue
-			} else {
-				// shutting down, just exit
+			// Check if error is from listener being closed
+			if errors.Is(err, net.ErrClosed) {
+				// Listener closed, exit gracefully
 				return
 			}
+			// Log other errors only if still running
+			if b.Running() {
+				b.log.Warn("Unable to accept connection", "error", err)
+				continue
+			}
+			return
 		}
 		defer conn.Close()
 		go server.ServeConn(conn)
