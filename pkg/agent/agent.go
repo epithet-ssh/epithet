@@ -22,7 +22,6 @@ var errAgentStopped = errors.New("agent has been stopped")
 type Agent struct {
 	keyring  agent.Agent
 	caClient *caclient.Client
-	ctx      context.Context
 
 	agentSocketPath string
 	agentListener   net.Listener
@@ -35,40 +34,39 @@ type Agent struct {
 	closeOnce sync.Once
 }
 
-// Start creates and starts an SSH agent that listens on the specified socket path.
-// If agentSocketPath is empty, a temporary socket will be created.
-// The agent will automatically close when the context is cancelled.
-func Start(ctx context.Context, caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
-	keyring := agent.NewKeyring()
-	a := &Agent{
-		ctx:             ctx,
-		agentSocketPath: agentSocketPath,
-		keyring:         keyring,
-		caClient:        caClient,
-		done:            make(chan struct{}),
-	}
-
+// New creates a new SSH agent. This does not start listening - call Serve() to begin accepting connections.
+// If agentSocketPath is empty, a temporary socket will be created when Serve() is called.
+func New(caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
 	pub, priv, err := sshcert.GenerateKeys()
 	if err != nil {
 		return nil, err
 	}
-	a.privateKey = priv
-	a.publicKey = pub
 
-	if a.ctx == nil {
-		a.ctx = context.Background()
+	return &Agent{
+		agentSocketPath: agentSocketPath,
+		keyring:         agent.NewKeyring(),
+		caClient:        caClient,
+		publicKey:       pub,
+		privateKey:      priv,
+		done:            make(chan struct{}),
+	}, nil
+}
+
+// Serve starts the agent listening on the configured socket and blocks until the context is cancelled.
+// Returns an error if the listener cannot be started, otherwise returns ctx.Err() when shutdown completes.
+func (a *Agent) Serve(ctx context.Context) error {
+	if err := a.startAgentListener(); err != nil {
+		return err
 	}
 
-	err = a.startAgentListener()
-	if err != nil {
-		return nil, err
-	}
+	// Serve connections in background
+	go a.serve(ctx)
 
-	context.AfterFunc(ctx, func() {
-		a.Close()
-	})
+	// Block until context cancelled
+	<-ctx.Done()
+	a.Close()
 
-	return a, nil
+	return ctx.Err()
 }
 
 // Credential contains the private key and certificate in PEM format
@@ -143,23 +141,35 @@ func (a *Agent) startAgentListener() error {
 		return fmt.Errorf("unable to set permissions on agent socket: %w", err)
 	}
 	a.agentListener = agentListener
-	go a.listenAndServeAgent()
 	return nil
 }
 
-func (a *Agent) listenAndServeAgent() {
-	for a.Running() {
+func (a *Agent) serve(ctx context.Context) {
+	for {
+		// Check if context is done
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		conn, err := a.agentListener.Accept()
 		if err != nil {
 			if conn != nil {
 				conn.Close()
 			}
-			if !a.Running() {
-				// Agent is shutting down
+			// Check if error is from listener being closed
+			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
-			continue
+			// Check context again before logging
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
+				continue
+			}
 		}
 		go a.serveAgent(conn)
 	}

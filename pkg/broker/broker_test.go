@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/rpc"
 	"testing"
+	"time"
 
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -13,13 +14,20 @@ func Test_RpcBasics(t *testing.T) {
 	ctx := t.Context()
 	authCommand := "echo '6:thello,'"
 	socketPath := t.TempDir() + "/broker.sock"
-	b, err := New(
-		ctx,
-		*testLogger(t),
-		socketPath,
-		authCommand)
-	require.NoError(t, err)
+
+	b := New(*testLogger(t), socketPath, authCommand)
+
+	// Serve in background
+	go func() {
+		err := b.Serve(ctx)
+		if err != nil && err != ctx.Err() {
+			t.Errorf("broker.Serve error: %v", err)
+		}
+	}()
 	defer b.Close()
+
+	// Give broker time to start listening
+	time.Sleep(10 * time.Millisecond)
 
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
@@ -35,13 +43,20 @@ func Test_MatchRequestFields(t *testing.T) {
 	ctx := t.Context()
 	authCommand := "echo '6:thello,'"
 	socketPath := t.TempDir() + "/broker.sock"
-	b, err := New(
-		ctx,
-		*testLogger(t),
-		socketPath,
-		authCommand)
-	require.NoError(t, err)
+
+	b := New(*testLogger(t), socketPath, authCommand)
+
+	// Serve in background
+	go func() {
+		err := b.Serve(ctx)
+		if err != nil && err != ctx.Err() {
+			t.Errorf("broker.Serve error: %v", err)
+		}
+	}()
 	defer b.Close()
+
+	// Give broker time to start listening
+	time.Sleep(10 * time.Millisecond)
 
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)

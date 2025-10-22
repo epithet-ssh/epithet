@@ -40,23 +40,31 @@ type MatchResponse struct {
 	Error string
 }
 
-func New(ctx context.Context, log slog.Logger, socketPath string, authCommand string) (*Broker, error) {
-	b := Broker{
+// New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
+func New(log slog.Logger, socketPath string, authCommand string) *Broker {
+	return &Broker{
 		auth:             NewAuth(authCommand),
 		brokerSocketPath: socketPath,
 		done:             make(chan struct{}),
 		log:              log,
 	}
+}
 
-	err := b.startBrokerListener()
-	if err != nil {
-		return nil, fmt.Errorf("Unable to start broker socket: %w", err)
+// Serve starts the broker listening on the configured socket and blocks until the context is cancelled.
+// Returns an error if the listener cannot be started, otherwise returns ctx.Err() when shutdown completes.
+func (b *Broker) Serve(ctx context.Context) error {
+	if err := b.startBrokerListener(); err != nil {
+		return fmt.Errorf("unable to start broker socket: %w", err)
 	}
 
-	context.AfterFunc(ctx, func() {
-		b.Close()
-	})
-	return &b, nil
+	// Serve connections in background
+	go b.serve(ctx)
+
+	// Block until context cancelled
+	<-ctx.Done()
+	b.Close()
+
+	return ctx.Err()
 }
 
 func (b *Broker) startBrokerListener() error {
@@ -67,7 +75,6 @@ func (b *Broker) startBrokerListener() error {
 	}
 
 	b.brokerListener = brokerListener
-	go b.listenAndServe()
 	return nil
 }
 
@@ -77,10 +84,17 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	return nil
 }
 
-func (b *Broker) listenAndServe() {
+func (b *Broker) serve(ctx context.Context) {
 	server := rpc.NewServer()
 	server.Register(b)
 	for {
+		// Check if context is done
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		conn, err := b.brokerListener.Accept()
 		if err != nil {
 			// Check if error is from listener being closed
@@ -88,15 +102,19 @@ func (b *Broker) listenAndServe() {
 				// Listener closed, exit gracefully
 				return
 			}
-			// Log other errors only if still running
-			if b.Running() {
+			// Check context again before logging
+			select {
+			case <-ctx.Done():
+				return
+			default:
 				b.log.Warn("Unable to accept connection", "error", err)
 				continue
 			}
-			return
 		}
-		defer conn.Close()
-		go server.ServeConn(conn)
+		go func() {
+			defer conn.Close()
+			server.ServeConn(conn)
+		}()
 	}
 }
 

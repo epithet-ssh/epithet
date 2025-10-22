@@ -30,9 +30,21 @@ func TestBasics(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 
-	a, err := agent.Start(ctx, nil, "")
+	a, err := agent.New(nil, "")
 	require.NoError(t, err)
+
+	// Serve in background
+	go func() {
+		err := a.Serve(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("agent.Serve error: %v", err)
+		}
+	}()
+
+	// Give agent time to start listening
+	time.Sleep(10 * time.Millisecond)
 
 	server, err := sshd.Start(caPub)
 	require.NoError(t, err)
