@@ -12,7 +12,7 @@ import (
 
 type MatchCLI struct {
 	Host      string `help:"Remote host (%h)" required:"true"`
-	Port      string `help:"Remote port (%p)" required:"true"`
+	Port      uint   `help:"Remote port (%p)" required:"true"`
 	User      string `help:"Remote user (%r)" required:"true"`
 	Hash      string `help:"Connection hash (%C)" required:"true"`
 	ProxyJump string `help:"ProxyJump configuration (%j)" default:""`

@@ -67,7 +67,7 @@ func Test_MatchRequestFields(t *testing.T) {
 		LocalUser:      "alice",
 		RemoteHost:     "server.example.com",
 		RemoteUser:     "root",
-		Port:           "22",
+		Port:           22,
 		ProxyJump:      "bastion.example.com",
 		ConnectionHash: "abc123def456",
 	}

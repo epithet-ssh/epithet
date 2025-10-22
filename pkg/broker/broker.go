@@ -27,7 +27,7 @@ type MatchRequest struct {
 	LocalUser      string
 	RemoteHost     string
 	RemoteUser     string
-	Port           string
+	Port           uint
 	ProxyJump      string
 	ConnectionHash string
 }
