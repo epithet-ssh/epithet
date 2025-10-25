@@ -51,8 +51,8 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 			RemoteUser: m.User,
 			Port:       m.Port,
 			ProxyJump:  m.ProxyJump,
+			Hash:       m.Hash,
 		},
-		ConnectionHash: m.Hash,
 	}
 
 	// Call broker

@@ -78,8 +78,8 @@ printf '%s' "6:thello,"
 			RemoteUser: "root",
 			Port:       22,
 			ProxyJump:  "bastion.example.com",
+			Hash:       "abc123def456",
 		},
-		ConnectionHash: "abc123def456",
 	}
 
 	resp := MatchResponse{}

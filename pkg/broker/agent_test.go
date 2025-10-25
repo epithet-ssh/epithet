@@ -48,8 +48,8 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	req := MatchRequest{
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
+			Hash:       "nonexistent-hash",
 		},
-		ConnectionHash: "nonexistent-hash",
 	}
 	var resp MatchResponse
 

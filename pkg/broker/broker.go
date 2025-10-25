@@ -75,8 +75,7 @@ func (b *Broker) startBrokerListener() error {
 }
 
 type MatchRequest struct {
-	Connection     policy.Connection
-	ConnectionHash string
+	Connection policy.Connection
 }
 
 type MatchResponse struct {
@@ -93,17 +92,17 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	defer b.lock.Unlock()
 
 	// Check if agent already exists for this connection hash
-	if entry, exists := b.agents[input.ConnectionHash]; exists {
+	if entry, exists := b.agents[input.Connection.Hash]; exists {
 		// Check if agent's certificate is still valid (with buffer)
 		if time.Now().Add(expiryBuffer).Before(entry.expiresAt) {
-			b.log.Debug("found existing valid agent", "hash", input.ConnectionHash, "expires", entry.expiresAt)
+			b.log.Debug("found existing valid agent", "hash", input.Connection.Hash, "expires", entry.expiresAt)
 			output.Allow = true
 			return nil
 		}
 		// Agent expired - clean it up
-		b.log.Debug("cleaning up expired agent", "hash", input.ConnectionHash, "expired", entry.expiresAt)
+		b.log.Debug("cleaning up expired agent", "hash", input.Connection.Hash, "expired", entry.expiresAt)
 		entry.agent.Close()
-		delete(b.agents, input.ConnectionHash)
+		delete(b.agents, input.Connection.Hash)
 	}
 
 	// Check if we have an auth token, if not authenticate
@@ -126,7 +125,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	// TODO(epithet-25): Create agent with credential
 
 	// For now, just return false (no agent available)
-	b.log.Debug("no valid agent found for connection", "hash", input.ConnectionHash, "host", input.Connection.RemoteHost)
+	b.log.Debug("no valid agent found for connection", "hash", input.Connection.Hash, "host", input.Connection.RemoteHost)
 	output.Allow = false
 	return nil
 }

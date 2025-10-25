@@ -5,6 +5,7 @@ import "path/filepath"
 // Connection represents the complete tuple of SSH connection parameters.
 // This matches the parameters available in OpenSSH Match exec via %C hash:
 // local hostname (%l), remote hostname (%h), port (%p), remote user (%r), and ProxyJump (%j).
+// The Hash field contains the %C hash value computed by OpenSSH from these parameters.
 type Connection struct {
 	LocalHost  string `json:"localHost"`
 	LocalUser  string `json:"localUser"`
@@ -12,6 +13,7 @@ type Connection struct {
 	RemoteUser string `json:"remoteUser"`
 	Port       uint   `json:"port"`
 	ProxyJump  string `json:"proxyJump"`
+	Hash       string `json:"hash"` // %C - hash of connection tuple
 }
 
 // Policy represents the policy rules for certificate usage
