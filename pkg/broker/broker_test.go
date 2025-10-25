@@ -36,7 +36,8 @@ func Test_RpcBasics(t *testing.T) {
 	err = client.Call("Broker.Match", MatchRequest{}, &resp)
 	require.NoError(t, err)
 
-	require.True(t, resp.Allow)
+	// With no agent available, should return false
+	require.False(t, resp.Allow)
 }
 
 func Test_MatchRequestFields(t *testing.T) {
@@ -76,7 +77,8 @@ func Test_MatchRequestFields(t *testing.T) {
 	err = client.Call("Broker.Match", req, &resp)
 	require.NoError(t, err)
 
-	require.True(t, resp.Allow)
+	// With no agent available, should return false
+	require.False(t, resp.Allow)
 	require.Empty(t, resp.Error)
 }
 

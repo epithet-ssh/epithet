@@ -9,9 +9,16 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 )
+
+// agentEntry tracks a running agent and when its certificate expires
+type agentEntry struct {
+	agent     *agent.Agent
+	expiresAt time.Time
+}
 
 type Broker struct {
 	lock      sync.Mutex
@@ -23,24 +30,7 @@ type Broker struct {
 	brokerListener   net.Listener
 	auth             *Auth
 	certStore        *CertificateStore
-}
-
-type MatchRequest struct {
-	LocalHost      string
-	LocalUser      string
-	RemoteHost     string
-	RemoteUser     string
-	Port           uint
-	ProxyJump      string
-	ConnectionHash string
-}
-
-type MatchResponse struct {
-	// Should the `Match exec` actually match?
-	Allow bool
-
-	// Error contains any error which should be reported to the user on stderr
-	Error string
+	agents           map[string]agentEntry // connectionHash → agent
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
@@ -48,6 +38,7 @@ func New(log slog.Logger, socketPath string, authCommand string) *Broker {
 	return &Broker{
 		auth:             NewAuth(authCommand),
 		certStore:        NewCertificateStore(),
+		agents:           make(map[string]agentEntry),
 		brokerSocketPath: socketPath,
 		done:             make(chan struct{}),
 		log:              log,
@@ -82,18 +73,51 @@ func (b *Broker) startBrokerListener() error {
 	return nil
 }
 
+type MatchRequest struct {
+	LocalHost      string
+	LocalUser      string
+	RemoteHost     string
+	RemoteUser     string
+	Port           uint
+	ProxyJump      string
+	ConnectionHash string
+}
+
+type MatchResponse struct {
+	// Should the `Match exec` actually match?
+	Allow bool
+
+	// Error contains any error which should be reported to the user on stderr
+	Error string
+}
+
 // Match is invoked via rpc from `epithet match` invocations
 func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
-	// TODO: Implement the 5-step certificate validation workflow (epithet-18)
-	// For now, just check if we have a valid certificate
-	_, found := b.certStore.Lookup(input.RemoteHost)
-	if found {
-		b.log.Debug("found valid certificate for host", "host", input.RemoteHost)
-	} else {
-		b.log.Debug("no valid certificate found for host", "host", input.RemoteHost)
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	// Check if agent already exists for this connection hash
+	if entry, exists := b.agents[input.ConnectionHash]; exists {
+		// Check if agent's certificate is still valid (with buffer)
+		if time.Now().Add(expiryBuffer).Before(entry.expiresAt) {
+			b.log.Debug("found existing valid agent", "hash", input.ConnectionHash, "expires", entry.expiresAt)
+			output.Allow = true
+			return nil
+		}
+		// Agent expired - clean it up
+		b.log.Debug("cleaning up expired agent", "hash", input.ConnectionHash, "expired", entry.expiresAt)
+		entry.agent.Close()
+		delete(b.agents, input.ConnectionHash)
 	}
 
-	output.Allow = true
+	// TODO: Check auth state, call auth plugin if needed to get fresh token (epithet-10)
+	// TODO: Check cert store for valid cert (epithet-18)
+	// TODO: If no cert, request from CA (epithet-21)
+	// TODO: Create agent with credential (epithet-25)
+
+	// For now, just return false (no agent available)
+	b.log.Debug("no valid agent found for connection", "hash", input.ConnectionHash, "host", input.RemoteHost)
+	output.Allow = false
 	return nil
 }
 
@@ -149,6 +173,16 @@ func (b *Broker) Done() <-chan struct{} {
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
 		_ = b.brokerListener.Close()
+
+		// Close all agents
+		b.lock.Lock()
+		for hash, entry := range b.agents {
+			b.log.Debug("closing agent on broker shutdown", "hash", hash)
+			entry.agent.Close()
+		}
+		b.agents = make(map[string]agentEntry)
+		b.lock.Unlock()
+
 		close(b.done)
 	})
 }
