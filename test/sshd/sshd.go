@@ -13,6 +13,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -22,13 +23,31 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
+// safeBuffer is a thread-safe wrapper around bytes.Buffer
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (sb *safeBuffer) Write(p []byte) (n int, err error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.Write(p)
+}
+
+func (sb *safeBuffer) String() string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.String()
+}
+
 type Server struct {
 	User     string
 	Path     string
 	Port     int
 	caPubKey sshcert.RawPublicKey
 	cmd      *exec.Cmd
-	Output   bytes.Buffer
+	Output   safeBuffer
 }
 
 // Start starts an sshd server as the current user, and returns a Server.
@@ -53,12 +72,12 @@ func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
 	}
 
 	s := &Server{
-		user.Username,
-		tmp_dir,
-		port,
-		caPubKey,
-		nil,
-		bytes.Buffer{},
+		User:     user.Username,
+		Path:     tmp_dir,
+		Port:     port,
+		caPubKey: caPubKey,
+		cmd:      nil,
+		Output:   safeBuffer{},
 	}
 
 	log.Printf("Starting sshd in %s", tmp_dir)
