@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	rekor "github.com/sigstore/rekor/pkg/pki/ssh"
 	"golang.org/x/crypto/ssh"
@@ -88,6 +89,13 @@ type CertParams struct {
 	Extensions map[string]string `json:"extensions"`
 }
 
+// PolicyResponse is the response from the policy server, containing both
+// the certificate parameters and the policy
+type PolicyResponse struct {
+	CertParams CertParams    `json:"certParams"`
+	Policy     policy.Policy `json:"policy"`
+}
+
 func Verify(pubkey sshcert.RawPublicKey, token, signature string) error {
 	s, err := base64.StdEncoding.DecodeString(signature)
 	if err != nil {
@@ -107,15 +115,16 @@ func (c *CA) Sign(value string) (signature string, err error) {
 }
 
 // RequestPolicy requests policy from the policy url
-func (c *CA) RequestPolicy(ctx context.Context, token string) (*CertParams, error) {
+func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*PolicyResponse, error) {
 	sig, err := c.Sign(token)
 	if err != nil {
 		return nil, fmt.Errorf("error creating signed nonce: %w", err)
 	}
 
-	body, err := json.Marshal(&map[string]string{
-		"token":     token,
-		"signature": sig,
+	body, err := json.Marshal(&map[string]interface{}{
+		"token":      token,
+		"signature":  sig,
+		"connection": conn,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error parsing input: %w", err)
@@ -138,12 +147,12 @@ func (c *CA) RequestPolicy(ctx context.Context, token string) (*CertParams, erro
 	if err != nil {
 		return nil, fmt.Errorf("error reading response: %w", err)
 	}
-	params := &CertParams{}
-	err = json.Unmarshal(buf, params)
+	policyResp := &PolicyResponse{}
+	err = json.Unmarshal(buf, policyResp)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
-	return params, nil
+	return policyResp, nil
 }
 
 // SignPublicKey signs a key to generate a certificate

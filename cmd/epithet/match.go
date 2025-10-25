@@ -8,6 +8,7 @@ import (
 	"os/user"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
 type MatchCLI struct {
@@ -43,12 +44,14 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 
 	// Build request
 	req := broker.MatchRequest{
-		LocalHost:      localHost,
-		LocalUser:      currentUser.Username,
-		RemoteHost:     m.Host,
-		RemoteUser:     m.User,
-		Port:           m.Port,
-		ProxyJump:      m.ProxyJump,
+		Connection: policy.Connection{
+			LocalHost:  localHost,
+			LocalUser:  currentUser.Username,
+			RemoteHost: m.Host,
+			RemoteUser: m.User,
+			Port:       m.Port,
+			ProxyJump:  m.ProxyJump,
+		},
 		ConnectionHash: m.Hash,
 	}
 

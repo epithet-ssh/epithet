@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
 // agentEntry tracks a running agent and when its certificate expires
@@ -74,12 +75,7 @@ func (b *Broker) startBrokerListener() error {
 }
 
 type MatchRequest struct {
-	LocalHost      string
-	LocalUser      string
-	RemoteHost     string
-	RemoteUser     string
-	Port           uint
-	ProxyJump      string
+	Connection     policy.Connection
 	ConnectionHash string
 }
 
@@ -130,15 +126,15 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	// TODO(epithet-25): Create agent with credential
 
 	// For now, just return false (no agent available)
-	b.log.Debug("no valid agent found for connection", "hash", input.ConnectionHash, "host", input.RemoteHost)
+	b.log.Debug("no valid agent found for connection", "hash", input.ConnectionHash, "host", input.Connection.RemoteHost)
 	output.Allow = false
 	return nil
 }
 
-// LookupCertificate finds a valid certificate for the given hostname.
+// LookupCertificate finds a valid certificate for the given connection.
 // Returns the Credential and true if found and not expired, otherwise returns false.
-func (b *Broker) LookupCertificate(hostname string) (agent.Credential, bool) {
-	return b.certStore.Lookup(hostname)
+func (b *Broker) LookupCertificate(conn policy.Connection) (agent.Credential, bool) {
+	return b.certStore.Lookup(conn)
 }
 
 // StoreCertificate adds or updates a certificate for a given policy pattern.

@@ -1,11 +1,11 @@
 package broker
 
 import (
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
 const (
@@ -21,22 +21,11 @@ const (
 	expiryBuffer = 5 * time.Second
 )
 
-// PolicyCert combines a policy pattern with its associated certificate and expiration.
+// PolicyCert combines a policy with its associated certificate and expiration.
 type PolicyCert struct {
-	// HostPattern is a glob pattern for matching remote hostnames (e.g., "*.example.com", "bastion-*")
-	HostPattern string
-	Credential  agent.Credential
-	ExpiresAt   time.Time
-}
-
-// matches checks if this policy's pattern matches the given hostname
-func (pc *PolicyCert) matches(hostname string) bool {
-	matched, err := filepath.Match(pc.HostPattern, hostname)
-	if err != nil {
-		// Invalid pattern, no match
-		return false
-	}
-	return matched
+	Policy     policy.Policy
+	Credential agent.Credential
+	ExpiresAt  time.Time
 }
 
 // CertificateStore manages the mapping of policies to certificates
@@ -52,15 +41,15 @@ func NewCertificateStore() *CertificateStore {
 	}
 }
 
-// Store adds or updates a certificate for a given policy pattern.
-// If a certificate already exists for this pattern, it is replaced.
+// Store adds or updates a certificate for a given policy.
+// If a certificate already exists for this policy, it is replaced.
 func (cs *CertificateStore) Store(pc PolicyCert) {
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
 
-	// Check if we already have a certificate for this pattern
+	// Check if we already have a certificate for this policy
 	for i := range cs.certs {
-		if cs.certs[i].HostPattern == pc.HostPattern {
+		if cs.certs[i].Policy.HostPattern == pc.Policy.HostPattern {
 			// Replace existing certificate
 			cs.certs[i] = pc
 			return
@@ -71,12 +60,12 @@ func (cs *CertificateStore) Store(pc PolicyCert) {
 	cs.certs = append(cs.certs, pc)
 }
 
-// Lookup finds a valid certificate for the given hostname.
+// Lookup finds a valid certificate for the given connection.
 // Returns the Credential and true if found and not expired, otherwise returns false.
 // Policies are evaluated in order; the first matching, non-expired certificate is returned.
 // Expired certificates are removed from the store during lookup.
 // Certificates are considered expired expiryBuffer seconds before their actual expiration time.
-func (cs *CertificateStore) Lookup(hostname string) (agent.Credential, bool) {
+func (cs *CertificateStore) Lookup(conn policy.Connection) (agent.Credential, bool) {
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
 
@@ -85,8 +74,8 @@ func (cs *CertificateStore) Lookup(hostname string) (agent.Credential, bool) {
 	for i := 0; i < len(cs.certs); i++ {
 		pc := cs.certs[i]
 
-		// Check if policy matches the hostname
-		if pc.matches(hostname) {
+		// Check if policy matches the connection
+		if pc.Policy.Matches(conn) {
 			// Check if certificate is still valid (with buffer)
 			if now.Before(pc.ExpiresAt) {
 				return pc.Credential, true

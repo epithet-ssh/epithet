@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 )
@@ -70,12 +71,14 @@ printf '%s' "6:thello,"
 
 	// Test with all fields populated
 	req := MatchRequest{
-		LocalHost:      "mylaptop.local",
-		LocalUser:      "alice",
-		RemoteHost:     "server.example.com",
-		RemoteUser:     "root",
-		Port:           22,
-		ProxyJump:      "bastion.example.com",
+		Connection: policy.Connection{
+			LocalHost:  "mylaptop.local",
+			LocalUser:  "alice",
+			RemoteHost: "server.example.com",
+			RemoteUser: "root",
+			Port:       22,
+			ProxyJump:  "bastion.example.com",
+		},
 		ConnectionHash: "abc123def456",
 	}
 

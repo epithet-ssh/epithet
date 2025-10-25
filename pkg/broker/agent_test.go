@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,8 +46,10 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 
 	// Make a Match request with no existing agent
 	req := MatchRequest{
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+		},
 		ConnectionHash: "nonexistent-hash",
-		RemoteHost:     "server.example.com",
 	}
 	var resp MatchResponse
 

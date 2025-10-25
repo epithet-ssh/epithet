@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/sirupsen/logrus"
 )
@@ -67,13 +68,15 @@ func (s *caServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // CreateCertRequest asks for a signed cert
 type CreateCertRequest struct {
-	PublicKey sshcert.RawPublicKey `json:"publicKey"`
-	Token     string               `json:"token"`
+	PublicKey  sshcert.RawPublicKey `json:"publicKey"`
+	Token      string               `json:"token"`
+	Connection policy.Connection    `json:"connection"`
 }
 
 // CreateCertResponse is response from a CreateCert request
 type CreateCertResponse struct {
 	Certificate sshcert.RawCertificate `json:"certificate"`
+	Policy      policy.Policy          `json:"policy"`
 }
 
 // RequestBodySizeLimit is the maximum request body size
@@ -99,7 +102,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params, err := s.c.RequestPolicy(r.Context(), ccr.Token)
+	policyResp, err := s.c.RequestPolicy(r.Context(), ccr.Token, ccr.Connection)
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
@@ -107,7 +110,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cert, err := s.c.SignPublicKey(ccr.PublicKey, params)
+	cert, err := s.c.SignPublicKey(ccr.PublicKey, &policyResp.CertParams)
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
@@ -117,6 +120,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	resp := CreateCertResponse{
 		Certificate: cert,
+		Policy:      policyResp.Policy,
 	}
 	out, err := json.Marshal(&resp)
 	if err != nil {
