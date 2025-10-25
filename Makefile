@@ -17,6 +17,7 @@ clean:			## clean all local resources
 	go clean -testcache
 	rm -rf epithet
 	rm -rf dist
+	rm -rf bad-policy
 
 .PHONY: clean-all
 clean-all: clean
