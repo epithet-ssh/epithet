@@ -37,11 +37,12 @@ type Broker struct {
 	certStore        *CertificateStore
 	agents           map[policy.ConnectionHash]agentEntry // connectionHash → agent
 	caClient         *caclient.Client
-	agentSocketDir   string // Directory for agent sockets (e.g., ~/.epithet/sockets)
+	agentSocketDir   string   // Directory for agent sockets (e.g., ~/.epithet/sockets)
+	matchPatterns    []string // Host patterns that epithet should handle (e.g., "*.example.com")
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, authCommand string, caURL string, agentSocketDir string) *Broker {
+func New(log slog.Logger, socketPath string, authCommand string, caURL string, agentSocketDir string, matchPatterns []string) *Broker {
 	return &Broker{
 		auth:             NewAuth(authCommand),
 		certStore:        NewCertificateStore(),
@@ -49,6 +50,7 @@ func New(log slog.Logger, socketPath string, authCommand string, caURL string, a
 		brokerSocketPath: socketPath,
 		caClient:         caclient.New(caURL),
 		agentSocketDir:   agentSocketDir,
+		matchPatterns:    matchPatterns,
 		done:             make(chan struct{}),
 		log:              log,
 	}
@@ -99,7 +101,15 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	// Check if agent already exists for this connection hash
+	// Step 1: Check if this host should be handled by epithet at all
+	if !b.shouldHandle(input.Connection.RemoteHost) {
+		b.log.Debug("host does not match any patterns, ignoring", "host", input.Connection.RemoteHost, "patterns", b.matchPatterns)
+		output.Allow = false
+		output.Error = fmt.Sprintf("host %s does not match any configured patterns", input.Connection.RemoteHost)
+		return nil
+	}
+
+	// Step 2: Check if agent already exists for this connection hash
 	if entry, exists := b.agents[input.Connection.Hash]; exists {
 		// Check if agent's certificate is still valid (with buffer)
 		if time.Now().Add(expiryBuffer).Before(entry.expiresAt) {
@@ -113,11 +123,11 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		delete(b.agents, input.Connection.Hash)
 	}
 
-	// Step 2: Check for existing, valid certificate in cert store
+	// Step 3: Check for existing, valid certificate in cert store
 	cred, found := b.certStore.Lookup(input.Connection)
 	if found {
 		b.log.Debug("found valid certificate in store", "host", input.Connection.RemoteHost)
-		// Step 3: Set up agent with existing certificate
+		// Step 4: Set up agent with existing certificate
 		err := b.ensureAgent(input.Connection.Hash, cred)
 		if err != nil {
 			b.log.Error("failed to create agent", "error", err)
@@ -129,7 +139,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		return nil
 	}
 
-	// Step 4: No valid certificate exists, request one from CA
+	// Step 5: No valid certificate exists, request one from CA
 	b.log.Debug("no valid certificate found, requesting from CA", "host", input.Connection.RemoteHost)
 
 	// Check if we have an auth token, if not authenticate
@@ -181,7 +191,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 
 	b.log.Debug("certificate obtained and stored", "host", input.Connection.RemoteHost, "policy", certResp.Policy.HostPattern)
 
-	// Step 3: Create agent with new certificate
+	// Step 4: Create agent with new certificate
 	credential := agent.Credential{
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
@@ -257,10 +267,37 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	return nil
 }
 
+// shouldHandle checks if the given hostname matches any of the configured match patterns.
+// Returns true if epithet should handle this connection, false otherwise.
+func (b *Broker) shouldHandle(hostname string) bool {
+	for _, pattern := range b.matchPatterns {
+		matched, err := filepath.Match(pattern, hostname)
+		if err != nil {
+			b.log.Warn("invalid match pattern", "pattern", pattern, "error", err)
+			continue
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
 // LookupCertificate finds a valid certificate for the given connection.
 // Returns the Credential and true if found and not expired, otherwise returns false.
 func (b *Broker) LookupCertificate(conn policy.Connection) (agent.Credential, bool) {
 	return b.certStore.Lookup(conn)
+}
+
+// AgentSocketPath returns the socket path for a given connection hash.
+// This is used by SSH to connect to the per-connection agent.
+func (b *Broker) AgentSocketPath(hash policy.ConnectionHash) string {
+	return filepath.Join(b.agentSocketDir, string(hash))
+}
+
+// BrokerSocketPath returns the path to the broker's RPC socket.
+func (b *Broker) BrokerSocketPath() string {
+	return b.brokerSocketPath
 }
 
 // StoreCertificate adds or updates a certificate for a given policy pattern.
@@ -308,7 +345,10 @@ func (b *Broker) Done() <-chan struct{} {
 
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
-		_ = b.brokerListener.Close()
+		// Only close listener if it was successfully created
+		if b.brokerListener != nil {
+			_ = b.brokerListener.Close()
+		}
 
 		// Close all agents
 		b.lock.Lock()

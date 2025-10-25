@@ -14,7 +14,7 @@ func TestBroker_AgentMapInitialized(t *testing.T) {
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir)
+	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
 
 	// Verify agents map is initialized
 	require.NotNil(t, b.agents)
@@ -27,7 +27,7 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	socketPath := "/tmp/test-broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir)
+	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
 
 	// Serve in background
 	go func() {
