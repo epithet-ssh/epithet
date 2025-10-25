@@ -9,6 +9,8 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+
+	"github.com/epithet-ssh/epithet/pkg/agent"
 )
 
 type Broker struct {
@@ -20,6 +22,7 @@ type Broker struct {
 	brokerSocketPath string
 	brokerListener   net.Listener
 	auth             *Auth
+	certStore        *CertificateStore
 }
 
 type MatchRequest struct {
@@ -44,6 +47,7 @@ type MatchResponse struct {
 func New(log slog.Logger, socketPath string, authCommand string) *Broker {
 	return &Broker{
 		auth:             NewAuth(authCommand),
+		certStore:        NewCertificateStore(),
 		brokerSocketPath: socketPath,
 		done:             make(chan struct{}),
 		log:              log,
@@ -80,8 +84,28 @@ func (b *Broker) startBrokerListener() error {
 
 // Match is invoked via rpc from `epithet match` invocations
 func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
+	// TODO: Implement the 5-step certificate validation workflow (epithet-18)
+	// For now, just check if we have a valid certificate
+	_, found := b.certStore.Lookup(input.RemoteHost)
+	if found {
+		b.log.Debug("found valid certificate for host", "host", input.RemoteHost)
+	} else {
+		b.log.Debug("no valid certificate found for host", "host", input.RemoteHost)
+	}
+
 	output.Allow = true
 	return nil
+}
+
+// LookupCertificate finds a valid certificate for the given hostname.
+// Returns the Credential and true if found and not expired, otherwise returns false.
+func (b *Broker) LookupCertificate(hostname string) (agent.Credential, bool) {
+	return b.certStore.Lookup(hostname)
+}
+
+// StoreCertificate adds or updates a certificate for a given policy pattern.
+func (b *Broker) StoreCertificate(pc PolicyCert) {
+	b.certStore.Store(pc)
 }
 
 func (b *Broker) serve(ctx context.Context) {
