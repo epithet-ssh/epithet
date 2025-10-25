@@ -80,6 +80,170 @@ sequenceDiagram
     ssh ->> agent: sign-with-cert
 ```
 
+## Policy Server API
+
+The policy server is a critical component of epithet that makes authorization decisions and determines certificate parameters. When a user requests an SSH certificate, the CA server forwards the request to your policy server to determine:
+
+1. Whether to approve or deny the certificate request
+2. What principals (usernames) to include in the certificate
+3. How long the certificate should be valid
+4. What SSH extensions to grant
+
+### HTTP Endpoint
+
+**Method:** `POST`  
+**Content-Type:** `application/json`
+
+### Request Format
+
+The CA sends a JSON request with the following fields:
+
+```json
+{
+  "token": "authentication-token-from-user",
+  "signature": "base64-encoded-signature",
+  "connection": {
+    "localHost": "user-laptop.local",
+    "localUser": "alice",
+    "remoteHost": "server.example.com",
+    "remoteUser": "ubuntu",
+    "port": 22,
+    "proxyJump": "",
+    "hash": "a1b2c3d4e5f6"
+  }
+}
+```
+
+**Fields:**
+- `token` (string): The authentication token from the user (format determined by your auth plugin)
+- `signature` (string): Base64-encoded cryptographic signature of the token, signed by the CA's private key
+- `connection` (object): Full SSH connection parameters
+  - `localHost` (string): User's local hostname (OpenSSH `%l`)
+  - `localUser` (string): User's local username
+  - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
+  - `remoteUser` (string): Target username on remote server (OpenSSH `%r`)
+  - `port` (uint): Target SSH port (OpenSSH `%p`)
+  - `proxyJump` (string): ProxyJump configuration (OpenSSH `%j`), empty if not used
+  - `hash` (string): OpenSSH `%C` hash - unique identifier for this connection
+
+### Signature Verification
+
+**IMPORTANT:** Your policy server must verify the signature before processing the request. This proves the request came from your CA server and not a malicious actor.
+
+```go
+import "github.com/epithet-ssh/epithet/pkg/ca"
+
+// Verify signature (CA_PUBKEY is your CA's public key in authorized_keys format)
+err := ca.Verify(CA_PUBKEY, token, signature)
+if err != nil {
+    // Invalid signature - reject the request
+    http.Error(w, "invalid signature", http.StatusUnauthorized)
+    return
+}
+```
+
+### Response Format
+
+**Success (HTTP 200):**
+
+```json
+{
+  "certParams": {
+    "identity": "alice@example.com",
+    "principals": ["ubuntu", "root", "deploy"],
+    "expiration": "5m0s",
+    "extensions": {
+      "permit-pty": "",
+      "permit-agent-forwarding": "",
+      "permit-port-forwarding": "",
+      "permit-user-rc": "",
+      "permit-X11-forwarding": ""
+    }
+  },
+  "policy": {
+    "hostPattern": "*.example.com"
+  }
+}
+```
+
+**Fields:**
+- `certParams.identity` (string): Certificate identity/key ID (for audit logs)
+- `certParams.principals` ([]string): List of usernames this cert can authenticate as
+- `certParams.expiration` (string): Certificate validity duration (e.g., "5m", "10m", "1h")
+- `certParams.extensions` (map[string]string): SSH certificate extensions to grant
+  - `permit-pty`: Allow terminal allocation
+  - `permit-agent-forwarding`: Allow SSH agent forwarding
+  - `permit-port-forwarding`: Allow port forwarding
+  - `permit-user-rc`: Allow executing `~/.ssh/rc`
+  - `permit-X11-forwarding`: Allow X11 forwarding
+- `policy.hostPattern` (string): Glob pattern for hosts this certificate is valid for (e.g., `*.example.com`, `server-*.prod.example.com`)
+
+**Denial (HTTP 403 or 401):**
+
+Return any non-200 status code to deny the certificate request. The status message will be logged.
+
+### Policy Decision Logic
+
+Your policy server should implement your organization's authorization logic:
+
+```go
+// Example: Check if user is allowed to access this host
+func authorizeRequest(token string, conn policy.Connection) (*ca.PolicyResponse, error) {
+    // 1. Validate the authentication token
+    user, err := validateToken(token)
+    if err != nil {
+        return nil, fmt.Errorf("invalid token: %w", err)
+    }
+    
+    // 2. Check authorization (your business logic here)
+    if !canUserAccessHost(user, conn.RemoteHost, conn.RemoteUser) {
+        return nil, fmt.Errorf("user %s not authorized for %s@%s", 
+            user, conn.RemoteUser, conn.RemoteHost)
+    }
+    
+    // 3. Determine principals (which usernames to allow)
+    principals := getPrincipalsForUser(user, conn.RemoteHost)
+    
+    // 4. Set expiration (shorter is more secure)
+    expiration := 5 * time.Minute // Recommended: 2-10 minutes
+    
+    // 5. Grant appropriate extensions
+    extensions := map[string]string{
+        "permit-pty": "", // Usually safe to grant
+    }
+    
+    // Add additional extensions based on use case
+    if needsAgentForwarding(user, conn.RemoteHost) {
+        extensions["permit-agent-forwarding"] = ""
+    }
+    
+    return &ca.PolicyResponse{
+        CertParams: ca.CertParams{
+            Identity:   user.Email,
+            Names:      principals,
+            Expiration: expiration,
+            Extensions: extensions,
+        },
+        Policy: policy.Policy{
+            HostPattern: determineHostPattern(conn.RemoteHost),
+        },
+    }, nil
+}
+```
+
+### Example Implementation
+
+See [`examples/bad-policy/bad-policy.go`](examples/bad-policy/bad-policy.go) for a complete working example policy server (warning: approves all requests - do not use in production!).
+
+### Security Considerations
+
+1. **Always verify the signature** - This prevents unauthorized certificate issuance
+2. **Use short expiration times** (2-10 minutes) - Limits damage from compromised certificates
+3. **Grant minimal extensions** - Only grant what users need
+4. **Log all decisions** - Track who accessed what for audit purposes
+5. **Validate tokens thoroughly** - Ensure authentication tokens haven't been tampered with
+6. **Use specific host patterns** - Avoid `*` in production; use `*.example.com` or more specific patterns
+
 ## TODO
 
 - **Implement a less strict netstring parser**: The current auth plugin protocol uses the `markdingo/netstring` library which strictly rejects whitespace between netstrings. This makes debugging auth plugins difficult since developers can't use `println()` for debugging output. We should implement a custom netstring parser that tolerates whitespace (spaces, tabs, `\n`, `\r`) between netstrings while still being strict about the netstring format itself. This would maintain protocol compatibility while significantly improving developer experience when writing auth plugins.
