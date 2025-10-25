@@ -18,8 +18,9 @@ cat > /dev/null
 printf '%s' "6:thello,"
 `)
 	socketPath := t.TempDir() + "/broker.sock"
+	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand)
+	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir)
 
 	// Serve in background
 	go func() {
@@ -51,8 +52,9 @@ cat > /dev/null
 printf '%s' "6:thello,"
 `)
 	socketPath := t.TempDir() + "/broker.sock"
+	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand)
+	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir)
 
 	// Serve in background
 	go func() {
@@ -86,9 +88,9 @@ printf '%s' "6:thello,"
 	err = client.Call("Broker.Match", req, &resp)
 	require.NoError(t, err)
 
-	// With no agent available, should return false
+	// With no CA available, should return false with error
 	require.False(t, resp.Allow)
-	require.Empty(t, resp.Error)
+	require.Contains(t, resp.Error, "failed to request certificate")
 }
 
 func testLogger(t *testing.T) *slog.Logger {

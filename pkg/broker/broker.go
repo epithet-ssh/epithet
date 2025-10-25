@@ -8,11 +8,15 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
+	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
 // agentEntry tracks a running agent and when its certificate expires
@@ -31,16 +35,20 @@ type Broker struct {
 	brokerListener   net.Listener
 	auth             *Auth
 	certStore        *CertificateStore
-	agents           map[string]agentEntry // connectionHash → agent
+	agents           map[policy.ConnectionHash]agentEntry // connectionHash → agent
+	caClient         *caclient.Client
+	agentSocketDir   string // Directory for agent sockets (e.g., ~/.epithet/sockets)
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, authCommand string) *Broker {
+func New(log slog.Logger, socketPath string, authCommand string, caURL string, agentSocketDir string) *Broker {
 	return &Broker{
 		auth:             NewAuth(authCommand),
 		certStore:        NewCertificateStore(),
-		agents:           make(map[string]agentEntry),
+		agents:           make(map[policy.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
+		caClient:         caclient.New(caURL),
+		agentSocketDir:   agentSocketDir,
 		done:             make(chan struct{}),
 		log:              log,
 	}
@@ -105,6 +113,25 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		delete(b.agents, input.Connection.Hash)
 	}
 
+	// Step 2: Check for existing, valid certificate in cert store
+	cred, found := b.certStore.Lookup(input.Connection)
+	if found {
+		b.log.Debug("found valid certificate in store", "host", input.Connection.RemoteHost)
+		// Step 3: Set up agent with existing certificate
+		err := b.ensureAgent(input.Connection.Hash, cred)
+		if err != nil {
+			b.log.Error("failed to create agent", "error", err)
+			output.Allow = false
+			output.Error = fmt.Sprintf("failed to create agent: %v", err)
+			return nil
+		}
+		output.Allow = true
+		return nil
+	}
+
+	// Step 4: No valid certificate exists, request one from CA
+	b.log.Debug("no valid certificate found, requesting from CA", "host", input.Connection.RemoteHost)
+
 	// Check if we have an auth token, if not authenticate
 	token := b.auth.Token()
 	if token == "" {
@@ -120,13 +147,113 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		b.log.Debug("authentication successful")
 	}
 
-	// TODO(epithet-18): Check cert store for valid cert
-	// TODO(epithet-21): If no cert, request from CA
-	// TODO(epithet-25): Create agent with credential
+	// Generate ephemeral keypair for this connection
+	publicKey, privateKey, err := sshcert.GenerateKeys()
+	if err != nil {
+		b.log.Error("failed to generate keypair", "error", err)
+		output.Allow = false
+		output.Error = fmt.Sprintf("failed to generate keypair: %v", err)
+		return nil
+	}
 
-	// For now, just return false (no agent available)
-	b.log.Debug("no valid agent found for connection", "hash", input.Connection.Hash, "host", input.Connection.RemoteHost)
-	output.Allow = false
+	// Request certificate from CA
+	certResp, err := b.caClient.GetCert(context.Background(), &caserver.CreateCertRequest{
+		PublicKey:  publicKey,
+		Token:      token,
+		Connection: input.Connection,
+	})
+	if err != nil {
+		b.log.Error("failed to request certificate from CA", "error", err)
+		output.Allow = false
+		output.Error = fmt.Sprintf("failed to request certificate: %v", err)
+		return nil
+	}
+
+	// Store the certificate with policy and expiration
+	// Note: We need to parse the certificate to get the actual expiration time
+	// For now, we'll use a reasonable default based on typical epithet cert lifetime
+	expiresAt := time.Now().Add(5 * time.Minute) // TODO: Parse cert to get actual expiry
+	b.certStore.Store(PolicyCert{
+		Policy:     certResp.Policy,
+		Credential: agent.Credential{PrivateKey: privateKey, Certificate: certResp.Certificate},
+		ExpiresAt:  expiresAt,
+	})
+
+	b.log.Debug("certificate obtained and stored", "host", input.Connection.RemoteHost, "policy", certResp.Policy.HostPattern)
+
+	// Step 3: Create agent with new certificate
+	credential := agent.Credential{
+		PrivateKey:  privateKey,
+		Certificate: certResp.Certificate,
+	}
+	err = b.ensureAgent(input.Connection.Hash, credential)
+	if err != nil {
+		b.log.Error("failed to create agent", "error", err)
+		output.Allow = false
+		output.Error = fmt.Sprintf("failed to create agent: %v", err)
+		return nil
+	}
+
+	output.Allow = true
+	return nil
+}
+
+// ensureAgent ensures an agent exists for the given connection hash with the given credential.
+// If an agent already exists, it updates the credential. If not, it creates a new agent.
+func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential agent.Credential) error {
+	// Check if agent already exists
+	if entry, exists := b.agents[connectionHash]; exists {
+		// Update the existing agent's credential
+		b.log.Debug("updating existing agent credential", "hash", connectionHash)
+		err := entry.agent.UseCredential(credential)
+		if err != nil {
+			return fmt.Errorf("failed to update agent credential: %w", err)
+		}
+		// Update expiration time (TODO: parse from cert)
+		entry.expiresAt = time.Now().Add(5 * time.Minute)
+		b.agents[connectionHash] = entry
+		return nil
+	}
+
+	// Create new agent
+	socketPath := filepath.Join(b.agentSocketDir, string(connectionHash))
+	b.log.Debug("creating new agent", "hash", connectionHash, "socket", socketPath)
+
+	// Ensure the socket directory exists
+	err := os.MkdirAll(b.agentSocketDir, 0700)
+	if err != nil {
+		return fmt.Errorf("failed to create agent socket directory: %w", err)
+	}
+
+	// Create the agent (Note: agent.New expects *caclient.Client, but we don't need it for UseCredential)
+	// We pass nil because we're manually managing certificates via UseCredential
+	ag, err := agent.New(nil, socketPath)
+	if err != nil {
+		return fmt.Errorf("failed to create agent: %w", err)
+	}
+
+	// Start the agent in background
+	go func() {
+		err := ag.Serve(context.Background())
+		if err != nil && err != context.Canceled {
+			b.log.Error("agent serve error", "hash", connectionHash, "error", err)
+		}
+	}()
+
+	// Set the credential
+	err = ag.UseCredential(credential)
+	if err != nil {
+		ag.Close()
+		return fmt.Errorf("failed to set agent credential: %w", err)
+	}
+
+	// Store the agent entry
+	b.agents[connectionHash] = agentEntry{
+		agent:     ag,
+		expiresAt: time.Now().Add(5 * time.Minute), // TODO: parse from cert
+	}
+
+	b.log.Info("agent created and started", "hash", connectionHash, "socket", socketPath)
 	return nil
 }
 
@@ -189,7 +316,7 @@ func (b *Broker) Close() {
 			b.log.Debug("closing agent on broker shutdown", "hash", hash)
 			entry.agent.Close()
 		}
-		b.agents = make(map[string]agentEntry)
+		b.agents = make(map[policy.ConnectionHash]agentEntry)
 		b.lock.Unlock()
 
 		close(b.done)
