@@ -4,11 +4,8 @@ all: test build		## run tests and build binaries
 epithet:
 	go build ./cmd/epithet
 
-epithet-ca:
-	go build ./cmd/epithet-ca
-
 .PHONY: build
-build: epithet epithet-ca
+build: epithet
 
 .PHONY: test
 test:	## run all tests
@@ -18,7 +15,6 @@ test:	## run all tests
 clean:			## clean all local resources
 	go clean ./...
 	go clean -testcache
-	rm -f epithet-*
 	rm -rf epithet
 	rm -rf dist
 

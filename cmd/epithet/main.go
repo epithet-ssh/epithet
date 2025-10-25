@@ -17,6 +17,7 @@ var cli struct {
 
 	Agent AgentCLI `cmd:"agent" help:"start the epithet agent"`
 	Match MatchCLI `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
+	CA    CACLI    `cmd:"ca" help:"Run the epithet CA server"`
 }
 
 func main() {
