@@ -28,10 +28,18 @@ type PolicyCert struct {
 	ExpiresAt  time.Time
 }
 
-// CertificateStore manages the mapping of policies to certificates
+// CertificateStore manages the mapping of policies to certificates.
+//
+// Concurrency: CertificateStore is safe for concurrent use.
+// All public methods use internal locking (lock/RWMutex).
+//
+// Locking invariants:
+//   - lock protects: certs slice (all reads and writes)
+//   - Store() uses write lock (exclusive access)
+//   - Lookup() uses write lock (not read lock) because it may modify the slice (removing expired certs)
 type CertificateStore struct {
-	lock  sync.RWMutex
-	certs []PolicyCert
+	lock  sync.RWMutex // Protects certs slice
+	certs []PolicyCert // Protected by lock
 }
 
 // NewCertificateStore creates a new empty certificate store

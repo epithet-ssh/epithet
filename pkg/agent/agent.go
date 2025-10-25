@@ -18,20 +18,27 @@ import (
 
 var errAgentStopped = errors.New("agent has been stopped")
 
-// Agent represents an SSH agent that manages certificates
+// Agent represents an SSH agent that manages certificates.
+//
+// Concurrency: Agent is safe for concurrent use. The keyring (golang.org/x/crypto/ssh/agent)
+// has internal synchronization and can be safely accessed from multiple goroutines.
+// The done channel and closeOnce provide safe shutdown coordination.
+//
+// Immutable after creation: agentSocketPath, publicKey, privateKey, caClient
+// Protected by internal sync: keyring (uses its own locking)
+// Protected by closeOnce: agentListener, done channel
 type Agent struct {
-	keyring  agent.Agent
+	keyring  agent.Agent // Thread-safe (has internal locking)
 	caClient *caclient.Client
 
-	agentSocketPath string
+	agentSocketPath string // Immutable after New()
 	agentListener   net.Listener
 
-	publicKey  sshcert.RawPublicKey
-	privateKey sshcert.RawPrivateKey
+	publicKey  sshcert.RawPublicKey  // Immutable after New()
+	privateKey sshcert.RawPrivateKey // Immutable after New()
 
-	lock      sync.Mutex
-	done      chan struct{}
-	closeOnce sync.Once
+	done      chan struct{} // Closed once by closeOnce
+	closeOnce sync.Once     // Protects Close() operations
 }
 
 // New creates a new SSH agent. This does not start listening - call Serve() to begin accepting connections.

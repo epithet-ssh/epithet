@@ -26,12 +26,20 @@ type authOutput struct {
 	Error string // Auth failure message (mutually exclusive with Token)
 }
 
-// Auth represents a configured authentication command
+// Auth represents a configured authentication command.
+//
+// Concurrency: Auth is safe for concurrent use. All public methods use internal locking.
+//
+// Locking invariants:
+//   - lock protects: state, token
+//   - Token() reads token under lock
+//   - Run() holds lock for entire auth command execution and state update (atomic operation)
+//   - cmdLine is immutable after NewAuth()
 type Auth struct {
-	cmdLine string
-	lock    sync.Mutex
-	state   []byte
-	token   string
+	cmdLine string     // Immutable after NewAuth()
+	lock    sync.Mutex // Protects state and token
+	state   []byte     // Protected by lock
+	token   string     // Protected by lock
 }
 
 // NewAuth creates a new Auth with an unparsed command line.

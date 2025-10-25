@@ -25,20 +25,38 @@ type agentEntry struct {
 	expiresAt time.Time
 }
 
+// Broker manages authentication, certificate storage, and per-connection SSH agents.
+//
+// Concurrency: Broker is safe for concurrent access from multiple RPC clients.
+// The primary lock (b.lock) protects the agents map and coordinates with Auth and CertificateStore.
+//
+// Locking invariants:
+//   - b.lock protects: agents map (both reads and writes)
+//   - Auth has its own internal lock (auth.lock) - safe to call without b.lock
+//   - CertificateStore has its own internal lock (certStore.lock) - safe to call without b.lock
+//   - Match() holds b.lock for the entire operation to ensure atomic cert lookup + agent creation
+//   - ensureAgent() MUST be called with b.lock held (caller responsibility)
+//
+// Immutable after New(): brokerSocketPath, agentSocketDir, matchPatterns, caClient, log
+// Protected by b.lock: agents map
+// Protected by closeOnce: brokerListener, done channel
+// Self-synchronized: auth (has internal lock), certStore (has internal lock)
 type Broker struct {
-	lock      sync.Mutex
+	lock      sync.Mutex // Protects agents map
 	done      chan struct{}
 	closeOnce sync.Once
-	log       slog.Logger
+	log       slog.Logger // Immutable after New()
 
-	brokerSocketPath string
+	brokerSocketPath string // Immutable after New()
 	brokerListener   net.Listener
-	auth             *Auth
-	certStore        *CertificateStore
-	agents           map[policy.ConnectionHash]agentEntry // connectionHash → agent
-	caClient         *caclient.Client
-	agentSocketDir   string   // Directory for agent sockets (e.g., ~/.epithet/sockets)
-	matchPatterns    []string // Host patterns that epithet should handle (e.g., "*.example.com")
+
+	auth      *Auth                                // Has internal locking, safe to call concurrently
+	certStore *CertificateStore                    // Has internal locking, safe to call concurrently
+	agents    map[policy.ConnectionHash]agentEntry // Protected by b.lock
+
+	caClient       *caclient.Client // Immutable after New()
+	agentSocketDir string           // Immutable after New()
+	matchPatterns  []string         // Immutable after New()
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
@@ -210,6 +228,8 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 
 // ensureAgent ensures an agent exists for the given connection hash with the given credential.
 // If an agent already exists, it updates the credential. If not, it creates a new agent.
+//
+// REQUIRES: b.lock must be held by caller. This method modifies b.agents map.
 func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential agent.Credential) error {
 	// Check if agent already exists
 	if entry, exists := b.agents[connectionHash]; exists {
