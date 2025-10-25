@@ -110,10 +110,24 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		delete(b.agents, input.ConnectionHash)
 	}
 
-	// TODO: Check auth state, call auth plugin if needed to get fresh token (epithet-10)
-	// TODO: Check cert store for valid cert (epithet-18)
-	// TODO: If no cert, request from CA (epithet-21)
-	// TODO: Create agent with credential (epithet-25)
+	// Check if we have an auth token, if not authenticate
+	token := b.auth.Token()
+	if token == "" {
+		b.log.Debug("no auth token, authenticating")
+		var err error
+		token, err = b.auth.Run(nil) // TODO(epithet-41): pass connection details for template rendering
+		if err != nil {
+			b.log.Error("authentication failed", "error", err)
+			output.Allow = false
+			output.Error = fmt.Sprintf("authentication failed: %v", err)
+			return nil
+		}
+		b.log.Debug("authentication successful")
+	}
+
+	// TODO(epithet-18): Check cert store for valid cert
+	// TODO(epithet-21): If no cert, request from CA
+	// TODO(epithet-25): Create agent with credential
 
 	// For now, just return false (no agent available)
 	b.log.Debug("no valid agent found for connection", "hash", input.ConnectionHash, "host", input.RemoteHost)

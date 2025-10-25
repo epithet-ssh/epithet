@@ -14,9 +14,9 @@ import (
 
 // Protocol keys for keyed netstrings
 const (
-	KeyState = 's' // State blob (opaque, managed by auth plugin)
-	KeyToken = 't' // Authentication token (to be sent to CA)
-	KeyError = 'e' // Error message (human-readable auth failure reason)
+	keyState = 's' // State blob (opaque, managed by auth plugin)
+	keyToken = 't' // Authentication token (to be sent to CA)
+	keyError = 'e' // Error message (human-readable auth failure reason)
 )
 
 // AuthOutput represents the result of an auth command invocation
@@ -31,6 +31,7 @@ type Auth struct {
 	cmdLine string
 	lock    sync.Mutex
 	state   []byte
+	token   string
 }
 
 // NewAuth creates a new Auth with an unparsed command line.
@@ -38,13 +39,21 @@ func NewAuth(cmdLine string) *Auth {
 	return &Auth{
 		cmdLine: cmdLine,
 		state:   []byte{},
+		token:   "",
 	}
 }
 
-// EncodeAuthInput encodes state for auth command stdin.
+// Token returns the current authentication token, or empty string if not authenticated.
+func (h *Auth) Token() string {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	return h.token
+}
+
+// encodeAuthInput encodes state for auth command stdin.
 // If state is empty, returns empty netstring "0:,"
 // Otherwise returns state with 's' key as keyed netstring
-func EncodeAuthInput(state []byte) ([]byte, error) {
+func encodeAuthInput(state []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := netstring.NewEncoder(&buf)
 
@@ -55,7 +64,7 @@ func EncodeAuthInput(state []byte) ([]byte, error) {
 		}
 	} else {
 		// State with 's' key
-		if err := enc.EncodeBytes(KeyState, state); err != nil {
+		if err := enc.EncodeBytes(keyState, state); err != nil {
 			return nil, fmt.Errorf("failed to encode state: %w", err)
 		}
 	}
@@ -63,9 +72,9 @@ func EncodeAuthInput(state []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DecodeAuthOutput parses auth command stdout.
+// decodeAuthOutput parses auth command stdout.
 // Reads keyed netstrings until EOF, validating protocol rules.
-func DecodeAuthOutput(stdout []byte) (*authOutput, error) {
+func decodeAuthOutput(stdout []byte) (*authOutput, error) {
 	if len(stdout) == 0 {
 		return nil, errors.New("auth command returned empty output")
 	}
@@ -85,10 +94,10 @@ func DecodeAuthOutput(stdout []byte) (*authOutput, error) {
 		}
 
 		switch key {
-		case KeyState:
+		case keyState:
 			output.State = value
 
-		case KeyToken:
+		case keyToken:
 			if hasToken {
 				return nil, errors.New("protocol violation: multiple token fields")
 			}
@@ -98,7 +107,7 @@ func DecodeAuthOutput(stdout []byte) (*authOutput, error) {
 			output.Token = string(value)
 			hasToken = true
 
-		case KeyError:
+		case keyError:
 			if hasError {
 				return nil, errors.New("protocol violation: multiple error fields")
 			}
@@ -135,7 +144,7 @@ func (h *Auth) Run(attrs any) (string, error) {
 	}
 
 	// Encode input (current state)
-	input, err := EncodeAuthInput(h.state)
+	input, err := encodeAuthInput(h.state)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode auth input: %w", err)
 	}
@@ -154,7 +163,7 @@ func (h *Auth) Run(attrs any) (string, error) {
 	}
 
 	// Decode the output
-	output, err := DecodeAuthOutput(stdout.Bytes())
+	output, err := decodeAuthOutput(stdout.Bytes())
 	if err != nil {
 		return "", fmt.Errorf("failed to decode auth output: %w", err)
 	}
@@ -166,6 +175,9 @@ func (h *Auth) Run(attrs any) (string, error) {
 
 	// Update stored state (even if empty - plugin might be clearing state)
 	h.state = output.State
+
+	// Store the token
+	h.token = output.Token
 
 	return output.Token, nil
 }

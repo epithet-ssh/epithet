@@ -12,7 +12,10 @@ import (
 
 func Test_RpcBasics(t *testing.T) {
 	ctx := t.Context()
-	authCommand := "echo '6:thello,'"
+	authCommand := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:thello,"
+`)
 	socketPath := t.TempDir() + "/broker.sock"
 
 	b := New(*testLogger(t), socketPath, authCommand)
@@ -42,7 +45,10 @@ func Test_RpcBasics(t *testing.T) {
 
 func Test_MatchRequestFields(t *testing.T) {
 	ctx := t.Context()
-	authCommand := "echo '6:thello,'"
+	authCommand := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:thello,"
+`)
 	socketPath := t.TempDir() + "/broker.sock"
 
 	b := New(*testLogger(t), socketPath, authCommand)
