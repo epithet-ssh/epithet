@@ -8,6 +8,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Epithet is an SSH certificate authority system that makes SSH certificates easy to use. The project is currently undergoing a v2 rewrite (see README.md for v2 architecture details).
 
+## Task Management with bd
+
+**CRITICAL**: This project uses bd (beads) for ALL task tracking. Do NOT use TodoWrite under any circumstances.
+
+When working on tasks:
+1. **Always use bd** - Create issues with `bd create`, update with `bd update`, close with `bd close`
+2. **Use bd proactively** - For any non-trivial work (multiple steps, complex tasks), create bd issues immediately
+3. **Track progress** - Use `bd list` to show current work, `bd ready` to find unblocked tasks
+4. **Dependencies matter** - Use `bd dep add` to track task dependencies when needed
+5. **Never use TodoWrite** - The TodoWrite tool is disabled for this project
+
+Example workflow:
+```bash
+# Start work on a feature
+bd create "Implement auth command protocol" --type feature
+
+# Track subtasks
+bd create "Parse netstring input from stdin" --type task
+bd create "Invoke auth command and capture output" --type task
+bd dep add TASK-2 TASK-1  # TASK-2 depends on TASK-1
+
+# Update progress
+bd update TASK-1 --status in-progress
+bd update TASK-1 --status done
+
+# Close completed work
+bd close TASK-1 "Completed netstring parser"
+```
+
 ## High-Level Architecture
 
 **IMPORTANT**: The current codebase contains placeholder implementations that do not yet match the v2 plan described in README.md. Future development will align the code with this architectural vision.
@@ -190,6 +219,92 @@ The broker communicates with auth plugins using **keyed netstrings** (Type-Lengt
 - **`agent.Credential`**: Private key + certificate pair used by the agent
 
 The CA uses cryptographic signing (via Rekor/Sigstore SSH signing) to authenticate requests to the policy server.
+
+### Error Handling and Match Behavior
+
+**IMPORTANT**: These design decisions affect how epithet interacts with SSH's Match exec behavior.
+
+#### SSH Config Precedence
+- SSH uses **first match wins** for configuration parameters
+- More specific Match blocks should appear before general ones
+- When a Match exec returns non-zero, that Match block doesn't apply and SSH continues to the next Match or default config
+
+#### Match Failure Strategy
+When epithet cannot obtain a certificate (auth failures, CA errors, agent creation failures):
+1. **Log clear error to stderr** - User-friendly message explaining what went wrong (verbosity matching configured log level)
+2. **Exit with non-zero status** - Fail the Match so SSH falls through to next config
+3. **Allow SSH fallback** - Enables breakglass/escape hatch scenarios
+
+**Rationale:**
+- Enables breakglass accounts: users can have epithet Match blocks first, then special-case configs (e.g., `Match host *.example.com user breakglass` with specific IdentityFile)
+- If epithet fails the Match, SSH can try other auth methods (default keys, other agents)
+- Trade-off: May leak connection attempts to fallback systems, but this is acceptable to enable legitimate escape hatches
+- Users who need strict security can configure SSH with no fallbacks after epithet Match blocks
+
+**Recommended SSH Config Structure:**
+```ssh_config
+# Epithet handling - first so it gets priority
+Match exec "epithet match --host %h --port %p --user %r --hash %C"
+    IdentityAgent ~/.epithet/sockets/%C
+
+# Breakglass/special cases - after epithet
+Match host *.example.com user breakglass
+    IdentityFile ~/.ssh/breakglass_cert
+
+# Default config last
+```
+
+#### CA Error Handling
+
+**HTTP 401 Unauthorized** - Token is invalid or expired:
+1. Clear the current token
+2. Invoke auth plugin (may use refresh token from state or do full re-auth)
+3. Retry cert request with new token
+4. Limit retries (2-3 attempts) to prevent infinite loops with buggy auth plugins
+5. Use immediate retries (no backoff) - if persistent issue, user will retry SSH connection
+6. If retries exhausted, fail the Match with clear error
+
+**HTTP 403 Forbidden** - Authentication succeeded but policy denied the request:
+1. Keep the token (it's valid, just not authorized for this connection)
+2. Fail the Match with clear error explaining policy denial
+3. Do not retry (policy decision is intentional)
+
+**HTTP 5xx Server Error** - Transient CA/policy server issue:
+1. Keep the token
+2. Fail the Match with clear error
+3. User can retry SSH connection
+
+**HTTP 4xx Client Error** (other than 401/403):
+1. Keep the token
+2. Fail the Match with clear error
+3. Do not retry (likely a permanent client-side issue)
+
+#### Auth Plugin Error Handling
+
+**Exit 0 with error field** - User-facing auth failure (cancelled flow, MFA failed, invalid credentials):
+1. Keep the existing state (don't clear it)
+2. Fail the Match with the error message from auth plugin
+3. User can retry SSH connection when ready
+
+**Non-zero exit** - Unexpected error (network issue, plugin crash, etc):
+1. Keep the existing state
+2. Retry up to limit (same as CA 401 retry limit)
+3. If retries exhausted, fail the Match with error
+4. Use immediate retries (no backoff)
+
+#### Certificate and Agent Management
+
+**Certificate Storage:**
+- Always store certificates obtained from CA, even if agent creation later fails
+- Certificates are bound to policies (hostPattern), not individual agents
+- Multiple agents (different connection hashes) may reuse the same certificate if policy matches
+- Keep certificates in store even on agent creation failures (cert is still valid)
+
+**Agent Creation Failures:**
+- Typically local system issues (permissions, disk space, socket directory problems)
+- Keep certificate in store (it's valid, may work on retry)
+- Fail the Match with clear error explaining the local issue (not a cert/auth problem)
+- User can fix local issue and retry
 
 ## Development Commands
 
