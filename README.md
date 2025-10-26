@@ -91,7 +91,7 @@ The policy server is a critical component of epithet that makes authorization de
 
 ### HTTP Endpoint
 
-**Method:** `POST`  
+**Method:** `POST`
 **Content-Type:** `application/json`
 
 ### Request Format
@@ -194,29 +194,29 @@ func authorizeRequest(token string, conn policy.Connection) (*ca.PolicyResponse,
     if err != nil {
         return nil, fmt.Errorf("invalid token: %w", err)
     }
-    
+
     // 2. Check authorization (your business logic here)
     if !canUserAccessHost(user, conn.RemoteHost, conn.RemoteUser) {
-        return nil, fmt.Errorf("user %s not authorized for %s@%s", 
+        return nil, fmt.Errorf("user %s not authorized for %s@%s",
             user, conn.RemoteUser, conn.RemoteHost)
     }
-    
+
     // 3. Determine principals (which usernames to allow)
     principals := getPrincipalsForUser(user, conn.RemoteHost)
-    
+
     // 4. Set expiration (shorter is more secure)
     expiration := 5 * time.Minute // Recommended: 2-10 minutes
-    
+
     // 5. Grant appropriate extensions
     extensions := map[string]string{
         "permit-pty": "", // Usually safe to grant
     }
-    
+
     // Add additional extensions based on use case
     if needsAgentForwarding(user, conn.RemoteHost) {
         extensions["permit-agent-forwarding"] = ""
     }
-    
+
     return &ca.PolicyResponse{
         CertParams: ca.CertParams{
             Identity:   user.Email,
