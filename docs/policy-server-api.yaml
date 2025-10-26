@@ -1,0 +1,301 @@
+openapi: 3.0.3
+info:
+  title: Epithet Policy Server API
+  version: 2.0.0
+  description: |
+    The Policy Server API is called by the Epithet CA to make authorization decisions
+    for SSH certificate requests. Your policy server receives authentication tokens,
+    connection details, and returns certificate parameters if the request is approved.
+
+    This OpenAPI specification can be used to:
+    - Generate server stubs in your preferred language
+    - Configure API gateways (AWS API Gateway, Kong, etc.)
+    - Validate requests and responses
+    - Generate client libraries
+
+    ## Security
+
+    The CA signs the authentication token with its private key and includes the signature
+    in the request. Your policy server MUST verify this signature before processing
+    the request to prevent unauthorized certificate issuance.
+
+  contact:
+    name: Epithet Project
+    url: https://github.com/epithet-ssh/epithet
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://policy.example.com
+    description: Your policy server endpoint
+
+paths:
+  /:
+    post:
+      operationId: evaluatePolicy
+      summary: Evaluate certificate request policy
+      description: |
+        Evaluate whether to approve an SSH certificate request and determine
+        the certificate parameters (principals, expiration, extensions).
+
+        The policy server should:
+        1. Verify the signature to ensure the request came from your CA
+        2. Validate the authentication token
+        3. Check authorization (can this user access this host?)
+        4. Determine principals (which usernames to allow)
+        5. Set appropriate expiration and extensions
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyRequest'
+            examples:
+              typical:
+                summary: Typical policy request
+                value:
+                  token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  signature: "MEUCIQDx1KZ2vH..."
+                  connection:
+                    localHost: "alice-laptop.corp.example.com"
+                    localUser: "alice"
+                    remoteHost: "prod-web-01.example.com"
+                    remoteUser: "deploy"
+                    port: 22
+                    proxyJump: ""
+                    hash: "a1b2c3d4e5f67890"
+
+      responses:
+        '200':
+          description: Certificate request approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResponse'
+              examples:
+                approved:
+                  summary: Approved with standard permissions
+                  value:
+                    certParams:
+                      identity: "alice@example.com"
+                      principals: ["deploy", "www-data"]
+                      expiration: "5m0s"
+                      extensions:
+                        permit-pty: ""
+                        permit-agent-forwarding: ""
+                    policy:
+                      hostPattern: "*.example.com"
+
+        '401':
+          description: Invalid signature or authentication token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalidSignature:
+                  summary: Signature verification failed
+                  value:
+                    error: "invalid signature from CA"
+
+        '403':
+          description: User not authorized for this access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                notAuthorized:
+                  summary: User not permitted
+                  value:
+                    error: "user alice not authorized for deploy@prod-web-01.example.com"
+
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    PolicyRequest:
+      type: object
+      required:
+        - token
+        - signature
+        - connection
+      properties:
+        token:
+          type: string
+          description: |
+            Authentication token from the user. The format is determined by your
+            auth plugin (could be JWT, OIDC token, SAML assertion, etc.)
+          example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+        signature:
+          type: string
+          description: |
+            Base64-encoded cryptographic signature of the token, signed by the
+            CA's private key using Rekor/Sigstore. MUST be verified before
+            processing the request.
+          example: "MEUCIQDx1KZ2vH..."
+
+        connection:
+          $ref: '#/components/schemas/Connection'
+
+    Connection:
+      type: object
+      required:
+        - localHost
+        - localUser
+        - remoteHost
+        - remoteUser
+        - port
+        - hash
+      properties:
+        localHost:
+          type: string
+          description: User's local hostname (OpenSSH %l)
+          example: "alice-laptop.corp.example.com"
+
+        localUser:
+          type: string
+          description: User's local username
+          example: "alice"
+
+        remoteHost:
+          type: string
+          description: Target SSH server hostname (OpenSSH %h)
+          example: "prod-web-01.example.com"
+
+        remoteUser:
+          type: string
+          description: Target username on remote server (OpenSSH %r)
+          example: "deploy"
+
+        port:
+          type: integer
+          format: uint32
+          description: Target SSH port (OpenSSH %p)
+          example: 22
+          minimum: 1
+          maximum: 65535
+
+        proxyJump:
+          type: string
+          description: ProxyJump configuration (OpenSSH %j), empty string if not used
+          example: ""
+
+        hash:
+          type: string
+          description: |
+            OpenSSH %C hash - unique identifier for this connection, computed
+            from local host, remote host, port, remote user, and proxy jump
+          example: "a1b2c3d4e5f67890"
+          pattern: "^[a-f0-9]{16}$"
+
+    PolicyResponse:
+      type: object
+      required:
+        - certParams
+        - policy
+      properties:
+        certParams:
+          $ref: '#/components/schemas/CertParams'
+        policy:
+          $ref: '#/components/schemas/Policy'
+
+    CertParams:
+      type: object
+      required:
+        - identity
+        - principals
+        - expiration
+        - extensions
+      properties:
+        identity:
+          type: string
+          description: |
+            Certificate identity/key ID used for audit logging and display.
+            Typically user email or username.
+          example: "alice@example.com"
+
+        principals:
+          type: array
+          description: |
+            List of usernames this certificate can authenticate as on the
+            remote server. Must match entries in the server's authorized_principals
+            file or TrustedUserCAKeys configuration.
+          items:
+            type: string
+          example: ["deploy", "www-data", "ubuntu"]
+          minItems: 1
+
+        expiration:
+          type: string
+          description: |
+            Certificate validity duration in Go duration format (e.g., "5m", "10m", "1h").
+            Recommended: 2-10 minutes for short-lived certificates that limit
+            exposure if compromised.
+          example: "5m0s"
+          pattern: "^[0-9]+(ns|us|µs|ms|s|m|h)$"
+
+        extensions:
+          type: object
+          description: |
+            SSH certificate extensions to grant. Keys are extension names,
+            values are typically empty strings. Common extensions:
+            - permit-pty: Allow terminal allocation
+            - permit-agent-forwarding: Allow SSH agent forwarding
+            - permit-port-forwarding: Allow port forwarding
+            - permit-user-rc: Allow executing ~/.ssh/rc
+            - permit-X11-forwarding: Allow X11 forwarding
+          additionalProperties:
+            type: string
+          example:
+            permit-pty: ""
+            permit-agent-forwarding: ""
+          minProperties: 0
+
+    Policy:
+      type: object
+      required:
+        - hostPattern
+      properties:
+        hostPattern:
+          type: string
+          description: |
+            Glob pattern for hosts this certificate is valid for. The pattern
+            is matched against the remote hostname. Use specific patterns in
+            production to limit certificate scope.
+
+            Examples:
+            - "*.example.com" - All hosts in example.com
+            - "prod-*.example.com" - Production hosts only
+            - "server-01.example.com" - Single specific host
+            - "*" - All hosts (NOT recommended for production)
+          example: "*.example.com"
+          pattern: "^[a-zA-Z0-9.*_-]+$"
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: "user not authorized"
+
+  securitySchemes:
+    SignatureVerification:
+      type: apiKey
+      in: header
+      name: X-CA-Signature
+      description: |
+        While not a traditional API key, the signature field in the request
+        body serves as authentication. Your implementation MUST verify this
+        signature using the CA's public key before processing requests.

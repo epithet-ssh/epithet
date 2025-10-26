@@ -231,6 +231,42 @@ func authorizeRequest(token string, conn policy.Connection) (*ca.PolicyResponse,
 }
 ```
 
+### OpenAPI Specification
+
+A complete OpenAPI 3.0 specification is available at [`docs/policy-server-api.yaml`](docs/policy-server-api.yaml).
+
+**Using the specification:**
+
+1. **Generate server code** in your preferred language:
+   ```bash
+   # Using openapi-generator
+   openapi-generator generate -i docs/policy-server-api.yaml -g python-flask -o policy-server
+   openapi-generator generate -i docs/policy-server-api.yaml -g go-server -o policy-server
+   openapi-generator generate -i docs/policy-server-api.yaml -g nodejs-express-server -o policy-server
+   ```
+
+2. **Import into AWS API Gateway:**
+   - Open AWS API Gateway console
+   - Choose "Create API" → "REST API"
+   - Select "Import from OpenAPI"
+   - Upload `docs/policy-server-api.yaml`
+   - Configure Lambda backend or HTTP proxy to your policy logic
+
+3. **Use with other API gateways:**
+   - **Kong**: Use the OpenAPI plugin or generate Kong configuration
+   - **Azure API Management**: Import OpenAPI spec directly
+   - **Google Cloud Endpoints**: Deploy with gcloud using the spec
+   - **Traefik**: Use with the OpenAPI middleware
+
+4. **Validate requests/responses** using tools like Prism:
+   ```bash
+   # Mock server for testing
+   npx @stoplight/prism-cli mock docs/policy-server-api.yaml
+   
+   # Validate your implementation
+   npx @stoplight/prism-cli validate docs/policy-server-api.yaml
+   ```
+
 ### Example Implementation
 
 See [`examples/bad-policy/bad-policy.go`](examples/bad-policy/bad-policy.go) for a complete working example policy server (warning: approves all requests - do not use in production!).
