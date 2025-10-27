@@ -22,6 +22,9 @@ import (
 const (
 	// maxRetries is the maximum number of retry attempts for CA 401 errors and auth plugin failures
 	maxRetries = 3
+
+	// cleanupInterval is how often the broker checks for expired agents to clean up
+	cleanupInterval = 30 * time.Second
 )
 
 // agentEntry tracks a running agent and when its certificate expires
@@ -62,6 +65,9 @@ type Broker struct {
 	caClient       *caclient.Client // Immutable after New()
 	agentSocketDir string           // Immutable after New()
 	matchPatterns  []string         // Immutable after New()
+
+	// For graceful shutdown: track in-flight RPC connections
+	activeRPC sync.WaitGroup
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
@@ -88,6 +94,9 @@ func (b *Broker) Serve(ctx context.Context) error {
 
 	// Serve connections in background
 	go b.serve(ctx)
+
+	// Start background cleanup of expired agents
+	go b.cleanupExpiredAgents(ctx)
 
 	// Block until context cancelled
 	<-ctx.Done()
@@ -435,8 +444,12 @@ func (b *Broker) serve(ctx context.Context) {
 				continue
 			}
 		}
+
+		// Track this RPC connection for graceful shutdown
+		b.activeRPC.Add(1)
 		go func() {
 			defer conn.Close()
+			defer b.activeRPC.Done()
 			server.ServeConn(conn)
 		}()
 	}
@@ -444,6 +457,53 @@ func (b *Broker) serve(ctx context.Context) {
 
 func (b *Broker) Done() <-chan struct{} {
 	return b.done
+}
+
+// cleanupExpiredAgents runs periodically to clean up agents with expired certificates.
+// This proactively removes expired agent sockets and closes agent connections.
+func (b *Broker) cleanupExpiredAgents(ctx context.Context) {
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.cleanupExpiredAgentsOnce()
+		}
+	}
+}
+
+// cleanupExpiredAgentsOnce performs a single cleanup pass over all agents.
+// Separated from cleanupExpiredAgents to allow for testing.
+func (b *Broker) cleanupExpiredAgentsOnce() {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	now := time.Now().Add(expiryBuffer)
+	expired := []policy.ConnectionHash{}
+
+	// Find all expired agents
+	for hash, entry := range b.agents {
+		if now.After(entry.expiresAt) {
+			expired = append(expired, hash)
+		}
+	}
+
+	// Clean them up
+	for _, hash := range expired {
+		entry := b.agents[hash]
+		b.log.Info("cleaning up expired agent", "hash", hash, "expired_at", entry.expiresAt)
+		if entry.agent != nil {
+			entry.agent.Close()
+		}
+		delete(b.agents, hash)
+	}
+
+	if len(expired) > 0 {
+		b.log.Debug("cleanup complete", "removed_agents", len(expired))
+	}
 }
 
 func (b *Broker) Close() {

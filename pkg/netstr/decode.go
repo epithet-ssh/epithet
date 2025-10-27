@@ -108,7 +108,7 @@ func (d *Decoder) readLength() (int, error) {
 			if d.skipPredicate != nil && d.skipPredicate(b) {
 				return 0, &FormatError{
 					Offset: d.offset,
-					Reason: fmt.Sprintf("unexpected skippable byte in length field (use SkipBytes() with appropriate predicate)"),
+					Reason: "unexpected skippable byte in length field (use SkipBytes() with appropriate predicate)",
 				}
 			}
 			return 0, &FormatError{

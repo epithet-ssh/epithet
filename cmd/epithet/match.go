@@ -23,6 +23,12 @@ type MatchCLI struct {
 func (m *MatchCLI) Run(logger *slog.Logger) error {
 	logger.Debug("match command called", "match", m)
 
+	// Expand broker socket path (handles ~ expansion)
+	brokerSock, err := expandPath(m.Broker)
+	if err != nil {
+		return fmt.Errorf("failed to expand broker socket path: %w", err)
+	}
+
 	// Get local hostname
 	localHost, err := os.Hostname()
 	if err != nil {
@@ -36,9 +42,9 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 	}
 
 	// Connect to broker
-	client, err := rpc.Dial("unix", m.Broker)
+	client, err := rpc.Dial("unix", brokerSock)
 	if err != nil {
-		return fmt.Errorf("failed to connect to broker at %s: %w", m.Broker, err)
+		return fmt.Errorf("failed to connect to broker at %s: %w", brokerSock, err)
 	}
 	defer client.Close()
 

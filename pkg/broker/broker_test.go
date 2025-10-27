@@ -236,3 +236,60 @@ func testLogger(t *testing.T) *slog.Logger {
 	}))
 	return logger
 }
+
+func TestCleanupExpiredAgents(t *testing.T) {
+	authCommand := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:thello,"
+`)
+	socketPath := t.TempDir() + "/broker.sock"
+	agentSocketDir := t.TempDir() + "/sockets"
+
+	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+
+	// Manually create agent entries with different expiration times
+	b.lock.Lock()
+
+	// Agent 1: Already expired
+	b.agents[policy.ConnectionHash("expired1")] = agentEntry{
+		agent:     nil, // We don't need a real agent for this test
+		expiresAt: time.Now().Add(-10 * time.Second),
+	}
+
+	// Agent 2: Expires very soon (within expiryBuffer)
+	b.agents[policy.ConnectionHash("expiring-soon")] = agentEntry{
+		agent:     nil,
+		expiresAt: time.Now().Add(3 * time.Second), // Less than expiryBuffer (5s)
+	}
+
+	// Agent 3: Still valid (expires well in the future)
+	b.agents[policy.ConnectionHash("valid")] = agentEntry{
+		agent:     nil,
+		expiresAt: time.Now().Add(1 * time.Hour),
+	}
+
+	// Verify we have 3 agents before cleanup
+	require.Equal(t, 3, len(b.agents))
+	b.lock.Unlock()
+
+	// Run cleanup
+	b.cleanupExpiredAgentsOnce()
+
+	// Verify cleanup results
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	// Should have only 1 agent remaining (the valid one)
+	require.Equal(t, 1, len(b.agents))
+
+	// The valid agent should still be there
+	_, exists := b.agents[policy.ConnectionHash("valid")]
+	require.True(t, exists, "valid agent should not be cleaned up")
+
+	// The expired agents should be gone
+	_, exists = b.agents[policy.ConnectionHash("expired1")]
+	require.False(t, exists, "expired agent should be cleaned up")
+
+	_, exists = b.agents[policy.ConnectionHash("expiring-soon")]
+	require.False(t, exists, "expiring-soon agent should be cleaned up")
+}

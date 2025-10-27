@@ -254,6 +254,36 @@ Match host *.example.com user breakglass
 # Default config last
 ```
 
+**Multiple Concurrent Brokers:**
+Epithet supports running multiple broker instances for different purposes (work vs personal, different CA servers, etc). Each broker needs a unique socket path:
+
+```ssh_config
+# Work connections
+Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/work-broker.sock" host *.work.example.com
+    IdentityAgent ~/.epithet/work-sockets/%C
+
+# Personal connections
+Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/personal-broker.sock" host *.personal.example.com
+    IdentityAgent ~/.epithet/personal-sockets/%C
+```
+
+Start each broker with unique socket paths:
+```bash
+# Work broker
+epithet agent --broker-sock ~/.epithet/work-broker.sock \
+              --agent-sock-dir ~/.epithet/work-sockets \
+              --match '*.work.example.com' \
+              --ca-url https://work-ca.example.com \
+              --auth work-auth-plugin
+
+# Personal broker
+epithet agent --broker-sock ~/.epithet/personal-broker.sock \
+              --agent-sock-dir ~/.epithet/personal-sockets \
+              --match '*.personal.example.com' \
+              --ca-url https://personal-ca.example.com \
+              --auth personal-auth-plugin
+```
+
 #### CA Error Handling
 
 **HTTP 401 Unauthorized** - Token is invalid or expired:
@@ -368,7 +398,7 @@ The project includes test support infrastructure in `test/sshd/` for running int
 Epithet is designed to integrate with OpenSSH client configuration:
 
 ```ssh_config
-Match exec "epithet auth --host %h --port %p --user %r --hash %C"
+Match exec "epithet match --host %h --port %p --user %r --hash %C"
     IdentityAgent ~/.epithet/sockets/%C
 ```
 
