@@ -198,9 +198,13 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	}
 
 	// Store the certificate with policy and expiration
-	// Note: We need to parse the certificate to get the actual expiration time
-	// For now, we'll use a reasonable default based on typical epithet cert lifetime
-	expiresAt := time.Now().Add(5 * time.Minute) // TODO: Parse cert to get actual expiry
+	expiresAt, err := certResp.Certificate.Expiry()
+	if err != nil {
+		b.log.Error("failed to parse certificate expiry", "error", err)
+		output.Allow = false
+		output.Error = fmt.Sprintf("failed to parse certificate expiry: %v", err)
+		return nil
+	}
 	b.certStore.Store(PolicyCert{
 		Policy:     certResp.Policy,
 		Credential: agent.Credential{PrivateKey: privateKey, Certificate: certResp.Certificate},
@@ -239,8 +243,12 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 		if err != nil {
 			return fmt.Errorf("failed to update agent credential: %w", err)
 		}
-		// Update expiration time (TODO: parse from cert)
-		entry.expiresAt = time.Now().Add(5 * time.Minute)
+		// Update expiration time from certificate
+		expiresAt, err := credential.Certificate.Expiry()
+		if err != nil {
+			return fmt.Errorf("failed to parse certificate expiry: %w", err)
+		}
+		entry.expiresAt = expiresAt
 		b.agents[connectionHash] = entry
 		return nil
 	}
@@ -277,10 +285,17 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 		return fmt.Errorf("failed to set agent credential: %w", err)
 	}
 
+	// Parse certificate expiry
+	expiresAt, err := credential.Certificate.Expiry()
+	if err != nil {
+		ag.Close()
+		return fmt.Errorf("failed to parse certificate expiry: %w", err)
+	}
+
 	// Store the agent entry
 	b.agents[connectionHash] = agentEntry{
 		agent:     ag,
-		expiresAt: time.Now().Add(5 * time.Minute), // TODO: parse from cert
+		expiresAt: expiresAt,
 	}
 
 	b.log.Info("agent created and started", "hash", connectionHash, "socket", socketPath)

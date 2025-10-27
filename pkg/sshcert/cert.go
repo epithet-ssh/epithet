@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"time"
 
 	"github.com/mikesmitty/edkey"
 	"golang.org/x/crypto/ssh"
@@ -31,6 +32,18 @@ func Parse(raw RawCertificate) (*ssh.Certificate, error) {
 		return nil, fmt.Errorf("error certificate is not a certificate: %w", err)
 	}
 	return cert, nil
+}
+
+// Expiry extracts the expiration time from the certificate.
+// Returns the ValidBefore time from the certificate, or an error if parsing fails.
+func (r RawCertificate) Expiry() (time.Time, error) {
+	cert, err := Parse(r)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	// ValidBefore is a uint64 Unix timestamp
+	return time.Unix(int64(cert.ValidBefore), 0), nil
 }
 
 // GenerateKeys generates a ed25519 keypair in on-disk format
