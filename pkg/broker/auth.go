@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/cbroglie/mustache"
-	"github.com/markdingo/netstring"
+	"github.com/epithet-ssh/epithet/pkg/netstr"
 )
 
 // Protocol keys for keyed netstrings
@@ -83,16 +83,16 @@ func (h *Auth) ClearToken() {
 // Otherwise returns state with 's' key as keyed netstring
 func encodeAuthInput(state []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
+	enc := netstr.NewEncoder(&buf)
 
 	if len(state) == 0 {
 		// Empty netstring for initial authentication (no key)
-		if err := enc.Encode(netstring.NoKey, []byte{}); err != nil {
+		if err := enc.Encode([]byte{}); err != nil {
 			return nil, fmt.Errorf("failed to encode empty state: %w", err)
 		}
 	} else {
 		// State with 's' key
-		if err := enc.EncodeBytes(keyState, state); err != nil {
+		if err := enc.EncodeKeyed(keyState, state); err != nil {
 			return nil, fmt.Errorf("failed to encode state: %w", err)
 		}
 	}
@@ -107,7 +107,7 @@ func decodeAuthOutput(stdout []byte) (*authOutput, error) {
 		return nil, errors.New("auth command returned empty output")
 	}
 
-	dec := netstring.NewDecoder(bytes.NewReader(stdout))
+	dec := netstr.NewDecoder(bytes.NewReader(stdout), netstr.SkipASCIIWhitespace())
 	output := &authOutput{}
 	hasToken := false
 	hasError := false

@@ -7,17 +7,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/markdingo/netstring"
+	"github.com/epithet-ssh/epithet/pkg/netstr"
 	"github.com/stretchr/testify/require"
 )
 
-// Test that the netstring library rejects whitespace (strict mode)
+// Test that the netstring library rejects whitespace (strict mode by default)
 func Test_NetString_StrictMode(t *testing.T) {
 	msg := "6:nBrian, 8:sSailing,"
-	dec := netstring.NewDecoder(strings.NewReader(msg))
+	dec := netstr.NewDecoder(strings.NewReader(msg)) // strict mode (no SkipASCIIWhitespace)
 	k, m, err := dec.DecodeKeyed()
 	require.NoError(t, err)
-	require.Equal(t, "n", k.String())
+	require.Equal(t, byte('n'), k)
 	require.Equal(t, "Brian", string(m))
 
 	// Second decode should fail due to space after comma
@@ -37,10 +37,10 @@ func TestEncodeAuthInput_WithState(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify it's a valid keyed netstring with 's' key
-	dec := netstring.NewDecoder(bytes.NewReader(encoded))
+	dec := netstr.NewDecoder(bytes.NewReader(encoded))
 	key, value, err := dec.DecodeKeyed()
 	require.NoError(t, err)
-	require.Equal(t, byte(keyState), byte(key))
+	require.Equal(t, byte(keyState), key)
 	require.Equal(t, state, value)
 }
 
@@ -54,8 +54,8 @@ func TestEncodeAuthInput_NilState(t *testing.T) {
 func TestDecodeAuthOutput_TokenOnly(t *testing.T) {
 	// Token without state - build with encoder to ensure correct format
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyToken, []byte("my-token-1")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("my-token-1")))
 
 	output, err := decodeAuthOutput(buf.Bytes())
 	require.NoError(t, err)
@@ -67,9 +67,9 @@ func TestDecodeAuthOutput_TokenOnly(t *testing.T) {
 func TestDecodeAuthOutput_TokenWithState(t *testing.T) {
 	// Token with state
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyToken, []byte("my-token")))
-	require.NoError(t, enc.EncodeBytes(keyState, []byte(`{"refresh":"xyz"}`)))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("my-token")))
+	require.NoError(t, enc.EncodeKeyed(keyState, []byte(`{"refresh":"xyz"}`)))
 
 	output, err := decodeAuthOutput(buf.Bytes())
 	require.NoError(t, err)
@@ -81,8 +81,8 @@ func TestDecodeAuthOutput_TokenWithState(t *testing.T) {
 func TestDecodeAuthOutput_ErrorOnly(t *testing.T) {
 	// Error without state - build with encoder to ensure correct format
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyError, []byte("Authentication failed, sorry")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyError, []byte("Authentication failed, sorry")))
 
 	output, err := decodeAuthOutput(buf.Bytes())
 	require.NoError(t, err)
@@ -94,9 +94,9 @@ func TestDecodeAuthOutput_ErrorOnly(t *testing.T) {
 func TestDecodeAuthOutput_ErrorWithState(t *testing.T) {
 	// Error with state (state preserved on error)
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyError, []byte("Token expired")))
-	require.NoError(t, enc.EncodeBytes(keyState, []byte(`{"attempts":3}`)))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyError, []byte("Token expired")))
+	require.NoError(t, enc.EncodeKeyed(keyState, []byte(`{"attempts":3}`)))
 
 	output, err := decodeAuthOutput(buf.Bytes())
 	require.NoError(t, err)
@@ -108,10 +108,10 @@ func TestDecodeAuthOutput_ErrorWithState(t *testing.T) {
 func TestDecodeAuthOutput_UnknownKeysIgnored(t *testing.T) {
 	// Unknown keys should be ignored for forward compatibility
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes('x', []byte("unknown")))
-	require.NoError(t, enc.EncodeBytes(keyToken, []byte("my-token")))
-	require.NoError(t, enc.EncodeBytes('y', []byte("also unknown")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed('x', []byte("unknown")))
+	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("my-token")))
+	require.NoError(t, enc.EncodeKeyed('y', []byte("also unknown")))
 
 	output, err := decodeAuthOutput(buf.Bytes())
 	require.NoError(t, err)
@@ -133,9 +133,9 @@ func TestDecodeAuthOutput_InvalidNetstring(t *testing.T) {
 
 func TestDecodeAuthOutput_MultipleTokens(t *testing.T) {
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyToken, []byte("token1")))
-	require.NoError(t, enc.EncodeBytes(keyToken, []byte("token2")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("token1")))
+	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("token2")))
 
 	_, err := decodeAuthOutput(buf.Bytes())
 	require.Error(t, err)
@@ -144,9 +144,9 @@ func TestDecodeAuthOutput_MultipleTokens(t *testing.T) {
 
 func TestDecodeAuthOutput_MultipleErrors(t *testing.T) {
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyError, []byte("error1")))
-	require.NoError(t, enc.EncodeBytes(keyError, []byte("error2")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyError, []byte("error1")))
+	require.NoError(t, enc.EncodeKeyed(keyError, []byte("error2")))
 
 	_, err := decodeAuthOutput(buf.Bytes())
 	require.Error(t, err)
@@ -155,9 +155,9 @@ func TestDecodeAuthOutput_MultipleErrors(t *testing.T) {
 
 func TestDecodeAuthOutput_BothTokenAndError(t *testing.T) {
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyToken, []byte("token")))
-	require.NoError(t, enc.EncodeBytes(keyError, []byte("error")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("token")))
+	require.NoError(t, enc.EncodeKeyed(keyError, []byte("error")))
 
 	_, err := decodeAuthOutput(buf.Bytes())
 	require.Error(t, err)
@@ -167,8 +167,8 @@ func TestDecodeAuthOutput_BothTokenAndError(t *testing.T) {
 func TestDecodeAuthOutput_NeitherTokenNorError(t *testing.T) {
 	// Only state, no token or error - build with encoder to ensure correct format
 	var buf bytes.Buffer
-	enc := netstring.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeBytes(keyState, []byte("some-state")))
+	enc := netstr.NewEncoder(&buf)
+	require.NoError(t, enc.EncodeKeyed(keyState, []byte("some-state")))
 
 	_, err := decodeAuthOutput(buf.Bytes())
 	require.Error(t, err)
@@ -396,10 +396,10 @@ func TestRoundTrip_EncodeDecodeWithState(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify it decodes correctly
-	dec := netstring.NewDecoder(bytes.NewReader(encoded))
+	dec := netstr.NewDecoder(bytes.NewReader(encoded))
 	key, value, err := dec.DecodeKeyed()
 	require.NoError(t, err)
-	require.Equal(t, byte(keyState), byte(key))
+	require.Equal(t, byte(keyState), key)
 	require.Equal(t, originalState, value)
 }
 

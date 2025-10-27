@@ -7,7 +7,6 @@ require (
 	github.com/cbroglie/mustache v1.4.0
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/lmittmann/tint v1.1.2
-	github.com/markdingo/netstring v1.0.2
 	github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a
 	github.com/sigstore/rekor v1.4.2
 	github.com/stretchr/testify v1.11.1

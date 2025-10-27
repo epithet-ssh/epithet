@@ -150,7 +150,7 @@ The broker communicates with auth plugins using **keyed netstrings** (Type-Lengt
 
 **Helper Libraries:**
 - Bash: `examples/bash_plugin_helper.bash` provides `read_netstring()` and `write_netstring()` functions
-- Go: Use `github.com/markdingo/netstring` library (note: requires manual whitespace handling between netstrings)
+- Go: Use `github.com/epithet-ssh/epithet/pkg/netstr` library (supports whitespace skipping via `netstr.SkipASCIIWhitespace()` option)
 
 #### Certificate Lifecycle with Short-Lived Certificates
 

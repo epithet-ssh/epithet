@@ -281,5 +281,3 @@ See [`examples/bad-policy/bad-policy.go`](examples/bad-policy/bad-policy.go) for
 6. **Use specific host patterns** - Avoid `*` in production; use `*.example.com` or more specific patterns
 
 ## TODO
-
-- **Implement a less strict netstring parser**: The current auth plugin protocol uses the `markdingo/netstring` library which strictly rejects whitespace between netstrings. This makes debugging auth plugins difficult since developers can't use `println()` for debugging output. We should implement a custom netstring parser that tolerates whitespace (spaces, tabs, `\n`, `\r`) between netstrings while still being strict about the netstring format itself. This would maintain protocol compatibility while significantly improving developer experience when writing auth plugins.

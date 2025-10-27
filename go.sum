@@ -34,8 +34,6 @@ github.com/letsencrypt/boulder v0.20251021.0 h1:H1X1JvLRRyrHuPL6UFRY7I5iospMDsOx
 github.com/letsencrypt/boulder v0.20251021.0/go.mod h1:yfWZ2Z+iPSF7zousTy57FbsAMFGT9xBrKP7IrheG3Jc=
 github.com/lmittmann/tint v1.1.2 h1:2CQzrL6rslrsyjqLDwD11bZ5OpLBPU+g3G/r5LSfS8w=
 github.com/lmittmann/tint v1.1.2/go.mod h1:HIS3gSy7qNwGCj+5oRjAutErFBl4BzdQP6cJZ0NfMwE=
-github.com/markdingo/netstring v1.0.2 h1:FptMPZdF/1QbW4gf8oVB7qE1GtZf7DgM7wq5o+dtS8o=
-github.com/markdingo/netstring v1.0.2/go.mod h1:zfPc/km8bb/5yGxJpuFLSdFfyqe/ZLTTwsC4zJS2JzI=
 github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a h1:eU8j/ClY2Ty3qdHnn0TyW3ivFoPC/0F1gQZz8yTxbbE=
 github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a/go.mod h1:v8eSC2SMp9/7FTKUncp7fH9IwPfw+ysMObcEz5FWheQ=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
