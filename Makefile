@@ -1,5 +1,5 @@
 .PHONY: all
-all: test build		## run tests and build binaries
+all: clean test build		## run tests and build binaries
 
 epithet:
 	go build ./cmd/epithet

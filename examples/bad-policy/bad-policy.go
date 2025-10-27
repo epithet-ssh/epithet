@@ -9,8 +9,8 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 const CA_PUBKEY = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF/w2nSKNmMMEWHu9hPlNRclzsrIrxtBrlA7a+jmf/s4 test@example.com`

@@ -10,8 +10,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 type CACLI struct {
