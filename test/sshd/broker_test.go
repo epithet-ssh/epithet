@@ -34,11 +34,7 @@ func TestBrokerEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create a logger for the test
-	logger := slog.New(tint.NewHandler(os.Stderr, &tint.Options{
-		Level:      slog.LevelDebug,
-		TimeFormat: "15:04:05",
-	}))
+	logger := testLogger(t)
 
 	// Generate CA key pair
 	caPublicKey, caPrivateKey, err := sshcert.GenerateKeys()
@@ -166,6 +162,13 @@ func writeTestScript(t *testing.T, script string) string {
 	require.NoError(t, err)
 
 	return tmpfile.Name()
+}
+
+func testLogger(t *testing.T) *slog.Logger {
+	return slog.New(tint.NewHandler(t.Output(), &tint.Options{
+		Level:      slog.LevelDebug,
+		TimeFormat: "15:04:05",
+	}))
 }
 
 func computeConnectionHash(t *testing.T, s *sshd.Server) policy.ConnectionHash {

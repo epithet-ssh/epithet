@@ -13,6 +13,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/test/sshd"
+	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -33,7 +34,7 @@ func TestBasics(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	a, err := agent.New(slog.Default(), nil, "")
+	a, err := agent.New(testLogger(t), nil, "")
 	require.NoError(t, err)
 
 	// Serve in background
@@ -116,4 +117,11 @@ func sign(signer ssh.Signer, rawPubKey sshcert.RawPublicKey) (sshcert.RawCertifi
 		return "", errors.New("unknown problem marshaling certificate")
 	}
 	return sshcert.RawCertificate(string(rawCert)), nil
+}
+
+func testLogger(t *testing.T) *slog.Logger {
+	return slog.New(tint.NewHandler(t.Output(), &tint.Options{
+		Level:      slog.LevelDebug,
+		TimeFormat: "15:04:05",
+	}))
 }
