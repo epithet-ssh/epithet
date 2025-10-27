@@ -333,7 +333,7 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 
 	// Create the agent (Note: agent.New expects *caclient.Client, but we don't need it for UseCredential)
 	// We pass nil because we're manually managing certificates via UseCredential
-	ag, err := agent.New(nil, socketPath)
+	ag, err := agent.New(&b.log, nil, socketPath)
 	if err != nil {
 		return fmt.Errorf("failed to create agent: %w", err)
 	}

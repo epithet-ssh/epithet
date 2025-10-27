@@ -10,7 +10,6 @@ require (
 	github.com/markdingo/netstring v1.0.2
 	github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a
 	github.com/sigstore/rekor v1.4.2
-	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.43.0
 	gotest.tools v2.2.0+incompatible

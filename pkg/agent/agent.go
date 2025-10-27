@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -24,12 +24,13 @@ var errAgentStopped = errors.New("agent has been stopped")
 // has internal synchronization and can be safely accessed from multiple goroutines.
 // The done channel and closeOnce provide safe shutdown coordination.
 //
-// Immutable after creation: agentSocketPath, publicKey, privateKey, caClient
+// Immutable after creation: agentSocketPath, publicKey, privateKey, caClient, log
 // Protected by internal sync: keyring (uses its own locking)
 // Protected by closeOnce: agentListener, done channel
 type Agent struct {
 	keyring  agent.Agent // Thread-safe (has internal locking)
 	caClient *caclient.Client
+	log      *slog.Logger // Immutable after New()
 
 	agentSocketPath string // Immutable after New()
 	agentListener   net.Listener
@@ -43,7 +44,7 @@ type Agent struct {
 
 // New creates a new SSH agent. This does not start listening - call Serve() to begin accepting connections.
 // If agentSocketPath is empty, a temporary socket will be created when Serve() is called.
-func New(caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
+func New(logger *slog.Logger, caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
 	pub, priv, err := sshcert.GenerateKeys()
 	if err != nil {
 		return nil, err
@@ -53,6 +54,7 @@ func New(caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
 		agentSocketPath: agentSocketPath,
 		keyring:         agent.NewKeyring(),
 		caClient:        caClient,
+		log:             logger,
 		publicKey:       pub,
 		privateKey:      priv,
 		done:            make(chan struct{}),
@@ -88,7 +90,7 @@ func (a *Agent) UseCredential(c Credential) error {
 		return errAgentStopped
 	}
 
-	log.Debug("replacing credentials")
+	a.log.Debug("replacing credentials")
 	oldKeys, err := a.keyring.List()
 	if err != nil {
 		a.Close()
@@ -174,7 +176,7 @@ func (a *Agent) serve(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Warnf("error on accept from SSH_AUTH_SOCK listener: %v", err)
+				a.log.Warn("error on accept from SSH_AUTH_SOCK listener", "error", err)
 				continue
 			}
 		}
@@ -185,10 +187,10 @@ func (a *Agent) serve(ctx context.Context) {
 func (a *Agent) serveAgent(conn net.Conn) {
 	defer conn.Close()
 
-	log.Debug("new connection to agent")
+	a.log.Debug("new connection to agent")
 	err := agent.ServeAgent(a.keyring, conn)
 	if err != nil && err != io.EOF {
-		log.Warnf("error from ssh-agent: %v", err)
+		a.log.Warn("error from ssh-agent", "error", err)
 	}
 }
 

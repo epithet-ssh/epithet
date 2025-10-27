@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestBasics(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	a, err := agent.New(nil, "")
+	a, err := agent.New(slog.Default(), nil, "")
 	require.NoError(t, err)
 
 	// Serve in background

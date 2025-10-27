@@ -10,7 +10,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -101,7 +100,7 @@ func TestCA_GetPublicKey(t *testing.T) {
 	c, err := ca.New(caPrivKey, "")
 	require.NoError(t, err)
 
-	logrus.Infof("%s", c.PublicKey())
+	t.Logf("%s", c.PublicKey())
 
 	require.True(t, strings.HasPrefix(string(c.PublicKey()), "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDNH7"))
 }
