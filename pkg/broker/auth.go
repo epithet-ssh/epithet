@@ -19,6 +19,17 @@ const (
 	keyError = 'e' // Error message (human-readable auth failure reason)
 )
 
+// AuthFailureError represents a user-facing authentication failure (exit 0 with error field).
+// These errors should NOT be retried - they indicate intentional failures like cancelled flow,
+// MFA failure, or invalid credentials.
+type AuthFailureError struct {
+	Message string
+}
+
+func (e *AuthFailureError) Error() string {
+	return e.Message
+}
+
 // AuthOutput represents the result of an auth command invocation
 type authOutput struct {
 	Token string // Authentication token (mutually exclusive with Error)
@@ -56,6 +67,15 @@ func (h *Auth) Token() string {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	return h.token
+}
+
+// ClearToken clears the stored authentication token.
+// Keeps the state intact (refresh token may still be valid).
+// Used when receiving HTTP 401 from CA to force re-authentication.
+func (h *Auth) ClearToken() {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	h.token = ""
 }
 
 // encodeAuthInput encodes state for auth command stdin.
@@ -177,8 +197,9 @@ func (h *Auth) Run(attrs any) (string, error) {
 	}
 
 	if output.Error != "" {
-		// error reported from auth plugin!
-		return "", errors.New(output.Error)
+		// User-facing auth failure from plugin (exit 0 with error field)
+		// Return typed error so caller knows not to retry
+		return "", &AuthFailureError{Message: output.Error}
 	}
 
 	// Update stored state (even if empty - plugin might be clearing state)

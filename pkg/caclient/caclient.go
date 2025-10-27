@@ -12,6 +12,46 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 )
 
+// InvalidTokenError indicates the authentication token is invalid or expired.
+// The broker should clear the token and re-authenticate.
+type InvalidTokenError struct {
+	Message string
+}
+
+func (e *InvalidTokenError) Error() string {
+	return fmt.Sprintf("invalid or expired token: %s", e.Message)
+}
+
+// PolicyDeniedError indicates authentication succeeded but policy denied access.
+// The token is valid, but the user is not authorized for this connection.
+type PolicyDeniedError struct {
+	Message string
+}
+
+func (e *PolicyDeniedError) Error() string {
+	return fmt.Sprintf("access denied by policy: %s", e.Message)
+}
+
+// CAUnavailableError indicates the CA service is temporarily unavailable.
+// This is typically a transient infrastructure issue.
+type CAUnavailableError struct {
+	Message string
+}
+
+func (e *CAUnavailableError) Error() string {
+	return fmt.Sprintf("CA unavailable: %s", e.Message)
+}
+
+// InvalidRequestError indicates the certificate request was malformed.
+// This typically indicates a bug in the client code.
+type InvalidRequestError struct {
+	Message string
+}
+
+func (e *InvalidRequestError) Error() string {
+	return fmt.Sprintf("invalid request: %s", e.Message)
+}
+
 // Client is a CA Client
 type Client struct {
 	httpClient *http.Client
@@ -76,7 +116,19 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 	}
 
 	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("%d status from server: %s", res.StatusCode, string(body))
+		// Map HTTP status codes to domain-specific errors
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			return nil, &InvalidTokenError{Message: string(body)}
+		case http.StatusForbidden:
+			return nil, &PolicyDeniedError{Message: string(body)}
+		default:
+			if res.StatusCode >= 500 {
+				return nil, &CAUnavailableError{Message: string(body)}
+			}
+			// Other 4xx errors
+			return nil, &InvalidRequestError{Message: string(body)}
+		}
 	}
 
 	resp := caserver.CreateCertResponse{}

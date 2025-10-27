@@ -19,6 +19,11 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
+const (
+	// maxRetries is the maximum number of retry attempts for CA 401 errors and auth plugin failures
+	maxRetries = 3
+)
+
 // agentEntry tracks a running agent and when its certificate expires
 type agentEntry struct {
 	agent     *agent.Agent
@@ -160,21 +165,6 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	// Step 5: No valid certificate exists, request one from CA
 	b.log.Debug("no valid certificate found, requesting from CA", "host", input.Connection.RemoteHost)
 
-	// Check if we have an auth token, if not authenticate
-	token := b.auth.Token()
-	if token == "" {
-		b.log.Debug("no auth token, authenticating")
-		var err error
-		token, err = b.auth.Run(nil) // TODO(epithet-41): pass connection details for template rendering
-		if err != nil {
-			b.log.Error("authentication failed", "error", err)
-			output.Allow = false
-			output.Error = fmt.Sprintf("authentication failed: %v", err)
-			return nil
-		}
-		b.log.Debug("authentication successful")
-	}
-
 	// Generate ephemeral keypair for this connection
 	publicKey, privateKey, err := sshcert.GenerateKeys()
 	if err != nil {
@@ -184,16 +174,94 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		return nil
 	}
 
-	// Request certificate from CA
-	certResp, err := b.caClient.GetCert(context.Background(), &caserver.CreateCertRequest{
-		PublicKey:  publicKey,
-		Token:      token,
-		Connection: input.Connection,
-	})
-	if err != nil {
+	// Request certificate with retry logic for 401 errors
+	var certResp *caserver.CreateCertResponse
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			b.log.Debug("retrying certificate request", "attempt", attempt+1, "max", maxRetries)
+		}
+
+		// Ensure we have an auth token
+		token := b.auth.Token()
+		if token == "" {
+			b.log.Debug("no auth token, authenticating")
+			token, err = b.auth.Run(nil) // TODO(epithet-42): pass connection details for template rendering
+			if err != nil {
+				// Check if this is a user-facing auth failure (don't retry)
+				var authFailure *AuthFailureError
+				if errors.As(err, &authFailure) {
+					b.log.Error("authentication failed", "error", authFailure.Message)
+					output.Allow = false
+					output.Error = fmt.Sprintf("authentication failed: %v", authFailure.Message)
+					return nil
+				}
+				// Unexpected error (non-zero exit) - will retry in outer loop
+				b.log.Warn("auth command error, will retry", "error", err, "attempt", attempt+1)
+				continue
+			}
+			b.log.Debug("authentication successful")
+		}
+
+		// Request certificate from CA
+		certResp, err = b.caClient.GetCert(context.Background(), &caserver.CreateCertRequest{
+			PublicKey:  publicKey,
+			Token:      token,
+			Connection: input.Connection,
+		})
+
+		if err == nil {
+			// Success!
+			break
+		}
+
+		// Check error type for appropriate handling
+		var invalidToken *caclient.InvalidTokenError
+		if errors.As(err, &invalidToken) {
+			// Token is invalid/expired - clear and retry
+			b.log.Warn("token invalid or expired, clearing and retrying", "attempt", attempt+1)
+			b.auth.ClearToken()
+			continue
+		}
+
+		var policyDenied *caclient.PolicyDeniedError
+		if errors.As(err, &policyDenied) {
+			// Policy denied - don't retry, keep token
+			b.log.Error("CA policy denied access", "error", policyDenied.Message)
+			output.Allow = false
+			output.Error = policyDenied.Error()
+			return nil
+		}
+
+		var caUnavailable *caclient.CAUnavailableError
+		if errors.As(err, &caUnavailable) {
+			// CA unavailable - don't retry, keep token
+			b.log.Error("CA service unavailable", "error", caUnavailable.Message)
+			output.Allow = false
+			output.Error = caUnavailable.Error()
+			return nil
+		}
+
+		var invalidRequest *caclient.InvalidRequestError
+		if errors.As(err, &invalidRequest) {
+			// Invalid request - don't retry, keep token
+			b.log.Error("invalid certificate request", "error", invalidRequest.Message)
+			output.Allow = false
+			output.Error = invalidRequest.Error()
+			return nil
+		}
+
+		// Other errors (network, etc.) - fail without retry
 		b.log.Error("failed to request certificate from CA", "error", err)
 		output.Allow = false
 		output.Error = fmt.Sprintf("failed to request certificate: %v", err)
+		return nil
+	}
+
+	// Check if we exhausted retries
+	if err != nil {
+		b.log.Error("exhausted retries requesting certificate", "attempts", maxRetries)
+		output.Allow = false
+		output.Error = "authentication failed after multiple attempts"
 		return nil
 	}
 
