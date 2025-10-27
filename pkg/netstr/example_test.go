@@ -99,3 +99,24 @@ func ExampleMaxLength() {
 	}
 	// Output: netstring too large
 }
+
+func ExampleSkipUnicodeWhitespace() {
+	// Skip Unicode whitespace including non-ASCII bytes like 0x85 (NEL) and 0xA0 (NBSP)
+	// Note: This uses unicode.IsSpace() on individual bytes
+	data := []byte("5:hello,\x85\xA05:world,")
+	dec := netstr.NewDecoder(bytes.NewReader(data), netstr.SkipUnicodeWhitespace())
+
+	for {
+		payload, err := dec.Decode()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%s\n", payload)
+	}
+	// Output:
+	// hello
+	// world
+}

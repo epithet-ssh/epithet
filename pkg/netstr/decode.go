@@ -69,9 +69,9 @@ func (d *Decoder) DecodeKeyed() (key byte, value []byte, err error) {
 }
 
 // readLength reads the length field from the netstring.
-// Format: [whitespace] <digits> ':'
+// Format: [skipped bytes] <digits> ':'
 //
-// In lenient mode, skips leading whitespace before the first digit.
+// If a skip predicate is configured, skips bytes before the first digit.
 // Returns the parsed length as an integer.
 func (d *Decoder) readLength() (int, error) {
 	length := 0
@@ -84,8 +84,8 @@ func (d *Decoder) readLength() (int, error) {
 			return 0, err
 		}
 
-		// Skip leading whitespace in lenient mode (before any digits)
-		if d.lenient && firstByte && isWhitespace(b) {
+		// Skip bytes according to predicate (before any digits)
+		if firstByte && d.skipPredicate != nil && d.skipPredicate(b) {
 			continue // Keep looking for first digit
 		}
 
@@ -104,10 +104,11 @@ func (d *Decoder) readLength() (int, error) {
 
 		// Must be a digit
 		if b < '0' || b > '9' {
-			if isWhitespace(b) {
+			// Check if this is a skippable byte that appeared after digits started
+			if d.skipPredicate != nil && d.skipPredicate(b) {
 				return 0, &FormatError{
 					Offset: d.offset,
-					Reason: fmt.Sprintf("unexpected whitespace in length field (use netstr.Lenient() for whitespace tolerance)"),
+					Reason: fmt.Sprintf("unexpected skippable byte in length field (use SkipBytes() with appropriate predicate)"),
 				}
 			}
 			return 0, &FormatError{
@@ -204,10 +205,4 @@ func (d *Decoder) readByte() (byte, error) {
 		d.offset++
 	}
 	return b, err
-}
-
-// isWhitespace returns true if b is a whitespace character.
-// Whitespace is defined as: space, tab, \n, \r
-func isWhitespace(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }

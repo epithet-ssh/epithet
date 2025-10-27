@@ -11,10 +11,10 @@ import "io"
 //
 // The decoder uses zero lookahead - every byte read is immediately processed.
 type Decoder struct {
-	r         io.ByteReader
-	lenient   bool
-	maxLength int
-	offset    int // Track position for error reporting
+	r             io.ByteReader
+	skipPredicate SkipPredicate
+	maxLength     int
+	offset        int // Track position for error reporting
 }
 
 // NewDecoder creates a new netstring decoder.
@@ -24,21 +24,21 @@ type Decoder struct {
 //
 // Example:
 //
-//	dec := netstr.NewDecoder(bufio.NewReader(conn), netstr.Lenient())
+//	dec := netstr.NewDecoder(bufio.NewReader(conn), netstr.SkipASCIIWhitespace())
 func NewDecoder(r io.ByteReader, opts ...Option) *Decoder {
 	cfg := &config{
-		lenient:   false,
-		maxLength: defaultMaxLength,
+		skipPredicate: nil, // nil means skip nothing (strict mode)
+		maxLength:     defaultMaxLength,
 	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
 	return &Decoder{
-		r:         r,
-		lenient:   cfg.lenient,
-		maxLength: cfg.maxLength,
-		offset:    0,
+		r:             r,
+		skipPredicate: cfg.skipPredicate,
+		maxLength:     cfg.maxLength,
+		offset:        0,
 	}
 }
 
