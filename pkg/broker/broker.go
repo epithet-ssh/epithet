@@ -196,17 +196,12 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 			b.log.Debug("no auth token, authenticating")
 			token, err = b.auth.Run(nil) // TODO(epithet-42): pass connection details for template rendering
 			if err != nil {
-				// Check if this is a user-facing auth failure (don't retry)
-				var authFailure *AuthFailureError
-				if errors.As(err, &authFailure) {
-					b.log.Error("authentication failed", "error", authFailure.Message)
-					output.Allow = false
-					output.Error = fmt.Sprintf("authentication failed: %v", authFailure.Message)
-					return nil
-				}
-				// Unexpected error (non-zero exit) - will retry in outer loop
-				b.log.Warn("auth command error, will retry", "error", err, "attempt", attempt+1)
-				continue
+				// Auth command failed - don't retry automatically
+				// User should fix the issue and retry the SSH connection
+				b.log.Error("authentication failed", "error", err)
+				output.Allow = false
+				output.Error = fmt.Sprintf("authentication failed: %v", err)
+				return nil
 			}
 			b.log.Debug("authentication successful")
 		}

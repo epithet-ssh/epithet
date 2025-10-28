@@ -2,40 +2,18 @@ package broker
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 
 	"github.com/cbroglie/mustache"
-	"github.com/epithet-ssh/epithet/pkg/netstr"
 )
 
-// Protocol keys for keyed netstrings
-const (
-	keyState = 's' // State blob (opaque, managed by auth plugin)
-	keyToken = 't' // Authentication token (to be sent to CA)
-	keyError = 'e' // Error message (human-readable auth failure reason)
-)
-
-// AuthFailureError represents a user-facing authentication failure (exit 0 with error field).
-// These errors should NOT be retried - they indicate intentional failures like cancelled flow,
-// MFA failure, or invalid credentials.
-type AuthFailureError struct {
-	Message string
-}
-
-func (e *AuthFailureError) Error() string {
-	return e.Message
-}
-
-// AuthOutput represents the result of an auth command invocation
-type authOutput struct {
-	Token string // Authentication token (mutually exclusive with Error)
-	State []byte // Updated state blob (optional)
-	Error string // Auth failure message (mutually exclusive with Token)
-}
+// MaxStateBlobSize is the maximum size of the state blob (10 MiB).
+// This prevents malicious or buggy auth plugins from exhausting memory.
+const MaxStateBlobSize = 10 * 1024 * 1024
 
 // Auth represents a configured authentication command.
 //
@@ -78,89 +56,16 @@ func (h *Auth) ClearToken() {
 	h.token = ""
 }
 
-// encodeAuthInput encodes state for auth command stdin.
-// If state is empty, returns empty netstring "0:,"
-// Otherwise returns state with 's' key as keyed netstring
-func encodeAuthInput(state []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-
-	if len(state) == 0 {
-		// Empty netstring for initial authentication (no key)
-		if err := enc.Encode([]byte{}); err != nil {
-			return nil, fmt.Errorf("failed to encode empty state: %w", err)
-		}
-	} else {
-		// State with 's' key
-		if err := enc.EncodeKeyed(keyState, state); err != nil {
-			return nil, fmt.Errorf("failed to encode state: %w", err)
-		}
-	}
-
-	return buf.Bytes(), nil
-}
-
-// decodeAuthOutput parses auth command stdout.
-// Reads keyed netstrings until EOF, validating protocol rules.
-func decodeAuthOutput(stdout []byte) (*authOutput, error) {
-	if len(stdout) == 0 {
-		return nil, errors.New("auth command returned empty output")
-	}
-
-	dec := netstr.NewDecoder(bytes.NewReader(stdout), netstr.SkipASCIIWhitespace())
-	output := &authOutput{}
-	hasToken := false
-	hasError := false
-
-	for {
-		key, value, err := dec.DecodeKeyed()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("invalid netstring format: %w", err)
-		}
-
-		switch key {
-		case keyState:
-			output.State = value
-
-		case keyToken:
-			if hasToken {
-				return nil, errors.New("protocol violation: multiple token fields")
-			}
-			if hasError {
-				return nil, errors.New("protocol violation: cannot have both token and error")
-			}
-			output.Token = string(value)
-			hasToken = true
-
-		case keyError:
-			if hasError {
-				return nil, errors.New("protocol violation: multiple error fields")
-			}
-			if hasToken {
-				return nil, errors.New("protocol violation: cannot have both token and error")
-			}
-			output.Error = string(value)
-			hasError = true
-
-		default:
-			// Unknown keys are ignored for forward compatibility
-		}
-	}
-
-	// Validate that we got either a token or an error
-	if !hasToken && !hasError {
-		return nil, errors.New("protocol violation: must have either token or error field and not both")
-	}
-
-	return output, nil
-}
-
 // Run executes the auth command with the current state and updates state based on output.
-// Returns AuthOutput containing token/error and updated state.
+// Returns the authentication token on success.
 // The command line is rendered as a mustache template with the provided attrs.
+//
+// Protocol:
+//   - stdin: current state bytes (empty on first call)
+//   - stdout: authentication token (raw bytes)
+//   - fd 3: new state bytes (max MaxStateBlobSize)
+//   - stderr: error messages on failure
+//   - exit 0: success, non-zero: failure
 func (h *Auth) Run(attrs any) (string, error) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
@@ -171,42 +76,58 @@ func (h *Auth) Run(attrs any) (string, error) {
 		return "", fmt.Errorf("failed to render command template: %w", err)
 	}
 
-	// Encode input (current state)
-	input, err := encodeAuthInput(h.state)
+	// Set up pipes for fd 3 (state output)
+	stateReader, stateWriter, err := os.Pipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to encode auth input: %w", err)
+		return "", fmt.Errorf("failed to create state pipe: %w", err)
 	}
+	defer stateReader.Close()
 
 	// Execute the auth command
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command("sh", "-c", cmdLine)
-	cmd.Stdin = bytes.NewReader(input)
+	cmd.Stdin = bytes.NewReader(h.state)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.ExtraFiles = []*os.File{stateWriter} // fd 3 in child process
 
-	err = cmd.Run()
+	if err := cmd.Start(); err != nil {
+		stateWriter.Close()
+		return "", fmt.Errorf("failed to start auth command: %w", err)
+	}
+
+	// Close write end in parent so we can detect EOF
+	stateWriter.Close()
+
+	// Read new state from fd 3 (with size limit)
+	newState, err := io.ReadAll(io.LimitReader(stateReader, MaxStateBlobSize+1))
 	if err != nil {
-		// Non-zero exit is an unexpected error (not auth failure)
+		cmd.Wait() // Clean up process
+		return "", fmt.Errorf("failed to read state from fd 3: %w", err)
+	}
+
+	// Check if state exceeds limit
+	if len(newState) > MaxStateBlobSize {
+		cmd.Wait() // Clean up process
+		return "", fmt.Errorf("state blob exceeds maximum size of %d bytes", MaxStateBlobSize)
+	}
+
+	// Wait for command to complete
+	if err := cmd.Wait(); err != nil {
 		return "", fmt.Errorf("auth command failed: %w: %s", err, stderr.String())
 	}
 
-	// Decode the output
-	output, err := decodeAuthOutput(stdout.Bytes())
-	if err != nil {
-		return "", fmt.Errorf("failed to decode auth output: %w", err)
+	// Extract token from stdout
+	token := stdout.Bytes()
+	if len(token) == 0 {
+		return "", fmt.Errorf("auth command returned empty token")
 	}
 
-	if output.Error != "" {
-		// User-facing auth failure from plugin (exit 0 with error field)
-		// Return typed error so caller knows not to retry
-		return "", &AuthFailureError{Message: output.Error}
-	}
-
-	// Update stored state (even if empty - plugin might be clearing state)
-	h.state = output.State
+	// Update stored state
+	h.state = newState
 
 	// Store the token
-	h.token = output.Token
+	h.token = string(token)
 
-	return output.Token, nil
+	return h.token, nil
 }

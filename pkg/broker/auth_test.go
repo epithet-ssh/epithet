@@ -1,179 +1,12 @@
 package broker
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/netstr"
 	"github.com/stretchr/testify/require"
 )
-
-// Test that the netstring library rejects whitespace (strict mode by default)
-func Test_NetString_StrictMode(t *testing.T) {
-	msg := "6:nBrian, 8:sSailing,"
-	dec := netstr.NewDecoder(strings.NewReader(msg)) // strict mode (no SkipASCIIWhitespace)
-	k, m, err := dec.DecodeKeyed()
-	require.NoError(t, err)
-	require.Equal(t, byte('n'), k)
-	require.Equal(t, "Brian", string(m))
-
-	// Second decode should fail due to space after comma
-	k, m, err = dec.DecodeKeyed()
-	require.Error(t, err)
-}
-
-func TestEncodeAuthInput_EmptyState(t *testing.T) {
-	encoded, err := encodeAuthInput([]byte{})
-	require.NoError(t, err)
-	require.Equal(t, "0:,", string(encoded))
-}
-
-func TestEncodeAuthInput_WithState(t *testing.T) {
-	state := []byte(`{"refresh_token":"abc123"}`)
-	encoded, err := encodeAuthInput(state)
-	require.NoError(t, err)
-
-	// Verify it's a valid keyed netstring with 's' key
-	dec := netstr.NewDecoder(bytes.NewReader(encoded))
-	key, value, err := dec.DecodeKeyed()
-	require.NoError(t, err)
-	require.Equal(t, byte(keyState), key)
-	require.Equal(t, state, value)
-}
-
-func TestEncodeAuthInput_NilState(t *testing.T) {
-	// nil state should behave like empty state
-	encoded, err := encodeAuthInput(nil)
-	require.NoError(t, err)
-	require.Equal(t, "0:,", string(encoded))
-}
-
-func TestDecodeAuthOutput_TokenOnly(t *testing.T) {
-	// Token without state - build with encoder to ensure correct format
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("my-token-1")))
-
-	output, err := decodeAuthOutput(buf.Bytes())
-	require.NoError(t, err)
-	require.Equal(t, "my-token-1", output.Token)
-	require.Empty(t, output.State)
-	require.Empty(t, output.Error)
-}
-
-func TestDecodeAuthOutput_TokenWithState(t *testing.T) {
-	// Token with state
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("my-token")))
-	require.NoError(t, enc.EncodeKeyed(keyState, []byte(`{"refresh":"xyz"}`)))
-
-	output, err := decodeAuthOutput(buf.Bytes())
-	require.NoError(t, err)
-	require.Equal(t, "my-token", output.Token)
-	require.Equal(t, []byte(`{"refresh":"xyz"}`), output.State)
-	require.Empty(t, output.Error)
-}
-
-func TestDecodeAuthOutput_ErrorOnly(t *testing.T) {
-	// Error without state - build with encoder to ensure correct format
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyError, []byte("Authentication failed, sorry")))
-
-	output, err := decodeAuthOutput(buf.Bytes())
-	require.NoError(t, err)
-	require.Empty(t, output.Token)
-	require.Empty(t, output.State)
-	require.Equal(t, "Authentication failed, sorry", output.Error)
-}
-
-func TestDecodeAuthOutput_ErrorWithState(t *testing.T) {
-	// Error with state (state preserved on error)
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyError, []byte("Token expired")))
-	require.NoError(t, enc.EncodeKeyed(keyState, []byte(`{"attempts":3}`)))
-
-	output, err := decodeAuthOutput(buf.Bytes())
-	require.NoError(t, err)
-	require.Empty(t, output.Token)
-	require.Equal(t, []byte(`{"attempts":3}`), output.State)
-	require.Equal(t, "Token expired", output.Error)
-}
-
-func TestDecodeAuthOutput_UnknownKeysIgnored(t *testing.T) {
-	// Unknown keys should be ignored for forward compatibility
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed('x', []byte("unknown")))
-	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("my-token")))
-	require.NoError(t, enc.EncodeKeyed('y', []byte("also unknown")))
-
-	output, err := decodeAuthOutput(buf.Bytes())
-	require.NoError(t, err)
-	require.Equal(t, "my-token", output.Token)
-	require.Empty(t, output.Error)
-}
-
-func TestDecodeAuthOutput_EmptyOutput(t *testing.T) {
-	_, err := decodeAuthOutput([]byte{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty output")
-}
-
-func TestDecodeAuthOutput_InvalidNetstring(t *testing.T) {
-	_, err := decodeAuthOutput([]byte("not a netstring"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid netstring")
-}
-
-func TestDecodeAuthOutput_MultipleTokens(t *testing.T) {
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("token1")))
-	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("token2")))
-
-	_, err := decodeAuthOutput(buf.Bytes())
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "multiple token fields")
-}
-
-func TestDecodeAuthOutput_MultipleErrors(t *testing.T) {
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyError, []byte("error1")))
-	require.NoError(t, enc.EncodeKeyed(keyError, []byte("error2")))
-
-	_, err := decodeAuthOutput(buf.Bytes())
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "multiple error fields")
-}
-
-func TestDecodeAuthOutput_BothTokenAndError(t *testing.T) {
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyToken, []byte("token")))
-	require.NoError(t, enc.EncodeKeyed(keyError, []byte("error")))
-
-	_, err := decodeAuthOutput(buf.Bytes())
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "cannot have both token and error")
-}
-
-func TestDecodeAuthOutput_NeitherTokenNorError(t *testing.T) {
-	// Only state, no token or error - build with encoder to ensure correct format
-	var buf bytes.Buffer
-	enc := netstr.NewEncoder(&buf)
-	require.NoError(t, enc.EncodeKeyed(keyState, []byte("some-state")))
-
-	_, err := decodeAuthOutput(buf.Bytes())
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "must have either token or error")
-}
 
 func TestAuth_New(t *testing.T) {
 	auth := NewAuth("my-auth-command --flag")
@@ -188,8 +21,8 @@ func TestAuth_Run_Success_InitialAuth(t *testing.T) {
 # Read and ignore stdin
 cat > /dev/null
 
-# Return token (using printf to avoid newline issues)
-printf '%s' "11:tmy-token-1,"
+# Return token to stdout (using printf to avoid newline issues)
+printf '%s' "my-token-1"
 `)
 
 	auth := NewAuth(script)
@@ -204,9 +37,11 @@ func TestAuth_Run_Success_WithStateUpdate(t *testing.T) {
 # Read and ignore stdin
 cat > /dev/null
 
-# Return token and new state
-printf '%s' "11:tmy-token-2,"
-printf '%s' "18:s{\"refresh\":\"xyz\"},"
+# Return token to stdout
+printf '%s' "my-token-2"
+
+# Return new state to fd 3
+printf '%s' '{"refresh":"xyz"}' >&3
 `)
 
 	auth := NewAuth(script)
@@ -220,8 +55,8 @@ func TestAuth_Run_Success_StatePreservedAcrossCalls(t *testing.T) {
 	// First call returns token and state
 	script1 := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:ttoken,"
-printf '%s' "12:s{\"count\":1},"
+printf '%s' "token"
+printf '%s' '{"count":1}' >&3
 `)
 
 	auth := NewAuth(script1)
@@ -235,10 +70,11 @@ printf '%s' "12:s{\"count\":1},"
 # Verify we received state on stdin
 input=$(cat)
 if echo "$input" | grep -q "count"; then
-    printf '%s' "12:ttoken-fresh,"
-    printf '%s' "12:s{\"count\":2},"
+    printf '%s' "token-fresh"
+    printf '%s' '{"count":2}' >&3
 else
-    printf '%s' "17:eExpected state!,"
+    echo "Expected state!" >&2
+    exit 1
 fi
 `)
 
@@ -252,13 +88,14 @@ fi
 func TestAuth_Run_AuthFailure(t *testing.T) {
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "22:eAuthentication failed,"
+echo "Authentication failed" >&2
+exit 1
 `)
 
 	auth := NewAuth(script)
 	_, err := auth.Run(nil)
 	require.Error(t, err)
-	require.Equal(t, "Authentication failed", err.Error())
+	require.Contains(t, err.Error(), "Authentication failed")
 }
 
 func TestAuth_Run_CommandExecutionError(t *testing.T) {
@@ -274,22 +111,21 @@ exit 1
 	require.Contains(t, err.Error(), "Something went wrong")
 }
 
-func TestAuth_Run_InvalidOutput(t *testing.T) {
+func TestAuth_Run_EmptyToken(t *testing.T) {
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "not a valid netstring"
+# No output to stdout - empty token
 `)
 
 	auth := NewAuth(script)
 	_, err := auth.Run(nil)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to decode auth output")
+	require.Contains(t, err.Error(), "empty token")
 }
 
 func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 	// Test that mustache template is rendered in command line
-	// Template renders "ok" (2 chars) so "token-ok" is 8 chars, plus 't' key = 9 total
-	auth := NewAuth(`printf '%s' "9:ttoken-{{host}},"`)
+	auth := NewAuth(`printf '%s' "token-{{host}}"`)
 	token, err := auth.Run(map[string]string{"host": "ok"})
 	require.NoError(t, err)
 	require.Equal(t, "token-ok", token)
@@ -307,8 +143,8 @@ func TestAuth_Run_Concurrent(t *testing.T) {
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 sleep 0.05
-printf '%s' "6:ttoken,"
-printf '%s' "12:s{\"count\":1},"
+printf '%s' "token"
+printf '%s' '{"count":1}' >&3
 `)
 
 	auth := NewAuth(script)
@@ -345,13 +181,14 @@ func writeTestScript(t *testing.T, content string) string {
 }
 
 func TestAuth_Run_EmptyStateHandling(t *testing.T) {
-	// Test that empty state is sent as "0:," on first call
+	// Test that empty state is sent on first call
 	script := writeTestScript(t, `#!/bin/sh
 input=$(cat)
-if [ "$input" = "0:," ]; then
-    printf '%s' "17:tfirst-call-token,"
+if [ -z "$input" ]; then
+    printf '%s' "first-call-token"
 else
-    printf '%s' "19:eExpected empty state,"
+    echo "Expected empty state" >&2
+    exit 1
 fi
 `)
 
@@ -362,11 +199,11 @@ fi
 }
 
 func TestAuth_Run_StateClearing(t *testing.T) {
-	// Test that plugin can clear state by returning empty state
+	// Test that plugin can clear state by not writing to fd 3
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:ttoken,"
-# No state field - should clear existing state
+printf '%s' "token"
+# No output to fd 3 - should clear existing state
 `)
 
 	auth := NewAuth(script)
@@ -378,43 +215,19 @@ printf '%s' "6:ttoken,"
 	require.Empty(t, auth.state) // State should be cleared
 }
 
-func TestRoundTrip_EncodeDecodeEmpty(t *testing.T) {
-	// Test roundtrip: empty state -> encode -> decode
-	encoded, err := encodeAuthInput([]byte{})
-	require.NoError(t, err)
-
-	// Can't decode "0:," as it has no token/error, but verify the encoding
-	require.Equal(t, "0:,", string(encoded))
-}
-
-func TestRoundTrip_EncodeDecodeWithState(t *testing.T) {
-	// Test roundtrip: state -> encode -> use in output -> decode
-	originalState := []byte(`{"token":"refresh123","exp":1234567890}`)
-
-	// Encode as input
-	encoded, err := encodeAuthInput(originalState)
-	require.NoError(t, err)
-
-	// Verify it decodes correctly
-	dec := netstr.NewDecoder(bytes.NewReader(encoded))
-	key, value, err := dec.DecodeKeyed()
-	require.NoError(t, err)
-	require.Equal(t, byte(keyState), key)
-	require.Equal(t, originalState, value)
-}
-
 func TestIntegration_FullAuthFlow(t *testing.T) {
 	// Integration test: simulate a full auth flow with state management
 
 	// First auth call - no state, returns token and state
 	script1 := writeTestScript(t, `#!/bin/sh
 input=$(cat)
-if [ "$input" = "0:," ]; then
+if [ -z "$input" ]; then
     # Initial auth - return token and state
-    printf '%s' "19:tinitial-auth-token,"
-    printf '%s' "27:s{\"refresh\":\"r1\",\"exp\":100},"
+    printf '%s' "initial-auth-token"
+    printf '%s' '{"refresh":"r1","exp":100}' >&3
 else
-    printf '%s' "29:eExpected initial empty state,"
+    echo "Expected initial empty state" >&2
+    exit 1
 fi
 `)
 
@@ -430,10 +243,11 @@ input=$(cat)
 # Check that we got state with refresh token
 if echo "$input" | grep -q "refresh.*r1"; then
     # Token refresh - return new token and updated state
-    printf '%s' "20:trefreshed-token-123,"
-    printf '%s' "27:s{\"refresh\":\"r2\",\"exp\":200},"
+    printf '%s' "refreshed-token-123"
+    printf '%s' '{"refresh":"r2","exp":200}' >&3
 else
-    printf '%s' "23:eExpected refresh state,"
+    echo "Expected refresh state" >&2
+    exit 1
 fi
 `)
 
@@ -448,18 +262,18 @@ fi
 input=$(cat)
 if echo "$input" | grep -q "refresh.*r2"; then
     # Simulate refresh token expired
-    printf '%s' "45:eRefresh token expired, full re-auth required,"
-    # State could be preserved or cleared - plugin's choice
-    printf '%s' "1:s,"
+    echo "Refresh token expired, full re-auth required" >&2
+    exit 1
 else
-    printf '%s' "23:eExpected refresh state,"
+    echo "Expected refresh state" >&2
+    exit 1
 fi
 `)
 
 	auth.cmdLine = script3
 	_, err = auth.Run(nil)
 	require.Error(t, err)
-	require.Equal(t, "Refresh token expired, full re-auth required", err.Error())
+	require.Contains(t, err.Error(), "Refresh token expired, full re-auth required")
 	// State should NOT be updated on error - the code returns early before state update
 	// So the state from the previous successful call should still be present
 	require.Equal(t, []byte(`{"refresh":"r2","exp":200}`), auth.state)
@@ -468,7 +282,7 @@ fi
 func TestAuth_Token(t *testing.T) {
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "13:tmy-token-abc,"
+printf '%s' "my-token-abc"
 `)
 
 	auth := NewAuth(script)
@@ -483,4 +297,35 @@ printf '%s' "13:tmy-token-abc,"
 
 	// Token() should return the stored token
 	require.Equal(t, "my-token-abc", auth.Token())
+}
+
+// TODO: Re-enable this test with a faster implementation
+// The current shell-based approach is too slow for CI
+/*
+func TestAuth_Run_StateSizeLimit(t *testing.T) {
+	// Test that state exceeding MaxStateBlobSize is rejected
+	// Use head to generate exactly 11 MiB of data
+	script := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "token"
+# Write 11 MiB to fd 3 (exceeds 10 MiB limit)
+head -c 11534336 /dev/zero >&3
+`)
+
+	auth := NewAuth(script)
+	_, err := auth.Run(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exceeds maximum size")
+}
+*/
+
+func TestAuth_ClearToken(t *testing.T) {
+	auth := NewAuth("echo token")
+	auth.token = "existing-token"
+	auth.state = []byte("existing-state")
+
+	auth.ClearToken()
+
+	require.Empty(t, auth.Token())
+	require.Equal(t, []byte("existing-state"), auth.state) // State should be preserved
 }

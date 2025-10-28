@@ -101,56 +101,116 @@ The broker uses an external **auth command** to obtain authentication tokens. Th
 
 #### Auth Command Protocol
 
-The broker communicates with auth plugins using **keyed netstrings** (Type-Length-Value encoding). This protocol is language-agnostic, handles binary data without encoding overhead, and is self-describing.
+The broker communicates with auth plugins using a simple **file descriptor protocol**. This protocol requires no encoding/decoding - plugins work with raw bytes.
 
-**Netstring Format:** `<length>:<key><value>,`
-- `<length>`: Decimal ASCII digits (no leading zeros except `0:,`)
-- `<key>`: Single ASCII byte identifying field type
-- `<value>`: Arbitrary bytes (length-1 bytes, since key takes 1 byte)
-- Whitespace (spaces, tabs, `\n`, `\r`) between netstrings is **ignored** for debugging convenience
+**Protocol:**
+- **stdin (fd 0)**: State bytes from previous invocation (empty on first call)
+- **stdout (fd 1)**: Authentication token (raw bytes)
+- **fd 3**: New state bytes to persist for next invocation (max 10 MiB)
+- **stderr (fd 2)**: Human-readable error messages (on failure)
+- **Exit code**: 0 = success, non-zero = failure
 
-**Defined Keys:**
-- `s` = State blob (opaque, managed by auth plugin)
-- `t` = Authentication token (to be sent to CA)
-- `e` = Error message (human-readable auth failure reason)
+**State Management:**
+- State is **completely opaque** to the broker (arbitrary byte blob, max 10 MiB)
+- Auth plugin owns session management (refresh tokens, token expiry, etc)
+- Broker stores state in memory and passes it to next invocation
+- State never touches disk (security: refresh tokens remain in memory only)
 
 **Protocol Flow:**
 
-**INPUT (stdin):**
-```
-# Initial authentication (no prior state)
-0:,
-
-# Token refresh (with existing state)
-85:s{"refresh_token":"abc123","expires_at":"2025-10-14T15:00:00Z"},
+**Initial authentication (no prior state):**
+```bash
+# INPUT: stdin is empty
+# Plugin performs authentication (browser flow, etc)
+# OUTPUT: stdout = access token, fd 3 = refresh token blob
 ```
 
-**OUTPUT (stdout) - Success:**
-```
-218:teyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...,
-92:s{"refresh_token":"xyz789","expires_at":"2025-10-14T16:00:00Z"},
-```
-
-**OUTPUT (stdout) - Failure:**
-```
-58:eRefresh token expired, full re-authentication required,
+**Token refresh (with existing state):**
+```bash
+# INPUT: stdin = previous state blob (e.g., refresh token)
+# Plugin uses refresh token to get new access token
+# OUTPUT: stdout = new access token, fd 3 = updated state blob
 ```
 
-**Exit codes:**
-- `0` with `t` key: Authentication successful
-- `0` with `e` key: Authentication failed (user-facing error message)
-- Non-zero exit: Unexpected error (stderr contains technical details)
+**Authentication failure:**
+```bash
+# Plugin writes error to stderr and exits non-zero
+# Broker presents error to user
+```
+
+**Example Implementations:**
+
+**Bash:**
+```bash
+#!/bin/bash
+# Read state from stdin
+state=$(cat)
+
+# Authenticate (using state if available)
+if [ -n "$state" ]; then
+    # Refresh flow
+    token=$(curl -s "https://auth.example.com/refresh" -d "$state")
+else
+    # Initial auth flow
+    token=$(do_browser_auth)
+fi
+
+# Output token to stdout
+echo -n "$token"
+
+# Output new state to fd 3
+echo -n "$new_state_blob" >&3
+```
+
+**Python:**
+```python
+import sys, os
+
+# Read state from stdin
+state = sys.stdin.buffer.read()
+
+# Authenticate
+token, new_state = authenticate(state)
+
+# Output token to stdout
+sys.stdout.buffer.write(token)
+
+# Output new state to fd 3
+os.write(3, new_state)
+```
+
+**Go:**
+```go
+package main
+
+import (
+    "io"
+    "os"
+)
+
+func main() {
+    // Read state from stdin
+    state, _ := io.ReadAll(os.Stdin)
+
+    // Authenticate
+    token, newState := authenticate(state)
+
+    // Output token to stdout
+    os.Stdout.Write(token)
+
+    // Output new state to fd 3
+    stateFd := os.NewFile(3, "state")
+    defer stateFd.Close()
+    stateFd.Write(newState)
+}
+```
 
 **Design Properties:**
-- Tokens and state are **completely opaque** to the broker (arbitrary byte blobs)
-- Auth command owns session management (refresh tokens, token expiry, etc)
-- Broker stores state and passes it to next invocation
-- Self-describing format allows future protocol extensions without breaking existing plugins
-- Whitespace tolerance allows use of `println()` for debugging
-
-**Helper Libraries:**
-- Bash: `examples/bash_plugin_helper.bash` provides `read_netstring()` and `write_netstring()` functions
-- Go: Use `github.com/epithet-ssh/epithet/pkg/netstr` library (supports whitespace skipping via `netstr.SkipASCIIWhitespace()` option)
+- Zero encoding/decoding burden for plugin authors
+- Binary-safe (tokens and state can be arbitrary bytes)
+- State never touches disk (security property)
+- Simple to implement (basic file I/O in any language)
+- Size-limited (10 MiB max state) to prevent memory exhaustion
 
 #### Certificate Lifecycle with Short-Lived Certificates
 
@@ -180,9 +240,9 @@ The broker communicates with auth plugins using **keyed netstrings** (Type-Lengt
 
 2. **Certificate expired or missing**:
    - Broker looks up auth state for this user identity
-   - Broker calls: `echo "<state>" | auth-command`
+   - Broker invokes auth command with state on stdin, fd 3 open for new state
    - Auth command uses refresh token to get fresh access token (~100ms)
-   - Auth command returns: new token + updated state
+   - Auth command outputs: token to stdout, updated state to fd 3
    - Broker calls CA: `request_certificate(token, connection_details)`
    - CA validates token and evaluates policy in real-time
    - CA returns certificate with 2-10 minute expiry
