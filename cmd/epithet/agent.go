@@ -13,29 +13,29 @@ import (
 )
 
 type AgentCLI struct {
-	Match        []string `help:"Match patterns" short:"m" required:"true"`
-	CaURL        string   `help:"CA URL" name:"ca-url" short:"c" required:"true"`
-	Auth         string   `help:"Authentication command" short:"a" required:"true"`
-	BrokerSock   string   `help:"Broker socket path" name:"broker-sock" short:"b" default:"~/.epithet/broker.sock"`
-	AgentSockDir string   `help:"Agent socket directory" name:"agent-sock-dir" default:"~/.epithet/sockets"`
+	Match    []string `help:"Match patterns" short:"m" required:"true"`
+	CaURL    string   `help:"CA URL" name:"ca-url" short:"c" required:"true"`
+	Auth     string   `help:"Authentication command" short:"a" required:"true"`
+	Broker   string   `help:"Broker socket path" short:"b" default:"~/.epithet/broker.sock"`
+	AgentDir string   `help:"Agent socket directory" name:"agent-dir" default:"~/.epithet/agent/"`
 }
 
 func (a *AgentCLI) Run(logger *slog.Logger) error {
 	logger.Debug("agent command received", "agent", a)
 
 	// Expand home directory in paths
-	brokerSock, err := expandPath(a.BrokerSock)
+	brokerSock, err := expandPath(a.Broker)
 	if err != nil {
 		return fmt.Errorf("failed to expand broker socket path: %w", err)
 	}
 
-	agentSockDir, err := expandPath(a.AgentSockDir)
+	agentDir, err := expandPath(a.AgentDir)
 	if err != nil {
 		return fmt.Errorf("failed to expand agent socket directory: %w", err)
 	}
 
 	// Create broker
-	b := broker.New(*logger, brokerSock, a.Auth, a.CaURL, agentSockDir, a.Match)
+	b := broker.New(*logger, brokerSock, a.Auth, a.CaURL, agentDir, a.Match)
 
 	// Set up context with cancellation on signals
 	ctx, cancel := context.WithCancel(context.Background())

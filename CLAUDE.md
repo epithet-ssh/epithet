@@ -245,7 +245,7 @@ When epithet cannot obtain a certificate (auth failures, CA errors, agent creati
 ```ssh_config
 # Epithet handling - first so it gets priority
 Match exec "epithet match --host %h --port %p --user %r --hash %C"
-    IdentityAgent ~/.epithet/sockets/%C
+    IdentityAgent ~/.epithet/agent/%C
 
 # Breakglass/special cases - after epithet
 Match host *.example.com user breakglass
@@ -260,25 +260,25 @@ Epithet supports running multiple broker instances for different purposes (work 
 ```ssh_config
 # Work connections
 Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/work-broker.sock" host *.work.example.com
-    IdentityAgent ~/.epithet/work-sockets/%C
+    IdentityAgent ~/.epithet/work-agent/%C
 
 # Personal connections
 Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/personal-broker.sock" host *.personal.example.com
-    IdentityAgent ~/.epithet/personal-sockets/%C
+    IdentityAgent ~/.epithet/personal-agent/%C
 ```
 
 Start each broker with unique socket paths:
 ```bash
 # Work broker
-epithet agent --broker-sock ~/.epithet/work-broker.sock \
-              --agent-sock-dir ~/.epithet/work-sockets \
+epithet agent --broker ~/.epithet/work-broker.sock \
+              --agent-dir ~/.epithet/work-agent/ \
               --match '*.work.example.com' \
               --ca-url https://work-ca.example.com \
               --auth work-auth-plugin
 
 # Personal broker
-epithet agent --broker-sock ~/.epithet/personal-broker.sock \
-              --agent-sock-dir ~/.epithet/personal-sockets \
+epithet agent --broker ~/.epithet/personal-broker.sock \
+              --agent-dir ~/.epithet/personal-agent/ \
               --match '*.personal.example.com' \
               --ca-url https://personal-ca.example.com \
               --auth personal-auth-plugin
@@ -399,7 +399,7 @@ Epithet is designed to integrate with OpenSSH client configuration:
 
 ```ssh_config
 Match exec "epithet match --host %h --port %p --user %r --hash %C"
-    IdentityAgent ~/.epithet/sockets/%C
+    IdentityAgent ~/.epithet/agent/%C
 ```
 
 The `%C` token represents a hash of the connection parameters (`%l%h%p%r%j`: local hostname, remote hostname, port, username, and ProxyJump), ensuring each unique connection gets its own agent socket.

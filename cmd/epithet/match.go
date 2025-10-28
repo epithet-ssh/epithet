@@ -12,12 +12,12 @@ import (
 )
 
 type MatchCLI struct {
-	Host      string `help:"Remote host (%h)" required:"true"`
-	Port      uint   `help:"Remote port (%p)" required:"true"`
-	User      string `help:"Remote user (%r)" required:"true"`
-	Hash      string `help:"Connection hash (%C)" required:"true"`
-	ProxyJump string `help:"ProxyJump configuration (%j)" default:""`
-	Broker    string `help:"Broker socket path" default:"~/.epithet/broker.sock"`
+	Host      string `help:"Remote host (%h)" short:"H" required:"true"`
+	Port      uint   `help:"Remote port (%p)" short:"p" required:"true"`
+	User      string `help:"Remote user (%r)" short:"r" required:"true"`
+	Hash      string `help:"Connection hash (%C)" short:"C" required:"true"`
+	ProxyJump string `help:"ProxyJump configuration (%j)" short:"j" default:""`
+	Broker    string `help:"Broker socket path" short:"b" default:"~/.epithet/broker.sock"`
 }
 
 func (m *MatchCLI) Run(logger *slog.Logger) error {
