@@ -267,9 +267,23 @@ A complete OpenAPI 3.0 specification is available at [`docs/policy-server-api.ya
    npx @stoplight/prism-cli validate docs/policy-server-api.yaml
    ```
 
-### Example Implementation
+### Development Policy Server
 
-See [`examples/bad-policy/bad-policy.go`](examples/bad-policy/bad-policy.go) for a complete working example policy server (warning: approves all requests - do not use in production!).
+For local testing and development, epithet includes a built-in policy server:
+
+```bash
+# Start the CA first
+epithet ca --policy http://localhost:9999 --key /path/to/ca.key &
+
+# Start a development policy server (allow-all mode)
+# The policy server automatically fetches the CA's public key
+epithet dev policy -p root -p admin --ca-pubkey http://localhost:8080 -P 9999 -v
+
+# Start in deny-all mode to test error handling
+epithet dev policy -p root --ca-pubkey http://localhost:8080 --mode deny-all -P 9999
+```
+
+See [Development Tools documentation](docs/development-tools.md) for complete usage details, including policy modes, configuration options, and testing scenarios.
 
 ### Security Considerations
 
