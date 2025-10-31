@@ -77,7 +77,7 @@ func New(log slog.Logger, socketPath string, authCommand string, caURL string, a
 		certStore:        NewCertificateStore(),
 		agents:           make(map[policy.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
-		caClient:         caclient.New(caURL),
+		caClient:         caclient.New(caURL, caclient.WithLogger(&log)),
 		agentSocketDir:   agentSocketDir,
 		matchPatterns:    matchPatterns,
 		done:             make(chan struct{}),

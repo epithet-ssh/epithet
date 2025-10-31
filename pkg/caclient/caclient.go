@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -56,6 +57,7 @@ func (e *InvalidRequestError) Error() string {
 type Client struct {
 	httpClient *http.Client
 	caURL      string
+	logger     *slog.Logger
 }
 
 // New creates a new CA Client
@@ -93,6 +95,14 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	})
 }
 
+// WithLogger specifies the logger to use
+func WithLogger(logger *slog.Logger) Option {
+	return optionFunc(func(c *Client) error {
+		c.logger = logger
+		return nil
+	})
+}
+
 // GetCert converts a token to a cert
 func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
 	body, err := json.Marshal(req)
@@ -100,10 +110,16 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 		return nil, err
 	}
 
+	// Debug logging: show what we're sending
+	if c.logger != nil {
+		c.logger.Debug("CA request", "url", c.caURL, "body", string(body))
+	}
+
 	rq, err := http.NewRequest("POST", c.caURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+	rq.Header.Set("Content-Type", "application/json")
 
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
 	if err != nil {
@@ -113,6 +129,11 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 	body, err = io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	// Debug logging: always log response for debugging
+	if c.logger != nil {
+		c.logger.Debug("CA response", "status", res.StatusCode, "body", string(body))
 	}
 
 	if res.StatusCode != 200 {
@@ -134,7 +155,7 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 	resp := caserver.CreateCertResponse{}
 	err = json.Unmarshal(body, &resp)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal CA response (body=%s): %w", string(body), err)
 	}
 
 	return &resp, nil

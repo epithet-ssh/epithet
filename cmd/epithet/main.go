@@ -18,10 +18,18 @@ var cli struct {
 	Agent AgentCLI `cmd:"agent" help:"start the epithet agent"`
 	Match MatchCLI `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
 	CA    CACLI    `cmd:"ca" help:"Run the epithet CA server"`
+	AWS   AWSCLI   `cmd:"aws" help:"AWS deployment commands"`
 	Dev   DevCLI   `cmd:"dev" help:"Development tools for testing and debugging"`
 }
 
 func main() {
+	// Check if we're running in Lambda mode via environment variable
+	if epithetCmd := os.Getenv("EPITHET_CMD"); epithetCmd != "" {
+		// Parse the command from environment (e.g., "aws ca")
+		args := strings.Fields(epithetCmd)
+		os.Args = append([]string{os.Args[0]}, args...)
+	}
+
 	ktx := kong.Parse(&cli, kong.Configuration(KVLoader, "~/.config/epithet/config"))
 	logger := setupLogger()
 	ktx.Bind(logger)

@@ -83,6 +83,18 @@ Step 5 may be refined - rather than deleting on expiration, certificates near ex
   - Creates in-process SSH agent instances for each unique connection (low memory overhead)
   - Manages authentication state and token refresh
 
+- **`epithet ca --policy <url> --key <path> --address <addr>`**:
+  - Runs the CA server as a standalone HTTP service
+  - Listens on specified address (default 0.0.0.0:8080)
+  - Reads CA private key from file
+  - Validates certificate requests against policy server
+
+- **`epithet aws ca --secret-arn <arn> --policy-url <url>`**:
+  - Runs the CA server as an AWS Lambda function
+  - Retrieves CA private key from AWS Secrets Manager
+  - Designed for serverless deployment (see `examples/aws-lambda/`)
+  - Set `EPITHET_CMD=aws ca` environment variable to auto-invoke this command in Lambda
+
 ### Core Architecture
 
 The system consists of four main components:

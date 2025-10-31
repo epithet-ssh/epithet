@@ -1,0 +1,10 @@
+# No external dependencies required for basic policy server
+# All imports are from Python standard library
+
+# If you want to add JWT validation, uncomment:
+# pyjwt>=2.8.0
+# cryptography>=41.0.0
+
+# If you want to add external authorization checks, consider:
+# requests>=2.31.0  # For HTTP calls to external services
+# boto3>=1.28.0     # For AWS service integration (DynamoDB, etc.)

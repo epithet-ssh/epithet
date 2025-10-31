@@ -1,0 +1,17 @@
+# OpenTofu/Terraform state files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Build artifacts
+bin/
+*.zip
+*.pyc
+
+# Environment files
+.env
+*.env
+
+# OS files
+.DS_Store
