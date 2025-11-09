@@ -49,3 +49,9 @@ variable "log_retention_days" {
   type        = number
   default     = 7
 }
+
+variable "policy_secret" {
+  description = "Shared secret for policy server authentication"
+  type        = string
+  sensitive   = true
+}

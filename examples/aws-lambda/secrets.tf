@@ -1,7 +1,8 @@
 # CA private key stored in Secrets Manager
 resource "aws_secretsmanager_secret" "ca_key" {
-  name        = "${local.name_prefix}-ca-key"
-  description = "Epithet CA private key (${var.ca_key_algorithm})"
+  name                    = "${local.name_prefix}-ca-key"
+  description             = "Epithet CA private key (${var.ca_key_algorithm})"
+  recovery_window_in_days = 0 # Force immediate deletion on destroy
 
   tags = local.common_tags
 }

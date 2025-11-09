@@ -46,6 +46,7 @@ resource "aws_lambda_function" "policy" {
     variables = {
       LOG_LEVEL     = "info"
       CA_PUBLIC_KEY = trimspace(local.ca_public_key)
+      POLICY_SECRET = var.policy_secret
     }
   }
 

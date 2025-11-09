@@ -42,7 +42,15 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		}
 	}
 
-	// Simple allow-all policy for personal use
+	// Validate shared secret token
+	policySecret := os.Getenv("POLICY_SECRET")
+	if policySecret == "" {
+		return errorResponse(500, "POLICY_SECRET not configured"), nil
+	}
+	if req.Token != policySecret {
+		return errorResponse(401, "Invalid authentication token"), nil
+	}
+
 	// Use the remote user as the principal
 	remoteUser := req.Connection.RemoteUser
 	if remoteUser == "" {
@@ -58,10 +66,10 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 			Names:      []string{remoteUser},
 			Expiration: expiration,
 			Extensions: map[string]string{
-				"permit-pty":              "",
-				"permit-X11-forwarding":   "",
-				"permit-port-forwarding":  "",
-				"permit-user-rc":          "",
+				"permit-pty":             "",
+				"permit-X11-forwarding":  "",
+				"permit-port-forwarding": "",
+				"permit-user-rc":         "",
 			},
 		},
 		Policy: policy.Policy{

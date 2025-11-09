@@ -31,7 +31,12 @@ plan: build
 
 # Apply infrastructure changes
 apply: build
-	tofu apply
+	@if [ -z "$$EPITHET_POLICY_SECRET" ]; then \
+		echo "Error: EPITHET_POLICY_SECRET environment variable not set"; \
+		echo "Please set it with: export EPITHET_POLICY_SECRET=your-secret-here"; \
+		exit 1; \
+	fi
+	tofu apply -var="policy_secret=$$EPITHET_POLICY_SECRET"
 
 # Destroy infrastructure
 destroy:

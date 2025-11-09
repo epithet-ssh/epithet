@@ -47,6 +47,11 @@ export TF_VAR_lambda_timeout_sec="30"             # Lambda timeout
 ```bash
 export TF_VAR_aws_region="us-west-2"
 export TF_VAR_project_name="epithet-personal"
+
+# Generate a shared secret for policy server authentication
+# This should be a strong random string - clients will need this to get certificates
+export EPITHET_POLICY_SECRET="$(openssl rand -base64 32)"
+echo "Save this secret - you'll need it on client machines: $EPITHET_POLICY_SECRET"
 ```
 
 2. **Build and deploy:**
@@ -57,6 +62,8 @@ make build
 make init
 make apply
 ```
+
+The Makefile will automatically use the `EPITHET_POLICY_SECRET` environment variable to configure the policy server.
 
 3. **Generate and upload the CA private key:**
 
@@ -122,29 +129,29 @@ echo "testuser" | sudo tee /etc/ssh/principals/yourusername
 
 ### Part 3: Configure Your Local Machine
 
-1. **Create a simple test auth plugin:**
+1. **Set the policy secret on your client machine:**
 
 ```bash
-mkdir -p ~/.epithet
-cat > ~/.epithet/test-auth-plugin << 'EOF'
-#!/bin/bash
-# Simple test auth plugin - returns a static token
-# In production, this would do real authentication (OAuth, OIDC, etc.)
+# Use the same secret you generated in Part 1
+export EPITHET_POLICY_SECRET="your-secret-from-part-1"
 
-# Read state from stdin (ignore for this test)
-cat > /dev/null
-
-# Output a test token to stdout
-echo -n "test-token-123"
-
-# Output empty state to fd 3
-echo -n "" >&3
-EOF
-
-chmod +x ~/.epithet/test-auth-plugin
+# Add to your shell profile to persist it
+echo "export EPITHET_POLICY_SECRET='your-secret-from-part-1'" >> ~/.bashrc  # or ~/.zshrc
 ```
 
-2. **Build and install epithet locally:**
+2. **Copy the example auth plugin:**
+
+```bash
+# The example auth plugin is already in the repo at:
+# examples/client/.epithet/test-auth-plugin.sh
+# It reads EPITHET_POLICY_SECRET and outputs it as the authentication token
+
+mkdir -p ~/.epithet
+cp examples/client/.epithet/test-auth-plugin.sh ~/.epithet/
+chmod +x ~/.epithet/test-auth-plugin.sh
+```
+
+3. **Build and install epithet locally:**
 
 ```bash
 # From the project root
@@ -152,7 +159,7 @@ make build
 sudo cp epithet /usr/local/bin/
 ```
 
-3. **Create epithet config file (optional but recommended):**
+4. **Create epithet config file (optional but recommended):**
 
 ```bash
 # Get the CA URL from your deployment
@@ -168,7 +175,7 @@ match yourserver
 ca-url $CA_URL
 
 # Auth plugin (using config_dir template for relative path)
-auth {config_dir}/test-auth-plugin
+auth {config_dir}/test-auth-plugin.sh
 EOF
 ```
 
@@ -177,7 +184,7 @@ EOF
 - `{home}` - user's home directory
 - `{env.VAR_NAME}` - environment variable expansion
 
-4. **Start the epithet broker:**
+5. **Start the epithet broker:**
 
 ```bash
 # Using config file (recommended):
@@ -187,7 +194,7 @@ epithet agent
 epithet agent \
   --match 'yourserver' \
   --ca-url $(tofu output -raw ca_url) \
-  --auth ~/.epithet/test-auth-plugin
+  --auth ~/.epithet/test-auth-plugin.sh
 ```
 
 The broker will automatically:
@@ -196,7 +203,9 @@ The broker will automatically:
 - Check if your `~/.ssh/config` has the required Include directive (warns if missing)
 - Clean up everything when it stops
 
-5. **Configure SSH to use epithet:**
+**Note:** The broker must be running with `EPITHET_POLICY_SECRET` set in its environment.
+
+6. **Configure SSH to use epithet:**
 
 Add this single line to the top of your `~/.ssh/config`:
 
@@ -212,7 +221,7 @@ The wildcard include picks up all broker config files automatically. Multiple br
 
 **Note:** If you forget to add the Include line, the broker will warn you at startup with the exact line you need to add.
 
-6. **Test the connection:**
+7. **Test the connection:**
 
 ```bash
 # Unset SSH_AUTH_SOCK if you have one set
