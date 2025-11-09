@@ -19,6 +19,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// PolicyError represents an error from the policy server.
+// The CA server should return the same status code to the client.
+type PolicyError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *PolicyError) Error() string {
+	return fmt.Sprintf("policy server returned %d: %s", e.StatusCode, e.Message)
+}
+
 // CA performs CA operations
 type CA struct {
 	signer     ssh.Signer
@@ -147,6 +158,17 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err != nil {
 		return nil, fmt.Errorf("error reading response: %w", err)
 	}
+
+	// Check HTTP status code
+	if res.StatusCode != 200 {
+		// Policy server returned an error - wrap it to signal to CA server
+		// CA server should return the same status code to the client
+		return nil, &PolicyError{
+			StatusCode: res.StatusCode,
+			Message:    string(buf),
+		}
+	}
+
 	policyResp := &PolicyResponse{}
 	err = json.Unmarshal(buf, policyResp)
 	if err != nil {

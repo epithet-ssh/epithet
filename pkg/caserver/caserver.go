@@ -2,6 +2,7 @@ package caserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -88,8 +89,18 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	policyResp, err := s.c.RequestPolicy(r.Context(), ccr.Token, ccr.Connection)
 	if err != nil {
+		// Check if it's a PolicyError with a specific status code
+		var policyErr *ca.PolicyError
+		if errors.As(err, &policyErr) {
+			// Return the same status code the policy server returned
+			w.Header().Add("Content-type", "text/plain")
+			w.WriteHeader(policyErr.StatusCode)
+			w.Write([]byte(policyErr.Message))
+			return
+		}
+		// Other error - return 500
 		w.Header().Add("Content-type", "text/plain")
-		w.WriteHeader(400)
+		w.WriteHeader(500)
 		w.Write([]byte(fmt.Sprintf("%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)))
 		return
 	}
