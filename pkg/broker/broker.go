@@ -132,6 +132,7 @@ type MatchResponse struct {
 func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	b.log.Debug("match request received", "request", input)
 
 	// Step 1: Check if this host should be handled by epithet at all
 	if !b.shouldHandle(input.Connection.RemoteHost) {

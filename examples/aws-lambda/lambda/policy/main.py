@@ -53,7 +53,6 @@ def handler(event: dict[str, object], _context: object) -> dict[str, object]:
                     "event": "policy_request",
                     "remote_host": connection.get("remoteHost"),
                     "remote_user": connection.get("remoteUser"),
-                    "local_user": connection.get("localUser"),
                 }
             )
         )
@@ -66,8 +65,10 @@ def handler(event: dict[str, object], _context: object) -> dict[str, object]:
     # TODO: Check authorization (can this user access this host?)
 
     # Simple allow-all policy for personal use
-    # Use fixed principal "testuser" for all connections
-    # This matches the authorized principal configured on SSH servers
+    # Use the remote user as the principal - the certificate will authenticate
+    # as the specific user requested in the SSH connection
+    remote_user_obj = connection.get("remoteUser", "root")
+    remote_user = remote_user_obj if isinstance(remote_user_obj, str) else "root"
 
     # Expiration in nanoseconds (5 minutes = 5 * 60 * 1e9 nanoseconds)
     expiration_ns = 5 * 60 * 1_000_000_000
@@ -75,7 +76,7 @@ def handler(event: dict[str, object], _context: object) -> dict[str, object]:
     response: dict[str, object] = {
         "certParams": {
             "identity": "personal-user",
-            "principals": ["testuser"],
+            "principals": [remote_user],
             "expiration": expiration_ns,
             "extensions": {
                 "permit-pty": "",

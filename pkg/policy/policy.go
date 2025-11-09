@@ -12,7 +12,6 @@ type ConnectionHash string
 // The Hash field contains the %C hash value computed by OpenSSH from these parameters.
 type Connection struct {
 	LocalHost  string         `json:"localHost"`
-	LocalUser  string         `json:"localUser"`
 	RemoteHost string         `json:"remoteHost"`
 	RemoteUser string         `json:"remoteUser"`
 	Port       uint           `json:"port"`

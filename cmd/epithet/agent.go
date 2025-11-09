@@ -13,7 +13,7 @@ import (
 )
 
 type AgentCLI struct {
-	Match    []string `help:"Match patterns" short:"m" required:"true"`
+	Match    []string `help:"Match patterns" short:"m"`
 	CaURL    string   `help:"CA URL" name:"ca-url" short:"c" required:"true"`
 	Auth     string   `help:"Authentication command" short:"a" required:"true"`
 	Broker   string   `help:"Broker socket path" short:"b" default:"~/.epithet/broker.sock"`

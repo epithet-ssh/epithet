@@ -30,7 +30,7 @@ func main() {
 		os.Args = append([]string{os.Args[0]}, args...)
 	}
 
-	ktx := kong.Parse(&cli, kong.Configuration(KVLoader, "~/.config/epithet/config"))
+	ktx := kong.Parse(&cli, kong.Configuration(KVLoader, "~/.epithet/config"))
 	logger := setupLogger()
 	ktx.Bind(logger)
 	err := ktx.Run()

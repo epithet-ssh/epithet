@@ -75,7 +75,6 @@ printf '%s' "6:thello,"
 	req := MatchRequest{
 		Connection: policy.Connection{
 			LocalHost:  "mylaptop.local",
-			LocalUser:  "alice",
 			RemoteHost: "server.example.com",
 			RemoteUser: "root",
 			Port:       22,

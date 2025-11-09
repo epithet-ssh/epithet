@@ -1,0 +1,3 @@
+ca-url  https://6bz307hzn.execute-api.us-west-2.amazonaws.com/
+auth    ~/.config/epithet/test-auth-plugin
+match   v0004

@@ -187,7 +187,7 @@ func (a *Agent) serve(ctx context.Context) {
 func (a *Agent) serveAgent(conn net.Conn) {
 	defer conn.Close()
 
-	a.log.Debug("new connection to agent")
+	a.log.Debug("new connection to agent", "socket", a.agentSocketPath)
 	err := agent.ServeAgent(a.keyring, conn)
 	if err != nil && err != io.EOF {
 		a.log.Warn("error from ssh-agent", "error", err)

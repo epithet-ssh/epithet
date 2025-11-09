@@ -125,8 +125,8 @@ echo "testuser" | sudo tee /etc/ssh/principals/yourusername
 1. **Create a simple test auth plugin:**
 
 ```bash
-mkdir -p ~/.config/epithet
-cat > ~/.config/epithet/test-auth-plugin << 'EOF'
+mkdir -p ~/.epithet
+cat > ~/.epithet/test-auth-plugin << 'EOF'
 #!/bin/bash
 # Simple test auth plugin - returns a static token
 # In production, this would do real authentication (OAuth, OIDC, etc.)
@@ -141,7 +141,7 @@ echo -n "test-token-123"
 echo -n "" >&3
 EOF
 
-chmod +x ~/.config/epithet/test-auth-plugin
+chmod +x ~/.epithet/test-auth-plugin
 ```
 
 2. **Build and install epithet locally:**
@@ -160,7 +160,7 @@ Add this to `~/.ssh/config` (replace `yourserver` with your actual hostname):
 Host yourserver
     User yourusername
 
-Match host yourserver exec "/usr/local/bin/epithet match --host %h --port %p --user %r --hash %C"
+Match host yourserver exec "/usr/local/bin/epithet match --host '%h' --port '%p' --user '%r' --jump '%j' --hash '%C'"
     IdentityAgent ~/.epithet/agent/%C
     PubkeyAuthentication yes
     PasswordAuthentication no
@@ -183,7 +183,7 @@ cd examples/aws-lambda
 epithet agent \
   --match 'yourserver' \
   --ca-url $(tofu output -raw ca_url) \
-  --auth ~/.config/epithet/test-auth-plugin
+  --auth ~/.epithet/test-auth-plugin
 ```
 
 5. **Test the connection:**

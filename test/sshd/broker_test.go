@@ -106,7 +106,6 @@ printf '%s' "6:ttoken,"
 	req := broker.MatchRequest{
 		Connection: policy.Connection{
 			LocalHost:  "localhost",
-			LocalUser:  os.Getenv("USER"),
 			RemoteHost: "localhost",
 			RemoteUser: sshdServer.User,
 			Port:       uint(sshdServer.Port),
