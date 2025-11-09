@@ -193,6 +193,7 @@ epithet agent \
 The broker will automatically:
 - Create a unique temporary directory in `~/.epithet/run/<instance-id>/`
 - Generate SSH config file, broker socket, and agent sockets in that directory
+- Check if your `~/.ssh/config` has the required Include directive (warns if missing)
 - Clean up everything when it stops
 
 5. **Configure SSH to use epithet:**
@@ -208,6 +209,8 @@ Host yourserver
 ```
 
 The wildcard include picks up all broker config files automatically. Multiple brokers (e.g., work and personal) can run simultaneously, each in its own directory with no conflicts.
+
+**Note:** If you forget to add the Include line, the broker will warn you at startup with the exact line you need to add.
 
 6. **Test the connection:**
 
