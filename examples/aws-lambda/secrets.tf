@@ -21,3 +21,15 @@ resource "aws_secretsmanager_secret_version" "ca_key" {
     ignore_changes = [secret_string]
   }
 }
+
+# Data source to read CA public key for policy server
+data "aws_secretsmanager_secret_version" "ca_key" {
+  secret_id  = aws_secretsmanager_secret.ca_key.id
+  depends_on = [aws_secretsmanager_secret_version.ca_key]
+}
+
+# Extract public key from the secret JSON
+locals {
+  ca_secret_data = jsondecode(data.aws_secretsmanager_secret_version.ca_key.secret_string)
+  ca_public_key  = try(local.ca_secret_data.public_key, "")
+}

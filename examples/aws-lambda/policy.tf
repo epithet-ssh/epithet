@@ -35,8 +35,8 @@ resource "aws_lambda_function" "policy" {
   filename         = "bin/bootstrap-policy.zip"
   function_name    = "${local.name_prefix}-policy"
   role             = aws_iam_role.policy_lambda.arn
-  handler          = "main.handler"
-  runtime          = "python3.12"
+  handler          = "bootstrap"
+  runtime          = "provided.al2023"
   architectures    = ["arm64"]
   memory_size      = var.lambda_memory_mb
   timeout          = var.lambda_timeout_sec
@@ -44,7 +44,8 @@ resource "aws_lambda_function" "policy" {
 
   environment {
     variables = {
-      LOG_LEVEL = "info"
+      LOG_LEVEL     = "info"
+      CA_PUBLIC_KEY = trimspace(local.ca_public_key)
     }
   }
 

@@ -7,7 +7,7 @@
 # Build artifacts
 bin/
 *.zip
-*.pyc
+policy-go/bootstrap
 
 # Environment files
 .env

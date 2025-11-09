@@ -10,11 +10,12 @@ ca-lambda:
 	cd ../../ && GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o examples/aws-lambda/bin/bootstrap ./cmd/epithet
 	cd bin && zip -q bootstrap-ca.zip bootstrap && rm bootstrap
 
-# Build Policy Lambda function (Python - just zip the source)
+# Build Policy Lambda function (Go)
 policy-lambda:
-	@echo "Building Policy Lambda function..."
+	@echo "Building Policy Lambda function (Go)..."
 	@mkdir -p bin
-	cd lambda/policy && zip -q ../../bin/bootstrap-policy.zip main.py
+	cd policy-go && GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o ../bin/bootstrap .
+	cd bin && zip -q bootstrap-policy.zip bootstrap && rm bootstrap
 
 # Clean build artifacts
 clean:
