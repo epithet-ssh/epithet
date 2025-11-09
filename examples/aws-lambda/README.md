@@ -152,41 +152,64 @@ make build
 sudo cp epithet /usr/local/bin/
 ```
 
-3. **Configure your SSH client:**
+3. **Create epithet config file (optional but recommended):**
 
-Add this to `~/.ssh/config` (replace `yourserver` with your actual hostname):
+```bash
+# Get the CA URL from your deployment
+cd examples/aws-lambda
+CA_URL=$(tofu output -raw ca_url)
 
-```ssh_config
-Host yourserver
-    User yourusername
+# Create config file using template expansion
+cat > ~/.epithet/config << EOF
+# Match patterns for hosts epithet should handle
+match yourserver
 
-Match host yourserver exec "/usr/local/bin/epithet match --host '%h' --port '%p' --user '%r' --jump '%j' --hash '%C'"
-    IdentityAgent ~/.epithet/agent/%C
-    PubkeyAuthentication yes
-    PasswordAuthentication no
-    KbdInteractiveAuthentication no
-    GSSAPIAuthentication no
-    PreferredAuthentications publickey
-    IdentityFile /dev/null
+# CA URL
+ca-url $CA_URL
+
+# Auth plugin (using config_dir template for relative path)
+auth {config_dir}/test-auth-plugin
+EOF
 ```
 
-Replace:
-- `yourserver` with the hostname you want to use epithet for
-- `yourusername` with your username on that server
+**Config file template syntax:**
+- `{config_dir}` - directory containing the config file (`~/.epithet`)
+- `{home}` - user's home directory
+- `{env.VAR_NAME}` - environment variable expansion
 
 4. **Start the epithet broker:**
 
 ```bash
-cd examples/aws-lambda
+# Using config file (recommended):
+epithet agent
 
-# Start the broker (in a separate terminal or background)
+# Or using command-line flags:
 epithet agent \
   --match 'yourserver' \
   --ca-url $(tofu output -raw ca_url) \
   --auth ~/.epithet/test-auth-plugin
 ```
 
-5. **Test the connection:**
+The broker will automatically:
+- Create a unique temporary directory in `~/.epithet/run/<instance-id>/`
+- Generate SSH config file, broker socket, and agent sockets in that directory
+- Clean up everything when it stops
+
+5. **Configure SSH to use epithet:**
+
+Add this single line to the top of your `~/.ssh/config`:
+
+```ssh_config
+Include ~/.epithet/run/*/ssh-config.conf
+
+# Your existing SSH config below...
+Host yourserver
+    User yourusername
+```
+
+The wildcard include picks up all broker config files automatically. Multiple brokers (e.g., work and personal) can run simultaneously, each in its own directory with no conflicts.
+
+6. **Test the connection:**
 
 ```bash
 # Unset SSH_AUTH_SOCK if you have one set

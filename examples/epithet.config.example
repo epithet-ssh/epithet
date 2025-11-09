@@ -1,0 +1,29 @@
+# Example epithet configuration file
+# Default location: ~/.epithet/config
+#
+# Format: key value
+# - Keys can use underscores or hyphens (match_pattern or match-pattern)
+# - Comments start with #
+# - Blank lines are ignored
+# - For repeatable flags, use multiple lines with the same key
+
+# Template expansion:
+#   {config_dir} - directory containing this config file
+#   {home} - user's home directory (~)
+#   {env.VAR_NAME} - environment variable
+
+# Agent configuration
+match *.example.com
+match *.internal
+
+# CA URL can use environment variable
+ca-url {env.EPITHET_CA_URL}
+
+# Auth plugin using relative path from config directory
+auth {config_dir}/auth-plugin.sh
+
+# Or use home directory
+# auth {home}/.epithet/auth-plugin.sh
+
+# Note: Broker socket and agent directories are automatically managed
+# in ~/.epithet/run/<instance-id>/ - no configuration needed!

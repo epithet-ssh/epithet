@@ -61,6 +61,22 @@ func setupLogger() *slog.Logger {
 }
 
 func KVLoader(r io.Reader) (kong.Resolver, error) {
+	// Determine config directory for template expansion
+	// If r is a file, get its directory; otherwise use current directory
+	configDir := "."
+	if f, ok := r.(*os.File); ok {
+		if path, err := expandPath(f.Name()); err == nil {
+			configDir = strings.TrimSuffix(path, "/"+strings.TrimPrefix(path, "/"))
+			// Get directory from full path
+			if idx := strings.LastIndex(path, "/"); idx != -1 {
+				configDir = path[:idx]
+			}
+		}
+	}
+
+	// Get home directory for template expansion
+	homeDir, _ := os.UserHomeDir()
+
 	m := make(map[string][]string)
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -74,6 +90,10 @@ func KVLoader(r io.Reader) (kong.Resolver, error) {
 		}
 		key := strings.ToLower(strings.ReplaceAll(parts[0], "_", "-"))
 		val := parts[1]
+
+		// Expand templates in value
+		val = expandConfigTemplates(val, configDir, homeDir)
+
 		m[key] = append(m[key], val)
 	}
 	if err := scanner.Err(); err != nil {
@@ -96,4 +116,37 @@ func KVLoader(r io.Reader) (kong.Resolver, error) {
 		// Kong will split on commas for slice types
 		return strings.Join(values, ","), nil
 	}), nil
+}
+
+// expandConfigTemplates expands template variables in config values
+// Supported templates:
+//
+//	{config_dir} - directory containing the config file
+//	{home} - user's home directory
+//	{env.VAR_NAME} - environment variable
+func expandConfigTemplates(val, configDir, homeDir string) string {
+	// Replace {config_dir}
+	val = strings.ReplaceAll(val, "{config_dir}", configDir)
+
+	// Replace {home}
+	val = strings.ReplaceAll(val, "{home}", homeDir)
+
+	// Replace {env.VAR_NAME} with environment variables
+	for {
+		start := strings.Index(val, "{env.")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(val[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		envVar := val[start+5 : end] // Extract VAR_NAME from {env.VAR_NAME}
+		envVal := os.Getenv(envVar)
+		val = val[:start] + envVal + val[end+1:]
+	}
+
+	return val
 }
