@@ -20,6 +20,7 @@ var cli struct {
 	CA    CACLI    `cmd:"ca" help:"Run the epithet CA server"`
 	AWS   AWSCLI   `cmd:"aws" help:"AWS deployment commands"`
 	Dev   DevCLI   `cmd:"dev" help:"Development tools for testing and debugging"`
+	Auth  AuthCLI  `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }
 
 func main() {

@@ -23,9 +23,54 @@ The `epithet auth` invocation will do several things:
 
 Step 5 is kind of questionable, but I think correct. In theory if a given cert if bound to a %C then it should be reusable directly as long as the socket/cert is there. Two catches -- this creates a race condition where it is unexpried when checked but before being used. This is a small window, so honestly is probably solvable by just having a 1-2 second "oh, this cert is going to expire, let's go fetch a new one" before allowing the connection. When the new one is established, just swizzle the cert into the agent on that socket and don't change the socket.
 
-## `epithet auth` details
+## Authentication
 
-The `epithet auth` invocation probably needs to receive all the components of `%C` as well as the %C hash itself.
+Epithet supports pluggable authentication via external auth plugins. The broker invokes these plugins to obtain tokens for certificate requests.
+
+### Built-in OIDC/OAuth2 Authentication
+
+Epithet includes built-in support for OIDC/OAuth2 authentication, compatible with:
+- **Google Workspace**
+- **Okta**
+- **Azure AD / Microsoft Identity Platform**
+- Any OIDC-compliant identity provider
+
+**Example usage:**
+
+```bash
+epithet agent \
+  --match '*.example.com' \
+  --ca-url https://ca.example.com \
+  --auth "epithet auth oidc \
+    --issuer https://accounts.google.com \
+    --client-id YOUR_CLIENT_ID.apps.googleusercontent.com"
+```
+
+**Features:**
+- Authorization code flow with PKCE (no client secret needed)
+- Automatic token refresh (no repeated browser logins)
+- Dynamic port selection (works even when ports are occupied)
+- Silent browser launch for authentication
+
+**First connection:** Browser opens, user authenticates (~2-5 seconds)  
+**Subsequent connections:** Fast token refresh (~100-200ms, no browser)
+
+See [docs/oidc-setup.md](docs/oidc-setup.md) for detailed setup instructions and [examples/google-workspace/](examples/google-workspace/) for a complete example.
+
+### Custom Auth Plugins
+
+You can write custom auth plugins in any language following the simple protocol:
+- **stdin**: State from previous invocation
+- **stdout**: Authentication token
+- **fd 3**: New state to persist
+- **stderr**: Human-readable messages
+- **Exit 0**: Success
+
+See [docs/authentication.md](docs/authentication.md) for details.
+
+## `epithet match` details
+
+The `epithet match` invocation receives all the components of `%C` as well as the %C hash itself.
 ```
 %C    Hash of %l%h%p%r%j.
 

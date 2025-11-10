@@ -8,6 +8,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Epithet is an SSH certificate authority system that makes SSH certificates easy to use. The project is currently undergoing a v2 rewrite (see README.md for v2 architecture details).
 
+## Version Control Policy
+
+**CRITICAL**: Do NOT create commits or interact with git to make new commits. The user will handle all commit creation.
+
+You are welcome to:
+- View commit history (`git log`, `git show`)
+- Check git status (`git status`, `git diff`)
+- View old commits and changes
+- Stage files for review (`git add` to help user see what will be committed)
+
+You must NOT:
+- Create commits (`git commit`)
+- Push changes (`git push`)
+- Create branches (`git checkout -b`)
+- Merge or rebase (`git merge`, `git rebase`)
+
+The user prefers to review all changes and craft commit messages themselves.
+
 ## Task Management with bd
 
 **CRITICAL**: This project uses bd (beads) for ALL task tracking. Do NOT use TodoWrite under any circumstances.
