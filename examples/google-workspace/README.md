@@ -14,14 +14,20 @@ This example demonstrates how to use epithet with Google Workspace authenticatio
 
 Follow the [OIDC Setup Guide](../../docs/oidc-setup.md#google-workspace--google-cloud) to create OAuth2 credentials in Google Cloud Console.
 
-You'll need:
-- **Client ID**: e.g., `123456-abc.apps.googleusercontent.com`
-- **Client Secret**: Optional (not needed with PKCE)
+**Recommended: Create a UWP app** (no client secret needed)
+- Application type: Universal Windows Platform (UWP)
+- Store package ID: Any valid string (e.g., "epithet-ssh-ca")
+- You'll get: **Client ID** (e.g., `123456-abc.apps.googleusercontent.com`)
+
+**Alternative: Create a Desktop app** (requires client secret)
+- Application type: Desktop app
+- You'll get: **Client ID** and **Client Secret**
 
 ### 2. Configure Epithet
 
 Create `~/.epithet/config`:
 
+**For UWP apps (recommended):**
 ```
 # Match pattern: which hosts should use epithet
 match *.corp.example.com
@@ -29,11 +35,23 @@ match *.corp.example.com
 # CA server URL
 ca-url https://ca.corp.example.com
 
-# Authentication: Google Workspace via OIDC
+# Authentication: Google Workspace via OIDC (no client secret needed)
 auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com
 ```
 
-Replace `YOUR_CLIENT_ID` with your actual client ID from step 1.
+**For Desktop apps:**
+```
+# Match pattern: which hosts should use epithet
+match *.corp.example.com
+
+# CA server URL
+ca-url https://ca.corp.example.com
+
+# Authentication: Google Workspace via OIDC (client secret required)
+auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET
+```
+
+Replace `YOUR_CLIENT_ID` (and optionally `YOUR_CLIENT_SECRET`) with your actual credentials from step 1.
 
 ### 3. Configure SSH
 

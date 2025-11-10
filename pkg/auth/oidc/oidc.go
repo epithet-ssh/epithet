@@ -9,6 +9,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/int128/oauth2cli"
+	"github.com/pkg/browser"
 	"golang.org/x/oauth2"
 )
 
@@ -48,7 +49,8 @@ func Run(ctx context.Context, cfg Config) error {
 
 	// Configure OAuth2
 	oauth2Config := oauth2.Config{
-		ClientID:     cfg.ClientID,
+		ClientID: cfg.ClientID,
+		// Only set ClientSecret if provided (for PKCE, it should be empty)
 		ClientSecret: cfg.ClientSecret,
 		Endpoint:     provider.Endpoint(),
 		Scopes:       cfg.Scopes,
@@ -108,32 +110,71 @@ func Run(ctx context.Context, cfg Config) error {
 // performFullAuth performs the full OAuth2 authorization code flow with PKCE.
 // It starts a local HTTP server, opens the browser, and waits for the callback.
 func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.Token, error) {
+	// Create a channel to receive the local server URL
+	readyChan := make(chan string, 1)
+
+	// Generate PKCE verifier (random code for this auth flow)
+	verifier := oauth2.GenerateVerifier()
+
 	// Use oauth2cli for the CLI authentication flow
 	// It handles:
 	// - Starting local HTTP server on random available port
 	// - Opening browser
 	// - Handling OAuth callback
-	// - PKCE
 	cfg := oauth2cli.Config{
-		OAuth2Config: oauth2Config,
+		OAuth2Config:         oauth2Config,
+		LocalServerReadyChan: readyChan,
 		// Let oauth2cli pick an available port automatically
 	}
 
-	// Add PKCE and offline access (for refresh tokens)
+	// Add PKCE, offline access, and force consent (for refresh tokens)
 	cfg.AuthCodeOptions = []oauth2.AuthCodeOption{
-		oauth2.AccessTypeOffline,
-		oauth2.ApprovalForce, // Force consent to ensure refresh token
+		oauth2.S256ChallengeOption(verifier), // PKCE challenge
+		oauth2.AccessTypeOffline,             // Request refresh token
+		oauth2.ApprovalForce,                 // Force consent to ensure refresh token
+	}
+
+	// Add PKCE verifier to token exchange
+	cfg.TokenRequestOptions = []oauth2.AuthCodeOption{
+		oauth2.VerifierOption(verifier), // PKCE verifier
 	}
 
 	// Notify user that browser is opening
 	fmt.Fprintln(os.Stderr, "Opening browser for authentication...")
 
-	// Perform the authentication
-	token, err := oauth2cli.GetToken(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("authentication failed: %w", err)
+	// Start authentication in background
+	tokenChan := make(chan *oauth2.Token, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		token, err := oauth2cli.GetToken(ctx, cfg)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		tokenChan <- token
+	}()
+
+	// Wait for the local server to be ready, then open browser
+	select {
+	case url := <-readyChan:
+		fmt.Fprintf(os.Stderr, "\nIf your browser doesn't open automatically, visit:\n%s\n\n", url)
+		// Attempt to open the browser
+		if err := browser.OpenURL(url); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not open browser automatically: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Please open the URL above manually.\n")
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 
-	fmt.Fprintln(os.Stderr, "Authentication successful!")
-	return token, nil
+	// Wait for authentication to complete
+	select {
+	case token := <-tokenChan:
+		fmt.Fprintln(os.Stderr, "Authentication successful!")
+		return token, nil
+	case err := <-errChan:
+		return nil, fmt.Errorf("authentication failed: %w", err)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

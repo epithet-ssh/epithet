@@ -16,21 +16,39 @@ To use `epithet auth oidc`, you need to create an OAuth2 application in your ide
 2. Select or create a project
 3. Navigate to **APIs & Services** → **Credentials**
 4. Click **Create Credentials** → **OAuth client ID**
-5. Choose **Application type**: **Desktop app**
+5. Choose **Application type** - see options below
 6. Enter a name (e.g., "Epithet SSH CA")
 7. Click **Create**
 
+**Application Type Options:**
+
+**Option A: Universal Windows Platform (UWP)** *(Recommended - No client secret needed)*
+- Choose **"Universal Windows Platform (UWP)"**
+- Fill in **Store package ID** with any valid string (e.g., "epithet-ssh-ca")
+- **Advantage**: Works with PKCE only, no client secret required
+- **Note**: Despite the name, this works for any CLI tool on any platform
+
+**Option B: Desktop app** *(Requires client secret)*
+- Choose **"Desktop app"**
+- **Advantage**: Standard Desktop app type
+- **Disadvantage**: Google requires client secret even with PKCE
+- You'll need to include `--client-secret` in your epithet configuration
+
 ### Step 2: Configure Redirect URI
 
-For desktop apps, Google automatically accepts `http://localhost` with any port. No manual configuration needed!
+Both app types automatically accept `http://localhost` with any port. No manual configuration needed!
 
 ### Step 3: Note Your Credentials
 
 You'll see a dialog with:
 - **Client ID**: Something like `123456-abc.apps.googleusercontent.com`
-- **Client secret**: Optional (you can leave it blank in epithet)
+- **Client secret**: 
+  - **UWP apps**: Not needed (can ignore)
+  - **Desktop apps**: Required - note this value
 
 ### Step 4: Configure Epithet
+
+**For UWP apps (no client secret needed):**
 
 ```bash
 epithet agent \
@@ -41,12 +59,32 @@ epithet agent \
     --client-id YOUR_CLIENT_ID.apps.googleusercontent.com"
 ```
 
-Or in a config file (`~/.epithet/config`):
+**For Desktop apps (client secret required):**
 
+```bash
+epithet agent \
+  --match '*.example.com' \
+  --ca-url https://ca.example.com \
+  --auth "epithet auth oidc \
+    --issuer https://accounts.google.com \
+    --client-id YOUR_CLIENT_ID.apps.googleusercontent.com \
+    --client-secret YOUR_CLIENT_SECRET"
+```
+
+**Or in a config file (`~/.epithet/config`):**
+
+UWP apps:
 ```
 match *.example.com
 ca-url https://ca.example.com
 auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com
+```
+
+Desktop apps:
+```
+match *.example.com
+ca-url https://ca.example.com
+auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET
 ```
 
 ### Step 5: First Authentication

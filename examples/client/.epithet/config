@@ -1,3 +1,5 @@
 ca-url      {env.EPITHET_CA}
 auth        {config_dir}/test-auth-plugin.sh
 match       v0004
+
+#auth        epithet auth oidc --issuer https://accounts.google.com --client-id {env.GOOGLE_OIDC_ID} --client-secret {env.GOOGLE_OIDC_SECRET}
