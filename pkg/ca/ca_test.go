@@ -65,7 +65,7 @@ func Test_NativeSign(t *testing.T) {
 
 func ascii(length int) ([]byte, error) {
 	b := make([]byte, length)
-	for i := 0; i < length; i++ {
+	for i := range length {
 		c, err := rand.Int(rand.Reader, big.NewInt(97))
 		if err != nil {
 			return nil, err

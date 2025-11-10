@@ -151,7 +151,7 @@ printf '%s' '{"count":1}' >&3
 
 	// Run two calls concurrently
 	done := make(chan bool, 2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			_, err := auth.Run(nil)
 			require.NoError(t, err)

@@ -173,7 +173,7 @@ func (c *PolicyCLI) Run(logger *slog.Logger) error {
 		if err != nil {
 			w.Header().Add("Content/type", "text/plain")
 			w.WriteHeader(500)
-			w.Write([]byte(fmt.Sprintf("%v", err)))
+			w.Write(fmt.Appendf(nil, "%v", err))
 			return
 		}
 

@@ -186,7 +186,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 
 	// Request certificate with retry logic for 401 errors
 	var certResp *caserver.CreateCertResponse
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		if attempt > 0 {
 			b.log.Debug("retrying certificate request", "attempt", attempt+1, "max", maxRetries)
 		}

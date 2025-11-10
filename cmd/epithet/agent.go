@@ -178,8 +178,8 @@ func checkSSHConfigInclude(homeDir, includePattern string, logger *slog.Logger) 
 	}
 
 	// Check for Include directive (case-insensitive, flexible whitespace)
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(content), "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		// Skip comments
 		if strings.HasPrefix(trimmed, "#") {

@@ -132,7 +132,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		return nil, fmt.Errorf("error creating signed nonce: %w", err)
 	}
 
-	body, err := json.Marshal(&map[string]interface{}{
+	body, err := json.Marshal(&map[string]any{
 		"token":      token,
 		"signature":  sig,
 		"connection": conn,

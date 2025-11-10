@@ -72,7 +72,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		w.Write([]byte(fmt.Sprintf("unable to read body: %s", err)))
+		w.Write(fmt.Appendf(nil, "unable to read body: %s", err))
 		return
 	}
 
@@ -80,7 +80,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		_, err := w.Write([]byte(fmt.Sprintf("unable to parse body: %s", err)))
+		_, err := w.Write(fmt.Appendf(nil, "unable to parse body: %s", err))
 		if err != nil {
 
 		}
@@ -101,7 +101,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		// Other error - return 500
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(500)
-		w.Write([]byte(fmt.Sprintf("%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)))
+		w.Write(fmt.Appendf(nil, "%s\nerror retrieving policy: %s", s.c.PolicyURL(), err))
 		return
 	}
 
@@ -109,7 +109,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		w.Write([]byte(fmt.Sprintf("error generating crt: %s", err)))
+		w.Write(fmt.Appendf(nil, "error generating crt: %s", err))
 		return
 	}
 
