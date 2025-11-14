@@ -22,3 +22,13 @@ output "region" {
   description = "AWS region where resources are deployed"
   value       = var.aws_region
 }
+
+output "cert_archive_bucket" {
+  description = "S3 bucket where certificate audit logs are archived"
+  value       = aws_s3_bucket.cert_archive.id
+}
+
+output "cert_archive_bucket_arn" {
+  description = "ARN of the S3 bucket for certificate archival"
+  value       = aws_s3_bucket.cert_archive.arn
+}

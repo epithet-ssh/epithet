@@ -1,6 +1,7 @@
 package caserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,28 +13,35 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"golang.org/x/crypto/ssh"
 )
 
 type caServer struct {
 	c          *ca.CA
 	httpClient *http.Client
 	log        *slog.Logger
+	certLogger CertLogger
 }
 
 // New creates a new CA Server which needs to then
 // be attached to some http server, a la
 // `http.ListenAndServeTLS(...)`
-func New(c *ca.CA, log *slog.Logger, httpClient *http.Client) http.Handler {
+func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLogger) http.Handler {
 	cas := &caServer{
 		c:          c,
 		log:        log,
 		httpClient: httpClient,
+		certLogger: certLogger,
 	}
 
 	if cas.httpClient == nil {
 		cas.httpClient = &http.Client{
 			Timeout: time.Second * 30,
 		}
+	}
+
+	if cas.certLogger == nil {
+		cas.certLogger = NewNoopCertLogger()
 	}
 
 	return cas
@@ -113,6 +121,11 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log certificate issuance (best-effort)
+	if err := s.logCertIssuance(r.Context(), cert, ccr.PublicKey, policyResp, ccr.Connection); err != nil {
+		s.log.Warn("failed to log certificate issuance", "error", err)
+	}
+
 	resp := CreateCertResponse{
 		Certificate: cert,
 		Policy:      policyResp.Policy,
@@ -137,4 +150,67 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))
+}
+
+// logCertIssuance logs a certificate issuance event with all metadata.
+func (s *caServer) logCertIssuance(
+	ctx context.Context,
+	cert sshcert.RawCertificate,
+	pubKey sshcert.RawPublicKey,
+	policyResp *ca.PolicyResponse,
+	conn policy.Connection,
+) error {
+	// Parse certificate to extract metadata
+	parsedCert, err := parseCert(cert)
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	// Generate public key fingerprint
+	fingerprint, err := generateFingerprint(pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate fingerprint: %w", err)
+	}
+
+	// Create cert event
+	event := &CertEvent{
+		Timestamp:            time.Now(),
+		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
+		Identity:             policyResp.CertParams.Identity,
+		Principals:           policyResp.CertParams.Names,
+		Connection:           conn,
+		ValidAfter:           time.Unix(int64(parsedCert.ValidAfter), 0),
+		ValidBefore:          time.Unix(int64(parsedCert.ValidBefore), 0),
+		Extensions:           policyResp.CertParams.Extensions,
+		PublicKeyFingerprint: fingerprint,
+		Policy:               policyResp.Policy,
+	}
+
+	// Log the event (best-effort, non-blocking)
+	return s.certLogger.LogCert(ctx, event)
+}
+
+// parseCert parses a raw SSH certificate to extract metadata.
+func parseCert(cert sshcert.RawCertificate) (*ssh.Certificate, error) {
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cert))
+	if err != nil {
+		return nil, err
+	}
+
+	sshCert, ok := pubKey.(*ssh.Certificate)
+	if !ok {
+		return nil, fmt.Errorf("not a certificate")
+	}
+
+	return sshCert, nil
+}
+
+// generateFingerprint generates an SSH fingerprint for a public key.
+func generateFingerprint(pubKey sshcert.RawPublicKey) (string, error) {
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pubKey))
+	if err != nil {
+		return "", err
+	}
+
+	return ssh.FingerprintSHA256(key), nil
 }

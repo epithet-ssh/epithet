@@ -67,7 +67,7 @@ func TestBrokerEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start CA server
-	caHTTPServer := httptest.NewServer(caserver.New(caInstance, logger, nil))
+	caHTTPServer := httptest.NewServer(caserver.New(caInstance, logger, nil, nil))
 	defer caHTTPServer.Close()
 
 	// Create auth command that returns a fake token

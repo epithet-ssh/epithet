@@ -47,7 +47,10 @@ func (c *CACLI) Run(logger *slog.Logger) error {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	r.Handle("/", caserver.New(caInstance, logger, nil))
+	// Create certificate logger for audit trail
+	certLogger := caserver.NewSlogCertLogger(logger)
+
+	r.Handle("/", caserver.New(caInstance, logger, nil, certLogger))
 
 	logger.Info("listening", "address", c.Address)
 	err = http.ListenAndServe(c.Address, r)
