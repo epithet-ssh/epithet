@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -30,10 +30,51 @@ type PolicyCLI struct {
 	CAPubkey   string   `help:"CA public key (URL like http://localhost:8080, file path, or literal SSH key)" required:"true"`
 }
 
-type policyRequestBody struct {
-	Signature  string            `json:"signature"`
-	Token      string            `json:"token"`
-	Connection policy.Connection `json:"connection"`
+// devPolicyEvaluator implements policyserver.PolicyEvaluator for the dev policy server
+type devPolicyEvaluator struct {
+	mode       string
+	principals []string
+	identity   string
+	expiration time.Duration
+	logger     *slog.Logger
+}
+
+func (e *devPolicyEvaluator) Evaluate(token string, conn policy.Connection) (*policyserver.Response, error) {
+	// Policy decision based on mode
+	switch e.mode {
+	case "allow-all":
+		e.logger.Info("policy decision: approved (allow-all mode)",
+			"remote_user", conn.RemoteUser,
+			"remote_host", conn.RemoteHost,
+			"port", conn.Port)
+
+		return &policyserver.Response{
+			CertParams: ca.CertParams{
+				Identity:   e.identity,
+				Names:      e.principals,
+				Expiration: e.expiration,
+				Extensions: map[string]string{
+					"permit-agent-forwarding": "",
+					"permit-pty":              "",
+					"permit-user-rc":          "",
+				},
+			},
+			Policy: policy.Policy{
+				HostPattern: "*",
+			},
+		}, nil
+
+	case "deny-all":
+		e.logger.Info("policy decision: denied (deny-all mode)",
+			"remote_user", conn.RemoteUser,
+			"remote_host", conn.RemoteHost,
+			"port", conn.Port)
+
+		return nil, policyserver.Forbidden("Policy denied by dev policy server (deny-all mode)")
+
+	default:
+		return nil, policyserver.InternalError(fmt.Sprintf("Unknown mode: %s", e.mode))
+	}
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key
@@ -89,105 +130,30 @@ func (c *PolicyCLI) Run(logger *slog.Logger) error {
 		return err
 	}
 
-	r := chi.NewRouter()
+	// Create policy evaluator
+	evaluator := &devPolicyEvaluator{
+		mode:       c.Mode,
+		principals: c.Principals,
+		identity:   c.Identity,
+		expiration: expiration,
+		logger:     logger,
+	}
 
-	// Middleware stack
+	// Create policy server handler
+	handler := policyserver.NewHandler(policyserver.Config{
+		CAPublicKey: sshcert.RawPublicKey(caPubkey),
+		Evaluator:   evaluator,
+	})
+
+	// Set up router with middleware
+	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	r.Post("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		buf, err := io.ReadAll(r.Body)
-		if err != nil {
-			panic(err)
-		}
-		r.Body.Close()
-
-		body := policyRequestBody{}
-		err = json.Unmarshal(buf, &body)
-		if err != nil {
-			panic(err)
-		}
-
-		signature := body.Signature
-		token := body.Token
-		conn := body.Connection
-
-		err = ca.Verify(sshcert.RawPublicKey(caPubkey), token, signature)
-		if err != nil {
-			w.Header().Add("Content/type", "text/plain")
-			w.WriteHeader(400)
-			w.Write([]byte("invalid token signature received from CA"))
-			return
-		}
-
-		// Policy decision based on mode
-		var approved bool
-		var denyReason string
-
-		switch c.Mode {
-		case "allow-all":
-			approved = true
-			logger.Info("policy decision: approved (allow-all mode)",
-				"remote_user", conn.RemoteUser,
-				"remote_host", conn.RemoteHost,
-				"port", conn.Port)
-
-		case "deny-all":
-			approved = false
-			denyReason = "Policy denied by dev policy server (deny-all mode)"
-			logger.Info("policy decision: denied (deny-all mode)",
-				"remote_user", conn.RemoteUser,
-				"remote_host", conn.RemoteHost,
-				"port", conn.Port)
-		}
-
-		// Deny if not approved
-		if !approved {
-			w.Header().Add("Content-Type", "text/plain")
-			w.WriteHeader(403)
-			w.Write([]byte(denyReason))
-			return
-		}
-
-		// Approve: build policy response
-		resp := &ca.PolicyResponse{
-			CertParams: ca.CertParams{
-				Identity:   c.Identity,
-				Names:      c.Principals,
-				Expiration: expiration,
-				Extensions: map[string]string{
-					"permit-agent-forwarding": "",
-					"permit-pty":              "",
-					"permit-user-rc":          "",
-				},
-			},
-			Policy: policy.Policy{
-				HostPattern: "*",
-			},
-		}
-
-		out, err := json.MarshalIndent(resp, "", "  ")
-		if err != nil {
-			w.Header().Add("Content/type", "text/plain")
-			w.WriteHeader(500)
-			w.Write(fmt.Appendf(nil, "%v", err))
-			return
-		}
-
-		// Log the connection info for demonstration
-		logger.Info("policy request",
-			"remote_user", conn.RemoteUser,
-			"remote_host", conn.RemoteHost,
-			"port", conn.Port,
-			"hash", conn.Hash)
-
-		w.Header().Add("Content/type", "application/json")
-		w.WriteHeader(200)
-		w.Write(out)
-	}))
+	r.Post("/", handler)
 
 	addr := fmt.Sprintf(":%d", c.Port)
 	logger.Info("starting dev policy server",

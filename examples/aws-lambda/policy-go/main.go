@@ -11,48 +11,25 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/policyserver"
 )
 
-// Request from CA
-type Request struct {
-	Token      string            `json:"token"`
-	Signature  string            `json:"signature"`
-	Connection policy.Connection `json:"connection"`
+// lambdaPolicyEvaluator implements policyserver.PolicyEvaluator for AWS Lambda
+type lambdaPolicyEvaluator struct {
+	policySecret string
 }
 
-// Response to CA
-type Response struct {
-	CertParams ca.CertParams `json:"certParams"`
-	Policy     policy.Policy `json:"policy"`
-}
-
-func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	// Parse request body
-	var req Request
-	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
-		return errorResponse(400, fmt.Sprintf("Invalid JSON: %v", err)), nil
-	}
-
-	// Verify CA signature
-	caPubKey := os.Getenv("CA_PUBLIC_KEY")
-	if caPubKey != "" {
-		if err := ca.Verify(sshcert.RawPublicKey(caPubKey), req.Token, req.Signature); err != nil {
-			return errorResponse(401, fmt.Sprintf("Invalid signature: %v", err)), nil
-		}
-	}
-
+func (e *lambdaPolicyEvaluator) Evaluate(token string, conn policy.Connection) (*policyserver.Response, error) {
 	// Validate shared secret token
-	policySecret := os.Getenv("POLICY_SECRET")
-	if policySecret == "" {
-		return errorResponse(500, "POLICY_SECRET not configured"), nil
+	if e.policySecret == "" {
+		return nil, policyserver.InternalError("POLICY_SECRET not configured")
 	}
-	if req.Token != policySecret {
-		return errorResponse(401, "Invalid authentication token"), nil
+	if token != e.policySecret {
+		return nil, policyserver.Unauthorized("Invalid authentication token")
 	}
 
 	// Use the remote user as the principal
-	remoteUser := req.Connection.RemoteUser
+	remoteUser := conn.RemoteUser
 	if remoteUser == "" {
 		remoteUser = "root"
 	}
@@ -60,7 +37,7 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 	// 5 minute expiration
 	expiration := 5 * time.Minute
 
-	resp := Response{
+	return &policyserver.Response{
 		CertParams: ca.CertParams{
 			Identity:   "personal-user",
 			Names:      []string{remoteUser},
@@ -75,8 +52,41 @@ func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (event
 		Policy: policy.Policy{
 			HostPattern: "*",
 		},
+	}, nil
+}
+
+func handler(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	// Create evaluator with environment config
+	evaluator := &lambdaPolicyEvaluator{
+		policySecret: os.Getenv("POLICY_SECRET"),
 	}
 
+	// Parse request body
+	var req policyserver.Request
+	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
+		return errorResponse(400, fmt.Sprintf("Invalid JSON: %v", err)), nil
+	}
+
+	// Verify CA signature if configured
+	caPubKey := os.Getenv("CA_PUBLIC_KEY")
+	if caPubKey != "" {
+		if err := ca.Verify([]byte(caPubKey), req.Token, req.Signature); err != nil {
+			return errorResponse(401, fmt.Sprintf("Invalid signature: %v", err)), nil
+		}
+	}
+
+	// Evaluate policy
+	resp, err := evaluator.Evaluate(req.Token, req.Connection)
+	if err != nil {
+		// Check if it's a PolicyError with specific status code
+		if policyErr, ok := err.(*policyserver.PolicyError); ok {
+			return errorResponse(policyErr.StatusCode, policyErr.Message), nil
+		}
+		// Default to 500 for unknown errors
+		return errorResponse(500, err.Error()), nil
+	}
+
+	// Success: return policy response
 	body, err := json.Marshal(resp)
 	if err != nil {
 		return errorResponse(500, fmt.Sprintf("Failed to marshal response: %v", err)), nil
