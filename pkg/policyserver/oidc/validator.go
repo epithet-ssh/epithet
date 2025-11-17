@@ -94,7 +94,7 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 	}
 
 	// Extract all claims into a map
-	var allClaims map[string]interface{}
+	var allClaims map[string]any
 	if err := idToken.Claims(&allClaims); err != nil {
 		return nil, fmt.Errorf("failed to extract claims: %w", err)
 	}
@@ -150,7 +150,7 @@ func (v *Validator) ValidateAccessToken(ctx context.Context, accessToken string)
 	}
 
 	// Extract claims from UserInfo
-	var allClaims map[string]interface{}
+	var allClaims map[string]any
 	if err := userInfo.Claims(&allClaims); err != nil {
 		return nil, fmt.Errorf("failed to extract UserInfo claims: %w", err)
 	}

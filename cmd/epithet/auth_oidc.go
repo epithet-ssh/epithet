@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,8 +36,8 @@ func (c *AuthOIDCCLI) Run(logger *slog.Logger) error {
 	// Parse scopes (handle both comma-separated and multiple values)
 	scopes := make([]string, 0)
 	for _, scope := range c.Scopes {
-		parts := strings.Split(scope, ",")
-		for _, part := range parts {
+		parts := strings.SplitSeq(scope, ",")
+		for part := range parts {
 			trimmed := strings.TrimSpace(part)
 			if trimmed != "" {
 				scopes = append(scopes, trimmed)
@@ -45,13 +46,7 @@ func (c *AuthOIDCCLI) Run(logger *slog.Logger) error {
 	}
 
 	// Ensure we always have at least openid scope
-	hasOpenID := false
-	for _, scope := range scopes {
-		if scope == "openid" {
-			hasOpenID = true
-			break
-		}
-	}
+	hasOpenID := slices.Contains(scopes, "openid")
 	if !hasOpenID {
 		scopes = append([]string{"openid"}, scopes...)
 	}

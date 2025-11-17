@@ -63,7 +63,7 @@ func TestSlogCertLogger(t *testing.T) {
 	}
 
 	// Parse JSON log line
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log output as JSON: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestCertEvent_toJSON_OmitsEmptyFields(t *testing.T) {
 	}
 
 	// Parse to map to check omitempty behavior
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(jsonBytes, &parsed); err != nil {
 		t.Fatalf("Failed to parse JSON: %v", err)
 	}
