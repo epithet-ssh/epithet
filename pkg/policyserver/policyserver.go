@@ -157,7 +157,7 @@ func writeError(w http.ResponseWriter, statusCode int, message string) {
 }
 
 // writeJSON writes a JSON response
-func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
+func writeJSON(w http.ResponseWriter, statusCode int, data any) {
 	body, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to marshal response: %v", err))

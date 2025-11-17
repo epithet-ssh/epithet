@@ -10,13 +10,13 @@ This document defines the configuration file format for the built-in OIDC-based 
 2. **Works with epithet auth oidc**: Primary use case is Google Workspace, Okta, Azure AD
 3. **Static mappings**: Adding users requires redeploying the server (acceptable trade-off for simplicity)
 4. **Clear authorization model**: Explicit allow/deny with no ambiguity
-5. **CUE-based parsing**: Uses CUE for configuration parsing (provides validation, defaults, and future extensibility)
+5. **YAML format with CUE parsing**: Uses CUE's YAML decoder for robust parsing with validation capabilities
 
 ## Configuration File Format
 
-### CUE/YAML Structure
+### YAML Structure
 
-Configuration files can be written in YAML (valid YAML is valid CUE) or native CUE syntax.
+Configuration files are written in YAML format. CUE's YAML decoder is used for parsing, which provides better validation and future extensibility options.
 
 ```yaml
 # CA public key for signature verification
@@ -226,31 +226,31 @@ hosts:
 
 ## Implementation Notes
 
-### CUE Parsing
+### YAML Parsing with CUE
 
-Use `cuelang.org/go/cue` for configuration parsing:
+Use `cuelang.org/go/encoding/yaml` for configuration parsing:
 
 ```go
 import (
-    "cuelang.org/go/cue"
     "cuelang.org/go/cue/cuecontext"
-    "cuelang.org/go/cue/load"
+    "cuelang.org/go/encoding/yaml"
 )
 
-// Parse config file (YAML or CUE)
+// Parse YAML config file
 ctx := cuecontext.New()
-val := ctx.CompileBytes(configFileBytes)
+file, err := yaml.Extract("", configFileBytes)
+val := ctx.BuildFile(file)
 
 // Decode into Go struct
 var config PolicyConfig
 err := val.Decode(&config)
 ```
 
-**Benefits of CUE**:
+**Benefits of CUE's YAML decoder**:
+- Handles casual YAML syntax (unquoted strings, etc.)
 - Validates structure and types automatically
-- Supports both YAML and CUE syntax
-- Future: Can add schema validation, constraints, computed fields
-- Future: Can use CUE's default value mechanisms
+- Better error messages than standard YAML parsers
+- Future: Can add CUE schema validation and constraints
 
 ### Token Validation
 
