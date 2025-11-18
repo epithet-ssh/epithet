@@ -83,9 +83,16 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	// Write access token to stdout (raw bytes, not JSON)
-	if _, err := os.Stdout.Write([]byte(newToken.AccessToken)); err != nil {
-		return fmt.Errorf("failed to write access token to stdout: %w", err)
+	// Extract ID token from the OAuth2 token response
+	// The ID token is a JWT that can be validated by the policy server
+	idToken, ok := newToken.Extra("id_token").(string)
+	if !ok || idToken == "" {
+		return fmt.Errorf("no id_token in response - ensure 'openid' scope is requested")
+	}
+
+	// Write ID token to stdout (raw bytes, not JSON)
+	if _, err := os.Stdout.Write([]byte(idToken)); err != nil {
+		return fmt.Errorf("failed to write ID token to stdout: %w", err)
 	}
 
 	// Write new state to fd 3 (JSON-encoded token)

@@ -24,7 +24,8 @@ type Evaluator struct {
 func New(ctx context.Context, cfg *config.PolicyConfig) (*Evaluator, error) {
 	// Create OIDC validator
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: cfg.OIDC,
+		Issuer:   cfg.OIDC.Issuer,
+		ClientID: cfg.OIDC.Audience,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OIDC validator: %w", err)
@@ -56,50 +57,66 @@ func (e *Evaluator) Evaluate(token string, conn policy.Connection) (*policyserve
 	// Get requested principal (the SSH username they're trying to login as)
 	requestedPrincipal := conn.RemoteUser
 
-	// Check if there's a host-specific policy
+	// Compute ALL principals this user is authorized for
+	authorizedPrincipals := e.computeAuthorizedPrincipals(userTags)
+
+	// Check if the requested principal is in the authorized set
+	if !slices.Contains(authorizedPrincipals, requestedPrincipal) {
+		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for principal %s", identity, requestedPrincipal))
+	}
+
+	// Determine expiration and extensions
+	// Use host-specific settings if available, otherwise use defaults
+	var expiration string
+	var extensions map[string]string
+	var hostPattern string
+
 	if hostPolicy, exists := e.config.Hosts[conn.RemoteHost]; exists {
-		return e.evaluateHostPolicy(identity, requestedPrincipal, userTags, conn, hostPolicy)
+		expiration = hostPolicy.Expiration
+		extensions = hostPolicy.Extensions
+		hostPattern = conn.RemoteHost
+	} else {
+		hostPattern = "*"
 	}
 
-	// Use global policy
-	return e.evaluateGlobalPolicy(identity, requestedPrincipal, userTags, conn)
+	// Build response with ALL authorized principals
+	return e.buildResponse(identity, authorizedPrincipals, expiration, extensions, hostPattern)
 }
 
-// evaluateHostPolicy evaluates policy for a specific host
-func (e *Evaluator) evaluateHostPolicy(identity string, requestedPrincipal string, userTags []string, conn policy.Connection, hostPolicy *config.HostPolicy) (*policyserver.Response, error) {
-	// Check if user is authorized for the requested principal on this host
-	if allowedTags, exists := hostPolicy.Allow[requestedPrincipal]; exists {
-		if e.hasAnyTag(userTags, allowedTags) {
-			return e.buildResponse(identity, []string{requestedPrincipal}, hostPolicy.Expiration, hostPolicy.Extensions, conn.RemoteHost)
-		}
-	}
+// computeAuthorizedPrincipals computes ALL principals the user is authorized for
+// based on their tags. This checks both global defaults and all host-specific policies,
+// returning the union of all authorized principals.
+func (e *Evaluator) computeAuthorizedPrincipals(userTags []string) []string {
+	principalsSet := make(map[string]bool)
 
-	// Fall back to global defaults if no host-specific rule
+	// Check global defaults
 	if e.config.Defaults != nil && e.config.Defaults.Allow != nil {
-		if allowedTags, exists := e.config.Defaults.Allow[requestedPrincipal]; exists {
+		for principal, allowedTags := range e.config.Defaults.Allow {
 			if e.hasAnyTag(userTags, allowedTags) {
-				return e.buildResponse(identity, []string{requestedPrincipal}, hostPolicy.Expiration, hostPolicy.Extensions, conn.RemoteHost)
+				principalsSet[principal] = true
 			}
 		}
 	}
 
-	// Deny: user not authorized for this principal on this host
-	return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for principal %s on host %s", identity, requestedPrincipal, conn.RemoteHost))
-}
-
-// evaluateGlobalPolicy evaluates global policy (no host-specific override)
-func (e *Evaluator) evaluateGlobalPolicy(identity string, requestedPrincipal string, userTags []string, conn policy.Connection) (*policyserver.Response, error) {
-	// Check defaults
-	if e.config.Defaults != nil && e.config.Defaults.Allow != nil {
-		if allowedTags, exists := e.config.Defaults.Allow[requestedPrincipal]; exists {
-			if e.hasAnyTag(userTags, allowedTags) {
-				return e.buildResponse(identity, []string{requestedPrincipal}, "", nil, "*")
+	// Check all host-specific policies
+	for _, hostPolicy := range e.config.Hosts {
+		if hostPolicy.Allow != nil {
+			for principal, allowedTags := range hostPolicy.Allow {
+				if e.hasAnyTag(userTags, allowedTags) {
+					principalsSet[principal] = true
+				}
 			}
 		}
 	}
 
-	// Deny: no rule allows this principal
-	return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for principal %s", identity, requestedPrincipal))
+	// Convert set to sorted slice
+	principals := make([]string, 0, len(principalsSet))
+	for principal := range principalsSet {
+		principals = append(principals, principal)
+	}
+	slices.Sort(principals)
+
+	return principals
 }
 
 // hasAnyTag checks if user has any of the allowed tags

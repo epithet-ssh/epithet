@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
@@ -9,14 +11,22 @@ import (
 func TestParse_MinimalConfig(t *testing.T) {
 	yaml := `
 ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://accounts.google.com"
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
 
 users:
   "alice@example.com": [alice]
   "bob@example.com": [bob]
 `
 
-	cfg, err := config.Parse([]byte(yaml))
+	// Write to temp file
+	tempFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	cfg, err := config.LoadFromFile(tempFile)
 	if err != nil {
 		t.Fatalf("failed to parse config: %v", err)
 	}
@@ -25,7 +35,7 @@ users:
 		t.Errorf("unexpected ca_public_key: %s", cfg.CAPublicKey)
 	}
 
-	if cfg.OIDC != "https://accounts.google.com" {
+	if cfg.OIDC.Issuer != "https://accounts.google.com" {
 		t.Errorf("unexpected oidc: %s", cfg.OIDC)
 	}
 
@@ -41,7 +51,9 @@ users:
 func TestParse_WithDefaults(t *testing.T) {
 	yaml := `
 ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://accounts.google.com"
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
 
 users:
   "alice@example.com": [admin]
@@ -56,7 +68,12 @@ defaults:
     permit-agent-forwarding: ""
 `
 
-	cfg, err := config.Parse([]byte(yaml))
+	tempFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	cfg, err := config.LoadFromFile(tempFile)
 	if err != nil {
 		t.Fatalf("failed to parse config: %v", err)
 	}
@@ -85,7 +102,9 @@ defaults:
 func TestParse_WithHosts(t *testing.T) {
 	yaml := `
 ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://accounts.google.com"
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
 
 users:
   "alice@example.com": [dba-tag]
@@ -97,7 +116,12 @@ hosts:
     expiration: "2m"
 `
 
-	cfg, err := config.Parse([]byte(yaml))
+	tempFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	cfg, err := config.LoadFromFile(tempFile)
 	if err != nil {
 		t.Fatalf("failed to parse config: %v", err)
 	}
@@ -122,12 +146,19 @@ hosts:
 
 func TestParse_MissingCAPublicKey(t *testing.T) {
 	yaml := `
-oidc: "https://accounts.google.com"
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
 users:
   "alice@example.com": [alice]
 `
 
-	_, err := config.Parse([]byte(yaml))
+	tempFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	_, err := config.LoadFromFile(tempFile)
 	if err == nil {
 		t.Fatal("expected error for missing ca_public_key, got nil")
 	}
@@ -140,7 +171,12 @@ users:
   "alice@example.com": [alice]
 `
 
-	_, err := config.Parse([]byte(yaml))
+	tempFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	_, err := config.LoadFromFile(tempFile)
 	if err == nil {
 		t.Fatal("expected error for missing oidc, got nil")
 	}
@@ -149,14 +185,21 @@ users:
 func TestParse_InvalidExpiration(t *testing.T) {
 	yaml := `
 ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://accounts.google.com"
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
 users:
   "alice@example.com": [alice]
 defaults:
   expiration: "invalid-duration"
 `
 
-	_, err := config.Parse([]byte(yaml))
+	tempFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	_, err := config.LoadFromFile(tempFile)
 	if err == nil {
 		t.Fatal("expected error for invalid expiration, got nil")
 	}
@@ -169,7 +212,7 @@ func TestLoadFromFile(t *testing.T) {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	if cfg.OIDC != "https://accounts.google.com" {
+	if cfg.OIDC.Issuer != "https://accounts.google.com" {
 		t.Errorf("unexpected oidc: %s", cfg.OIDC)
 	}
 

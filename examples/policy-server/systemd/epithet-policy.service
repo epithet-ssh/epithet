@@ -1,0 +1,38 @@
+[Unit]
+Description=Epithet Policy Server
+Documentation=https://github.com/epithet-ssh/epithet
+After=network-online.target
+Wants=network-online.target
+Before=epithet-ca.service
+
+[Service]
+Type=simple
+User=epithet
+Group=epithet
+
+# Policy server configuration
+ExecStart=/usr/local/bin/epithet policy \
+  --config-file /etc/epithet/policy.yaml \
+  --ca-pubkey "$(cat /etc/epithet/ca_key.pub)" \
+  --port 9999
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/epithet
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=epithet-policy
+
+[Install]
+WantedBy=multi-user.target

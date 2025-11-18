@@ -15,12 +15,13 @@ var cli struct {
 	Verbose int             `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	Config  kong.ConfigFlag `help:"Path to config file"`
 
-	Agent AgentCLI `cmd:"agent" help:"start the epithet agent"`
-	Match MatchCLI `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
-	CA    CACLI    `cmd:"ca" help:"Run the epithet CA server"`
-	AWS   AWSCLI   `cmd:"aws" help:"AWS deployment commands"`
-	Dev   DevCLI   `cmd:"dev" help:"Development tools for testing and debugging"`
-	Auth  AuthCLI  `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
+	Agent  AgentCLI        `cmd:"agent" help:"start the epithet agent"`
+	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
+	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
+	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
+	AWS    AWSCLI          `cmd:"aws" help:"AWS deployment commands"`
+	Dev    DevCLI          `cmd:"dev" help:"Development tools for testing and debugging"`
+	Auth   AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }
 
 func main() {
@@ -90,7 +91,7 @@ func KVLoader(r io.Reader) (kong.Resolver, error) {
 			continue
 		}
 		key := strings.ToLower(strings.ReplaceAll(parts[0], "_", "-"))
-		val := parts[1]
+		val := strings.Join(parts[1:], " ") // Join all parts after the key
 
 		// Expand templates in value
 		val = expandConfigTemplates(val, configDir, homeDir)

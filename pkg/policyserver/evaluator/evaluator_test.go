@@ -20,7 +20,10 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 
 	cfg := &config.PolicyConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC:        "https://accounts.google.com",
+		OIDC: config.OIDCConfig{
+			Issuer:   "https://accounts.google.com",
+			Audience: "test-client-id",
+		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 			"bob@example.com":   {"user"},
@@ -51,7 +54,10 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 
 	cfg := &config.PolicyConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC:        "https://accounts.google.com",
+		OIDC: config.OIDCConfig{
+			Issuer:   "https://accounts.google.com",
+			Audience: "test-client-id",
+		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
@@ -80,7 +86,10 @@ func TestEvaluateHostPolicy(t *testing.T) {
 
 	cfg := &config.PolicyConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC:        "https://accounts.google.com",
+		OIDC: config.OIDCConfig{
+			Issuer:   "https://accounts.google.com",
+			Audience: "test-client-id",
+		},
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
@@ -106,7 +115,10 @@ func TestEvaluateHostPolicy(t *testing.T) {
 func TestNew_InvalidOIDCIssuer(t *testing.T) {
 	cfg := &config.PolicyConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC:        "https://invalid-oidc-provider.example.com",
+		OIDC: config.OIDCConfig{
+			Issuer:   "https://invalid-oidc-provider.example.com",
+			Audience: "test-client-id",
+		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
@@ -125,7 +137,10 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 func ExampleEvaluator() {
 	cfg := &config.PolicyConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC:        "https://accounts.google.com",
+		OIDC: config.OIDCConfig{
+			Issuer:   "https://accounts.google.com",
+			Audience: "test-client-id",
+		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},

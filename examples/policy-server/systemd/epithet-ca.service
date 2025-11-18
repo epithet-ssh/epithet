@@ -1,0 +1,37 @@
+[Unit]
+Description=Epithet SSH Certificate Authority
+Documentation=https://github.com/epithet-ssh/epithet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=epithet
+Group=epithet
+
+# CA server configuration
+ExecStart=/usr/local/bin/epithet ca \
+  --key /etc/epithet/ca_key \
+  --policy http://localhost:9999 \
+  --address :8080
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/epithet
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=epithet-ca
+
+[Install]
+WantedBy=multi-user.target

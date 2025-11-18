@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  policy:
+    image: epithet:latest
+    container_name: epithet-policy
+    command: >
+      policy
+      --config-file /config/policy.yaml
+      --ca-pubkey "$$(cat /config/ca_key.pub)"
+      --port 9999
+    volumes:
+      - ./config:/config:ro
+    ports:
+      - "9999:9999"
+    restart: unless-stopped
+    networks:
+      - epithet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  ca:
+    image: epithet:latest
+    container_name: epithet-ca
+    command: >
+      ca
+      --key /config/ca_key
+      --policy http://policy:9999
+      --address :8080
+    volumes:
+      - ./config:/config:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      policy:
+        condition: service_healthy
+    networks:
+      - epithet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  epithet:
+    driver: bridge

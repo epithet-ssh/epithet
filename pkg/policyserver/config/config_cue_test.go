@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
@@ -9,7 +11,10 @@ import (
 func TestParseCUE(t *testing.T) {
 	cue := `
 ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://accounts.google.com"
+oidc: {
+	issuer: "https://accounts.google.com"
+	audience: "test-client-id"
+}
 
 users: {
 	"alice@example.com": ["admin"]
@@ -25,12 +30,17 @@ defaults: {
 }
 `
 
-	cfg, err := config.ParseCUE([]byte(cue))
+	tempFile := filepath.Join(t.TempDir(), "config.cue")
+	if err := os.WriteFile(tempFile, []byte(cue), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	cfg, err := config.LoadFromFile(tempFile)
 	if err != nil {
 		t.Fatalf("failed to parse CUE: %v", err)
 	}
 
-	if cfg.OIDC != "https://accounts.google.com" {
+	if cfg.OIDC.Issuer != "https://accounts.google.com" {
 		t.Errorf("unexpected oidc: %s", cfg.OIDC)
 	}
 
@@ -53,7 +63,7 @@ func TestLoadFromFile_CUE(t *testing.T) {
 		t.Fatalf("failed to load CUE file: %v", err)
 	}
 
-	if cfg.OIDC != "https://accounts.google.com" {
+	if cfg.OIDC.Issuer != "https://accounts.google.com" {
 		t.Errorf("unexpected oidc: %s", cfg.OIDC)
 	}
 
@@ -68,7 +78,7 @@ func TestLoadFromFile_YAML(t *testing.T) {
 		t.Fatalf("failed to load YAML file: %v", err)
 	}
 
-	if cfg.OIDC != "https://accounts.google.com" {
+	if cfg.OIDC.Issuer != "https://accounts.google.com" {
 		t.Errorf("unexpected oidc: %s", cfg.OIDC)
 	}
 

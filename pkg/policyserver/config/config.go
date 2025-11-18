@@ -7,14 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
+	"cuelang.org/go/cue/load"
 	"cuelang.org/go/encoding/yaml"
 )
+
+// OIDCConfig represents OIDC configuration
+type OIDCConfig struct {
+	Issuer   string `yaml:"issuer" json:"issuer"`
+	Audience string `yaml:"audience" json:"audience"`
+}
 
 // PolicyConfig represents the policy server configuration
 type PolicyConfig struct {
 	CAPublicKey string                 `yaml:"ca_public_key" json:"ca_public_key"`
-	OIDC        string                 `yaml:"oidc" json:"oidc"`   // OIDC issuer URL
+	OIDC        OIDCConfig             `yaml:"oidc" json:"oidc"`
 	Users       map[string][]string    `yaml:"users" json:"users"` // user identity → tags
 	Defaults    *DefaultPolicy         `yaml:"defaults,omitempty" json:"defaults,omitempty"`
 	Hosts       map[string]*HostPolicy `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host policy
@@ -34,73 +42,95 @@ type HostPolicy struct {
 	Extensions map[string]string   `yaml:"extensions,omitempty" json:"extensions,omitempty"` // Override extensions
 }
 
-// LoadFromFile loads policy configuration from a file
-// Detects format based on file extension: .yaml/.yml for YAML, .cue for CUE
+// LoadFromFile loads policy configuration from a file or directory.
+//
+// For .cue files: Uses CUE's load.Instances to support CUE packages with imports and modules.
+// For .yaml/.yml/.json files: Uses direct parsing for standalone data files.
+// For directories: Loads all .cue files as a package (supports imports between files).
+//
+// Examples:
+//   - Single YAML: LoadFromFile("policy.yaml")
+//   - Single CUE: LoadFromFile("policy.cue")
+//   - CUE directory: LoadFromFile("./config")  // loads all .cue files as a package
+//   - With imports: CUE files in a directory can import each other
 func LoadFromFile(path string) (*PolicyConfig, error) {
-	// Read file
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	// Determine format from extension
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".cue":
-		return ParseCUE(data)
-	case ".yaml", ".yml":
-		return ParseYAML(data)
-	default:
-		// Default to YAML for backwards compatibility
-		return ParseYAML(data)
-	}
-}
-
-// Parse parses policy configuration from bytes (YAML format)
-// Deprecated: Use ParseYAML or ParseCUE explicitly
-func Parse(data []byte) (*PolicyConfig, error) {
-	return ParseYAML(data)
-}
-
-// ParseYAML parses policy configuration from YAML bytes
-func ParseYAML(data []byte) (*PolicyConfig, error) {
 	ctx := cuecontext.New()
 
-	// Decode YAML into CUE value
-	// This handles casual YAML syntax (unquoted strings, etc)
-	file, err := yaml.Extract("", data)
+	// Check if path exists
+	fileInfo, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+		return nil, fmt.Errorf("failed to stat path: %w", err)
 	}
 
-	// Build CUE value from the AST
-	val := ctx.BuildFile(file)
-	if err := val.Err(); err != nil {
-		return nil, fmt.Errorf("failed to build CUE value: %w", err)
-	}
+	var val cue.Value
 
-	// Decode into Go struct
-	var config PolicyConfig
-	if err := val.Decode(&config); err != nil {
-		return nil, fmt.Errorf("failed to decode config: %w", err)
-	}
+	// TODO refactor this to use file globing and load instances. Claude cannot seem to do it.
+	// TODO add schema validation
 
-	// Validate required fields
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
+	// Handle directories and .cue files using load.Instances
+	if fileInfo.IsDir() || strings.HasSuffix(strings.ToLower(path), ".cue") {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve path: %w", err)
+		}
 
-	return &config, nil
-}
+		cfg := &load.Config{
+			Dir:       filepath.Dir(absPath),
+			DataFiles: true,
+		}
 
-// ParseCUE parses policy configuration from CUE bytes
-func ParseCUE(data []byte) (*PolicyConfig, error) {
-	ctx := cuecontext.New()
+		var args []string
+		if fileInfo.IsDir() {
+			args = []string{path}
+		} else {
+			args = []string{absPath}
+		}
 
-	// Compile CUE source directly
-	val := ctx.CompileBytes(data)
-	if err := val.Err(); err != nil {
-		return nil, fmt.Errorf("failed to parse CUE: %w", err)
+		instances := load.Instances(args, cfg)
+		if len(instances) == 0 {
+			return nil, fmt.Errorf("no instances loaded from %s", path)
+		}
+
+		inst := instances[0]
+		if inst.Err != nil {
+			return nil, fmt.Errorf("failed to load config: %w", inst.Err)
+		}
+
+		val = ctx.BuildInstance(inst)
+		if err := val.Err(); err != nil {
+			return nil, fmt.Errorf("failed to build CUE value: %w", err)
+		}
+	} else {
+		// Handle standalone data files (YAML, JSON)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
+
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".yaml", ".yml":
+			// Use YAML decoder
+			file, err := yaml.Extract("", data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse YAML: %w", err)
+			}
+			val = ctx.BuildFile(file)
+		case ".json":
+			// JSON can be compiled directly
+			val = ctx.CompileBytes(data)
+		default:
+			// Try YAML as default
+			file, err := yaml.Extract("", data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse file: %w", err)
+			}
+			val = ctx.BuildFile(file)
+		}
+
+		if err := val.Err(); err != nil {
+			return nil, fmt.Errorf("failed to build CUE value: %w", err)
+		}
 	}
 
 	// Decode into Go struct
@@ -123,8 +153,12 @@ func (c *PolicyConfig) Validate() error {
 		return fmt.Errorf("ca_public_key is required")
 	}
 
-	if c.OIDC == "" {
-		return fmt.Errorf("oidc is required")
+	if c.OIDC.Issuer == "" {
+		return fmt.Errorf("oidc.issuer is required")
+	}
+
+	if c.OIDC.Audience == "" {
+		return fmt.Errorf("oidc.audience is required")
 	}
 
 	if c.Users == nil {
