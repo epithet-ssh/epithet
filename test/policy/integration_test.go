@@ -276,8 +276,8 @@ func TestDevPolicyServer(t *testing.T) {
 		t.Errorf("expected principals [testuser], got %v", policyResp.CertParams.Names)
 	}
 
-	if policyResp.Policy.HostPattern != "*" {
-		t.Errorf("expected hostPattern '*', got %q", policyResp.Policy.HostPattern)
+	if len(policyResp.Policy.HostUsers) == 0 || len(policyResp.Policy.HostUsers["*"]) == 0 {
+		t.Errorf("expected hostUsers with '*' pattern, got %v", policyResp.Policy.HostUsers)
 	}
 
 	t.Logf("Dev policy server test passed")

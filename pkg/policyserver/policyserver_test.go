@@ -39,7 +39,9 @@ func TestHandler_Success(t *testing.T) {
 				},
 			},
 			Policy: policy.Policy{
-				HostPattern: "*",
+				HostUsers: map[string][]string{
+					"*": {"testuser"},
+				},
 			},
 		},
 	}

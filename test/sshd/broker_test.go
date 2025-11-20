@@ -55,7 +55,9 @@ func TestBrokerEndToEnd(t *testing.T) {
 				},
 			},
 			Policy: policy.Policy{
-				HostPattern: "*", // Accept all hosts
+				HostUsers: map[string][]string{
+					"*": {"a", "b"}, // Accept all hosts for these users
+				},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)

@@ -3,6 +3,7 @@ package evaluator
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -54,33 +55,29 @@ func (e *Evaluator) Evaluate(token string, conn policy.Connection) (*policyserve
 		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not in users list", identity))
 	}
 
-	// Get requested principal (the SSH username they're trying to login as)
-	requestedPrincipal := conn.RemoteUser
+	// Compute HostUsers mapping: for each host pattern, which users can this identity access?
+	hostUsers := e.computeHostUsers(userTags)
 
-	// Compute ALL principals this user is authorized for
-	authorizedPrincipals := e.computeAuthorizedPrincipals(userTags)
-
-	// Check if the requested principal is in the authorized set
-	if !slices.Contains(authorizedPrincipals, requestedPrincipal) {
-		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for principal %s", identity, requestedPrincipal))
+	// Check if the requested (host, user) is authorized
+	if !e.isAuthorized(hostUsers, conn) {
+		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for %s@%s", identity, conn.RemoteUser, conn.RemoteHost))
 	}
+
+	// Compute ALL principals this user is authorized for (for the certificate)
+	authorizedPrincipals := e.computeAuthorizedPrincipals(userTags)
 
 	// Determine expiration and extensions
 	// Use host-specific settings if available, otherwise use defaults
 	var expiration string
 	var extensions map[string]string
-	var hostPattern string
 
 	if hostPolicy, exists := e.config.Hosts[conn.RemoteHost]; exists {
 		expiration = hostPolicy.Expiration
 		extensions = hostPolicy.Extensions
-		hostPattern = conn.RemoteHost
-	} else {
-		hostPattern = "*"
 	}
 
-	// Build response with ALL authorized principals
-	return e.buildResponse(identity, authorizedPrincipals, expiration, extensions, hostPattern)
+	// Build response with HostUsers mapping
+	return e.buildResponseWithHostUsers(identity, authorizedPrincipals, expiration, extensions, hostUsers)
 }
 
 // computeAuthorizedPrincipals computes ALL principals the user is authorized for
@@ -129,8 +126,60 @@ func (e *Evaluator) hasAnyTag(userTags []string, allowedTags []string) bool {
 	return false
 }
 
-// buildResponse builds a policy response with the given parameters
-func (e *Evaluator) buildResponse(identity string, principals []string, expirationOverride string, extensionsOverride map[string]string, hostPattern string) (*policyserver.Response, error) {
+// computeHostUsers builds the mapping of host patterns to allowed users
+// based on the user's tags and configured policies.
+func (e *Evaluator) computeHostUsers(userTags []string) map[string][]string {
+	hostUsers := make(map[string][]string)
+
+	// From defaults (pattern "*")
+	if e.config.Defaults != nil && e.config.Defaults.Allow != nil {
+		var users []string
+		for principal, allowedTags := range e.config.Defaults.Allow {
+			if e.hasAnyTag(userTags, allowedTags) {
+				users = append(users, principal)
+			}
+		}
+		if len(users) > 0 {
+			slices.Sort(users)
+			hostUsers["*"] = users
+		}
+	}
+
+	// From host-specific policies
+	for hostname, hostPolicy := range e.config.Hosts {
+		if hostPolicy.Allow != nil {
+			var users []string
+			for principal, allowedTags := range hostPolicy.Allow {
+				if e.hasAnyTag(userTags, allowedTags) {
+					users = append(users, principal)
+				}
+			}
+			if len(users) > 0 {
+				slices.Sort(users)
+				hostUsers[hostname] = users
+			}
+		}
+	}
+
+	return hostUsers
+}
+
+// isAuthorized checks if the connection is allowed by the hostUsers mapping
+func (e *Evaluator) isAuthorized(hostUsers map[string][]string, conn policy.Connection) bool {
+	for pattern, users := range hostUsers {
+		matched, err := filepath.Match(pattern, conn.RemoteHost)
+		if err != nil || !matched {
+			continue
+		}
+		if slices.Contains(users, conn.RemoteUser) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildResponseWithHostUsers builds a policy response with HostUsers mapping
+func (e *Evaluator) buildResponseWithHostUsers(identity string, principals []string, expirationOverride string, extensionsOverride map[string]string, hostUsers map[string][]string) (*policyserver.Response, error) {
 	// Determine expiration
 	expiration := e.getExpiration(expirationOverride)
 
@@ -145,7 +194,7 @@ func (e *Evaluator) buildResponse(identity string, principals []string, expirati
 			Extensions: extensions,
 		},
 		Policy: policy.Policy{
-			HostPattern: hostPattern,
+			HostUsers: hostUsers,
 		},
 	}, nil
 }

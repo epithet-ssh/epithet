@@ -284,7 +284,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		ExpiresAt:  expiresAt,
 	})
 
-	b.log.Debug("certificate obtained and stored", "host", input.Connection.RemoteHost, "policy", certResp.Policy.HostPattern)
+	b.log.Debug("certificate obtained and stored", "host", input.Connection.RemoteHost, "user", input.Connection.RemoteUser, "policy", certResp.Policy.HostUsers)
 
 	// Step 4: Create agent with new certificate
 	credential := agent.Credential{

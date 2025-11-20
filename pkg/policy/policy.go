@@ -21,15 +21,24 @@ type Connection struct {
 
 // Policy represents the policy rules for certificate usage
 type Policy struct {
-	HostPattern string `json:"hostPattern"` // Glob pattern for matching hostnames (e.g., "*.example.com")
+	// HostUsers maps host patterns to allowed users for that host
+	// Example: {"*.example.com": ["arch", "deploy"], "prod-*": ["root"]}
+	HostUsers map[string][]string `json:"hostUsers"`
 }
 
-// Matches checks if this policy's pattern matches the given connection's remote hostname
+// Matches checks if this policy matches the given connection's host AND user
 func (p *Policy) Matches(conn Connection) bool {
-	matched, err := filepath.Match(p.HostPattern, conn.RemoteHost)
-	if err != nil {
-		// Invalid pattern, no match
-		return false
+	for pattern, users := range p.HostUsers {
+		matched, err := filepath.Match(pattern, conn.RemoteHost)
+		if err != nil || !matched {
+			continue
+		}
+		// Host matches, check if user is in allowed list
+		for _, u := range users {
+			if u == conn.RemoteUser {
+				return true
+			}
+		}
 	}
-	return matched
+	return false
 }

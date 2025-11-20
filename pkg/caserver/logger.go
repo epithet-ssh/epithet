@@ -55,7 +55,7 @@ func (l *SlogCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
 		slog.Time("valid_before", event.ValidBefore),
 		slog.Any("extensions", event.Extensions),
 		slog.String("public_key_fingerprint", event.PublicKeyFingerprint),
-		slog.String("host_pattern", event.Policy.HostPattern),
+		slog.Any("host_users", event.Policy.HostUsers),
 	)
 	return nil
 }
@@ -102,20 +102,20 @@ func (n *NoopCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
 // certEventForJSON is a JSON-friendly representation of CertEvent.
 // Used by S3CertArchiver and other JSON-based loggers.
 type certEventForJSON struct {
-	Timestamp            time.Time         `json:"timestamp"`
-	SerialNumber         string            `json:"serial_number"`
-	Identity             string            `json:"identity"`
-	Principals           []string          `json:"principals"`
-	RemoteHost           string            `json:"remote_host"`
-	RemoteUser           string            `json:"remote_user"`
-	Port                 int               `json:"port"`
-	Hash                 string            `json:"hash"`
-	ProxyJump            string            `json:"proxy_jump,omitempty"`
-	ValidAfter           time.Time         `json:"valid_after"`
-	ValidBefore          time.Time         `json:"valid_before"`
-	Extensions           map[string]string `json:"extensions,omitempty"`
-	PublicKeyFingerprint string            `json:"public_key_fingerprint"`
-	HostPattern          string            `json:"host_pattern"`
+	Timestamp            time.Time           `json:"timestamp"`
+	SerialNumber         string              `json:"serial_number"`
+	Identity             string              `json:"identity"`
+	Principals           []string            `json:"principals"`
+	RemoteHost           string              `json:"remote_host"`
+	RemoteUser           string              `json:"remote_user"`
+	Port                 int                 `json:"port"`
+	Hash                 string              `json:"hash"`
+	ProxyJump            string              `json:"proxy_jump,omitempty"`
+	ValidAfter           time.Time           `json:"valid_after"`
+	ValidBefore          time.Time           `json:"valid_before"`
+	Extensions           map[string]string   `json:"extensions,omitempty"`
+	PublicKeyFingerprint string              `json:"public_key_fingerprint"`
+	HostUsers            map[string][]string `json:"host_users"`
 }
 
 // toJSON converts a CertEvent to JSON bytes.
@@ -134,7 +134,7 @@ func (e *CertEvent) toJSON() ([]byte, error) {
 		ValidBefore:          e.ValidBefore,
 		Extensions:           e.Extensions,
 		PublicKeyFingerprint: e.PublicKeyFingerprint,
-		HostPattern:          e.Policy.HostPattern,
+		HostUsers:            e.Policy.HostUsers,
 	}
 	return json.Marshal(je)
 }

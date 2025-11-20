@@ -49,22 +49,13 @@ func NewCertificateStore() *CertificateStore {
 	}
 }
 
-// Store adds or updates a certificate for a given policy.
-// If a certificate already exists for this policy, it is replaced.
+// Store adds a certificate for a given policy.
+// No deduplication is performed - overlapping policies are fine and will coexist.
+// Certificates expire naturally and are cleaned up during Lookup.
 func (cs *CertificateStore) Store(pc PolicyCert) {
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
 
-	// Check if we already have a certificate for this policy
-	for i := range cs.certs {
-		if cs.certs[i].Policy.HostPattern == pc.Policy.HostPattern {
-			// Replace existing certificate
-			cs.certs[i] = pc
-			return
-		}
-	}
-
-	// Add new policy-certificate mapping
 	cs.certs = append(cs.certs, pc)
 }
 

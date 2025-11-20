@@ -60,7 +60,9 @@ func (e *devPolicyEvaluator) Evaluate(token string, conn policy.Connection) (*po
 				},
 			},
 			Policy: policy.Policy{
-				HostPattern: "*",
+				HostUsers: map[string][]string{
+					"*": {conn.RemoteUser}, // Allow this user on all hosts
+				},
 			},
 		}, nil
 
