@@ -15,12 +15,13 @@ var cli struct {
 	Verbose int             `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	Config  kong.ConfigFlag `help:"Path to config file"`
 
-	Agent  AgentCLI        `cmd:"agent" help:"start the epithet agent"`
-	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
-	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
-	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
-	AWS    AWSCLI          `cmd:"aws" help:"AWS deployment commands"`
-	Auth   AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
+	Agent   AgentCLI        `cmd:"agent" help:"start the epithet agent"`
+	Match   MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
+	Inspect InspectCLI      `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
+	CA      CACLI           `cmd:"ca" help:"Run the epithet CA server"`
+	Policy  PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
+	AWS     AWSCLI          `cmd:"aws" help:"AWS deployment commands"`
+	Auth    AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }
 
 func main() {

@@ -88,3 +88,20 @@ func (cs *CertificateStore) Lookup(conn policy.Connection) (agent.Credential, bo
 
 	return agent.Credential{}, false
 }
+
+// List returns information about all stored certificates.
+// Used by the inspect command to show broker state.
+func (cs *CertificateStore) List() []CertInfo {
+	cs.lock.RLock()
+	defer cs.lock.RUnlock()
+
+	result := make([]CertInfo, len(cs.certs))
+	for i, pc := range cs.certs {
+		result[i] = CertInfo{
+			Certificate: pc.Credential.Certificate,
+			Policy:      pc.Policy,
+			ExpiresAt:   pc.ExpiresAt,
+		}
+	}
+	return result
+}

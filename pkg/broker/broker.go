@@ -29,8 +29,9 @@ const (
 
 // agentEntry tracks a running agent and when its certificate expires
 type agentEntry struct {
-	agent     *agent.Agent
-	expiresAt time.Time
+	agent       *agent.Agent
+	expiresAt   time.Time
+	certificate sshcert.RawCertificate
 }
 
 // Broker manages authentication, certificate storage, and per-connection SSH agents.
@@ -134,6 +135,33 @@ type MatchResponse struct {
 
 	// Error contains any error which should be reported to the user on stderr
 	Error string
+}
+
+// InspectRequest is the input for Broker.Inspect RPC
+type InspectRequest struct{}
+
+// AgentInfo contains information about a running agent
+type AgentInfo struct {
+	Hash        string                 `json:"hash"`
+	SocketPath  string                 `json:"socketPath"`
+	ExpiresAt   time.Time              `json:"expiresAt"`
+	Certificate sshcert.RawCertificate `json:"certificate"`
+}
+
+// CertInfo contains information about a stored certificate
+type CertInfo struct {
+	Certificate sshcert.RawCertificate `json:"certificate"`
+	Policy      policy.Policy          `json:"policy"`
+	ExpiresAt   time.Time              `json:"expiresAt"`
+}
+
+// InspectResponse contains the current broker state
+type InspectResponse struct {
+	SocketPath     string      `json:"socketPath"`
+	AgentSocketDir string      `json:"agentSocketDir"`
+	MatchPatterns  []string    `json:"matchPatterns"`
+	Agents         []AgentInfo `json:"agents"`
+	Certificates   []CertInfo  `json:"certificates"`
 }
 
 // Match is invoked via rpc from `epithet match` invocations
@@ -324,12 +352,13 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 		if err != nil {
 			return fmt.Errorf("failed to update agent credential: %w", err)
 		}
-		// Update expiration time from certificate
+		// Update expiration time and certificate
 		expiresAt, err := credential.Certificate.Expiry()
 		if err != nil {
 			return fmt.Errorf("failed to parse certificate expiry: %w", err)
 		}
 		entry.expiresAt = expiresAt
+		entry.certificate = credential.Certificate
 		b.agents[connectionHash] = entry
 		return nil
 	}
@@ -375,8 +404,9 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 
 	// Store the agent entry
 	b.agents[connectionHash] = agentEntry{
-		agent:     ag,
-		expiresAt: expiresAt,
+		agent:       ag,
+		expiresAt:   expiresAt,
+		certificate: credential.Certificate,
 	}
 
 	b.log.Info("agent created and started", "hash", connectionHash, "socket", socketPath)
@@ -553,4 +583,31 @@ func (b *Broker) Running() bool {
 	default:
 		return true
 	}
+}
+
+// Inspect is invoked via RPC from `epithet inspect` to get broker state
+func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	output.SocketPath = b.brokerSocketPath
+	output.AgentSocketDir = b.agentSocketDir
+	output.MatchPatterns = b.matchPatterns
+
+	// Get agent info
+	output.Agents = make([]AgentInfo, 0, len(b.agents))
+	for hash, entry := range b.agents {
+		socketPath := filepath.Join(b.agentSocketDir, string(hash))
+		output.Agents = append(output.Agents, AgentInfo{
+			Hash:        string(hash),
+			SocketPath:  socketPath,
+			ExpiresAt:   entry.expiresAt,
+			Certificate: entry.certificate,
+		})
+	}
+
+	// Get certificate info
+	output.Certificates = b.certStore.List()
+
+	return nil
 }
