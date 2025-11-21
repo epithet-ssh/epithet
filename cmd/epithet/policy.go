@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
@@ -72,4 +75,44 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger) error {
 		"ca_pubkey_length", len(caPubkey))
 
 	return http.ListenAndServe(addr, r)
+}
+
+// resolveCAPubkey resolves the CA public key from a URL, file path, or literal key
+func resolveCAPubkey(input string) (string, error) {
+	// Check if it's a URL
+	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		resp, err := http.Get(input)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch CA public key from URL %s: %w", input, err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return "", fmt.Errorf("failed to fetch CA public key from URL %s: status %d", input, resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("failed to read CA public key from URL %s: %w", input, err)
+		}
+
+		return strings.TrimSpace(string(body)), nil
+	}
+
+	// Check if it's a file path (exists on filesystem)
+	if _, err := os.Stat(input); err == nil {
+		body, err := os.ReadFile(input)
+		if err != nil {
+			return "", fmt.Errorf("failed to read CA public key from file %s: %w", input, err)
+		}
+		return strings.TrimSpace(string(body)), nil
+	}
+
+	// Assume it's a literal SSH public key
+	// Basic validation: should start with ssh-
+	if !strings.HasPrefix(input, "ssh-") && !strings.HasPrefix(input, "ecdsa-") {
+		return "", fmt.Errorf("CA public key does not appear to be a valid SSH key (should start with ssh-* or ecdsa-*), not a valid URL, and file does not exist: %s", input)
+	}
+
+	return input, nil
 }

@@ -67,7 +67,8 @@ type Broker struct {
 	matchPatterns  []string         // Immutable after New()
 
 	// For graceful shutdown: track in-flight RPC connections
-	activeRPC sync.WaitGroup
+	activeRPC       sync.WaitGroup
+	shutdownTimeout time.Duration // Timeout for waiting on in-flight RPCs during shutdown
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
@@ -82,7 +83,14 @@ func New(log slog.Logger, socketPath string, authCommand string, caURL string, a
 		matchPatterns:    matchPatterns,
 		done:             make(chan struct{}),
 		log:              log,
+		shutdownTimeout:  2 * time.Second, // Default timeout for graceful shutdown
 	}
+}
+
+// SetShutdownTimeout sets the timeout for waiting on in-flight RPCs during shutdown.
+// Use 0 to skip waiting (useful for tests).
+func (b *Broker) SetShutdownTimeout(d time.Duration) {
+	b.shutdownTimeout = d
 }
 
 // Serve starts the broker listening on the configured socket and blocks until the context is cancelled.
@@ -504,9 +512,25 @@ func (b *Broker) cleanupExpiredAgentsOnce() {
 
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
-		// Only close listener if it was successfully created
+		// Stop accepting new connections
 		if b.brokerListener != nil {
 			_ = b.brokerListener.Close()
+		}
+
+		// Wait for in-flight RPCs to complete (with timeout)
+		if b.shutdownTimeout > 0 {
+			done := make(chan struct{})
+			go func() {
+				b.activeRPC.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				b.log.Debug("all in-flight RPCs completed")
+			case <-time.After(b.shutdownTimeout):
+				b.log.Warn("timeout waiting for in-flight RPCs, proceeding with shutdown")
+			}
 		}
 
 		// Close all agents

@@ -2,20 +2,10 @@ package policy_test
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
 // TestPolicyServerIntegration tests the full policy server with real config files
@@ -178,109 +168,6 @@ func TestPolicyServerCommand(t *testing.T) {
 			t.Errorf("help output missing %q\nOutput:\n%s", expected, outputStr)
 		}
 	}
-}
-
-// TestDevPolicyServer validates that the dev policy server still works
-func TestDevPolicyServer(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	// Start dev policy server in background
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Generate a test CA key for signature verification
-	caPub, caPriv, err := sshcert.GenerateKeys()
-	if err != nil {
-		t.Fatalf("failed to generate CA keypair: %v", err)
-	}
-
-	// Build the epithet binary
-	tempDir := t.TempDir()
-	epithetBin := filepath.Join(tempDir, "epithet")
-	buildCmd := exec.Command("go", "build", "-o", epithetBin, "../../cmd/epithet")
-	if output, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("failed to build epithet: %v\n%s", err, output)
-	}
-	port := "19999" // Use non-standard port to avoid conflicts
-
-	// Start dev policy server
-	cmd := exec.CommandContext(ctx, epithetBin, "dev", "policy",
-		"--mode", "allow-all",
-		"-p", "testuser",
-		"--port", port,
-		"--ca-pubkey", string(caPub))
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start dev policy server: %v", err)
-	}
-
-	// Wait for server to start
-	time.Sleep(1 * time.Second)
-
-	// Create CA instance for signing
-	testCA, err := ca.New(caPriv, "http://localhost:"+port)
-	if err != nil {
-		t.Fatalf("failed to create CA: %v", err)
-	}
-
-	// Sign the token
-	token := "test-token"
-	signature, err := testCA.Sign(token)
-	if err != nil {
-		t.Fatalf("failed to sign token: %v", err)
-	}
-
-	// Make a test request
-	reqBody := policyserver.Request{
-		Token:     token,
-		Signature: signature,
-		Connection: policy.Connection{
-			LocalHost:  "laptop.local",
-			RemoteHost: "server.example.com",
-			RemoteUser: "testuser",
-			Port:       22,
-			Hash:       "abc123",
-		},
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		t.Fatalf("failed to marshal request: %v", err)
-	}
-
-	resp, err := http.Post(fmt.Sprintf("http://localhost:%s/", port), "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to make request to dev policy server: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, buf.String())
-	}
-
-	var policyResp policyserver.Response
-	if err := json.NewDecoder(resp.Body).Decode(&policyResp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	// Verify response
-	if policyResp.CertParams.Identity != "steve" {
-		t.Errorf("expected identity 'steve', got %q", policyResp.CertParams.Identity)
-	}
-
-	if len(policyResp.CertParams.Names) != 1 || policyResp.CertParams.Names[0] != "testuser" {
-		t.Errorf("expected principals [testuser], got %v", policyResp.CertParams.Names)
-	}
-
-	if len(policyResp.Policy.HostUsers) == 0 || len(policyResp.Policy.HostUsers["*"]) == 0 {
-		t.Errorf("expected hostUsers with '*' pattern, got %v", policyResp.Policy.HostUsers)
-	}
-
-	t.Logf("Dev policy server test passed")
 }
 
 func contains(s, substr string) bool {

@@ -133,15 +133,6 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
   - Uses browser-based authentication flow with local callback server
   - See `examples/google-workspace/` for setup guide
 
-- **`epithet dev policy --mode <allow-all|deny-all> --ca-public-key <key|url|file> --principals <p1,p2,...>`**:
-  - **Status**: ✅ Implemented as trivial test stub (`cmd/epithet/dev.go`)
-  - **Purpose**: Local testing and demonstrating the policy server protocol only
-  - **Modes**: allow-all (always approves with hardcoded principals/identity), deny-all (always rejects)
-  - **Does NOT**: Parse tokens, validate with identity provider, make real authorization decisions
-  - **Limitations**: Returns fixed principals for all requests, always returns HostPattern="*"
-  - **Not suitable for production** - see "Critical Gaps" section below
-  - Useful for understanding the policy server HTTP protocol and testing certificate flows
-
 ### Core Architecture
 
 The system consists of four main components (all fully implemented):
@@ -344,8 +335,8 @@ func main() {
 
 ### Policy Server Protocol
 
-**Protocol Status**: ✅ CA-side implementation complete in `pkg/ca/ca.go:RequestPolicy()`
-**Server Implementation**: ⚠️ Only trivial test stub exists (`epithet dev policy`), no production-ready policy server
+**Protocol Status**: ✅ Fully implemented
+**Server Implementation**: ✅ Production-ready policy server (`epithet policy`) with OIDC token validation
 
 The CA validates authentication tokens by calling an external policy server over HTTP. The policy server is expected to verify the token and return certificate parameters.
 
@@ -393,8 +384,6 @@ The CA validates authentication tokens by calling an external policy server over
 - HTTP 403: Token valid but policy denied (CA returns PolicyDeniedError immediately)
 - HTTP 5xx: CA/policy server unavailable (CA returns CAUnavailableError)
 - HTTP 4xx: Invalid request format (CA returns InvalidRequestError)
-
-**Current Implementation**: `epithet dev policy` demonstrates the HTTP protocol but is only a trivial test stub (allow-all/deny-all modes with hardcoded principals). A production policy server needs to validate tokens, query identity providers, and make real authorization decisions. See "Critical Gaps" section.
 
 ### Error Handling and Match Behavior
 
@@ -689,11 +678,11 @@ All core components of the v2 architecture (described in README.md) are fully im
    - ✅ Automatic cleanup of expired agents (every 30 seconds)
    - ✅ Graceful shutdown with proper resource cleanup
 
-**5. CA and Policy Server** (`pkg/ca/`, `pkg/caserver/`):
+**5. CA and Policy Server** (`pkg/ca/`, `pkg/caserver/`, `pkg/policyserver/`):
    - ✅ Standalone CA server (`epithet ca`)
    - ✅ AWS Lambda CA deployment (`epithet aws ca`)
    - ✅ Policy server protocol with cryptographic verification (SSH signatures)
-   - ✅ Development policy server (`epithet dev policy`)
+   - ✅ Production policy server with OIDC validation (`epithet policy`)
    - ✅ Error code propagation (401, 403, 5xx, 4xx)
 
 **6. Authentication** (`cmd/epithet/auth_oidc.go`):
@@ -713,52 +702,21 @@ All core components of the v2 architecture (described in README.md) are fully im
    - ✅ Graceful shutdown and cleanup
    - ✅ Full end-to-end integration tests
 
-#### ⚠️ Critical Gaps (Blocking Production Use)
+#### ✅ Current Status: Production Ready
 
-1. **Certificate matching is incomplete** (`pkg/broker/certs.go`, `pkg/policy/policy.go`):
-   - **Problem**: Certificates only match on hostname (via `Policy.HostPattern`)
-   - **Missing**: Matching on remote user, auth identity, or certificate principals
-   - **Impact**: Multiple users connecting to the same host will reuse the same certificate
-   - **Example**: Alice gets cert with principal "alice" for server.example.com, then Bob connects to server.example.com and reuses Alice's cert (which will fail because SSH needs principal "bob")
-   - **Needed**: Policy needs to include user/identity dimensions, and certificate lookup must validate principals match the connection
+**v2 is complete and production-ready!** All critical components are fully implemented:
 
-2. **No useful policy server implementation**:
-   - **What exists**: `epithet dev policy` is a trivial test stub (allow-all or deny-all mode)
-   - **What it doesn't do**:
-     - Parse or validate the authentication token content
-     - Verify token with the identity provider (OIDC provider, etc.)
-     - Make real authorization decisions (check group membership, permissions, etc.)
-     - Return appropriate principals based on user identity and target system
-     - Implement realistic policies ("users in group X can access hosts Y as principals Z")
-   - **Impact**: Cannot make real-world authorization decisions
-   - **Needed**: Production policy server that validates tokens, queries directory services, and makes authorization decisions
-
-3. **Connection details in auth templates** (`pkg/broker/broker.go:198`):
-   - Auth command mustache templates don't yet receive connection details (%h, %p, %r, %C)
-   - Lower priority than the above issues
-
-#### 🚧 Current Status: Functional Prototype
-
-The system has all the **mechanisms** working (protocols, communication, token flow, certificate signing), but lacks **complete policy logic** for production use:
-
-**What works**:
-- ✅ All protocols and communication paths (broker ↔ match, broker ↔ CA, CA ↔ policy)
+- ✅ Certificate matching with HostUsers (matches host AND remote user)
+- ✅ Production policy server with OIDC token validation (`epithet policy`)
+- ✅ All protocols and communication paths working
 - ✅ Auth command protocol with state management
 - ✅ OIDC authentication with token refresh
 - ✅ Certificate signing and SSH agent integration
-- ✅ End-to-end flow for simple single-user scenarios
+- ✅ Multi-user scenarios supported
+- ✅ Full end-to-end integration tests
 
-**What's needed for production**:
-- ❌ Certificate matching that considers user/identity/principals
-- ❌ Real policy server that validates tokens and makes authorization decisions
-- ❌ Testing with multiple users and complex authorization scenarios
-- ❌ Production examples and deployment guides beyond trivial cases
-
-**Next Steps**:
-1. Design and implement proper certificate matching (policy includes user dimensions)
-2. Build a reference policy server implementation (validates OIDC tokens, checks claims, makes real authz decisions)
-3. Validate multi-user scenarios
-4. Production deployment examples with realistic policies
+**Minor remaining tasks**:
+- Connection details in auth templates (`pkg/broker/broker.go`) - auth command mustache templates don't yet receive connection details (%h, %p, %r, %C)
 
 ### Available Examples
 

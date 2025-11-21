@@ -20,7 +20,6 @@ var cli struct {
 	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
 	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
 	AWS    AWSCLI          `cmd:"aws" help:"AWS deployment commands"`
-	Dev    DevCLI          `cmd:"dev" help:"Development tools for testing and debugging"`
 	Auth   AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }
 

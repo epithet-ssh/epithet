@@ -21,6 +21,7 @@ printf '%s' "6:thello,"
 	agentSocketDir := t.TempDir() + "/sockets"
 
 	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Serve in background
 	go func() {
@@ -55,6 +56,7 @@ printf '%s' "6:thello,"
 	agentSocketDir := t.TempDir() + "/sockets"
 
 	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Serve in background
 	go func() {
@@ -159,6 +161,7 @@ printf '%s' "6:thello,"
 			agentSocketDir := t.TempDir() + "/sockets"
 
 			b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, tt.patterns)
+			b.SetShutdownTimeout(0) // Skip waiting in tests
 
 			result := b.shouldHandle(tt.hostname)
 			require.Equal(t, tt.expected, result, "hostname: %s, patterns: %v", tt.hostname, tt.patterns)
@@ -180,6 +183,7 @@ printf '%s' "6:thello,"
 	// Create broker that only handles *.example.com
 	patterns := []string{"*.example.com"}
 	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, patterns)
+	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Serve in background
 	go func() {
@@ -245,6 +249,7 @@ printf '%s' "6:thello,"
 	agentSocketDir := t.TempDir() + "/sockets"
 
 	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Manually create agent entries with different expiration times
 	b.lock.Lock()
