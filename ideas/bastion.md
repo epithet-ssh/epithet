@@ -1,5 +1,7 @@
 # Using epithet with SSH Jump Hosts
 
+> **Note**: This document was extracted from the `bastion` branch (Oct 2025) for future reference. None of this is currently implemented.
+
 ## Overview
 
 This document explores how epithet can work with SSH jump hosts (bastions) to provide certificate-based authentication for both the jump connection and the final target connection, while maintaining end-to-end encryption.

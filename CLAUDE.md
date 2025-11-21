@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Epithet is an SSH certificate authority system that makes SSH certificates easy to use. The project is currently undergoing a v2 rewrite (see README.md for v2 architecture details).
 
+Design notes, future ideas, and exploratory documents are kept in the `ideas/` directory for future reference.
+
 ## Version Control Policy
 
 **CRITICAL**: Do NOT create commits or interact with git to make new commits. The user will handle all commit creation.
