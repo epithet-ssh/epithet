@@ -58,7 +58,33 @@ defaults: {
 }
 
 func TestLoadFromFile_CUE(t *testing.T) {
-	cfg, err := config.LoadFromFile("../../../tmp/policy.cue")
+	cue := `
+ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+oidc: {
+	issuer: "https://accounts.google.com"
+	audience: "test-client-id"
+}
+
+users: {
+	"alice@example.com": ["admin"]
+	"bob@example.com": ["user"]
+}
+
+defaults: {
+	allow: {
+		root: ["admin"]
+		guest: ["user"]
+	}
+	expiration: "5m"
+}
+`
+
+	tempFile := filepath.Join(t.TempDir(), "policy.cue")
+	if err := os.WriteFile(tempFile, []byte(cue), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	cfg, err := config.LoadFromFile(tempFile)
 	if err != nil {
 		t.Fatalf("failed to load CUE file: %v", err)
 	}
@@ -73,7 +99,33 @@ func TestLoadFromFile_CUE(t *testing.T) {
 }
 
 func TestLoadFromFile_YAML(t *testing.T) {
-	cfg, err := config.LoadFromFile("../../../tmp/policy.yaml")
+	yaml := `
+ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
+
+users:
+  "alice@example.com":
+    - "admin"
+  "bob@example.com":
+    - "user"
+
+defaults:
+  allow:
+    root:
+      - "admin"
+    guest:
+      - "user"
+  expiration: "5m"
+`
+
+	tempFile := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(tempFile, []byte(yaml), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	cfg, err := config.LoadFromFile(tempFile)
 	if err != nil {
 		t.Fatalf("failed to load YAML file: %v", err)
 	}
