@@ -1,0 +1,27 @@
+ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
+
+# Users mapped to tags (roles/teams)
+users:
+  "alice@example.com": [admin, eng]
+  "bob@example.com": [eng]
+
+# Principals are group names, used with AuthorizedPrincipalsFile
+defaults:
+  allow:
+    wheel: [admin] # admins get wheel group
+    developers: [eng] # engineers get developers group
+  expiration: "5m"
+  extensions:
+    permit-pty: ""
+    permit-agent-forwarding: ""
+    permit-user-rc: ""
+
+hosts:
+  m0001: {} # uses defaults only
+  v0003:
+    allow:
+      deployers: [eng] # engineers get deployers group on v0003
+    expiration: "1h"

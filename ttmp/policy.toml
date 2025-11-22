@@ -1,0 +1,16 @@
+[server]
+ca_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+oidc-issuer = "https://accounts.google.com"
+# Optional: override OIDC discovery URL
+# discovery_url= "https://accounts.google.com/.well-known/openid-configuration"
+
+[users]
+a@example.com
+b@example.com
+c@example.com
+
+[hosts.m0001]
+m0001
+    principals: [arch, root]
+  v0003:
+    principals: [dev, root]
