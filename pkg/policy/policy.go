@@ -1,6 +1,9 @@
 package policy
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"slices"
+)
 
 // ConnectionHash is the OpenSSH %C hash value that uniquely identifies a connection.
 // This is computed by OpenSSH from the connection parameters (local host, remote host, port, user, ProxyJump).
@@ -34,10 +37,8 @@ func (p *Policy) Matches(conn Connection) bool {
 			continue
 		}
 		// Host matches, check if user is in allowed list
-		for _, u := range users {
-			if u == conn.RemoteUser {
-				return true
-			}
+		if slices.Contains(users, conn.RemoteUser) {
+			return true
 		}
 	}
 	return false
