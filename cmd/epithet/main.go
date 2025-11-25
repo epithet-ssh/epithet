@@ -8,12 +8,17 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/lmittmann/tint"
 )
 
 var cli struct {
 	Verbose int             `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	Config  kong.ConfigFlag `help:"Path to config file"`
+
+	// TLS configuration flags (global)
+	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
+	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
 	Agent   AgentCLI        `cmd:"agent" help:"start the epithet agent"`
 	Match   MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
@@ -34,7 +39,15 @@ func main() {
 
 	ktx := kong.Parse(&cli, kong.Configuration(KVLoader, "~/.epithet/config"))
 	logger := setupLogger()
+
+	// Create TLS config from global flags
+	tlsCfg := tlsconfig.Config{
+		Insecure:   cli.Insecure,
+		CACertFile: cli.TLSCACert,
+	}
+
 	ktx.Bind(logger)
+	ktx.Bind(tlsCfg)
 	err := ktx.Run()
 	if err != nil {
 		logger.Error("error", "error", err)

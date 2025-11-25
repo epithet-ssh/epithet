@@ -15,6 +15,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	rekor "github.com/sigstore/rekor/pkg/pki/ssh"
 	"golang.org/x/crypto/ssh"
 )
@@ -56,7 +57,9 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 	}
 
 	for _, o := range options {
-		o.apply(ca)
+		if err := o.apply(ca); err != nil {
+			return nil, err
+		}
 	}
 
 	if ca.httpClient == nil {
@@ -68,21 +71,34 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 	return ca, nil
 }
 
-// Option configures the agent
+// Option configures the CA
 type Option interface {
-	apply(*CA)
+	apply(*CA) error
 }
 
-type optionFunc func(*CA)
+type optionFunc func(*CA) error
 
-func (f optionFunc) apply(a *CA) {
-	f(a)
+func (f optionFunc) apply(a *CA) error {
+	return f(a)
 }
 
 // WithHTTPClient configures the CA to use the specified HTTP Client
 func WithHTTPClient(httpClient *http.Client) Option {
-	return optionFunc(func(c *CA) {
+	return optionFunc(func(c *CA) error {
 		c.httpClient = httpClient
+		return nil
+	})
+}
+
+// WithTLSConfig creates an HTTP client with the specified TLS configuration
+func WithTLSConfig(cfg tlsconfig.Config) Option {
+	return optionFunc(func(c *CA) error {
+		httpClient, err := tlsconfig.NewHTTPClientWithTimeout(cfg, time.Second*30)
+		if err != nil {
+			return fmt.Errorf("failed to create HTTP client: %w", err)
+		}
+		c.httpClient = httpClient
+		return nil
 	})
 }
 

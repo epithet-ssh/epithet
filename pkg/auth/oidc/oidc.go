@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/int128/oauth2cli"
 	"github.com/pkg/browser"
 	"golang.org/x/oauth2"
@@ -19,6 +20,7 @@ type Config struct {
 	ClientID     string
 	ClientSecret string // Optional for PKCE
 	Scopes       []string
+	TLSConfig    tlsconfig.Config
 }
 
 // Run performs OIDC authentication following the epithet auth plugin protocol.
@@ -40,6 +42,13 @@ func Run(ctx context.Context, cfg Config) error {
 			token = nil
 		}
 	}
+
+	// Create HTTP client with TLS config and inject into context
+	httpClient, err := tlsconfig.NewHTTPClient(cfg.TLSConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+	ctx = oidc.ClientContext(ctx, httpClient)
 
 	// Set up OIDC provider
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)

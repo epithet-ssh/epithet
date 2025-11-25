@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/auth/oidc"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // AuthOIDCCLI implements the "epithet auth oidc" command for OIDC/OAuth2 authentication.
@@ -28,7 +29,12 @@ type AuthOIDCCLI struct {
 //   - fd 3: new JSON-encoded oauth2.Token for next invocation
 //   - stderr: human-readable messages and errors
 //   - exit 0: success, non-zero: failure
-func (c *AuthOIDCCLI) Run(logger *slog.Logger) error {
+func (c *AuthOIDCCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	// Validate issuer URL requires TLS (unless --insecure)
+	if err := tlsCfg.ValidateURL(c.Issuer); err != nil {
+		return err
+	}
+
 	// Set a reasonable timeout for the entire auth flow
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -63,6 +69,7 @@ func (c *AuthOIDCCLI) Run(logger *slog.Logger) error {
 		ClientID:     c.ClientID,
 		ClientSecret: c.ClientSecret,
 		Scopes:       scopes,
+		TLSConfig:    tlsCfg,
 	}
 
 	// Run the authentication flow

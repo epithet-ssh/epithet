@@ -83,7 +83,8 @@ printf '%s' "6:ttoken,"
 	brokerSocketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a" // Very short to avoid socket path length issues
 	matchPatterns := []string{"*"}  // Accept all hosts
-	b := broker.New(*logger, brokerSocketPath, authScript, caHTTPServer.URL, agentSocketDir, matchPatterns)
+	b, err := broker.New(*logger, brokerSocketPath, authScript, caHTTPServer.URL, agentSocketDir, matchPatterns)
+	require.NoError(t, err)
 
 	// Start broker in background
 	go func() {

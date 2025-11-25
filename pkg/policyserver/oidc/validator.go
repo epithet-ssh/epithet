@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/oauth2"
 )
 
@@ -25,6 +26,9 @@ type Config struct {
 
 	// SkipExpiryCheck disables token expiration validation (not recommended for production)
 	SkipExpiryCheck bool
+
+	// TLSConfig configures TLS for OIDC provider connections
+	TLSConfig tlsconfig.Config
 }
 
 // Claims represents the claims extracted from an OIDC token
@@ -57,6 +61,13 @@ func NewValidator(ctx context.Context, config Config) (*Validator, error) {
 	if config.Issuer == "" {
 		return nil, fmt.Errorf("issuer is required")
 	}
+
+	// Create HTTP client with TLS config and inject into context
+	httpClient, err := tlsconfig.NewHTTPClient(config.TLSConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+	ctx = oidc.ClientContext(ctx, httpClient)
 
 	// Perform OIDC discovery
 	provider, err := oidc.NewProvider(ctx, config.Issuer)

@@ -20,7 +20,8 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Serve in background
@@ -55,7 +56,8 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Serve in background
@@ -160,7 +162,8 @@ printf '%s' "6:thello,"
 			socketPath := t.TempDir() + "/broker.sock"
 			agentSocketDir := t.TempDir() + "/sockets"
 
-			b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, tt.patterns)
+			b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, tt.patterns)
+			require.NoError(t, err)
 			b.SetShutdownTimeout(0) // Skip waiting in tests
 
 			result := b.shouldHandle(tt.hostname)
@@ -182,7 +185,8 @@ printf '%s' "6:thello,"
 
 	// Create broker that only handles *.example.com
 	patterns := []string{"*.example.com"}
-	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, patterns)
+	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, patterns)
+	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Serve in background
@@ -248,7 +252,8 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
 	// Manually create agent entries with different expiration times

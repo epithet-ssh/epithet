@@ -8,6 +8,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // Note: These tests use mock configs, not real OIDC token validation
@@ -37,7 +38,7 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	eval, err := evaluator.New(ctx, cfg)
+	eval, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
 	if err != nil {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	eval, err := evaluator.New(ctx, cfg)
+	eval, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
 	if err != nil {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestEvaluateHostPolicy(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	eval, err := evaluator.New(ctx, cfg)
+	eval, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
 	if err != nil {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := evaluator.New(ctx, cfg)
+	_, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
 	if err == nil {
 		t.Fatal("expected error for invalid OIDC issuer, got nil")
 	}
@@ -152,7 +153,7 @@ func ExampleEvaluator() {
 	}
 
 	ctx := context.Background()
-	eval, _ := evaluator.New(ctx, cfg)
+	eval, _ := evaluator.New(ctx, cfg, tlsconfig.Config{})
 
 	// Evaluate would be called with a real OIDC token
 	conn := policy.Connection{

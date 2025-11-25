@@ -12,6 +12,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // Evaluator implements policyserver.PolicyEvaluator using OIDC token validation
@@ -22,11 +23,12 @@ type Evaluator struct {
 }
 
 // New creates a new policy evaluator
-func New(ctx context.Context, cfg *config.PolicyConfig) (*Evaluator, error) {
+func New(ctx context.Context, cfg *config.PolicyConfig, tlsCfg tlsconfig.Config) (*Evaluator, error) {
 	// Create OIDC validator
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer:   cfg.OIDC.Issuer,
-		ClientID: cfg.OIDC.Audience,
+		Issuer:    cfg.OIDC.Issuer,
+		ClientID:  cfg.OIDC.Audience,
+		TLSConfig: tlsCfg,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OIDC validator: %w", err)

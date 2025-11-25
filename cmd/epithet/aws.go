@@ -23,6 +23,7 @@ import (
 	policyconfig "github.com/epithet-ssh/epithet/pkg/policyserver/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 type AWSCLI struct {
@@ -44,8 +45,13 @@ type caSecretValue struct {
 	CreatedAt  string `json:"created_at"`
 }
 
-func (a *AwsCALambdaCLI) Run(logger *slog.Logger) error {
+func (a *AwsCALambdaCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Info("starting CA Lambda handler", "policy_url", a.PolicyURL)
+
+	// Validate policy URL requires TLS (unless --insecure)
+	if err := tlsCfg.ValidateURL(a.PolicyURL); err != nil {
+		return err
+	}
 
 	// Load AWS SDK config
 	cfg, err := config.LoadDefaultConfig(context.Background())
@@ -73,7 +79,7 @@ func (a *AwsCALambdaCLI) Run(logger *slog.Logger) error {
 	}
 
 	// Create CA instance
-	caInstance, err := ca.New(sshcert.RawPrivateKey(secret.PrivateKey), a.PolicyURL)
+	caInstance, err := ca.New(sshcert.RawPrivateKey(secret.PrivateKey), a.PolicyURL, ca.WithTLSConfig(tlsCfg))
 	if err != nil {
 		return fmt.Errorf("failed to create CA: %w", err)
 	}
@@ -81,8 +87,14 @@ func (a *AwsCALambdaCLI) Run(logger *slog.Logger) error {
 	// Create certificate loggers
 	certLogger := a.createCertLogger(cfg, logger)
 
+	// Create HTTP client with TLS config
+	httpClient, err := tlsconfig.NewHTTPClient(tlsCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+
 	// Create HTTP handler
-	handler := caserver.New(caInstance, logger, &http.Client{}, certLogger)
+	handler := caserver.New(caInstance, logger, httpClient, certLogger)
 
 	logger.Info("CA Lambda initialized successfully")
 
@@ -197,7 +209,7 @@ type AwsPolicyLambdaCLI struct {
 	PolicyParameterName string `help:"SSM Parameter Store parameter name containing policy configuration" env:"POLICY_PARAMETER_NAME" required:"true"`
 }
 
-func (a *AwsPolicyLambdaCLI) Run(logger *slog.Logger) error {
+func (a *AwsPolicyLambdaCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Info("starting policy Lambda handler", "parameter_name", a.PolicyParameterName)
 
 	// Load AWS SDK config
@@ -237,7 +249,7 @@ func (a *AwsPolicyLambdaCLI) Run(logger *slog.Logger) error {
 
 	// Create policy evaluator
 	ctx := context.Background()
-	eval, err := evaluator.New(ctx, cfg)
+	eval, err := evaluator.New(ctx, cfg, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("failed to create policy evaluator: %w", err)
 	}

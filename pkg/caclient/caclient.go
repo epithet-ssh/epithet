@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // InvalidTokenError indicates the authentication token is invalid or expired.
@@ -61,7 +62,7 @@ type Client struct {
 }
 
 // New creates a new CA Client
-func New(url string, options ...Option) *Client {
+func New(url string, options ...Option) (*Client, error) {
 	client := &Client{
 		caURL: url,
 		httpClient: &http.Client{
@@ -70,10 +71,12 @@ func New(url string, options ...Option) *Client {
 	}
 
 	for _, o := range options {
-		o.apply(client)
+		if err := o.apply(client); err != nil {
+			return nil, err
+		}
 	}
 
-	return client
+	return client, nil
 }
 
 // Option configures the agent
@@ -99,6 +102,18 @@ func WithHTTPClient(httpClient *http.Client) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *Client) error {
 		c.logger = logger
+		return nil
+	})
+}
+
+// WithTLSConfig creates an HTTP client with the specified TLS configuration
+func WithTLSConfig(cfg tlsconfig.Config) Option {
+	return optionFunc(func(c *Client) error {
+		httpClient, err := tlsconfig.NewHTTPClientWithTimeout(cfg, time.Second*30)
+		if err != nil {
+			return fmt.Errorf("failed to create HTTP client: %w", err)
+		}
+		c.httpClient = httpClient
 		return nil
 	})
 }

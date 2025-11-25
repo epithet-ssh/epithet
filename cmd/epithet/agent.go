@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 type AgentCLI struct {
@@ -21,8 +22,13 @@ type AgentCLI struct {
 	Auth  string   `help:"Authentication command" short:"a" required:"true"`
 }
 
-func (a *AgentCLI) Run(logger *slog.Logger) error {
+func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Debug("agent command received", "agent", a)
+
+	// Validate CA URL requires TLS (unless --insecure)
+	if err := tlsCfg.ValidateURL(a.CaURL); err != nil {
+		return err
+	}
 
 	// Get home directory
 	homeDir, err := os.UserHomeDir()
@@ -59,7 +65,10 @@ func (a *AgentCLI) Run(logger *slog.Logger) error {
 	}
 
 	// Create broker
-	b := broker.New(*logger, brokerSock, a.Auth, a.CaURL, agentDir, a.Match)
+	b, err := broker.New(*logger, brokerSock, a.Auth, a.CaURL, agentDir, a.Match, broker.WithTLSConfig(tlsCfg))
+	if err != nil {
+		return fmt.Errorf("failed to create broker: %w", err)
+	}
 
 	// Set up context with cancellation on signals
 	ctx, cancel := context.WithCancel(context.Background())

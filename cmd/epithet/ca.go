@@ -10,6 +10,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -20,8 +21,13 @@ type CACLI struct {
 	Address string `help:"Address to bind to" short:"a" env:"PORT" default:"0.0.0.0:8080"`
 }
 
-func (c *CACLI) Run(logger *slog.Logger) error {
+func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Debug("ca command called", "ca", c)
+
+	// Validate policy URL requires TLS (unless --insecure)
+	if err := tlsCfg.ValidateURL(c.Policy); err != nil {
+		return err
+	}
 
 	// Read CA private key
 	privKey, err := os.ReadFile(c.Key)
@@ -32,7 +38,7 @@ func (c *CACLI) Run(logger *slog.Logger) error {
 	logger.Info("policy_url", "url", c.Policy)
 
 	// Create CA
-	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy)
+	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg))
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}

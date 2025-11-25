@@ -14,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -24,9 +25,9 @@ type PolicyServerCLI struct {
 	CAPubkey   string `help:"CA public key (URL like http://localhost:8080, file path, or literal SSH key)" required:"true"`
 }
 
-func (c *PolicyServerCLI) Run(logger *slog.Logger) error {
-	// Resolve CA public key
-	caPubkey, err := resolveCAPubkey(c.CAPubkey)
+func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	// Resolve CA public key (may fetch from URL)
+	caPubkey, err := resolveCAPubkey(c.CAPubkey, tlsCfg)
 	if err != nil {
 		return err
 	}
@@ -47,7 +48,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger) error {
 
 	// Create policy evaluator
 	ctx := context.Background()
-	eval, err := evaluator.New(ctx, cfg)
+	eval, err := evaluator.New(ctx, cfg, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("failed to create policy evaluator: %w", err)
 	}
@@ -78,10 +79,21 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger) error {
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key
-func resolveCAPubkey(input string) (string, error) {
+func resolveCAPubkey(input string, tlsCfg tlsconfig.Config) (string, error) {
 	// Check if it's a URL
 	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
-		resp, err := http.Get(input)
+		// Validate URL requires TLS (unless --insecure)
+		if err := tlsCfg.ValidateURL(input); err != nil {
+			return "", err
+		}
+
+		// Create HTTP client with TLS config
+		httpClient, err := tlsconfig.NewHTTPClient(tlsCfg)
+		if err != nil {
+			return "", fmt.Errorf("failed to create HTTP client: %w", err)
+		}
+
+		resp, err := httpClient.Get(input)
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch CA public key from URL %s: %w", input, err)
 		}
