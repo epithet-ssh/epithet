@@ -1,27 +1,29 @@
 # Epithet Deployment Examples
 
-This directory contains example deployments for epithet's CA and policy server components.
+This directory contains example deployments and reference implementations for epithet.
 
 ## Available Examples
 
-### [aws-lambda/](aws-lambda/)
+- **`bash_auth_example.bash`**: Reference bash auth plugin demonstrating the stdin/stdout/fd3 protocol
+- **`epithet.config.example`**: Sample config file showing key-value format and repeatable flags
+- **`google-workspace/`**: OIDC setup guide for Google Workspace integration
+- **`policy-server/`**: Policy server configuration examples
+- **`client/`**: Client configuration examples
+- **`example-target-host/`**: SSH server configuration for trusting epithet certificates
 
-Deploy epithet CA and policy server to AWS Lambda with API Gateway using OpenTofu (open-source Terraform fork).
+## AWS Lambda Deployment
 
-**Best for:**
-- Personal/small team use
-- Serverless operations (no infrastructure management)
-- Cost-effective (~$1/month)
-- Getting started quickly
+For deploying epithet CA and policy server on AWS Lambda, see the dedicated repository:
 
-**Architecture:**
-- CA server on AWS Lambda (ARM64)
-- Policy server on AWS Lambda (ARM64)
+**[epithet-aws](https://github.com/epithet-ssh/epithet-aws)** - AWS Lambda deployment template
+
+Features:
+- CA and policy server on AWS Lambda (ARM64)
 - API Gateway for HTTPS endpoints
 - Secrets Manager for CA private key storage
-- CloudWatch for logs
-
-See [aws-lambda/README.md](aws-lambda/README.md) for deployment instructions.
+- S3 certificate archival
+- OpenTofu/Terraform infrastructure
+- Cost-effective (~$1/month)
 
 ## Future Examples
 

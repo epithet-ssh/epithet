@@ -116,13 +116,6 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
   - Reads CA private key from file
   - Validates certificate requests against policy server with cryptographic verification
 
-- **`epithet aws ca --secret-arn <arn> --policy-url <url>`**:
-  - **Status**: ✅ Fully implemented (`cmd/epithet/aws.go`)
-  - Runs the CA server as an AWS Lambda function
-  - Retrieves CA private key from AWS Secrets Manager
-  - Designed for serverless deployment (see `examples/aws-lambda/`)
-  - Set `EPITHET_CMD=aws ca` environment variable to auto-invoke this command in Lambda
-
 - **`epithet auth oidc --issuer <url> --client-id <id> [--client-secret <secret>]`**:
   - **Status**: ✅ Fully implemented (`cmd/epithet/auth_oidc.go`)
   - Built-in OIDC/OAuth2 authentication plugin
@@ -680,10 +673,10 @@ All core components of the v2 architecture (described in README.md) are fully im
 
 **5. CA and Policy Server** (`pkg/ca/`, `pkg/caserver/`, `pkg/policyserver/`):
    - ✅ Standalone CA server (`epithet ca`)
-   - ✅ AWS Lambda CA deployment (`epithet aws ca`)
    - ✅ Policy server protocol with cryptographic verification (SSH signatures)
    - ✅ Production policy server with OIDC validation (`epithet policy`)
    - ✅ Error code propagation (401, 403, 5xx, 4xx)
+   - For AWS Lambda deployment, see [epithet-aws](https://github.com/epithet-ssh/epithet-aws)
 
 **6. Authentication** (`cmd/epithet/auth_oidc.go`):
    - ✅ Built-in OIDC/OAuth2 authentication
@@ -724,8 +717,9 @@ The `examples/` directory contains deployment guides and reference implementatio
 
 - **`examples/bash_auth_example.bash`**: Reference bash auth plugin demonstrating the stdin/stdout/fd3 protocol
 - **`examples/epithet.config.example`**: Sample config file showing key-value format and repeatable flags
-- **`examples/aws-lambda/`**: Complete AWS Lambda deployment with CloudFormation/Terraform templates
 - **`examples/google-workspace/`**: OIDC setup guide for Google Workspace integration (referenced in code)
 - **`examples/README.md`**: Overview of deployment options and architecture choices
+
+For AWS Lambda deployment, see the [epithet-aws](https://github.com/epithet-ssh/epithet-aws) repository.
 
 These examples demonstrate real-world usage patterns and serve as templates for custom deployments.
