@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Note**: This project uses [bd (beads)](https://github.com/steveyegge/beads) for issue tracking. Use `bd` commands instead of markdown TODOs. See AGENTS.md for workflow details.
+**Note**: This project uses bt (Brian's Tasks) for task tracking. Use `bt` commands instead of markdown TODOs. Tasks are stored in `.tasks/` directory.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -28,33 +28,36 @@ You must NOT:
 
 The user prefers to review all changes and craft commit messages themselves.
 
-## Task Management with bd
+## Task Management with bt
 
-**CRITICAL**: This project uses bd (beads) for ALL task tracking. Do NOT use TodoWrite under any circumstances.
+**CRITICAL**: This project uses bt (Brian's Tasks) for ALL task tracking. Do NOT use TodoWrite under any circumstances.
 
 When working on tasks:
-1. **Always use bd** - Create issues with `bd create`, update with `bd update`, close with `bd close`
-2. **Use bd proactively** - For any non-trivial work (multiple steps, complex tasks), create bd issues immediately
-3. **Track progress** - Use `bd list` to show current work, `bd ready` to find unblocked tasks
-4. **Dependencies matter** - Use `bd dep add` to track task dependencies when needed
-5. **Never use TodoWrite** - The TodoWrite tool is disabled for this project
+1. **Always use bt** - Create tasks with `bt new`, start with `bt start`, close with `bt close`
+2. **Use bt proactively** - For any non-trivial work (multiple steps, complex tasks), create bt tasks immediately
+3. **Track progress** - Use `bt list` to show current work, `bt ready` to find unblocked tasks, `bt next` for suggested task
+4. **Log progress** - Use `bt log <id> "message"` to record progress throughout work
+5. **Dependencies matter** - Use `bt block` to track task dependencies when needed
+6. **Never use TodoWrite** - The TodoWrite tool is disabled for this project
 
 Example workflow:
 ```bash
 # Start work on a feature
-bd create "Implement auth command protocol" --type feature
+bt new "Implement auth command protocol" --priority high --tags feature
 
 # Track subtasks
-bd create "Parse netstring input from stdin" --type task
-bd create "Invoke auth command and capture output" --type task
-bd dep add TASK-2 TASK-1  # TASK-2 depends on TASK-1
+bt new "Parse netstring input from stdin" --tags task
+bt new "Invoke auth command and capture output" --tags task
+bt block <task-2-id> <task-1-id>  # task-2 is blocked by task-1
 
-# Update progress
-bd update TASK-1 --status in-progress
-bd update TASK-1 --status done
+# Start working
+bt start <task-1-id>
+
+# Log progress as you work
+bt log <task-1-id> "Found root cause, implementing fix"
 
 # Close completed work
-bd close TASK-1 "Completed netstring parser"
+bt close <task-1-id> --reason "Completed netstring parser"
 ```
 
 ## High-Level Architecture
