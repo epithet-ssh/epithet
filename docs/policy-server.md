@@ -632,6 +632,117 @@ hosts:
     expiration: "2m"
 ```
 
+## Policy Server HTTP API
+
+The CA server communicates with the policy server over HTTP. This section documents the API contract for implementing custom policy servers.
+
+### HTTP Endpoint
+
+**Method:** `POST`
+**Content-Type:** `application/json`
+
+### Request Format
+
+The CA sends a JSON request with the following fields:
+
+```json
+{
+  "token": "authentication-token-from-user",
+  "signature": "base64-encoded-signature",
+  "connection": {
+    "localHost": "user-laptop.local",
+    "localUser": "alice",
+    "remoteHost": "server.example.com",
+    "remoteUser": "ubuntu",
+    "port": 22,
+    "proxyJump": "",
+    "hash": "a1b2c3d4e5f6"
+  }
+}
+```
+
+**Fields:**
+- `token` (string): The authentication token from the user (format determined by your auth plugin)
+- `signature` (string): Base64-encoded cryptographic signature of the token, signed by the CA's private key
+- `connection` (object): Full SSH connection parameters
+  - `localHost` (string): User's local hostname (OpenSSH `%l`)
+  - `localUser` (string): User's local username
+  - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
+  - `remoteUser` (string): Target username on remote server (OpenSSH `%r`)
+  - `port` (uint): Target SSH port (OpenSSH `%p`)
+  - `proxyJump` (string): ProxyJump configuration (OpenSSH `%j`), empty if not used
+  - `hash` (string): OpenSSH `%C` hash - unique identifier for this connection
+
+### Response Format
+
+**Success (HTTP 200):**
+
+```json
+{
+  "certParams": {
+    "identity": "alice@example.com",
+    "principals": ["ubuntu", "root", "deploy"],
+    "expiration": "5m0s",
+    "extensions": {
+      "permit-pty": "",
+      "permit-agent-forwarding": "",
+      "permit-port-forwarding": "",
+      "permit-user-rc": "",
+      "permit-X11-forwarding": ""
+    }
+  },
+  "policy": {
+    "hostPattern": "*.example.com"
+  }
+}
+```
+
+**Fields:**
+- `certParams.identity` (string): Certificate identity/key ID (for audit logs)
+- `certParams.principals` ([]string): List of usernames this cert can authenticate as
+- `certParams.expiration` (string): Certificate validity duration (e.g., "5m", "10m", "1h")
+- `certParams.extensions` (map[string]string): SSH certificate extensions to grant
+- `policy.hostPattern` (string): Glob pattern for hosts this certificate is valid for
+
+**Denial (HTTP 403 or 401):**
+
+Return any non-200 status code to deny the certificate request.
+
+### Signature Verification
+
+**IMPORTANT:** Your policy server must verify the signature before processing the request. This proves the request came from your CA server and not a malicious actor.
+
+```go
+import "github.com/epithet-ssh/epithet/pkg/ca"
+
+// Verify signature (CA_PUBKEY is your CA's public key in authorized_keys format)
+err := ca.Verify(CA_PUBKEY, token, signature)
+if err != nil {
+    // Invalid signature - reject the request
+    http.Error(w, "invalid signature", http.StatusUnauthorized)
+    return
+}
+```
+
+### OpenAPI Specification
+
+A complete OpenAPI 3.0 specification is available at [`docs/policy-server-api.yaml`](./policy-server-api.yaml).
+
+**Using the specification:**
+
+1. **Generate server code** in your preferred language:
+   ```bash
+   openapi-generator generate -i docs/policy-server-api.yaml -g python-flask -o policy-server
+   openapi-generator generate -i docs/policy-server-api.yaml -g go-server -o policy-server
+   ```
+
+2. **Import into AWS API Gateway** or other API gateways that support OpenAPI
+
+3. **Validate requests/responses** using tools like Prism:
+   ```bash
+   npx @stoplight/prism-cli mock docs/policy-server-api.yaml
+   ```
+
 ## See Also
 
 - [Policy Configuration Design](./policy-config-design.md) - Detailed design document
