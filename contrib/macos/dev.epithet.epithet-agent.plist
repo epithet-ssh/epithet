@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.epithet.epithet-agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/epithet</string>
+        <string>agent</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true />
+
+    <key>KeepAlive</key>
+    <true />
+
+    <key>StandardOutPath</key>
+    <string>/Users/brianm/.epithet/logs/agent.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/brianm/.epithet/logs/agent.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/brianm</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/brianm</string>
+    </dict>
+</dict>
+</plist>
