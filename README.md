@@ -1,6 +1,6 @@
 # Epithet makes SSH certificates easy
 
-[![Actions Status](https://github.com/epithet-ssh/epithet/workflows/build/badge.svg)](https://github.com/epithet-ssh/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/epithet-ssh/epithet)](https://goreportcard.com/report/github.com/epithet-ssh/epithet) [![Maintainability](https://api.codeclimate.com/v1/badges/3a4020265b38c175bdf0/maintainability)](https://codeclimate.com/github/brianm/epithet/maintainability)
+[![Actions Status](https://github.com/epithet-ssh/epithet/workflows/build/badge.svg)](https://github.com/epithet-ssh/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/epithet-ssh/epithet)](https://goreportcard.com/report/github.com/epithet-ssh/epithet)
 
 ## Plan for v2
 
@@ -52,7 +52,7 @@ epithet agent \
 - Dynamic port selection (works even when ports are occupied)
 - Silent browser launch for authentication
 
-**First connection:** Browser opens, user authenticates (~2-5 seconds)  
+**First connection:** Browser opens, user authenticates (~2-5 seconds)
 **Subsequent connections:** Fast token refresh (~100-200ms, no browser)
 
 See [docs/oidc-setup.md](docs/oidc-setup.md) for detailed setup instructions and [examples/google-workspace/](examples/google-workspace/) for a complete example.
@@ -307,7 +307,7 @@ A complete OpenAPI 3.0 specification is available at [`docs/policy-server-api.ya
    ```bash
    # Mock server for testing
    npx @stoplight/prism-cli mock docs/policy-server-api.yaml
-   
+
    # Validate your implementation
    npx @stoplight/prism-cli validate docs/policy-server-api.yaml
    ```
