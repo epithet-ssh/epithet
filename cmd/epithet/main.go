@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -14,6 +15,7 @@ import (
 
 var cli struct {
 	Verbose int             `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
+	LogFile string          `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
 	Config  kong.ConfigFlag `help:"Path to config file"`
 
 	// TLS configuration flags (global)
@@ -66,12 +68,52 @@ func setupLogger() *slog.Logger {
 		level = slog.LevelDebug
 	}
 
-	logger := slog.New(tint.NewHandler(os.Stderr, &tint.Options{
+	// Determine output writer
+	var w io.Writer = os.Stderr
+	if cli.LogFile != "" {
+		path, err := expandLogPath(cli.LogFile)
+		if err != nil {
+			// Fall back to stderr if path expansion fails
+			slog.Error("failed to expand log file path", "error", err)
+		} else {
+			// Ensure parent directory exists
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				slog.Error("failed to create log directory", "error", err)
+			} else {
+				f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+				if err != nil {
+					slog.Error("failed to open log file", "error", err)
+				} else {
+					w = f
+				}
+			}
+		}
+	}
+
+	logger := slog.New(tint.NewHandler(w, &tint.Options{
 		Level:      level,
 		TimeFormat: "15:04:05",
 	}))
 
 	return logger
+}
+
+// expandLogPath expands ~ to the user's home directory
+func expandLogPath(path string) (string, error) {
+	if len(path) == 0 || path[0] != '~' {
+		return path, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	if len(path) == 1 {
+		return home, nil
+	}
+
+	return filepath.Join(home, path[1:]), nil
 }
 
 func KVLoader(r io.Reader) (kong.Resolver, error) {

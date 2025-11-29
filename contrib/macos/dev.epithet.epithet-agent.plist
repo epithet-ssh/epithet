@@ -9,6 +9,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/epithet</string>
+        <string>--log-file=~/Library/logs/dev.epithet/agent.log</string>
         <string>agent</string>
     </array>
 
@@ -18,22 +19,7 @@
     <key>KeepAlive</key>
     <true />
 
-    <key>StandardOutPath</key>
-    <string>/Users/brianm/.epithet/logs/agent.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>/Users/brianm/.epithet/logs/agent.err</string>
-
     <key>ProcessType</key>
     <string>Background</string>
-
-    <key>WorkingDirectory</key>
-    <string>/Users/brianm</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>/Users/brianm</string>
-    </dict>
 </dict>
 </plist>
