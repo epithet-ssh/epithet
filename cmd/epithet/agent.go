@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -39,7 +40,11 @@ func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	// Create a unique temporary directory for this broker instance
 	// Use a hash of the CA URL + match patterns to make it deterministic
 	instanceID := hashString(a.CaURL + fmt.Sprintf("%v", a.Match))
-	tempDir := filepath.Join(homeDir, ".epithet", "run", instanceID)
+	runDir := filepath.Join(homeDir, ".epithet", "run")
+	tempDir := filepath.Join(runDir, instanceID)
+
+	// Clean up stale run directories from dead processes
+	cleanupStaleRunDirs(runDir, logger)
 
 	// Clean up temp directory on exit
 	defer func() {
@@ -53,6 +58,12 @@ func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	// Create temp directory
 	if err := os.MkdirAll(tempDir, 0700); err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Write PID file for stale detection
+	pidFile := filepath.Join(tempDir, "broker.pid")
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 
 	// Define paths within temp directory
@@ -238,4 +249,64 @@ func expandPath(path string) (string, error) {
 	}
 
 	return filepath.Join(home, path[1:]), nil
+}
+
+// cleanupStaleRunDirs removes run directories from dead processes
+func cleanupStaleRunDirs(runDir string, logger *slog.Logger) {
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // No run directory yet, nothing to clean
+		}
+		logger.Warn("failed to read run directory", "error", err)
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		instanceDir := filepath.Join(runDir, entry.Name())
+		pidFile := filepath.Join(instanceDir, "broker.pid")
+
+		pidBytes, err := os.ReadFile(pidFile)
+		if err != nil {
+			// No PID file - could be old format or corrupted, remove it
+			logger.Info("removing run directory without PID file", "path", instanceDir)
+			if err := os.RemoveAll(instanceDir); err != nil {
+				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
+			}
+			continue
+		}
+
+		pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+		if err != nil {
+			logger.Warn("invalid PID file", "path", pidFile, "error", err)
+			if err := os.RemoveAll(instanceDir); err != nil {
+				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
+			}
+			continue
+		}
+
+		// Check if process is alive
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			// On Unix, FindProcess always succeeds, but let's be safe
+			if err := os.RemoveAll(instanceDir); err != nil {
+				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
+			}
+			continue
+		}
+
+		// Send signal 0 to check if process exists
+		err = process.Signal(syscall.Signal(0))
+		if err != nil {
+			// Process is dead
+			logger.Info("removing stale run directory", "path", instanceDir, "dead_pid", pid)
+			if err := os.RemoveAll(instanceDir); err != nil {
+				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
+			}
+		}
+	}
 }
