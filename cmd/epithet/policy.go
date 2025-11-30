@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -21,7 +21,7 @@ import (
 
 type PolicyServerCLI struct {
 	ConfigFile string `help:"Path to policy configuration file (YAML or CUE)" short:"c" required:"true"`
-	Address    string `help:"Address to bind to" short:"a" default:"0.0.0.0:9999"`
+	Listen     string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
 	CAPubkey   string `help:"CA public key (URL like http://localhost:8080, file path, or literal SSH key)" required:"true"`
 }
 
@@ -34,9 +34,14 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	// Load policy configuration
 	logger.Info("loading policy configuration", "file", c.ConfigFile)
-	cfg, err := config.LoadFromFile(c.ConfigFile)
+	cfg, err := config.LoadFromFile[policyserver.PolicyRulesConfig](c.ConfigFile)
 	if err != nil {
 		return fmt.Errorf("failed to load policy config: %w", err)
+	}
+
+	// Validate policy configuration
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid policy config: %w", err)
 	}
 
 	// Validate configuration
@@ -70,11 +75,11 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	r.Post("/", handler)
 
 	logger.Info("starting policy server",
-		"addr", c.Address,
+		"listen", c.Listen,
 		"config_file", c.ConfigFile,
 		"ca_pubkey_length", len(caPubkey))
 
-	return http.ListenAndServe(c.Address, r)
+	return http.ListenAndServe(c.Listen, r)
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key

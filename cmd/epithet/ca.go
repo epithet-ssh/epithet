@@ -16,9 +16,9 @@ import (
 )
 
 type CACLI struct {
-	Policy  string `help:"URL for policy service" short:"p" env:"POLICY_URL" required:"true"`
-	Key     string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
-	Address string `help:"Address to bind to" short:"a" env:"PORT" default:"0.0.0.0:8080"`
+	Policy string `help:"URL for policy service" short:"p" env:"POLICY_URL" required:"true"`
+	Key    string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
+	Listen string `help:"Address to listen on" short:"l" env:"PORT" default:"0.0.0.0:8080"`
 }
 
 func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
@@ -58,8 +58,8 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 
 	r.Handle("/", caserver.New(caInstance, logger, nil, certLogger))
 
-	logger.Info("listening", "address", c.Address)
-	err = http.ListenAndServe(c.Address, r)
+	logger.Info("listening", "address", c.Listen)
+	err = http.ListenAndServe(c.Listen, r)
 	if err != nil {
 		return err
 	}

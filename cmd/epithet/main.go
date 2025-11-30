@@ -1,14 +1,16 @@
 package main
 
 import (
-	"bufio"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"cuelang.org/go/cue"
 	"github.com/alecthomas/kong"
+	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/lmittmann/tint"
 )
@@ -38,7 +40,7 @@ func main() {
 		os.Args = append([]string{os.Args[0]}, args...)
 	}
 
-	ktx := kong.Parse(&cli, kong.Configuration(KVLoader, "~/.epithet/config"))
+	ktx := kong.Parse(&cli, kong.Configuration(StructuredConfigLoader, "~/.epithet/config.yaml"))
 	logger := setupLogger()
 
 	// Create TLS config from global flags
@@ -71,7 +73,7 @@ func setupLogger() *slog.Logger {
 	// Determine output writer
 	var w io.Writer = os.Stderr
 	if cli.LogFile != "" {
-		path, err := expandLogPath(cli.LogFile)
+		path, err := expandPath(cli.LogFile)
 		if err != nil {
 			// Fall back to stderr if path expansion fails
 			slog.Error("failed to expand log file path", "error", err)
@@ -98,111 +100,124 @@ func setupLogger() *slog.Logger {
 	return logger
 }
 
-// expandLogPath expands ~ to the user's home directory
-func expandLogPath(path string) (string, error) {
-	if len(path) == 0 || path[0] != '~' {
-		return path, nil
-	}
-
-	home, err := os.UserHomeDir()
+// StructuredConfigLoader loads configuration from a structured YAML/JSON file.
+// It resolves values directly from the CUE value based on command path.
+func StructuredConfigLoader(r io.Reader) (kong.Resolver, error) {
+	val, err := config.LoadValueFromReader(r)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	if len(path) == 1 {
-		return home, nil
-	}
-
-	return filepath.Join(home, path[1:]), nil
+	return &cueResolver{value: val}, nil
 }
 
-func KVLoader(r io.Reader) (kong.Resolver, error) {
-	// Determine config directory for template expansion
-	// If r is a file, get its directory; otherwise use current directory
-	configDir := "."
-	if f, ok := r.(*os.File); ok {
-		if path, err := expandPath(f.Name()); err == nil {
-			configDir = strings.TrimSuffix(path, "/"+strings.TrimPrefix(path, "/"))
-			// Get directory from full path
-			if idx := strings.LastIndex(path, "/"); idx != -1 {
-				configDir = path[:idx]
+// cueResolver implements kong.Resolver using direct CUE value lookups
+type cueResolver struct {
+	value cue.Value
+}
+
+func (r *cueResolver) Validate(app *kong.Application) error {
+	return nil
+}
+
+func (r *cueResolver) Resolve(ctx *kong.Context, parent *kong.Path, flag *kong.Flag) (any, error) {
+	// Build the config path from command context
+	cmdPath := getCommandPath(parent)
+
+	// Normalize flag name: convert kebab-case to snake_case
+	flagName := strings.ReplaceAll(flag.Name, "-", "_")
+
+	// Build full path: e.g., "agent.ca_url" or just "insecure" for globals
+	var cuePath string
+	if len(cmdPath) == 0 {
+		cuePath = flagName
+	} else {
+		cuePath = strings.Join(append(cmdPath, flagName), ".")
+	}
+
+	// Look up the value in CUE
+	val := r.value.LookupPath(cue.ParsePath(cuePath))
+	if !val.Exists() {
+		return nil, nil
+	}
+
+	// Extract the value based on type
+	return extractValue(val, flag.IsSlice())
+}
+
+// getCommandPath extracts the command path from kong's parent path
+func getCommandPath(parent *kong.Path) []string {
+	if parent == nil {
+		return nil
+	}
+
+	var path []string
+	for n := parent.Node(); n != nil; n = n.Parent {
+		if n.Type == kong.CommandNode && n.Name != "" {
+			path = append([]string{n.Name}, path...)
+		}
+	}
+	return path
+}
+
+// extractValue extracts a Go value from a CUE value
+func extractValue(val cue.Value, isSlice bool) (any, error) {
+	// Handle lists/slices
+	if isSlice {
+		iter, err := val.List()
+		if err != nil {
+			// Not a list, try as single value
+			str, err := val.String()
+			if err != nil {
+				return nil, nil
 			}
+			return str, nil
 		}
-	}
 
-	// Get home directory for template expansion
-	homeDir, _ := os.UserHomeDir()
-
-	m := make(map[string][]string)
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+		var items []string
+		for iter.Next() {
+			str, err := iter.Value().String()
+			if err != nil {
+				continue
+			}
+			items = append(items, str)
 		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		key := strings.ToLower(strings.ReplaceAll(parts[0], "_", "-"))
-		val := strings.Join(parts[1:], " ") // Join all parts after the key
 
-		// Expand templates in value
-		val = expandConfigTemplates(val, configDir, homeDir)
-
-		m[key] = append(m[key], val)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return kong.ResolverFunc(func(_ *kong.Context, _ *kong.Path, f *kong.Flag) (any, error) {
-		values, ok := m[f.Name]
-		if !ok {
+		if len(items) == 0 {
 			return nil, nil
 		}
-		// For single value flags, return the last value
-		if !f.IsSlice() {
-			return values[len(values)-1], nil
+		if len(items) == 1 {
+			return items[0], nil
 		}
-		// For slice flags with a single value, return it as a string
-		if len(values) == 1 {
-			return values[0], nil
-		}
-		// For slice flags with multiple values, return as comma-separated string
-		// Kong will split on commas for slice types
-		return strings.Join(values, ","), nil
-	}), nil
-}
-
-// expandConfigTemplates expands template variables in config values
-// Supported templates:
-//
-//	{config_dir} - directory containing the config file
-//	{home} - user's home directory
-//	{env.VAR_NAME} - environment variable
-func expandConfigTemplates(val, configDir, homeDir string) string {
-	// Replace {config_dir}
-	val = strings.ReplaceAll(val, "{config_dir}", configDir)
-
-	// Replace {home}
-	val = strings.ReplaceAll(val, "{home}", homeDir)
-
-	// Replace {env.VAR_NAME} with environment variables
-	for {
-		start := strings.Index(val, "{env.")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(val[start:], "}")
-		if end == -1 {
-			break
-		}
-		end += start
-
-		envVar := val[start+5 : end] // Extract VAR_NAME from {env.VAR_NAME}
-		envVal := os.Getenv(envVar)
-		val = val[:start] + envVal + val[end+1:]
+		return strings.Join(items, ","), nil
 	}
 
-	return val
+	// Handle booleans
+	if b, err := val.Bool(); err == nil {
+		if b {
+			return true, nil
+		}
+		return nil, nil // Don't return false, let kong use default
+	}
+
+	// Handle integers
+	if i, err := val.Int64(); err == nil {
+		if i > 0 {
+			return i, nil
+		}
+		return nil, nil // Don't return 0, let kong use default
+	}
+
+	// Handle strings
+	if str, err := val.String(); err == nil {
+		if str != "" {
+			return str, nil
+		}
+		return nil, nil
+	}
+
+	return nil, nil
 }
+
+// Ensure cueResolver implements kong.Resolver
+var _ kong.Resolver = (*cueResolver)(nil)

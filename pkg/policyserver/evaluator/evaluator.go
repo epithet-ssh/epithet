@@ -10,7 +10,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
@@ -18,12 +17,12 @@ import (
 // Evaluator implements policyserver.PolicyEvaluator using OIDC token validation
 // and tag-based authorization
 type Evaluator struct {
-	config    *config.PolicyConfig
+	config    *policyserver.PolicyRulesConfig
 	validator *oidc.Validator
 }
 
 // New creates a new policy evaluator
-func New(ctx context.Context, cfg *config.PolicyConfig, tlsCfg tlsconfig.Config) (*Evaluator, error) {
+func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlsconfig.Config) (*Evaluator, error) {
 	// Create OIDC validator
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
 		Issuer:    cfg.OIDC.Issuer,
@@ -218,7 +217,7 @@ func (e *Evaluator) getExpiration(override string) time.Duration {
 	}
 
 	// Use hardcoded default
-	d, _ := time.ParseDuration(config.DefaultExpiration())
+	d, _ := time.ParseDuration(policyserver.DefaultExpiration())
 	return d
 }
 
@@ -235,5 +234,5 @@ func (e *Evaluator) getExtensions(override map[string]string) map[string]string 
 	}
 
 	// Use hardcoded default
-	return config.DefaultExtensions()
+	return policyserver.DefaultExtensions()
 }

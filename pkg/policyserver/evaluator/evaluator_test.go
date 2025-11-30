@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/config"
+	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
@@ -19,9 +19,9 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 		t.Skip("skipping integration test that requires OIDC provider")
 	}
 
-	cfg := &config.PolicyConfig{
+	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC: config.OIDCConfig{
+		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
 			Audience: "test-client-id",
 		},
@@ -29,7 +29,7 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 			"alice@example.com": {"admin"},
 			"bob@example.com":   {"user"},
 		},
-		Defaults: &config.DefaultPolicy{
+		Defaults: &policyserver.DefaultPolicy{
 			Allow: map[string][]string{
 				"root": {"admin"},
 				"app":  {"user"},
@@ -53,16 +53,16 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 		t.Skip("skipping integration test that requires OIDC provider")
 	}
 
-	cfg := &config.PolicyConfig{
+	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC: config.OIDCConfig{
+		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
 			Audience: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &config.DefaultPolicy{
+		Defaults: &policyserver.DefaultPolicy{
 			Allow: map[string][]string{
 				"root":  {"admin"},
 				"guest": {"visitor"},
@@ -85,16 +85,16 @@ func TestEvaluateHostPolicy(t *testing.T) {
 		t.Skip("skipping integration test that requires OIDC provider")
 	}
 
-	cfg := &config.PolicyConfig{
+	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC: config.OIDCConfig{
+		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
 			Audience: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
-		Hosts: map[string]*config.HostPolicy{
+		Hosts: map[string]*policyserver.HostPolicy{
 			"prod-db-01": {
 				Allow: map[string][]string{
 					"postgres": {"dba"},
@@ -114,9 +114,9 @@ func TestEvaluateHostPolicy(t *testing.T) {
 }
 
 func TestNew_InvalidOIDCIssuer(t *testing.T) {
-	cfg := &config.PolicyConfig{
+	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC: config.OIDCConfig{
+		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://invalid-oidc-provider.example.com",
 			Audience: "test-client-id",
 		},
@@ -136,16 +136,16 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 
 // Example showing how the evaluator would be used
 func ExampleEvaluator() {
-	cfg := &config.PolicyConfig{
+	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
-		OIDC: config.OIDCConfig{
+		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
 			Audience: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &config.DefaultPolicy{
+		Defaults: &policyserver.DefaultPolicy{
 			Allow: map[string][]string{
 				"alice": {"admin"},
 			},
