@@ -21,7 +21,7 @@ import (
 
 type PolicyServerCLI struct {
 	ConfigFile string `help:"Path to policy configuration file (YAML or CUE)" short:"c" required:"true"`
-	Port       int    `help:"Port to listen on" short:"p" default:"9999"`
+	Address    string `help:"Address to bind to" short:"a" default:"0.0.0.0:9999"`
 	CAPubkey   string `help:"CA public key (URL like http://localhost:8080, file path, or literal SSH key)" required:"true"`
 }
 
@@ -69,13 +69,12 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	r.Post("/", handler)
 
-	addr := fmt.Sprintf(":%d", c.Port)
 	logger.Info("starting policy server",
-		"addr", addr,
+		"addr", c.Address,
 		"config_file", c.ConfigFile,
 		"ca_pubkey_length", len(caPubkey))
 
-	return http.ListenAndServe(addr, r)
+	return http.ListenAndServe(c.Address, r)
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key

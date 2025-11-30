@@ -54,7 +54,7 @@ hosts:
 
 	t.Logf("Config file created at: %s", configFile)
 	t.Logf("To manually test the policy server:")
-	t.Logf("  ./epithet policy --config-file %s --ca-pubkey <key> --port 9999", configFile)
+	t.Logf("  ./epithet policy --config-file %s --ca-pubkey <key> --address 0.0.0.0:9999", configFile)
 }
 
 // TestPolicyServerWithMockOIDC demonstrates how to test policy evaluation
@@ -159,7 +159,7 @@ func TestPolicyServerCommand(t *testing.T) {
 	expectedStrings := []string{
 		"--config-file",
 		"--ca-pubkey",
-		"--port",
+		"--address",
 		"OIDC-based authorization",
 	}
 
