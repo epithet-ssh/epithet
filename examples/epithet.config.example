@@ -1,8 +1,14 @@
 # Example epithet configuration file
-# Default location: ~/.epithet/config.yaml
+#
+# Location: ~/.epithet/*.yaml (or .yml, .cue, .json)
 #
 # Format: YAML (also supports CUE and JSON)
 # Config sections mirror the CLI command structure
+#
+# Multi-file support:
+#   All config files in ~/.epithet/ are loaded and merged using CUE unification.
+#   This allows splitting config across multiple files (e.g., base.yaml, work.yaml).
+#   Conflicting values (same field, different values) will cause an error at startup.
 
 # Global flags (apply to all commands)
 # insecure: true           # Disable TLS verification (NOT RECOMMENDED)

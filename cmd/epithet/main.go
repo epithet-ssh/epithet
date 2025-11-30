@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -40,7 +39,21 @@ func main() {
 		os.Args = append([]string{os.Args[0]}, args...)
 	}
 
-	ktx := kong.Parse(&cli, kong.Configuration(StructuredConfigLoader, "~/.epithet/config.yaml"))
+	// Load and unify config files
+	configPaths := []string{
+		"~/.epithet/*.yaml",
+		"~/.epithet/*.yml",
+		"~/.epithet/*.cue",
+		"~/.epithet/*.json",
+	}
+
+	unifiedConfig, err := config.LoadAndUnifyPaths(configPaths)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	ktx := kong.Parse(&cli, kong.Resolvers(&cueResolver{value: unifiedConfig}))
 	logger := setupLogger()
 
 	// Create TLS config from global flags
@@ -51,7 +64,7 @@ func main() {
 
 	ktx.Bind(logger)
 	ktx.Bind(tlsCfg)
-	err := ktx.Run()
+	err = ktx.Run()
 	if err != nil {
 		logger.Error("error", "error", err)
 		os.Exit(1)
@@ -100,16 +113,6 @@ func setupLogger() *slog.Logger {
 	return logger
 }
 
-// StructuredConfigLoader loads configuration from a structured YAML/JSON file.
-// It resolves values directly from the CUE value based on command path.
-func StructuredConfigLoader(r io.Reader) (kong.Resolver, error) {
-	val, err := config.LoadValueFromReader(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	return &cueResolver{value: val}, nil
-}
 
 // cueResolver implements kong.Resolver using direct CUE value lookups
 type cueResolver struct {

@@ -508,3 +508,280 @@ func TestValidateDuration(t *testing.T) {
 		})
 	}
 }
+
+// Tests for LoadAndUnifyPaths
+
+func TestLoadAndUnifyPaths_SingleYAML(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(yamlFile, []byte(`
+agent:
+  ca_url: "https://ca.example.com"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	val, err := config.LoadAndUnifyPaths([]string{yamlFile})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	caURL, err := val.LookupPath(cue.ParsePath("agent.ca_url")).String()
+	if err != nil {
+		t.Fatalf("failed to get agent.ca_url: %v", err)
+	}
+	if caURL != "https://ca.example.com" {
+		t.Errorf("expected https://ca.example.com, got %s", caURL)
+	}
+}
+
+func TestLoadAndUnifyPaths_SingleCUE(t *testing.T) {
+	dir := t.TempDir()
+	cueFile := filepath.Join(dir, "config.cue")
+	if err := os.WriteFile(cueFile, []byte(`
+agent: {
+	ca_url: "https://ca.example.com"
+	port: 8080
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	val, err := config.LoadAndUnifyPaths([]string{cueFile})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	caURL, err := val.LookupPath(cue.ParsePath("agent.ca_url")).String()
+	if err != nil {
+		t.Fatalf("failed to get agent.ca_url: %v", err)
+	}
+	if caURL != "https://ca.example.com" {
+		t.Errorf("expected https://ca.example.com, got %s", caURL)
+	}
+
+	port, err := val.LookupPath(cue.ParsePath("agent.port")).Int64()
+	if err != nil {
+		t.Fatalf("failed to get agent.port: %v", err)
+	}
+	if port != 8080 {
+		t.Errorf("expected 8080, got %d", port)
+	}
+}
+
+func TestLoadAndUnifyPaths_MultipleFilesCompatible(t *testing.T) {
+	dir := t.TempDir()
+
+	// First file with ca_url
+	file1 := filepath.Join(dir, "base.yaml")
+	if err := os.WriteFile(file1, []byte(`
+agent:
+  ca_url: "https://ca.example.com"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second file with match patterns (different field, compatible)
+	file2 := filepath.Join(dir, "matches.yaml")
+	if err := os.WriteFile(file2, []byte(`
+agent:
+  match:
+    - "*.example.com"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	val, err := config.LoadAndUnifyPaths([]string{file1, file2})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	// Check ca_url from first file
+	caURL, err := val.LookupPath(cue.ParsePath("agent.ca_url")).String()
+	if err != nil {
+		t.Fatalf("failed to get agent.ca_url: %v", err)
+	}
+	if caURL != "https://ca.example.com" {
+		t.Errorf("expected https://ca.example.com, got %s", caURL)
+	}
+
+	// Check match from second file
+	matchVal := val.LookupPath(cue.ParsePath("agent.match"))
+	iter, err := matchVal.List()
+	if err != nil {
+		t.Fatalf("failed to get agent.match as list: %v", err)
+	}
+
+	var matches []string
+	for iter.Next() {
+		s, _ := iter.Value().String()
+		matches = append(matches, s)
+	}
+	if len(matches) != 1 || matches[0] != "*.example.com" {
+		t.Errorf("expected [*.example.com], got %v", matches)
+	}
+}
+
+func TestLoadAndUnifyPaths_ConflictingValues(t *testing.T) {
+	dir := t.TempDir()
+
+	// First file with ca_url
+	file1 := filepath.Join(dir, "base.yaml")
+	if err := os.WriteFile(file1, []byte(`
+agent:
+  ca_url: "https://ca1.example.com"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second file with different ca_url (conflict!)
+	file2 := filepath.Join(dir, "override.yaml")
+	if err := os.WriteFile(file2, []byte(`
+agent:
+  ca_url: "https://ca2.example.com"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := config.LoadAndUnifyPaths([]string{file1, file2})
+	if err == nil {
+		t.Fatal("expected error for conflicting values, got nil")
+	}
+}
+
+func TestLoadAndUnifyPaths_GlobPattern(t *testing.T) {
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, "config.d")
+	if err := os.MkdirAll(confDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create multiple yaml files
+	if err := os.WriteFile(filepath.Join(confDir, "a.yaml"), []byte(`
+settings:
+  a: true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(confDir, "b.yaml"), []byte(`
+settings:
+  b: true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	val, err := config.LoadAndUnifyPaths([]string{filepath.Join(confDir, "*.yaml")})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	// Check both values are present
+	a, err := val.LookupPath(cue.ParsePath("settings.a")).Bool()
+	if err != nil {
+		t.Fatalf("failed to get settings.a: %v", err)
+	}
+	if !a {
+		t.Error("expected settings.a to be true")
+	}
+
+	b, err := val.LookupPath(cue.ParsePath("settings.b")).Bool()
+	if err != nil {
+		t.Fatalf("failed to get settings.b: %v", err)
+	}
+	if !b {
+		t.Error("expected settings.b to be true")
+	}
+}
+
+func TestLoadAndUnifyPaths_MissingFilesSkipped(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "exists.yaml")
+	if err := os.WriteFile(yamlFile, []byte(`
+key: value
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Include a non-existent file in the patterns
+	val, err := config.LoadAndUnifyPaths([]string{
+		filepath.Join(dir, "does-not-exist.yaml"),
+		yamlFile,
+	})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	// The existing file's value should be present
+	key, err := val.LookupPath(cue.ParsePath("key")).String()
+	if err != nil {
+		t.Fatalf("failed to get key: %v", err)
+	}
+	if key != "value" {
+		t.Errorf("expected 'value', got %s", key)
+	}
+}
+
+func TestLoadAndUnifyPaths_EmptyResult(t *testing.T) {
+	dir := t.TempDir()
+
+	// No files exist
+	val, err := config.LoadAndUnifyPaths([]string{
+		filepath.Join(dir, "does-not-exist.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	// Should return an empty object, not an error
+	if !val.Exists() {
+		t.Error("expected value to exist (empty object)")
+	}
+}
+
+func TestLoadAndUnifyPaths_MixedFileTypes(t *testing.T) {
+	dir := t.TempDir()
+
+	// YAML file
+	yamlFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(yamlFile, []byte(`
+from_yaml: true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// CUE file
+	cueFile := filepath.Join(dir, "config.cue")
+	if err := os.WriteFile(cueFile, []byte(`
+from_cue: true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// JSON file
+	jsonFile := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(jsonFile, []byte(`{"from_json": true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	val, err := config.LoadAndUnifyPaths([]string{yamlFile, cueFile, jsonFile})
+	if err != nil {
+		t.Fatalf("LoadAndUnifyPaths failed: %v", err)
+	}
+
+	// Check all values are present
+	fromYAML, _ := val.LookupPath(cue.ParsePath("from_yaml")).Bool()
+	if !fromYAML {
+		t.Error("expected from_yaml to be true")
+	}
+
+	fromCUE, _ := val.LookupPath(cue.ParsePath("from_cue")).Bool()
+	if !fromCUE {
+		t.Error("expected from_cue to be true")
+	}
+
+	fromJSON, _ := val.LookupPath(cue.ParsePath("from_json")).Bool()
+	if !fromJSON {
+		t.Error("expected from_json to be true")
+	}
+}

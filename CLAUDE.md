@@ -86,7 +86,7 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
 
 ### Command Structure
 
-**Implementation**: The `epithet` binary uses `alecthomas/kong` for command-line parsing, with a custom KVLoader for config file support. All commands are fully implemented and production-ready.
+**Implementation**: The `epithet` binary uses `alecthomas/kong` for command-line parsing, with CUE-based config file loading supporting YAML, CUE, and JSON formats with multi-file unification. All commands are fully implemented and production-ready.
 
 - **`epithet match --host %h --port %p --user %r --hash %C [--jump %j] [--broker <path>]`**:
   - **Status**: ✅ Fully implemented (`cmd/epithet/match.go`)
@@ -518,30 +518,28 @@ This automatically updates when you start new broker instances and ensures the c
 
 #### Config File Format
 
-Epithet uses a simple key-value config file format (via KVLoader) that supports:
-- One flag per line: `flag-name value`
-- Repeatable flags: List the flag multiple times
-- Mustache templates: Use `{{variable}}` in values (currently supports built-in functions like `{{ca_public_key}}`)
-- Comments: Lines starting with `#`
+Epithet uses structured config files in YAML, CUE, or JSON format. Config sections mirror the CLI command structure.
 
-**Example** (`~/.config/epithet/agent.conf`):
-```
-# Epithet agent configuration
-match *.work.example.com
-match *.dev.example.com
-ca-url https://ca.example.com
-auth epithet auth oidc --issuer https://accounts.google.com --client-id {{google_client_id}}
+**Location**: `~/.epithet/*.yaml` (or `.yml`, `.cue`, `.json`)
+
+**Multi-file unification**: All config files in `~/.epithet/` are loaded and merged using CUE's `Value.Unify()`. This allows splitting config across multiple files (e.g., `base.yaml`, `work.yaml`). Conflicting values (same field, different values) cause an error at startup.
+
+**Example** (`~/.epithet/config.yaml`):
+```yaml
+# Global flags
+insecure: false
+verbose: 1
+
+# Agent configuration
+agent:
+  match:
+    - "*.work.example.com"
+    - "*.dev.example.com"
+  ca_url: https://ca.example.com
+  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
 ```
 
-**Load config**:
-```bash
-epithet agent --config ~/.config/epithet/agent.conf
-```
-
-**Mustache Template Support**:
-- The `--auth` flag supports mustache templates for dynamic command construction
-- Currently only built-in functions are supported (like `{{ca_public_key}}` for fetching CA public key)
-- Future: Connection details (%h, %p, %r, %C) passed to templates (TODO at `pkg/broker/broker.go:198`)
+**Config key naming**: Use `snake_case` in config files (e.g., `ca_url`), which maps to CLI flags with `kebab-case` (e.g., `--ca-url`).
 
 ## Development Commands
 
@@ -606,7 +604,8 @@ Run all tests with `make test` or `go test ./...`.
   - `golang.org/x/crypto/ssh` - SSH agent and certificate implementation
   - `github.com/sigstore/sigstore/pkg/signature` - SSH signature verification for policy server protocol
   - `alecthomas/kong` - Command-line parsing
-  - `cbroglie/mustache` - Template rendering in config files
+  - `cuelang.org/go/cue` - Configuration loading with multi-file unification
+  - `cbroglie/mustache` - Template rendering in auth commands
   - `coreos/go-oidc/v3` - OIDC authentication
   - `golang.org/x/oauth2` - OAuth2 flows
 
@@ -719,7 +718,7 @@ All core components of the v2 architecture (described in README.md) are fully im
 The `examples/` directory contains deployment guides and reference implementations:
 
 - **`examples/bash_auth_example.bash`**: Reference bash auth plugin demonstrating the stdin/stdout/fd3 protocol
-- **`examples/epithet.config.example`**: Sample config file showing key-value format and repeatable flags
+- **`examples/epithet.config.example`**: Sample config file in YAML format (also supports CUE and JSON)
 - **`examples/google-workspace/`**: OIDC setup guide for Google Workspace integration (referenced in code)
 - **`examples/README.md`**: Overview of deployment options and architecture choices
 
