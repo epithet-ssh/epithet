@@ -15,10 +15,12 @@ blocked_by:
 ---
 ## Log
 
-### 2025-11-30T00:34:48Z Brian McCallister
+---
+# Log: 2025-11-30T00:34:48Z Brian McCallister
 
 Created task.
-### 2025-11-30T00:35:10Z Brian McCallister
+---
+# Log: 2025-11-30T00:35:10Z Brian McCallister
 
 Future enhancement to consider after priority-based failover is implemented.
 
@@ -55,6 +57,7 @@ Instead of strict priority ordering, distribute requests proportionally:
 ## Decision
 Start with priority (simpler, matches primary/backup use case).
 Revisit weighted if canary/load-balancing needs arise.
-### 2025-11-30T00:35:18Z Brian McCallister
+---
+# Log: 2025-11-30T00:35:18Z Brian McCallister
 
 Added blocker: htbx21b7

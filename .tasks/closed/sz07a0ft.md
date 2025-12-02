@@ -12,13 +12,16 @@ tags:
 ---
 ## Log
 
-### 2025-11-30T03:20:36Z Brian McCallister
+---
+# Log: 2025-11-30T03:20:36Z Brian McCallister
 
 Created task.
-### 2025-11-30T03:20:47Z Brian McCallister
+---
+# Log: 2025-11-30T03:20:47Z Brian McCallister
 
 Started working.
-### 2025-11-30T03:25:36Z Brian McCallister
+---
+# Log: 2025-11-30T03:25:36Z Brian McCallister
 
 Completed implementation:
 - Created pkg/config/ with generic LoadFromFile[T]() function
@@ -29,6 +32,7 @@ Completed implementation:
 - Deleted old pkg/policyserver/config/ package
 - Added comprehensive tests for the new config package
 - Updated example config file to YAML format
-### 2025-11-30T03:25:45Z Brian McCallister
+---
+# Log: 2025-11-30T03:25:45Z Brian McCallister
 
 Closed: Implemented unified YAML/CUE configuration system

@@ -12,12 +12,15 @@ tags:
 ---
 ## Log
 
-### 2025-11-29T19:54:46Z Brian McCallister
+---
+# Log: 2025-11-29T19:54:46Z Brian McCallister
 
 Created task.
-### 2025-11-29T19:54:53Z Brian McCallister
+---
+# Log: 2025-11-29T19:54:53Z Brian McCallister
 
 Started working.
-### 2025-11-29T19:55:52Z Brian McCallister
+---
+# Log: 2025-11-29T19:55:52Z Brian McCallister
 
 Closed.

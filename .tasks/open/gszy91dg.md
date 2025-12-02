@@ -310,14 +310,17 @@ fn agent_wrapper(shell: &str) -> Result<()> {
 ---
 ## Log
 
-### 2025-12-01T18:36:44Z Brian McCallister
+---
+# Log: 2025-12-01T18:36:44Z Brian McCallister
 
 Created task.
 
-### 2025-12-01T21:52:12Z Brian McCallister
+---
+# Log: 2025-12-01T21:52:12Z Brian McCallister
 
 Updated description with possible design
-### 2025-12-02T01:16:11Z Brian McCallister
+---
+# Log: 2025-12-02T01:16:11Z Brian McCallister
 
 ## Design Validated
 
@@ -368,7 +371,8 @@ Model C (Token Relay) with local-owned auth config is the right approach.
 1. Command syntax: `epithet agent <shell>` vs `epithet remote <shell>`?
 2. User confirmation UX for remote auth requests?
 3. Timeout handling for slow auth?
-### 2025-12-02T01:19:12Z Brian McCallister
+---
+# Log: 2025-12-02T01:19:12Z Brian McCallister
 
 # Complete Implementation Plan
 

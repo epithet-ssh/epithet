@@ -12,10 +12,12 @@ tags:
 ---
 ## Log
 
-### 2025-11-30T04:08:27Z Brian McCallister
+---
+# Log: 2025-11-30T04:08:27Z Brian McCallister
 
 Created task.
-### 2025-11-30T04:08:41Z Brian McCallister
+---
+# Log: 2025-11-30T04:08:41Z Brian McCallister
 
 ## Overview
 The policy server currently uses `config.LoadFromFile[T]()` for single-file config loading.

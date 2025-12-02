@@ -13,10 +13,12 @@ tags:
 ---
 ## Log
 
-### 2025-11-29T23:57:17Z Brian McCallister
+---
+# Log: 2025-11-29T23:57:17Z Brian McCallister
 
 Created task.
-### 2025-11-29T23:57:50Z Brian McCallister
+---
+# Log: 2025-11-29T23:57:50Z Brian McCallister
 
 Full plan available at ~/.claude/plans/memoized-mapping-pelican.md
 
@@ -61,7 +63,8 @@ NO: 401 (InvalidTokenError), 403 (PolicyDeniedError), 4xx
 - pkg/broker/broker.go (main changes)
 - cmd/epithet/agent.go (CLI flags)
 - pkg/caclient/caclient.go (reference for error types)
-### 2025-11-29T23:59:31Z Brian McCallister
+---
+# Log: 2025-11-29T23:59:31Z Brian McCallister
 
 UPDATED: Simplified package structure per user feedback.
 
@@ -80,7 +83,8 @@ Instead of separate pkg/multicaclient, extend pkg/caclient directly with multi-C
    - Add WithTimeout, WithCooldown options
 
 No separate multicaclient package needed - cleaner design.
-### 2025-11-30T00:01:01Z Brian McCallister
+---
+# Log: 2025-11-30T00:01:01Z Brian McCallister
 
 FINAL: Everything in pkg/caclient, no new packages.
 
@@ -98,7 +102,8 @@ All in pkg/caclient:
 4. Update broker.go New() signature
 5. Update agent.go CLI flags
 6. Update docs
-### 2025-11-30T00:35:40Z Brian McCallister
+---
+# Log: 2025-11-30T00:35:40Z Brian McCallister
 
 UPDATED: Using 'priority' instead of 'weight'.
 
@@ -117,7 +122,8 @@ priority=N:https://ca.example.com/ (default priority 100)
 
 ## Future
 See task gcn46n6z for potential weighted round-robin enhancement later.
-### 2025-11-30T00:37:10Z Brian McCallister
+---
+# Log: 2025-11-30T00:37:10Z Brian McCallister
 
 # Full Implementation Plan
 
