@@ -2,7 +2,7 @@
 title: mechanism to tunnel auth to remote agent
 id: gszy91dg
 created: 2025-12-01T18:36:44.286521Z
-updated: 2025-12-01T21:53:04.529307Z
+updated: 2025-12-02T01:19:12.682892Z
 author: Brian McCallister
 priority: medium
 ---
@@ -317,3 +317,202 @@ Created task.
 ### 2025-12-01T21:52:12Z Brian McCallister
 
 Updated description with possible design
+### 2025-12-02T01:16:11Z Brian McCallister
+
+## Design Validated
+
+Model C (Token Relay) with local-owned auth config is the right approach.
+
+### Key Findings
+
+1. **Extension mechanism exists**: `golang.org/x/crypto/ssh/agent.ExtendedAgent` interface supports custom extensions (message type 27)
+
+2. **Protocol extensions needed**:
+   - `epithet-hello@epithet.dev` - probe if socket is epithet agent
+   - `epithet-auth@epithet.dev` - request auth from upstream
+
+3. **Data flow**:
+   - Remote epithet detects upstream via forwarded SSH_AUTH_SOCK
+   - When auth needed, sends extension request to upstream
+   - Local epithet runs its own auth plugin, returns token + state
+   - Remote presents token to CA (transparent to CA/policy)
+
+4. **State management**: Remote stores state, passes to local when requesting, gets back updated state with token
+
+5. **Multi-hop**: Works naturally - each epithet proxies to its upstream
+
+### Implementation Components
+
+1. **ExtendedAgent wrapper** (`pkg/agent/extended.go`):
+   - Wrap `agent.Agent` with `ExtendedAgent` implementation
+   - Handle `epithet-hello` and `epithet-auth` extensions
+
+2. **Wrapper mode** (`cmd/epithet/agent.go`):
+   - New: `epithet agent <shell>` or `epithet remote <shell>`
+   - Probe upstream, create child agent, exec shell
+
+3. **Auth proxy in broker** (`pkg/broker/`):
+   - When auth needed and upstream exists: proxy via extension
+   - When no upstream: run local auth command (existing)
+
+### Files to Modify
+
+- `pkg/agent/agent.go` - Add ExtendedAgent wrapper
+- `pkg/agent/extensions.go` - New file for extension handlers  
+- `cmd/epithet/agent.go` - Add wrapper mode subcommand
+- `pkg/broker/broker.go` - Add upstream proxy logic
+- `pkg/broker/auth.go` - Add `authViaUpstream()` method
+
+### Open Questions for Implementation
+
+1. Command syntax: `epithet agent <shell>` vs `epithet remote <shell>`?
+2. User confirmation UX for remote auth requests?
+3. Timeout handling for slow auth?
+### 2025-12-02T01:19:12Z Brian McCallister
+
+# Complete Implementation Plan
+
+## Summary
+
+**Status**: Design validated, ready for future implementation
+
+The proposed "tunnel auth to remote agent" design is sound. The chosen approach (Model C: Token Relay with local-owned auth config) integrates cleanly with existing architecture and requires no changes to CA or policy server.
+
+## Problem Statement
+
+User on laptop1 → SSHs to shell1 (bastion) → wants to SSH to host1/host2/host3
+
+- CA only reachable from shell1's network
+- Auth plugins (browser, FIDO2) must run on laptop1 where user is present
+- Need to bridge this gap through SSH agent forwarding
+
+## Validated Design: Token Relay via Agent Extensions
+
+### Key Insight
+
+The `golang.org/x/crypto/ssh/agent` library already supports protocol extensions via `ExtendedAgent` interface. The agent can handle custom message type 27 (`SSH_AGENTC_EXTENSION`) with vendor-namespaced extensions.
+
+### Architecture
+
+```
+laptop1 (local)                    shell1 (remote)                 host1 (target)
+┌─────────────────┐               ┌─────────────────┐
+│ epithet agent   │  SSH agent    │ epithet agent   │
+│ + auth plugin   │──forwarding──▶│ (wrapper mode)  │──SSH+cert──▶ host1
+│ + ExtendedAgent │               │ + upstream ref  │
+└─────────────────┘               └─────────────────┘
+                                         │
+                                         ▼
+                                  CA (internal network)
+```
+
+### Data Flow
+
+1. User SSHs to shell1 with agent forwarding (`-A` or `ForwardAgent yes`)
+2. On shell1, user runs `epithet agent bash` (new wrapper mode)
+3. shell1's epithet probes `SSH_AUTH_SOCK` with `epithet-hello@epithet.dev`
+4. Detects upstream is epithet, stashes socket reference
+5. Creates own agent socket, sets `SSH_AUTH_SOCK`, execs shell
+6. User runs `ssh host1` from shell1
+7. shell1's epithet needs cert, talks to CA, CA needs auth token
+8. shell1's epithet sends `epithet-auth@epithet.dev` to upstream socket
+9. laptop1's epithet runs its auth plugin (browser popup)
+10. Token flows back through extension response
+11. shell1's epithet presents token to CA, gets cert
+12. SSH to host1 proceeds with cert
+
+### Protocol Extensions
+
+**1. Discovery: `epithet-hello@epithet.dev`**
+```
+Request:  { protocol_version: 1 }
+Response: { protocol_version: 1, capabilities: ["auth_proxy"], chain_depth: 0 }
+```
+
+**2. Auth Request: `epithet-auth@epithet.dev`**
+```
+Request:  { state: <bytes>, context: { remote_host: "host1", ... } }
+Response: { token: <bytes>, new_state: <bytes> }
+   or     { error: "user cancelled" }
+```
+
+### State Management
+
+- **Remote stores state**: shell1's epithet maintains auth state per-upstream
+- **State passed through**: When requesting auth, remote sends state to local
+- **Local runs auth**: Local uses its own `--auth` config with the provided state
+- **State flows back**: New state returned with token, remote stores it
+
+This preserves the existing auth plugin contract (stdin=state, stdout=token, fd3=new_state).
+
+### Implementation Components
+
+**1. ExtendedAgent wrapper** (`pkg/agent/extended.go`):
+- Wrap `agent.Agent` with `ExtendedAgent` implementation
+- Handle `epithet-hello` and `epithet-auth` extensions
+- Delegate standard agent ops to wrapped keyring
+
+**2. Wrapper mode** (`cmd/epithet/agent.go`):
+- New subcommand: `epithet agent <shell>` or `epithet remote <shell>`
+- Probe upstream socket for epithet capability
+- Create child agent with upstream reference
+- Exec child process with new `SSH_AUTH_SOCK`
+
+**3. Auth proxy in broker** (`pkg/broker/`):
+- When auth needed and upstream exists: proxy via extension
+- When no upstream: run local auth command (existing behavior)
+- Multi-hop: each layer proxies to its upstream
+
+### Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Trust model | Token relay | Works with existing CA/policy, no new trust relationships |
+| Auth config | Local owns | Local epithet has its own `--auth`, remote just requests |
+| State ownership | Remote stores | Remote controls when to re-auth, can have per-upstream state |
+| Extension namespace | `@epithet.dev` | Standard OpenSSH vendor extension naming |
+
+### Security Considerations
+
+1. **Rate limiting**: Local epithet should rate-limit auth requests from downstream
+2. **User confirmation**: Optional popup "shell1 is requesting auth, allow?"
+3. **Chain depth limit**: Prevent infinite proxy chains
+4. **Audit logging**: Log all proxied auth requests
+
+### Multi-hop Support
+
+Works naturally:
+- laptop1 → shell1 → shell2 → host1
+- shell2 sends auth request to shell1
+- shell1 proxies to laptop1
+- Token flows back through chain
+
+### Fallback Behavior
+
+When no upstream epithet detected:
+- Run local auth command (existing behavior)
+- If local auth fails (no browser, etc.): clear error message
+- No silent failures
+
+## Files to Modify (Future Implementation)
+
+1. **`pkg/agent/agent.go`**: Add ExtendedAgent wrapper
+2. **`pkg/agent/extensions.go`**: New file for extension handlers
+3. **`cmd/epithet/agent.go`**: Add wrapper mode subcommand
+4. **`pkg/broker/broker.go`**: Add upstream proxy logic to auth flow
+5. **`pkg/broker/auth.go`**: Add `authViaUpstream()` method
+
+## Open Questions for Implementation
+
+1. **Command syntax**: `epithet agent <shell>` vs `epithet remote <shell>` vs `epithet wrap <shell>`?
+2. **Confirmation UX**: Should local require user confirmation for remote auth requests? Configurable?
+3. **Timeout handling**: What if local auth takes a long time (user away from keyboard)?
+
+## Conclusion
+
+The design is validated. Model C (Token Relay) with local-owned auth config is the right approach because:
+- No changes to CA or policy server required
+- Leverages existing SSH agent extension mechanism
+- Preserves existing auth plugin contract
+- Natural multi-hop support
+- Clean separation of concerns
