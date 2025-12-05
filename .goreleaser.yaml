@@ -39,10 +39,10 @@ changelog:
 
 brews:
   - name: epithet
-    token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     repository:
       owner: epithet-ssh
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/epithet-ssh/epithet
     description: SSH certificate authority that makes SSH certificates easy to use
     license: Apache-2.0
