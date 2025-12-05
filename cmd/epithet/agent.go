@@ -17,17 +17,33 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
+// AgentCLI is the parent command for agent-related subcommands.
+// Shared flags (Match, CaURL, Auth) are defined here and inherited by subcommands.
 type AgentCLI struct {
 	Match []string `help:"Match patterns" short:"m"`
-	CaURL string   `help:"CA URL" name:"ca-url" short:"c" required:"true"`
-	Auth  string   `help:"Authentication command" short:"a" required:"true"`
+	CaURL string   `help:"CA URL" name:"ca-url" short:"c"`
+	Auth  string   `help:"Authentication command" short:"a"`
+
+	Start   AgentStartCLI   `cmd:"" default:"withargs" help:"Start the epithet agent"`
+	Inspect AgentInspectCLI `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
 }
 
-func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	logger.Debug("agent command received", "agent", a)
+// AgentStartCLI is the default subcommand that starts the agent/broker.
+type AgentStartCLI struct{}
+
+func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	// Validate required fields for start
+	if parent.CaURL == "" {
+		return fmt.Errorf("--ca-url is required")
+	}
+	if parent.Auth == "" {
+		return fmt.Errorf("--auth is required")
+	}
+
+	logger.Debug("agent start command received", "ca_url", parent.CaURL, "match", parent.Match)
 
 	// Validate CA URL requires TLS (unless --insecure)
-	if err := tlsCfg.ValidateURL(a.CaURL); err != nil {
+	if err := tlsCfg.ValidateURL(parent.CaURL); err != nil {
 		return err
 	}
 
@@ -39,7 +55,7 @@ func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 
 	// Create a unique temporary directory for this broker instance
 	// Use a hash of the CA URL + match patterns to make it deterministic
-	instanceID := hashString(a.CaURL + fmt.Sprintf("%v", a.Match))
+	instanceID := hashString(parent.CaURL + fmt.Sprintf("%v", parent.Match))
 	runDir := filepath.Join(homeDir, ".epithet", "run")
 	tempDir := filepath.Join(runDir, instanceID)
 
@@ -76,7 +92,7 @@ func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	}
 
 	// Create broker
-	b, err := broker.New(*logger, brokerSock, a.Auth, a.CaURL, agentDir, a.Match, broker.WithTLSConfig(tlsCfg))
+	b, err := broker.New(*logger, brokerSock, parent.Auth, parent.CaURL, agentDir, parent.Match, broker.WithTLSConfig(tlsCfg))
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}
@@ -96,7 +112,7 @@ func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	// Generate SSH config file in the temp directory
 	sshConfigPath := filepath.Join(tempDir, "ssh-config.conf")
 
-	if err := a.generateSSHConfig(sshConfigPath, agentDir, brokerSock, homeDir); err != nil {
+	if err := parent.generateSSHConfig(sshConfigPath, agentDir, brokerSock, homeDir); err != nil {
 		logger.Warn("failed to generate SSH config", "error", err, "path", sshConfigPath)
 		// Don't fail startup, just warn
 	} else {
@@ -110,7 +126,7 @@ func (a *AgentCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	}
 
 	// Start broker
-	logger.Info("starting broker", "socket", brokerSock, "patterns", a.Match)
+	logger.Info("starting broker", "socket", brokerSock, "patterns", parent.Match)
 	err = b.Serve(ctx)
 	if err != nil && err != context.Canceled {
 		return fmt.Errorf("broker serve error: %w", err)

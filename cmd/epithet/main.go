@@ -23,10 +23,9 @@ var cli struct {
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
 	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
-	Agent   AgentCLI        `cmd:"agent" help:"start the epithet agent"`
-	Match   MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
-	Inspect InspectCLI      `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
-	CA      CACLI           `cmd:"ca" help:"Run the epithet CA server"`
+	Agent  AgentCLI        `cmd:"agent" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
+	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
+	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
 	Policy  PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
 	Auth    AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }

@@ -17,14 +17,14 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type InspectCLI struct {
-	Broker string   `help:"Broker socket path (overrides config-based discovery)" short:"b"`
-	Match  []string `help:"Match patterns (used to find broker socket)" short:"m"`
-	CaURL  string   `help:"CA URL (used to find broker socket)" name:"ca-url" short:"c"`
-	JSON   bool     `help:"Output in JSON format" short:"j"`
+// AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
+// It inherits Match and CaURL from the parent AgentCLI.
+type AgentInspectCLI struct {
+	Broker string `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	JSON   bool   `help:"Output in JSON format" short:"j"`
 }
 
-func (i *InspectCLI) Run(logger *slog.Logger) error {
+func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	var brokerSock string
 
 	if i.Broker != "" {
@@ -34,13 +34,13 @@ func (i *InspectCLI) Run(logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("failed to expand broker socket path: %w", err)
 		}
-	} else if i.CaURL != "" {
-		// Derive socket path from config (same logic as AgentCLI)
+	} else if parent.CaURL != "" {
+		// Derive socket path from parent's config (same logic as AgentStartCLI)
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("failed to get home directory: %w", err)
 		}
-		instanceID := hashString(i.CaURL + fmt.Sprintf("%v", i.Match))
+		instanceID := hashString(parent.CaURL + fmt.Sprintf("%v", parent.Match))
 		brokerSock = filepath.Join(homeDir, ".epithet", "run", instanceID, "broker.sock")
 	} else {
 		return fmt.Errorf("must specify either --broker or --ca-url (with optional --match)")
