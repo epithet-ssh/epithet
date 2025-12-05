@@ -37,7 +37,7 @@ changelog:
       - "^test:"
       - "^chore:"
 
-homebrew:
+brews:
   - repository:
       owner: epithet-ssh
       name: homebrew-tap
