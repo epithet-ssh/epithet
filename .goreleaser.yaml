@@ -21,7 +21,8 @@ builds:
       - -X main.date={{.Date}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -36,7 +37,7 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
+homebrew:
   - repository:
       owner: epithet-ssh
       name: homebrew-tap
