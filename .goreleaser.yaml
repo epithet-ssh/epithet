@@ -1,0 +1,52 @@
+version: 2
+project_name: epithet
+
+builds:
+  - id: epithet
+    main: ./cmd/epithet
+    binary: epithet
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: epithet-ssh
+      name: homebrew-tap
+    homepage: https://github.com/epithet-ssh/epithet
+    description: SSH certificate authority that makes SSH certificates easy to use
+    license: Apache-2.0
+    install: |
+      bin.install "epithet"
+
+release:
+  github:
+    owner: epithet-ssh
+    name: epithet

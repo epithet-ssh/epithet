@@ -14,7 +14,14 @@ import (
 	"github.com/lmittmann/tint"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 var cli struct {
+	Version kong.VersionFlag `short:"V" help:"Print version information"`
 	Verbose int             `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	LogFile string          `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
 	Config  kong.ConfigFlag `help:"Path to config file"`
@@ -52,7 +59,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	ktx := kong.Parse(&cli, kong.Resolvers(&cueResolver{value: unifiedConfig}))
+	ktx := kong.Parse(&cli,
+		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
+		kong.Resolvers(&cueResolver{value: unifiedConfig}),
+	)
 	logger := setupLogger()
 
 	// Create TLS config from global flags
