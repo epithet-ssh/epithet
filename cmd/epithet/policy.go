@@ -7,10 +7,14 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/config"
+	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/cuecontext"
+	"cuelang.org/go/cue/load"
+	"cuelang.org/go/encoding/yaml"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -34,7 +38,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	// Load policy configuration
 	logger.Info("loading policy configuration", "file", c.ConfigFile)
-	cfg, err := config.LoadFromFile[policyserver.PolicyRulesConfig](c.ConfigFile)
+	cfg, err := loadPolicyConfig(c.ConfigFile)
 	if err != nil {
 		return fmt.Errorf("failed to load policy config: %w", err)
 	}
@@ -131,4 +135,88 @@ func resolveCAPubkey(input string, tlsCfg tlsconfig.Config) (string, error) {
 	}
 
 	return input, nil
+}
+
+// loadPolicyConfig loads policy configuration from a file (YAML, JSON, or CUE).
+func loadPolicyConfig(path string) (*policyserver.PolicyRulesConfig, error) {
+	ctx := cuecontext.New()
+
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path: %w", err)
+	}
+
+	var val cue.Value
+
+	// Handle directories and .cue files using load.Instances
+	if fileInfo.IsDir() || strings.HasSuffix(strings.ToLower(path), ".cue") {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve path: %w", err)
+		}
+
+		cfg := &load.Config{
+			Dir:       filepath.Dir(absPath),
+			DataFiles: true,
+		}
+
+		var args []string
+		if fileInfo.IsDir() {
+			args = []string{path}
+		} else {
+			args = []string{absPath}
+		}
+
+		instances := load.Instances(args, cfg)
+		if len(instances) == 0 {
+			return nil, fmt.Errorf("no instances loaded from %s", path)
+		}
+
+		inst := instances[0]
+		if inst.Err != nil {
+			return nil, fmt.Errorf("failed to load config: %w", inst.Err)
+		}
+
+		val = ctx.BuildInstance(inst)
+		if err := val.Err(); err != nil {
+			return nil, fmt.Errorf("failed to build CUE value: %w", err)
+		}
+	} else {
+		// Handle standalone data files (YAML, JSON)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
+
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".yaml", ".yml":
+			file, err := yaml.Extract("", data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse YAML: %w", err)
+			}
+			val = ctx.BuildFile(file)
+		case ".json":
+			val = ctx.CompileBytes(data)
+		default:
+			// Try YAML as default
+			file, err := yaml.Extract("", data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse file: %w", err)
+			}
+			val = ctx.BuildFile(file)
+		}
+
+		if err := val.Err(); err != nil {
+			return nil, fmt.Errorf("failed to build CUE value: %w", err)
+		}
+	}
+
+	// Decode into PolicyRulesConfig
+	var config policyserver.PolicyRulesConfig
+	if err := val.Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %w", err)
+	}
+
+	return &config, nil
 }

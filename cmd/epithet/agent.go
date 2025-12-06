@@ -249,23 +249,6 @@ func hashString(s string) string {
 	return hex.EncodeToString(h[:8]) // Use first 8 bytes (16 hex chars)
 }
 
-// expandPath expands ~ to the user's home directory
-func expandPath(path string) (string, error) {
-	if len(path) == 0 || path[0] != '~' {
-		return path, nil
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	if len(path) == 1 {
-		return home, nil
-	}
-
-	return filepath.Join(home, path[1:]), nil
-}
 
 // cleanupStaleRunDirs removes run directories from dead processes
 func cleanupStaleRunDirs(runDir string, logger *slog.Logger) {

@@ -7,9 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"cuelang.org/go/cue"
 	"github.com/alecthomas/kong"
-	"github.com/epithet-ssh/epithet/pkg/config"
+	"github.com/brianm/kongcue"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/lmittmann/tint"
 )
@@ -22,9 +21,9 @@ var (
 
 var cli struct {
 	Version kong.VersionFlag `short:"V" help:"Print version information"`
-	Verbose int             `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
-	LogFile string          `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
-	Config  kong.ConfigFlag `help:"Path to config file"`
+	Verbose int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
+	LogFile string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
+	Config  kong.ConfigFlag  `help:"Path to config file"`
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
@@ -33,8 +32,8 @@ var cli struct {
 	Agent  AgentCLI        `cmd:"agent" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
 	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
 	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
-	Policy  PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
-	Auth    AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
+	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
+	Auth   AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }
 
 func main() {
@@ -53,7 +52,7 @@ func main() {
 		"~/.epithet/*.json",
 	}
 
-	unifiedConfig, err := config.LoadAndUnifyPaths(configPaths)
+	unifiedConfig, err := kongcue.LoadAndUnifyPaths(configPaths)
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
@@ -61,7 +60,7 @@ func main() {
 
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
-		kong.Resolvers(&cueResolver{value: unifiedConfig}),
+		kong.Resolvers(kongcue.NewResolver(unifiedConfig)),
 	)
 	logger := setupLogger()
 
@@ -78,6 +77,21 @@ func main() {
 		logger.Error("error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// expandPath expands ~ to the user's home directory
+func expandPath(path string) (string, error) {
+	if path == "" {
+		return path, nil
+	}
+	if path[0] != '~' {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, path[1:]), nil
 }
 
 func setupLogger() *slog.Logger {
@@ -121,115 +135,3 @@ func setupLogger() *slog.Logger {
 
 	return logger
 }
-
-
-// cueResolver implements kong.Resolver using direct CUE value lookups
-type cueResolver struct {
-	value cue.Value
-}
-
-func (r *cueResolver) Validate(app *kong.Application) error {
-	return nil
-}
-
-func (r *cueResolver) Resolve(ctx *kong.Context, parent *kong.Path, flag *kong.Flag) (any, error) {
-	// Build the config path from command context
-	cmdPath := getCommandPath(parent)
-
-	// Normalize flag name: convert kebab-case to snake_case
-	flagName := strings.ReplaceAll(flag.Name, "-", "_")
-
-	// Build full path: e.g., "agent.ca_url" or just "insecure" for globals
-	var cuePath string
-	if len(cmdPath) == 0 {
-		cuePath = flagName
-	} else {
-		cuePath = strings.Join(append(cmdPath, flagName), ".")
-	}
-
-	// Look up the value in CUE
-	val := r.value.LookupPath(cue.ParsePath(cuePath))
-	if !val.Exists() {
-		return nil, nil
-	}
-
-	// Extract the value based on type
-	return extractValue(val, flag.IsSlice())
-}
-
-// getCommandPath extracts the command path from kong's parent path
-func getCommandPath(parent *kong.Path) []string {
-	if parent == nil {
-		return nil
-	}
-
-	var path []string
-	for n := parent.Node(); n != nil; n = n.Parent {
-		if n.Type == kong.CommandNode && n.Name != "" {
-			path = append([]string{n.Name}, path...)
-		}
-	}
-	return path
-}
-
-// extractValue extracts a Go value from a CUE value
-func extractValue(val cue.Value, isSlice bool) (any, error) {
-	// Handle lists/slices
-	if isSlice {
-		iter, err := val.List()
-		if err != nil {
-			// Not a list, try as single value
-			str, err := val.String()
-			if err != nil {
-				return nil, nil
-			}
-			return str, nil
-		}
-
-		var items []string
-		for iter.Next() {
-			str, err := iter.Value().String()
-			if err != nil {
-				continue
-			}
-			items = append(items, str)
-		}
-
-		if len(items) == 0 {
-			return nil, nil
-		}
-		if len(items) == 1 {
-			return items[0], nil
-		}
-		return strings.Join(items, ","), nil
-	}
-
-	// Handle booleans
-	if b, err := val.Bool(); err == nil {
-		if b {
-			return true, nil
-		}
-		return nil, nil // Don't return false, let kong use default
-	}
-
-	// Handle integers
-	if i, err := val.Int64(); err == nil {
-		if i > 0 {
-			return i, nil
-		}
-		return nil, nil // Don't return 0, let kong use default
-	}
-
-	// Handle strings
-	if str, err := val.String(); err == nil {
-		if str != "" {
-			return str, nil
-		}
-		return nil, nil
-	}
-
-	return nil, nil
-}
-
-// Ensure cueResolver implements kong.Resolver
-var _ kong.Resolver = (*cueResolver)(nil)
