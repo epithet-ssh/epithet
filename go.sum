@@ -10,10 +10,10 @@ github.com/alecthomas/repr v0.5.2 h1:SU73FTI9D1P5UNtvseffFSGmdNci/O6RsqzeXJtP0Qs
 github.com/alecthomas/repr v0.5.2/go.mod h1:Fr0507jx4eOXV7AlPV6AVZLYrLIuIeSOWtW57eE/O/4=
 github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 h1:DklsrG3dyBCFEj5IhUbnKptjxatkF07cF2ak3yi77so=
 github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2/go.mod h1:WaHUgvxTVq04UNunO+XhnAqY/wQc+bxr74GqbsZ/Jqw=
-github.com/brianm/kongcue v0.0.2 h1:M4flU9mHn42zRNsr8u8F+v0YN9bcVCE+OoNnkWMhTN4=
-github.com/brianm/kongcue v0.0.2/go.mod h1:qOIMLB26kkEXsYeySsnEV5iKg/pwCESNAAGvLyoXSbY=
-github.com/brianm/kongcue v0.0.3 h1:v90uLLQs1E9eh0re0JnRmP4N7MEsPBXungmsDP4trBw=
-github.com/brianm/kongcue v0.0.3/go.mod h1:mK5P6Z4xIurnR0SlehqrbYjVu4k5nq7csMYrHbW5jD8=
+github.com/brianm/kongcue v0.0.4 h1:cZKknHIK5W34m8eJ6JvVrpNVNp+jKZQeoK6LjCdEYxo=
+github.com/brianm/kongcue v0.0.4/go.mod h1:mK5P6Z4xIurnR0SlehqrbYjVu4k5nq7csMYrHbW5jD8=
+github.com/brianm/kongcue v0.0.5 h1:kmP1/i9jUr/TPmYtWdHIBQ2pGdXMiQKL9HaKEMYTFDw=
+github.com/brianm/kongcue v0.0.5/go.mod h1:mK5P6Z4xIurnR0SlehqrbYjVu4k5nq7csMYrHbW5jD8=
 github.com/cbroglie/mustache v1.4.0 h1:Azg0dVhxTml5me+7PsZ7WPrQq1Gkf3WApcHMjMprYoU=
 github.com/cbroglie/mustache v1.4.0/go.mod h1:SS1FTIghy0sjse4DUVGV1k/40B1qE1XkD9DtDsHo9iM=
 github.com/cockroachdb/apd/v3 v3.2.1 h1:U+8j7t0axsIgvQUqthuNm82HIrYXodOV2iWLWtEaIwg=

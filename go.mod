@@ -32,12 +32,10 @@ require (
 	github.com/int128/listener v1.3.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/protocolbuffers/txtpbfmt v0.0.0-20251124094003-fcb97cc64c7b // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.9.1 // indirect
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
 	github.com/sigstore/sigstore v1.10.0 // indirect
@@ -52,4 +50,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-require github.com/brianm/kongcue v0.0.3
+require github.com/brianm/kongcue v0.0.5

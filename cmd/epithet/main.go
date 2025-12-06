@@ -23,7 +23,7 @@ var cli struct {
 	Version kong.VersionFlag `short:"V" help:"Print version information"`
 	Verbose int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	LogFile string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
-	Config  kong.ConfigFlag  `help:"Path to config file"`
+	Config  kongcue.Config   `help:"Path to config file" default:"~/.epithet/*.yaml,~/.epithet/*.yml,~/.epithet/*.cue,~/.epithet/*.json"`
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
@@ -37,30 +37,17 @@ var cli struct {
 }
 
 func main() {
-	// Check if we're running in Lambda mode via environment variable
-	if epithetCmd := os.Getenv("EPITHET_CMD"); epithetCmd != "" {
-		// Parse the command from environment (e.g., "aws ca")
-		args := strings.Fields(epithetCmd)
-		os.Args = append([]string{os.Args[0]}, args...)
-	}
-
-	// Load and unify config files
-	configPaths := []string{
-		"~/.epithet/*.yaml",
-		"~/.epithet/*.yml",
-		"~/.epithet/*.cue",
-		"~/.epithet/*.json",
-	}
-
-	unifiedConfig, err := kongcue.LoadAndUnifyPaths(configPaths)
-	if err != nil {
-		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
+	// we also allow command to be named epithet-agent and such, to imply a command
+	if baseName := filepath.Base(os.Args[0]); strings.Contains(baseName, "-") {
+		parts := strings.SplitN(baseName, "-", 2)
+		if len(parts) == 2 {
+			// Transform [epithet-policy, --woof, --meow] -> [epithet, policy, --woof, --meow]
+			os.Args = append([]string{parts[0], parts[1]}, os.Args[1:]...)
+		}
 	}
 
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
-		kong.Resolvers(kongcue.NewResolver(unifiedConfig)),
 	)
 	logger := setupLogger()
 
@@ -72,8 +59,7 @@ func main() {
 
 	ktx.Bind(logger)
 	ktx.Bind(tlsCfg)
-	ktx.Bind(unifiedConfig) // Bind CUE value for commands that need full config (e.g., policy)
-	err = ktx.Run()
+	err := ktx.Run()
 	if err != nil {
 		logger.Error("error", "error", err)
 		os.Exit(1)
