@@ -19,7 +19,10 @@ func TestPolicyServerIntegration(t *testing.T) {
 	configFile := filepath.Join(tempDir, "policy.yaml")
 
 	configContent := `
-oidc: https://accounts.google.com
+ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest..."
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "test-client-id"
 users:
   alice@example.com: [admin, dev]
   bob@example.com: [dev]
@@ -54,7 +57,7 @@ hosts:
 
 	t.Logf("Config file created at: %s", configFile)
 	t.Logf("To manually test the policy server:")
-	t.Logf("  ./epithet policy --config-file %s --ca-pubkey <key> --listen 0.0.0.0:9999", configFile)
+	t.Logf("  Copy to ~/.epithet/policy.yaml (under 'policy:' section) and run: ./epithet policy")
 }
 
 // TestPolicyServerWithMockOIDC demonstrates how to test policy evaluation
@@ -157,7 +160,8 @@ func TestPolicyServerCommand(t *testing.T) {
 
 	// Verify help output contains expected flags
 	expectedStrings := []string{
-		"--config-file",
+		"--oidc-issuer",
+		"--oidc-audience",
 		"--ca-pubkey",
 		"--listen",
 		"OIDC-based authorization",

@@ -31,10 +31,37 @@ agent:
 #   listen: "0.0.0.0:8080"
 
 # Policy server configuration (epithet policy)
+# All policy config is now unified here - no separate policy.yaml needed
 # policy:
-#   config_file: /etc/epithet/policy.yaml
 #   listen: "0.0.0.0:9999"
-#   ca_pubkey: ssh-ed25519 AAAAC3...
+#   ca_pubkey: ssh-ed25519 AAAAC3...  # or URL like https://ca.example.com/pubkey
+#   default_expiration: "5m"
+#
+#   # OIDC configuration for token validation
+#   oidc:
+#     issuer: "https://accounts.google.com"
+#     audience: "your-client-id"
+#
+#   # Map users (by email) to tags (roles/teams)
+#   users:
+#     alice@example.com: [admin, eng]
+#     bob@example.com: [eng]
+#
+#   # Default policy settings (apply to all hosts)
+#   defaults:
+#     allow:
+#       wheel: [admin]         # users with "admin" tag get "wheel" principal
+#       developers: [eng]      # users with "eng" tag get "developers" principal
+#     extensions:
+#       permit-pty: ""
+#       permit-agent-forwarding: ""
+#
+#   # Per-host policy overrides
+#   hosts:
+#     "*.prod.example.com":
+#       expiration: "2m"       # shorter expiration for production
+#       allow:
+#         root: [admin]        # only admins can access as root
 
 # Auth OIDC configuration (epithet auth oidc)
 # auth:

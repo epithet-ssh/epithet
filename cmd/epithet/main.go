@@ -72,6 +72,7 @@ func main() {
 
 	ktx.Bind(logger)
 	ktx.Bind(tlsCfg)
+	ktx.Bind(unifiedConfig) // Bind CUE value for commands that need full config (e.g., policy)
 	err = ktx.Run()
 	if err != nil {
 		logger.Error("error", "error", err)

@@ -7,14 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"cuelang.org/go/cue"
-	"cuelang.org/go/cue/cuecontext"
-	"cuelang.org/go/cue/load"
-	"cuelang.org/go/encoding/yaml"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -23,32 +19,54 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-type PolicyServerCLI struct {
-	ConfigFile string `help:"Path to policy configuration file (YAML or CUE)" short:"c" required:"true"`
-	Listen     string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
-	CAPubkey   string `help:"CA public key (URL like http://localhost:8080, file path, or literal SSH key)" required:"true"`
+// PolicyOIDCConfig holds OIDC configuration for the policy server.
+// This is embedded in PolicyServerCLI to enable nested config paths like policy.oidc.issuer
+type PolicyOIDCConfig struct {
+	Issuer   string `help:"OIDC issuer URL" name:"issuer"`
+	Audience string `help:"OIDC audience (client ID)" name:"audience"`
 }
 
-func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	// Resolve CA public key (may fetch from URL)
-	caPubkey, err := resolveCAPubkey(c.CAPubkey, tlsCfg)
-	if err != nil {
-		return err
-	}
+// PolicyServerCLI defines the CLI flags for the policy server.
+// Configuration comes from ~/.epithet/*.yaml under the "policy" section,
+// or from command-line flags. Maps (users, hosts) can only come from config files.
+type PolicyServerCLI struct {
+	Listen string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
 
-	// Load policy configuration
-	logger.Info("loading policy configuration", "file", c.ConfigFile)
-	cfg, err := loadPolicyConfig(c.ConfigFile)
+	// Nested struct for OIDC - gives us policy.oidc.issuer in config
+	OIDC PolicyOIDCConfig `embed:"" prefix:"oidc-"`
+
+	// CA public key - can be URL, file path, or literal key
+	CAPubkey string `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
+
+	// Default expiration
+	DefaultExpiration string `help:"Default certificate expiration (e.g., 5m)" name:"default-expiration"`
+}
+
+func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unifiedConfig cue.Value) error {
+	// Load policy configuration from unified CUE config (handles maps like users, hosts)
+	cfg, err := c.loadPolicyFromCUE(unifiedConfig)
 	if err != nil {
 		return fmt.Errorf("failed to load policy config: %w", err)
 	}
+
+	// Apply CLI overrides (scalar values take precedence over config file)
+	c.applyOverrides(cfg)
+
+	// Resolve CA public key (may fetch from URL)
+	if cfg.CAPublicKey == "" {
+		return fmt.Errorf("ca_pubkey is required (via --ca-pubkey flag or policy.ca_pubkey in config)")
+	}
+	caPubkey, err := resolveCAPubkey(cfg.CAPublicKey, tlsCfg)
+	if err != nil {
+		return err
+	}
+	cfg.CAPublicKey = caPubkey
 
 	// Validate policy configuration
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid policy config: %w", err)
 	}
 
-	// Validate configuration
 	logger.Info("policy configuration loaded",
 		"users", len(cfg.Users),
 		"hosts", len(cfg.Hosts),
@@ -80,10 +98,55 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
-		"config_file", c.ConfigFile,
 		"ca_pubkey_length", len(caPubkey))
 
 	return http.ListenAndServe(c.Listen, r)
+}
+
+// loadPolicyFromCUE decodes the policy section from the unified CUE config.
+// This handles maps (users, hosts) that cannot be represented as CLI flags.
+func (c *PolicyServerCLI) loadPolicyFromCUE(unifiedConfig cue.Value) (*policyserver.PolicyRulesConfig, error) {
+	// Look up policy section
+	policyVal := unifiedConfig.LookupPath(cue.ParsePath("policy"))
+	if !policyVal.Exists() {
+		// Return empty config - CLI flags will provide required values
+		return &policyserver.PolicyRulesConfig{
+			Users: make(map[string][]string),
+		}, nil
+	}
+
+	// Decode into PolicyRulesConfig (CUE handles maps correctly)
+	var cfg policyserver.PolicyRulesConfig
+	if err := policyVal.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to decode policy config: %w", err)
+	}
+
+	// Ensure Users map is not nil
+	if cfg.Users == nil {
+		cfg.Users = make(map[string][]string)
+	}
+
+	return &cfg, nil
+}
+
+// applyOverrides applies CLI-provided values over config file values.
+// Only non-empty CLI values override the config.
+func (c *PolicyServerCLI) applyOverrides(cfg *policyserver.PolicyRulesConfig) {
+	if c.CAPubkey != "" {
+		cfg.CAPublicKey = c.CAPubkey
+	}
+	if c.OIDC.Issuer != "" {
+		cfg.OIDC.Issuer = c.OIDC.Issuer
+	}
+	if c.OIDC.Audience != "" {
+		cfg.OIDC.Audience = c.OIDC.Audience
+	}
+	if c.DefaultExpiration != "" {
+		if cfg.Defaults == nil {
+			cfg.Defaults = &policyserver.DefaultPolicy{}
+		}
+		cfg.Defaults.Expiration = c.DefaultExpiration
+	}
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key
@@ -135,88 +198,4 @@ func resolveCAPubkey(input string, tlsCfg tlsconfig.Config) (string, error) {
 	}
 
 	return input, nil
-}
-
-// loadPolicyConfig loads policy configuration from a file (YAML, JSON, or CUE).
-func loadPolicyConfig(path string) (*policyserver.PolicyRulesConfig, error) {
-	ctx := cuecontext.New()
-
-	fileInfo, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat path: %w", err)
-	}
-
-	var val cue.Value
-
-	// Handle directories and .cue files using load.Instances
-	if fileInfo.IsDir() || strings.HasSuffix(strings.ToLower(path), ".cue") {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve path: %w", err)
-		}
-
-		cfg := &load.Config{
-			Dir:       filepath.Dir(absPath),
-			DataFiles: true,
-		}
-
-		var args []string
-		if fileInfo.IsDir() {
-			args = []string{path}
-		} else {
-			args = []string{absPath}
-		}
-
-		instances := load.Instances(args, cfg)
-		if len(instances) == 0 {
-			return nil, fmt.Errorf("no instances loaded from %s", path)
-		}
-
-		inst := instances[0]
-		if inst.Err != nil {
-			return nil, fmt.Errorf("failed to load config: %w", inst.Err)
-		}
-
-		val = ctx.BuildInstance(inst)
-		if err := val.Err(); err != nil {
-			return nil, fmt.Errorf("failed to build CUE value: %w", err)
-		}
-	} else {
-		// Handle standalone data files (YAML, JSON)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read file: %w", err)
-		}
-
-		ext := strings.ToLower(filepath.Ext(path))
-		switch ext {
-		case ".yaml", ".yml":
-			file, err := yaml.Extract("", data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse YAML: %w", err)
-			}
-			val = ctx.BuildFile(file)
-		case ".json":
-			val = ctx.CompileBytes(data)
-		default:
-			// Try YAML as default
-			file, err := yaml.Extract("", data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse file: %w", err)
-			}
-			val = ctx.BuildFile(file)
-		}
-
-		if err := val.Err(); err != nil {
-			return nil, fmt.Errorf("failed to build CUE value: %w", err)
-		}
-	}
-
-	// Decode into PolicyRulesConfig
-	var config policyserver.PolicyRulesConfig
-	if err := val.Decode(&config); err != nil {
-		return nil, fmt.Errorf("failed to decode config: %w", err)
-	}
-
-	return &config, nil
 }

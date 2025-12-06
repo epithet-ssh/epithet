@@ -8,7 +8,7 @@ import (
 // PolicyRulesConfig represents the policy server rules configuration.
 // This defines users, hosts, and access policies - not CLI flags.
 type PolicyRulesConfig struct {
-	CAPublicKey string                 `yaml:"ca_public_key" json:"ca_public_key"`
+	CAPublicKey string                 `yaml:"ca_pubkey" json:"ca_pubkey"`
 	OIDC        OIDCConfig             `yaml:"oidc" json:"oidc"`
 	Users       map[string][]string    `yaml:"users" json:"users"` // user identity → tags
 	Defaults    *DefaultPolicy         `yaml:"defaults,omitempty" json:"defaults,omitempty"`

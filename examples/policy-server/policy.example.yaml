@@ -3,19 +3,36 @@
 # This configuration uses group names as principals, designed to work with
 # SSH's AuthorizedPrincipalsFile feature for fine-grained access control.
 #
-# Copy this file to policy.yaml and customize for your team.
+# LOCATION: This config should be placed in ~/.epithet/policy.yaml
+# The policy server loads config from ~/.epithet/*.yaml under the "policy:" section.
+#
+# Example with policy prefix (how it should appear in ~/.epithet/policy.yaml):
+#
+#   policy:
+#     listen: "0.0.0.0:9999"
+#     ca_pubkey: "ssh-ed25519 AAAAC3..."
+#     oidc:
+#       issuer: "https://accounts.google.com"
+#       audience: "your-client-id"
+#     users:
+#       alice@example.com: [admin, eng]
+#     ... rest of config ...
+#
+# The example below shows the policy section content (add "policy:" prefix when using):
 
 # CA public key for signature verification
 # Get this from your CA server: curl http://localhost:8080/
 # Or from the file: cat ca_key.pub
-ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
 
-# OIDC issuer URL
+# OIDC configuration for token validation
 # Examples:
-#   Google: https://accounts.google.com
-#   Okta: https://your-domain.okta.com
-#   Azure AD: https://login.microsoftonline.com/{tenant-id}/v2.0
-oidc: "https://accounts.google.com"
+#   Google: issuer: https://accounts.google.com
+#   Okta: issuer: https://your-domain.okta.com
+#   Azure AD: issuer: https://login.microsoftonline.com/{tenant-id}/v2.0
+oidc:
+  issuer: "https://accounts.google.com"
+  audience: "your-client-id"  # Your OAuth2 client ID
 
 # Map users (by email or OIDC sub claim) to tags
 # Tags represent roles or team membership

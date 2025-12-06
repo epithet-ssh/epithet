@@ -31,49 +31,55 @@ cat ~/.epithet/ca_key.pub
 
 ### 2. Create a Policy Configuration File
 
-Create `policy.yaml`:
+Create `~/.epithet/policy.yaml` (the policy server loads config from `~/.epithet/*.yaml`):
 
 ```yaml
-# CA public key for signature verification
-ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+policy:
+  # Address to listen on
+  listen: "0.0.0.0:9999"
 
-# OIDC issuer URL
-oidc: "https://accounts.google.com"
+  # CA public key for signature verification
+  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
 
-# Map users (by email/identity) to tags
-users:
-  alice@example.com: [admin, dev]
-  bob@example.com: [dev]
-  charlie@example.com: [ops]
+  # OIDC configuration for token validation
+  oidc:
+    issuer: "https://accounts.google.com"
+    audience: "your-client-id"
 
-# Global defaults for all hosts
-defaults:
-  # Map principals to allowed tags
-  allow:
-    root: [admin]           # Users with 'admin' tag can log in as root
-    ubuntu: [dev, ops]      # Users with 'dev' or 'ops' tag can log in as ubuntu
-    deploy: [ops]           # Users with 'ops' tag can log in as deploy
-  
-  # Default certificate expiration
-  expiration: "5m"
-  
-  # Default SSH certificate extensions
-  extensions:
-    permit-pty: ""
-    permit-agent-forwarding: ""
-    permit-user-rc: ""
+  # Map users (by email/identity) to tags
+  users:
+    alice@example.com: [admin, dev]
+    bob@example.com: [dev]
+    charlie@example.com: [ops]
 
-# Per-host policy overrides (optional)
-hosts:
-  prod-db-01:
+  # Global defaults for all hosts
+  defaults:
+    # Map principals to allowed tags
     allow:
-      dbadmins: [admin]     # Only admins get 'dbadmins' group on prod-db
-    expiration: "2m"        # Shorter expiration for production database
-  
-  dev-server:
-    allow:
-      docker: [eng]         # Engineers get 'docker' group on dev server
-    expiration: "10m"       # Longer expiration for dev environment
+      root: [admin]           # Users with 'admin' tag can log in as root
+      ubuntu: [dev, ops]      # Users with 'dev' or 'ops' tag can log in as ubuntu
+      deploy: [ops]           # Users with 'ops' tag can log in as deploy
+
+    # Default certificate expiration
+    expiration: "5m"
+
+    # Default SSH certificate extensions
+    extensions:
+      permit-pty: ""
+      permit-agent-forwarding: ""
+      permit-user-rc: ""
+
+  # Per-host policy overrides (optional)
+  hosts:
+    prod-db-01:
+      allow:
+        dbadmins: [admin]     # Only admins get 'dbadmins' group on prod-db
+      expiration: "2m"        # Shorter expiration for production database
+
+    dev-server:
+      allow:
+        docker: [eng]         # Engineers get 'docker' group on dev server
+      expiration: "10m"       # Longer expiration for dev environment
 ```
 
 **Important**: Certificates contain **all principals** the user is authorized for (union of global defaults + all host-specific policies). For example, if alice has the `admin` tag, her certificate will include: `wheel`, `dbadmins`, `developers` (if admin also grants eng access), etc.
@@ -81,10 +87,13 @@ hosts:
 ### 3. Start the Policy Server
 
 ```bash
+# Config is loaded from ~/.epithet/policy.yaml
+epithet policy
+
+# Or override with CLI flags
 epithet policy \
-  --config-file policy.yaml \
   --ca-pubkey "$(curl -s http://localhost:8080/)" \
-  --port 9999
+  --listen 0.0.0.0:9999
 ```
 
 ### 4. Configure the CA to Use the Policy Server
@@ -123,11 +132,15 @@ The format is auto-detected based on file extension.
 
 #### Top-Level Fields
 
-- **`ca_public_key`** (required): SSH public key of the CA for signature verification
-- **`oidc`** (required): OIDC issuer URL (e.g., `https://accounts.google.com`)
+All fields go under the `policy:` section in `~/.epithet/*.yaml`:
+
+- **`listen`** (optional): Address to listen on (default: `0.0.0.0:9999`)
+- **`ca_pubkey`** (required): SSH public key of the CA for signature verification
+- **`oidc`** (required): OIDC configuration object with `issuer` and `audience` fields
 - **`users`** (required): Map of user identities to tags
 - **`defaults`** (optional): Global policy defaults
 - **`hosts`** (optional): Per-host policy overrides
+- **`default_expiration`** (optional): Default certificate expiration (e.g., `5m`)
 
 #### Users Section
 
@@ -404,11 +417,8 @@ epithet ca \
   --policy http://localhost:9999 \
   --address :8080 &
 
-# Start policy server
-epithet policy \
-  --config-file policy.yaml \
-  --ca-pubkey "$(cat ~/.epithet/ca_key.pub)" \
-  --port 9999 &
+# Start policy server (config loaded from ~/.epithet/policy.yaml)
+epithet policy &
 ```
 
 ### Production Setup
@@ -425,10 +435,8 @@ After=network.target
 Type=simple
 User=epithet
 Group=epithet
-ExecStart=/usr/local/bin/epithet policy \
-  --config-file /etc/epithet/policy.yaml \
-  --ca-pubkey "$(cat /etc/epithet/ca_key.pub)" \
-  --port 9999
+# Config is loaded from ~/.epithet/policy.yaml (or specify --config for another location)
+ExecStart=/usr/local/bin/epithet policy
 Restart=on-failure
 RestartSec=5s
 
@@ -518,7 +526,7 @@ The target host does NOT know about host-specific policies in the policy configu
 
 **"Invalid CA signature" (400)**
 - The signature from the CA doesn't verify with the configured public key
-- Check that `ca_public_key` in the config matches the CA's actual public key
+- Check that `ca_pubkey` in the config matches the CA's actual public key
 - Ensure the CA and policy server are using compatible key formats
 
 ### Debugging
@@ -526,7 +534,7 @@ The target host does NOT know about host-specific policies in the policy configu
 Enable verbose logging:
 
 ```bash
-epithet -vv policy --config-file policy.yaml --ca-pubkey "..." --port 9999
+epithet -vv policy
 ```
 
 Check policy server logs for:
@@ -540,96 +548,105 @@ Check policy server logs for:
 ### Small Team (3-5 developers)
 
 ```yaml
-ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://accounts.google.com"
+policy:
+  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  oidc:
+    issuer: "https://accounts.google.com"
+    audience: "your-client-id"
 
-users:
-  alice@team.com: [admin]
-  bob@team.com: [dev]
-  charlie@team.com: [dev]
+  users:
+    alice@team.com: [admin]
+    bob@team.com: [dev]
+    charlie@team.com: [dev]
 
-defaults:
-  allow:
-    root: [admin]
-    ubuntu: [dev, admin]
-  expiration: "10m"
+  defaults:
+    allow:
+      root: [admin]
+      ubuntu: [dev, admin]
+    expiration: "10m"
 ```
 
 ### Development and Production Separation
 
 ```yaml
-ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://login.example.com"
+policy:
+  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  oidc:
+    issuer: "https://login.example.com"
+    audience: "your-client-id"
 
-users:
-  alice@example.com: [admin, dev]
-  bob@example.com: [dev]
-  ops@example.com: [ops]
+  users:
+    alice@example.com: [admin, dev]
+    bob@example.com: [dev]
+    ops@example.com: [ops]
 
-defaults:
-  allow:
-    ubuntu: [dev, admin]
-  expiration: "10m"
-
-hosts:
-  prod-web-*:            # Note: wildcards not yet supported in v1
+  defaults:
     allow:
-      deploy: [ops, admin]
-    expiration: "2m"
-  
-  prod-db-*:
-    allow:
-      postgres: [admin]
-    expiration: "2m"
+      ubuntu: [dev, admin]
+    expiration: "10m"
+
+  hosts:
+    prod-web-*:            # Note: wildcards not yet supported in v1
+      allow:
+        deploy: [ops, admin]
+      expiration: "2m"
+
+    prod-db-*:
+      allow:
+        postgres: [admin]
+      expiration: "2m"
 ```
 
 ### Multiple Environments with Different Access Levels
 
 ```yaml
-ca_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
-oidc: "https://sso.company.com"
+policy:
+  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  oidc:
+    issuer: "https://sso.company.com"
+    audience: "your-client-id"
 
-users:
-  # Engineering
-  alice@company.com: [eng-lead, eng]
-  bob@company.com: [eng]
-  
-  # Operations
-  ops-alice@company.com: [ops-lead, ops]
-  ops-bob@company.com: [ops]
-  
-  # Security
-  security@company.com: [security, ops]
+  users:
+    # Engineering
+    alice@company.com: [eng-lead, eng]
+    bob@company.com: [eng]
 
-defaults:
-  allow:
-    ubuntu: [eng, ops]
-  expiration: "5m"
+    # Operations
+    ops-alice@company.com: [ops-lead, ops]
+    ops-bob@company.com: [ops]
 
-hosts:
-  # Development - relaxed policies
-  dev-server-01:
+    # Security
+    security@company.com: [security, ops]
+
+  defaults:
     allow:
-      root: [eng]
-      deploy: [eng]
-    expiration: "1h"
-  
-  # Staging - moderate policies
-  staging-web-01:
-    allow:
-      deploy: [eng-lead, ops]
-    expiration: "10m"
-  
-  # Production - strict policies
-  prod-web-01:
-    allow:
-      deploy: [ops-lead]
-    expiration: "2m"
-  
-  prod-db-01:
-    allow:
-      postgres: [ops-lead, security]
-    expiration: "2m"
+      ubuntu: [eng, ops]
+    expiration: "5m"
+
+  hosts:
+    # Development - relaxed policies
+    dev-server-01:
+      allow:
+        root: [eng]
+        deploy: [eng]
+      expiration: "1h"
+
+    # Staging - moderate policies
+    staging-web-01:
+      allow:
+        deploy: [eng-lead, ops]
+      expiration: "10m"
+
+    # Production - strict policies
+    prod-web-01:
+      allow:
+        deploy: [ops-lead]
+      expiration: "2m"
+
+    prod-db-01:
+      allow:
+        postgres: [ops-lead, security]
+      expiration: "2m"
 ```
 
 ## Policy Server HTTP API
