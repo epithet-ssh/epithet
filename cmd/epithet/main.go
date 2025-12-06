@@ -23,7 +23,7 @@ var cli struct {
 	Version kong.VersionFlag `short:"V" help:"Print version information"`
 	Verbose int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	LogFile string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
-	Config  kongcue.Config   `help:"Path to config file" default:"/etc/epithet/*.{cue,yaml,yml,json},~/.epithet/*.{cue,yaml,yml,json}"`
+	Config  kongcue.Config   `help:"Path to config file" sep:";" default:"/etc/epithet/*.{cue,yaml,yml,json};~/.epithet/*.{cue,yaml,yml,json}"`
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
@@ -48,6 +48,7 @@ func main() {
 
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
+		kong.ShortUsageOnError(),
 	)
 	logger := setupLogger()
 
@@ -60,10 +61,7 @@ func main() {
 	ktx.Bind(logger)
 	ktx.Bind(tlsCfg)
 	err := ktx.Run()
-	if err != nil {
-		logger.Error("error", "error", err)
-		os.Exit(1)
-	}
+	ktx.FatalIfErrorf(err)
 }
 
 // expandPath expands ~ to the user's home directory
