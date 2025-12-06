@@ -23,7 +23,7 @@ var cli struct {
 	Version kong.VersionFlag `short:"V" help:"Print version information"`
 	Verbose int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	LogFile string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
-	Config  kongcue.Config   `help:"Path to config file" default:"~/.epithet/*.yaml,~/.epithet/*.yml,~/.epithet/*.cue,~/.epithet/*.json"`
+	Config  kongcue.Config   `help:"Path to config file" default:"/etc/epithet/*.{cue,yaml,yml,json},~/.epithet/*.{cue,yaml,yml,json}"`
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
