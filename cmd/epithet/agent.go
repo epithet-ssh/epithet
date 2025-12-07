@@ -273,7 +273,6 @@ func hashString(s string) string {
 	return hex.EncodeToString(h[:8]) // Use first 8 bytes (16 hex chars)
 }
 
-
 // cleanupStaleRunDirs removes run directories from dead processes
 func cleanupStaleRunDirs(runDir string, logger *slog.Logger) {
 	entries, err := os.ReadDir(runDir)

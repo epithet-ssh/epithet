@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/breakerpool"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	gobreaker "github.com/sony/gobreaker/v2"
 )
 
 // InvalidTokenError indicates the authentication token is invalid or expired.
@@ -75,7 +77,7 @@ const DefaultCooldown = 10 * time.Minute
 type Client struct {
 	httpClient *http.Client
 	endpoints  []CAEndpoint
-	selector   *selector
+	pool       *breakerpool.Pool[*caserver.CreateCertResponse, string]
 	timeout    time.Duration
 	cooldown   time.Duration
 	logger     *slog.Logger
@@ -103,8 +105,25 @@ func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
 		}
 	}
 
-	// Create selector after options are applied (cooldown may have changed)
-	client.selector = newSelector(endpoints, client.cooldown)
+	// Create entries for the breakerpool
+	entries := make([]breakerpool.Entry[string], len(endpoints))
+	for i, ep := range endpoints {
+		entries[i] = breakerpool.Entry[string]{
+			State:    ep.URL,
+			Priority: ep.Priority,
+		}
+	}
+
+	// Default circuit breaker settings
+	defaults := gobreaker.Settings{
+		Timeout: client.cooldown,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 1
+		},
+		IsSuccessful: isSuccessfulForCircuitBreaker,
+	}
+
+	client.pool = breakerpool.New[*caserver.CreateCertResponse](entries, defaults)
 
 	return client, nil
 }
@@ -174,58 +193,25 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 		return nil, err
 	}
 
-	var lastErr error
-
-	// Try CAs until we succeed or exhaust all options
-	for {
-		// Get next available CA
-		caURL, breaker := c.selector.next()
-		if caURL == "" || breaker == nil {
-			// All CAs unavailable
-			if lastErr != nil {
-				return nil, &AllCAsUnavailableError{
-					Message: fmt.Sprintf("all CAs in circuit breaker, last error: %v", lastErr),
-				}
-			}
-			return nil, &AllCAsUnavailableError{Message: "all CAs in circuit breaker"}
+	result, err := c.pool.Execute(func(caURL string) (*caserver.CreateCertResponse, error) {
+		if c.logger != nil {
+			c.logger.Debug("trying CA", "url", caURL)
 		}
+		return c.doRequest(ctx, caURL, body)
+	})
 
-		// Execute request through circuit breaker
-		resp, err := breaker.Execute(func() (struct{}, error) {
-			return struct{}{}, nil // We handle the actual request below
-		})
-		_ = resp // unused, we just use the breaker for state management
-
-		// Make the actual request
-		result, err := c.doRequest(ctx, caURL, body)
-		if err != nil {
-			// Check if this is a non-failover error (auth/policy issues)
-			var invalidToken *InvalidTokenError
-			var policyDenied *PolicyDeniedError
-			var invalidReq *InvalidRequestError
-			if errors.As(err, &invalidToken) || errors.As(err, &policyDenied) || errors.As(err, &invalidReq) {
-				// Don't failover on auth/policy errors - return immediately
-				// The circuit breaker's IsSuccessful already treats these as "successful"
-				// so the breaker won't trip
-				return nil, err
+	if err != nil {
+		// Convert breakerpool.AllUnavailableError to our AllCAsUnavailableError
+		var allUnavail *breakerpool.AllUnavailableError
+		if errors.As(err, &allUnavail) {
+			return nil, &AllCAsUnavailableError{
+				Message: allUnavail.Error(),
 			}
-
-			// Infrastructure error - record failure and try next CA
-			// Execute through breaker to record the failure
-			_, _ = breaker.Execute(func() (struct{}, error) {
-				return struct{}{}, err
-			})
-
-			lastErr = err
-			if c.logger != nil {
-				c.logger.Warn("CA request failed, trying next CA", "url", caURL, "error", err)
-			}
-			continue
 		}
-
-		// Success - the breaker will record this automatically on next Execute
-		return result, nil
+		return nil, err
 	}
+
+	return result, nil
 }
 
 // doRequest makes a single HTTP request to a CA.
@@ -276,4 +262,41 @@ func (c *Client) doRequest(ctx context.Context, caURL string, body []byte) (*cas
 	}
 
 	return &resp, nil
+}
+
+// isSuccessfulForCircuitBreaker determines whether an error should count as a
+// circuit breaker failure. Only infrastructure errors (connection failures,
+// timeouts, 5xx) trigger the circuit breaker. Auth and policy errors do not.
+func isSuccessfulForCircuitBreaker(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	// CAUnavailableError (5xx) triggers circuit breaker
+	var caUnavail *CAUnavailableError
+	if errors.As(err, &caUnavail) {
+		return false
+	}
+
+	// InvalidTokenError (401) - auth issue, not infrastructure
+	var invalidToken *InvalidTokenError
+	if errors.As(err, &invalidToken) {
+		return true // Don't trip breaker
+	}
+
+	// PolicyDeniedError (403) - policy issue, not infrastructure
+	var policyDenied *PolicyDeniedError
+	if errors.As(err, &policyDenied) {
+		return true // Don't trip breaker
+	}
+
+	// InvalidRequestError (4xx) - client issue, not infrastructure
+	var invalidReq *InvalidRequestError
+	if errors.As(err, &invalidReq) {
+		return true // Don't trip breaker
+	}
+
+	// Unknown errors - treat as infrastructure failures to be safe
+	// This includes connection refused, DNS failures, TLS errors, etc.
+	return false
 }
