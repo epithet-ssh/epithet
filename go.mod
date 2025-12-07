@@ -51,4 +51,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-require github.com/brianm/kongcue v0.1.3
+require (
+	github.com/brianm/kongcue v0.1.3
+	github.com/sony/gobreaker/v2 v2.3.0
+)

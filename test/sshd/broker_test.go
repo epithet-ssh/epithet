@@ -15,6 +15,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -83,7 +84,13 @@ printf '%s' "6:ttoken,"
 	brokerSocketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a" // Very short to avoid socket path length issues
 	matchPatterns := []string{"*"}  // Accept all hosts
-	b, err := broker.New(*logger, brokerSocketPath, authScript, caHTTPServer.URL, agentSocketDir, matchPatterns)
+
+	// Create CA client
+	caEndpoints := []caclient.CAEndpoint{{URL: caHTTPServer.URL, Priority: caclient.DefaultPriority}}
+	caClient, err := caclient.New(caEndpoints)
+	require.NoError(t, err)
+
+	b, err := broker.New(*logger, brokerSocketPath, authScript, caClient, agentSocketDir, matchPatterns)
 	require.NoError(t, err)
 
 	// Start broker in background

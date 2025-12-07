@@ -17,7 +17,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 const (
@@ -64,10 +63,9 @@ type Broker struct {
 	certStore *CertificateStore                    // Has internal locking, safe to call concurrently
 	agents    map[policy.ConnectionHash]agentEntry // Protected by b.lock
 
-	caClient       *caclient.Client  // Immutable after New()
-	agentSocketDir string            // Immutable after New()
-	matchPatterns  []string          // Immutable after New()
-	tlsConfig      *tlsconfig.Config // Immutable after New()
+	caClient       *caclient.Client // Immutable after New()
+	agentSocketDir string           // Immutable after New()
+	matchPatterns  []string         // Immutable after New()
 
 	// For graceful shutdown: track in-flight RPC connections
 	activeRPC       sync.WaitGroup
@@ -85,16 +83,13 @@ func (f optionFunc) apply(b *Broker) error {
 	return f(b)
 }
 
-// WithTLSConfig configures TLS for the CA client
-func WithTLSConfig(cfg tlsconfig.Config) Option {
-	return optionFunc(func(b *Broker) error {
-		b.tlsConfig = &cfg
-		return nil
-	})
-}
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, authCommand string, caURL string, agentSocketDir string, matchPatterns []string, options ...Option) (*Broker, error) {
+func New(log slog.Logger, socketPath string, authCommand string, caClient *caclient.Client, agentSocketDir string, matchPatterns []string, options ...Option) (*Broker, error) {
+	if caClient == nil {
+		return nil, fmt.Errorf("caClient is required")
+	}
+
 	b := &Broker{
 		auth:             NewAuth(authCommand),
 		certStore:        NewCertificateStore(),
@@ -102,6 +97,7 @@ func New(log slog.Logger, socketPath string, authCommand string, caURL string, a
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
 		matchPatterns:    matchPatterns,
+		caClient:         caClient,
 		done:             make(chan struct{}),
 		log:              log,
 		shutdownTimeout:  2 * time.Second, // Default timeout for graceful shutdown
@@ -112,19 +108,6 @@ func New(log slog.Logger, socketPath string, authCommand string, caURL string, a
 			return nil, err
 		}
 	}
-
-	// Create CA client with TLS config if provided
-	var clientOpts []caclient.Option
-	clientOpts = append(clientOpts, caclient.WithLogger(&log))
-	if b.tlsConfig != nil {
-		clientOpts = append(clientOpts, caclient.WithTLSConfig(*b.tlsConfig))
-	}
-
-	caClient, err := caclient.New(caURL, clientOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CA client: %w", err)
-	}
-	b.caClient = caClient
 
 	return b, nil
 }
@@ -320,6 +303,15 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 			b.log.Error("CA service unavailable", "error", caUnavailable.Message)
 			output.Allow = false
 			output.Error = caUnavailable.Error()
+			return nil
+		}
+
+		var allCAsUnavailable *caclient.AllCAsUnavailableError
+		if errors.As(err, &allCAsUnavailable) {
+			// All CAs are in circuit breaker - don't retry
+			b.log.Error("all CA servers unavailable", "error", allCAsUnavailable.Message)
+			output.Allow = false
+			output.Error = allCAsUnavailable.Error()
 			return nil
 		}
 

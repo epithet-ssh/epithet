@@ -2,7 +2,7 @@
 title: Multi-CA failover with circuit breaker
 id: htbx21b7
 created: 2025-11-29T23:57:17.446438Z
-updated: 2025-11-30T01:18:24.436296Z
+updated: 2025-12-07T22:16:03.574577Z
 author: Brian McCallister
 priority: high
 tags:
@@ -312,3 +312,19 @@ priority=N:https://ca.example.com/ where N is an integer (default 100, higher = 
 | pkg/caclient/errors.go | Add AllCAsUnavailableError |
 | pkg/broker/broker.go | Update New() signature |
 | cmd/epithet/agent.go | Slice flag, timeout/cooldown flags |
+---
+# Log: 2025-12-07T20:41:49Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-07T22:08:15Z Brian McCallister
+
+Implementation complete. Multi-CA failover with gobreaker circuit breaker is fully implemented and tested.
+---
+# Log: 2025-12-07T22:08:16Z Brian McCallister
+
+Closed: Completed: Multi-CA failover with gobreaker circuit breaker
+---
+# Log: 2025-12-07T22:16:03Z Brian McCallister
+
+Refactored broker to use dependency injection - broker.New() now accepts *caclient.Client instead of constructing it internally. Updated all callers: cmd/epithet/agent.go, pkg/broker/broker_test.go, pkg/broker/agent_test.go, test/sshd/broker_test.go

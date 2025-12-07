@@ -6,10 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 )
+
+// testCAClient creates a test CA client for use in tests
+func testCAClient(t *testing.T, url string) *caclient.Client {
+	t.Helper()
+	endpoints := []caclient.CAEndpoint{{URL: url, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	if err != nil {
+		t.Fatalf("failed to create test CA client: %v", err)
+	}
+	return client
+}
 
 func Test_RpcBasics(t *testing.T) {
 	ctx := t.Context()
@@ -20,7 +32,7 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -56,7 +68,7 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -93,7 +105,7 @@ printf '%s' "6:thello,"
 
 	// With no CA available, should return false with error
 	require.False(t, resp.Allow)
-	require.Contains(t, resp.Error, "failed to request certificate")
+	require.Contains(t, resp.Error, "all CAs unavailable")
 }
 
 func Test_ShouldHandle(t *testing.T) {
@@ -162,7 +174,7 @@ printf '%s' "6:thello,"
 			socketPath := t.TempDir() + "/broker.sock"
 			agentSocketDir := t.TempDir() + "/sockets"
 
-			b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, tt.patterns)
+			b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, tt.patterns)
 			require.NoError(t, err)
 			b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -185,7 +197,7 @@ printf '%s' "6:thello,"
 
 	// Create broker that only handles *.example.com
 	patterns := []string{"*.example.com"}
-	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, patterns)
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, patterns)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -217,7 +229,7 @@ printf '%s' "6:thello,"
 	require.NoError(t, err)
 	// Should proceed past pattern check (will fail later for other reasons)
 	require.False(t, resp1.Allow)
-	require.Contains(t, resp1.Error, "failed to request certificate") // Not "does not match"
+	require.Contains(t, resp1.Error, "all CAs unavailable") // Not "does not match"
 
 	// Test 2: Host that doesn't match pattern
 	req2 := MatchRequest{
@@ -252,7 +264,7 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, "http://localhost:9999", agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 

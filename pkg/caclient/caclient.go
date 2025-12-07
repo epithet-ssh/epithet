@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -54,19 +55,45 @@ func (e *InvalidRequestError) Error() string {
 	return fmt.Sprintf("invalid request: %s", e.Message)
 }
 
-// Client is a CA Client
+// AllCAsUnavailableError indicates all configured CAs are unavailable.
+// This happens when all CAs have their circuit breakers in the open state.
+type AllCAsUnavailableError struct {
+	Message string
+}
+
+func (e *AllCAsUnavailableError) Error() string {
+	return fmt.Sprintf("all CAs unavailable: %s", e.Message)
+}
+
+// DefaultTimeout is the default per-request timeout for CA requests.
+const DefaultTimeout = 15 * time.Second
+
+// DefaultCooldown is the default circuit breaker cooldown duration.
+const DefaultCooldown = 10 * time.Minute
+
+// Client is a CA Client with support for multiple CA endpoints and failover.
 type Client struct {
 	httpClient *http.Client
-	caURL      string
+	endpoints  []CAEndpoint
+	selector   *selector
+	timeout    time.Duration
+	cooldown   time.Duration
 	logger     *slog.Logger
 }
 
-// New creates a new CA Client
-func New(url string, options ...Option) (*Client, error) {
+// New creates a new CA Client with the given endpoints.
+// At least one endpoint is required.
+func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("at least one CA endpoint is required")
+	}
+
 	client := &Client{
-		caURL: url,
+		endpoints: endpoints,
+		timeout:   DefaultTimeout,
+		cooldown:  DefaultCooldown,
 		httpClient: &http.Client{
-			Timeout: time.Second * 30,
+			Timeout: DefaultTimeout,
 		},
 	}
 
@@ -75,6 +102,9 @@ func New(url string, options ...Option) (*Client, error) {
 			return nil, err
 		}
 	}
+
+	// Create selector after options are applied (cooldown may have changed)
+	client.selector = newSelector(endpoints, client.cooldown)
 
 	return client, nil
 }
@@ -109,7 +139,7 @@ func WithLogger(logger *slog.Logger) Option {
 // WithTLSConfig creates an HTTP client with the specified TLS configuration
 func WithTLSConfig(cfg tlsconfig.Config) Option {
 	return optionFunc(func(c *Client) error {
-		httpClient, err := tlsconfig.NewHTTPClientWithTimeout(cfg, time.Second*30)
+		httpClient, err := tlsconfig.NewHTTPClientWithTimeout(cfg, c.timeout)
 		if err != nil {
 			return fmt.Errorf("failed to create HTTP client: %w", err)
 		}
@@ -118,19 +148,93 @@ func WithTLSConfig(cfg tlsconfig.Config) Option {
 	})
 }
 
-// GetCert converts a token to a cert
+// WithTimeout sets the per-request timeout for CA requests.
+func WithTimeout(d time.Duration) Option {
+	return optionFunc(func(c *Client) error {
+		c.timeout = d
+		c.httpClient.Timeout = d
+		return nil
+	})
+}
+
+// WithCooldown sets the circuit breaker cooldown duration.
+// Failed CAs will be unavailable for this duration before being retried.
+func WithCooldown(d time.Duration) Option {
+	return optionFunc(func(c *Client) error {
+		c.cooldown = d
+		return nil
+	})
+}
+
+// GetCert requests a certificate from the CA, with automatic failover to backup CAs.
+// It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
 func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	// Debug logging: show what we're sending
+	var lastErr error
+
+	// Try CAs until we succeed or exhaust all options
+	for {
+		// Get next available CA
+		caURL, breaker := c.selector.next()
+		if caURL == "" || breaker == nil {
+			// All CAs unavailable
+			if lastErr != nil {
+				return nil, &AllCAsUnavailableError{
+					Message: fmt.Sprintf("all CAs in circuit breaker, last error: %v", lastErr),
+				}
+			}
+			return nil, &AllCAsUnavailableError{Message: "all CAs in circuit breaker"}
+		}
+
+		// Execute request through circuit breaker
+		resp, err := breaker.Execute(func() (struct{}, error) {
+			return struct{}{}, nil // We handle the actual request below
+		})
+		_ = resp // unused, we just use the breaker for state management
+
+		// Make the actual request
+		result, err := c.doRequest(ctx, caURL, body)
+		if err != nil {
+			// Check if this is a non-failover error (auth/policy issues)
+			var invalidToken *InvalidTokenError
+			var policyDenied *PolicyDeniedError
+			var invalidReq *InvalidRequestError
+			if errors.As(err, &invalidToken) || errors.As(err, &policyDenied) || errors.As(err, &invalidReq) {
+				// Don't failover on auth/policy errors - return immediately
+				// The circuit breaker's IsSuccessful already treats these as "successful"
+				// so the breaker won't trip
+				return nil, err
+			}
+
+			// Infrastructure error - record failure and try next CA
+			// Execute through breaker to record the failure
+			_, _ = breaker.Execute(func() (struct{}, error) {
+				return struct{}{}, err
+			})
+
+			lastErr = err
+			if c.logger != nil {
+				c.logger.Warn("CA request failed, trying next CA", "url", caURL, "error", err)
+			}
+			continue
+		}
+
+		// Success - the breaker will record this automatically on next Execute
+		return result, nil
+	}
+}
+
+// doRequest makes a single HTTP request to a CA.
+func (c *Client) doRequest(ctx context.Context, caURL string, body []byte) (*caserver.CreateCertResponse, error) {
 	if c.logger != nil {
-		c.logger.Debug("CA request", "url", c.caURL, "body", string(body))
+		c.logger.Debug("CA request", "url", caURL, "body", string(body))
 	}
 
-	rq, err := http.NewRequest("POST", c.caURL, bytes.NewReader(body))
+	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -140,37 +244,35 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 	if err != nil {
 		return nil, err
 	}
+	defer res.Body.Close()
 
-	body, err = io.ReadAll(res.Body)
+	respBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	// Debug logging: always log response for debugging
 	if c.logger != nil {
-		c.logger.Debug("CA response", "status", res.StatusCode, "body", string(body))
+		c.logger.Debug("CA response", "url", caURL, "status", res.StatusCode, "body", string(respBody))
 	}
 
 	if res.StatusCode != 200 {
-		// Map HTTP status codes to domain-specific errors
 		switch res.StatusCode {
 		case http.StatusUnauthorized:
-			return nil, &InvalidTokenError{Message: string(body)}
+			return nil, &InvalidTokenError{Message: string(respBody)}
 		case http.StatusForbidden:
-			return nil, &PolicyDeniedError{Message: string(body)}
+			return nil, &PolicyDeniedError{Message: string(respBody)}
 		default:
 			if res.StatusCode >= 500 {
-				return nil, &CAUnavailableError{Message: string(body)}
+				return nil, &CAUnavailableError{Message: string(respBody)}
 			}
-			// Other 4xx errors
-			return nil, &InvalidRequestError{Message: string(body)}
+			return nil, &InvalidRequestError{Message: string(respBody)}
 		}
 	}
 
 	resp := caserver.CreateCertResponse{}
-	err = json.Unmarshal(body, &resp)
+	err = json.Unmarshal(respBody, &resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal CA response (body=%s): %w", string(body), err)
+		return nil, fmt.Errorf("failed to unmarshal CA response (body=%s): %w", string(respBody), err)
 	}
 
 	return &resp, nil

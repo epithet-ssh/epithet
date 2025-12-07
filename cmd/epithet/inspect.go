@@ -34,13 +34,13 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("failed to expand broker socket path: %w", err)
 		}
-	} else if parent.CaURL != "" {
+	} else if len(parent.CaURL) > 0 {
 		// Derive socket path from parent's config (same logic as AgentStartCLI)
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("failed to get home directory: %w", err)
 		}
-		instanceID := hashString(parent.CaURL + fmt.Sprintf("%v", parent.Match))
+		instanceID := hashString(fmt.Sprintf("%v%v", parent.CaURL, parent.Match))
 		brokerSock = filepath.Join(homeDir, ".epithet", "run", instanceID, "broker.sock")
 	} else {
 		return fmt.Errorf("must specify either --broker or --ca-url (with optional --match)")

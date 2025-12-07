@@ -12,17 +12,21 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // AgentCLI is the parent command for agent-related subcommands.
 // Shared flags (Match, CaURL, Auth) are defined here and inherited by subcommands.
 type AgentCLI struct {
-	Match []string `help:"Match patterns" short:"m"`
-	CaURL string   `help:"CA URL" name:"ca-url" short:"c"`
-	Auth  string   `help:"Authentication command" short:"a"`
+	Match      []string      `help:"Match patterns" short:"m"`
+	CaURL      []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
+	Auth       string        `help:"Authentication command" short:"a"`
+	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
+	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 
 	Start   AgentStartCLI   `cmd:"" default:"withargs" help:"Start the epithet agent"`
 	Inspect AgentInspectCLI `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
@@ -33,18 +37,26 @@ type AgentStartCLI struct{}
 
 func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	// Validate required fields for start
-	if parent.CaURL == "" {
-		return fmt.Errorf("--ca-url is required")
+	if len(parent.CaURL) == 0 {
+		return fmt.Errorf("--ca-url is required (at least one)")
 	}
 	if parent.Auth == "" {
 		return fmt.Errorf("--auth is required")
 	}
 
-	logger.Debug("agent start command received", "ca_url", parent.CaURL, "match", parent.Match)
+	// Parse CA URLs into endpoints
+	caEndpoints, err := caclient.ParseCAURLs(parent.CaURL)
+	if err != nil {
+		return fmt.Errorf("invalid CA URL: %w", err)
+	}
 
-	// Validate CA URL requires TLS (unless --insecure)
-	if err := tlsCfg.ValidateURL(parent.CaURL); err != nil {
-		return err
+	logger.Debug("agent start command received", "ca_urls", parent.CaURL, "match", parent.Match, "ca_timeout", parent.CaTimeout, "ca_cooldown", parent.CaCooldown)
+
+	// Validate all CA URLs require TLS (unless --insecure)
+	for _, ep := range caEndpoints {
+		if err := tlsCfg.ValidateURL(ep.URL); err != nil {
+			return fmt.Errorf("CA URL %q: %w", ep.URL, err)
+		}
 	}
 
 	// Get home directory
@@ -54,8 +66,8 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	}
 
 	// Create a unique temporary directory for this broker instance
-	// Use a hash of the CA URL + match patterns to make it deterministic
-	instanceID := hashString(parent.CaURL + fmt.Sprintf("%v", parent.Match))
+	// Use a hash of the CA URLs + match patterns to make it deterministic
+	instanceID := hashString(fmt.Sprintf("%v%v", parent.CaURL, parent.Match))
 	runDir := filepath.Join(homeDir, ".epithet", "run")
 	tempDir := filepath.Join(runDir, instanceID)
 
@@ -91,8 +103,20 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return fmt.Errorf("failed to create agent directory: %w", err)
 	}
 
+	// Create CA client
+	caClientOpts := []caclient.Option{
+		caclient.WithLogger(logger),
+		caclient.WithTimeout(parent.CaTimeout),
+		caclient.WithCooldown(parent.CaCooldown),
+		caclient.WithTLSConfig(tlsCfg),
+	}
+	caClient, err := caclient.New(caEndpoints, caClientOpts...)
+	if err != nil {
+		return fmt.Errorf("failed to create CA client: %w", err)
+	}
+
 	// Create broker
-	b, err := broker.New(*logger, brokerSock, parent.Auth, parent.CaURL, agentDir, parent.Match, broker.WithTLSConfig(tlsCfg))
+	b, err := broker.New(*logger, brokerSock, parent.Auth, caClient, agentDir, parent.Match)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}
