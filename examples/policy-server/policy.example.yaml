@@ -5,91 +5,78 @@
 #
 # LOCATION: This config should be placed in ~/.epithet/policy.yaml
 # The policy server loads config from ~/.epithet/*.yaml under the "policy:" section.
-#
-# Example with policy prefix (how it should appear in ~/.epithet/policy.yaml):
-#
-#   policy:
-#     listen: "0.0.0.0:9999"
-#     ca_pubkey: "ssh-ed25519 AAAAC3..."
-#     oidc:
-#       issuer: "https://accounts.google.com"
-#       audience: "your-client-id"
-#     users:
-#       alice@example.com: [admin, eng]
-#     ... rest of config ...
-#
-# The example below shows the policy section content (add "policy:" prefix when using):
 
-# CA public key for signature verification
-# Get this from your CA server: curl http://localhost:8080/
-# Or from the file: cat ca_key.pub
-ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+policy:
+  # CA public key for signature verification
+  # Get this from your CA server: curl http://localhost:8080/
+  # Or from the file: cat ca_key.pub
+  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
 
-# OIDC configuration for token validation
-# Examples:
-#   Google: issuer: https://accounts.google.com
-#   Okta: issuer: https://your-domain.okta.com
-#   Azure AD: issuer: https://login.microsoftonline.com/{tenant-id}/v2.0
-oidc:
-  issuer: "https://accounts.google.com"
-  audience: "your-client-id"  # Your OAuth2 client ID
+  # OIDC configuration for token validation
+  # Examples:
+  #   Google: issuer: https://accounts.google.com
+  #   Okta: issuer: https://your-domain.okta.com
+  #   Azure AD: issuer: https://login.microsoftonline.com/{tenant-id}/v2.0
+  oidc:
+    issuer: "https://accounts.google.com"
+    audience: "your-client-id"  # Your OAuth2 client ID
 
-# Map users (by email or OIDC sub claim) to tags
-# Tags represent roles or team membership
-users:
-  alice@example.com: [admin, eng] # Senior engineer with admin access
-  bob@example.com: [eng] # Engineer
-  charlie@example.com: [ops] # Operations team
-  diana@example.com: [admin, ops] # Ops lead with admin access
+  # Map users (by email or OIDC sub claim) to tags
+  # Tags represent roles or team membership
+  users:
+    alice@example.com: [admin, eng] # Senior engineer with admin access
+    bob@example.com: [eng] # Engineer
+    charlie@example.com: [ops] # Operations team
+    diana@example.com: [admin, ops] # Ops lead with admin access
 
-  # Add your team members here:
-  # yourname@example.com: [admin]
+    # Add your team members here:
+    # yourname@example.com: [admin]
 
-# Global defaults for all hosts (unless overridden per-host)
-defaults:
-  # Map principals (group names) to allowed tags
-  #
-  # IMPORTANT: Principals are group names, not usernames!
-  # Use AuthorizedPrincipalsFile on target hosts to map group principals
-  # to local user accounts.
-  #
-  # The certificate will contain ALL principals the user is authorized for
-  # (union of global defaults + all host-specific policies).
-  allow:
-    wheel: [admin] # Admins get 'wheel' group
-    developers: [eng] # Engineers get 'developers' group
-    operators: [ops] # Ops team gets 'operators' group
-    dbadmins: [admin] # Admins also get 'dbadmins' group
-
-  # Default certificate expiration (2-10 minutes recommended)
-  expiration: "5m"
-
-  # Default SSH certificate extensions
-  extensions:
-    permit-pty: ""
-    permit-agent-forwarding: ""
-    permit-user-rc: ""
-
-# Per-host policy overrides (optional)
-# Use this to grant additional principals for specific hosts
-hosts:
-  # Production database - only admins get postgres group
-  prod-db-01:
+  # Global defaults for all hosts (unless overridden per-host)
+  defaults:
+    # Map principals (group names) to allowed tags
+    #
+    # IMPORTANT: Principals are group names, not usernames!
+    # Use AuthorizedPrincipalsFile on target hosts to map group principals
+    # to local user accounts.
+    #
+    # The certificate will contain ALL principals the user is authorized for
+    # (union of global defaults + all host-specific policies).
     allow:
-      postgres: [admin]
-    expiration: "2m" # Shorter expiration for production database
+      wheel: [admin] # Admins get 'wheel' group
+      developers: [eng] # Engineers get 'developers' group
+      operators: [ops] # Ops team gets 'operators' group
+      dbadmins: [admin] # Admins also get 'dbadmins' group
 
-  # Development server - engineers get additional access
-  dev-server:
-    allow:
-      docker: [eng] # Engineers can access docker group
-    expiration: "10m" # Longer expiration for development
-
-  # Staging environment
-  staging-api:
-    allow:
-      deployers: [ops, eng] # Both ops and eng can deploy to staging
+    # Default certificate expiration (2-10 minutes recommended)
     expiration: "5m"
+
+    # Default SSH certificate extensions
+    extensions:
+      permit-pty: ""
+      permit-agent-forwarding: ""
+      permit-user-rc: ""
+
+  # Per-host policy overrides (optional)
+  # Use this to grant additional principals for specific hosts
+  hosts:
+    # Production database - only admins get postgres group
+    prod-db-01:
+      allow:
+        postgres: [admin]
+      expiration: "2m" # Shorter expiration for production database
+
+    # Development server - engineers get additional access
+    dev-server:
+      allow:
+        docker: [eng] # Engineers can access docker group
+      expiration: "10m" # Longer expiration for development
+
+    # Staging environment
+    staging-api:
+      allow:
+        deployers: [ops, eng] # Both ops and eng can deploy to staging
+      expiration: "5m"
 # Certificate Principal Assignment Examples:
 #
 # 1. alice@example.com (tags: [admin, eng])

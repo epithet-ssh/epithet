@@ -49,6 +49,7 @@ func main() {
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
 		kong.ShortUsageOnError(),
+		kongcue.AllowUnknownFields("policy.users", "policy.defaults", "policy.hosts"),
 	)
 	logger := setupLogger()
 
