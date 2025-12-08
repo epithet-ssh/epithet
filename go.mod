@@ -52,6 +52,6 @@ require (
 )
 
 require (
-	github.com/brianm/kongcue v0.1.3
+	github.com/brianm/kongcue v0.1.5
 	github.com/sony/gobreaker/v2 v2.3.0
 )

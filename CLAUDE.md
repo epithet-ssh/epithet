@@ -101,7 +101,7 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
   - Starts the broker daemon with RPC server on Unix domain socket
   - Required flags (can be set in config file with mustache template support):
     - `--match`: Repeatable patterns defining which hosts epithet should handle
-    - `--ca-url`: URL of the certificate authority
+    - `--ca-url`: CA URL(s) - repeatable for multi-CA failover. Optionally prefix with `priority=N:` (e.g., `priority=50:https://backup.example.com`); plain URLs default to priority 100. Higher priority CAs are tried first; circuit breakers skip failed CAs.
     - `--auth`: Command to invoke for user authentication (can use templates)
   - Auto-generates SSH config file at `~/.epithet/run/<instance-hash>/ssh-config.conf`
   - The broker maintains (with proper concurrency controls):
@@ -430,14 +430,15 @@ Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.ep
 
 Start each broker with unique socket paths:
 ```bash
-# Work broker
+# Work broker (with primary and backup CAs)
 epithet agent --broker ~/.epithet/work-broker.sock \
               --agent-dir ~/.epithet/work-agent/ \
               --match '*.work.example.com' \
               --ca-url https://work-ca.example.com \
+              --ca-url 'priority=50:https://work-ca-backup.example.com' \
               --auth work-auth-plugin
 
-# Personal broker
+# Personal broker (single CA)
 epithet agent --broker ~/.epithet/personal-broker.sock \
               --agent-dir ~/.epithet/personal-agent/ \
               --match '*.personal.example.com' \
@@ -535,7 +536,9 @@ agent:
   match:
     - "*.work.example.com"
     - "*.dev.example.com"
-  ca_url: https://ca.example.com
+  ca_url:
+    - "https://ca-primary.example.com"               # Default priority (100)
+    - "priority=50:https://ca-backup.example.com"    # Lower priority = backup
   auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
 ```
 
