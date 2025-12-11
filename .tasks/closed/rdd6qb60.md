@@ -2,7 +2,7 @@
 title: Update policy server to use LoadAndUnifyPaths for config unification
 id: rdd6qb60
 created: 2025-11-30T04:08:27.592917Z
-updated: 2025-11-30T04:08:41.676075Z
+updated: 2025-12-11T19:13:51.081857741Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -64,3 +64,7 @@ Update it to use `config.LoadAndUnifyPaths()` to support multi-file config with 
 
 ## Reference
 See `cmd/epithet/main.go` for example of LoadAndUnifyPaths usage with kong resolver.
+---
+# Log: 2025-12-11T19:13:51Z Brian McCallister
+
+Closed: Policy server already uses LoadAndUnifyPaths - receives unified cue.Value in Run() method
