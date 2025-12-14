@@ -141,6 +141,36 @@ func TestHandler_Forbidden(t *testing.T) {
 	}
 }
 
+func TestHandler_NotHandled(t *testing.T) {
+	evaluator := &mockEvaluator{
+		err: policyserver.NotHandled("connection not handled by this policy server"),
+	}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		Evaluator: evaluator,
+	})
+
+	req := policyserver.Request{
+		Token:     "valid-token",
+		Signature: "test-signature",
+		Connection: policy.Connection{
+			RemoteHost: "unknown.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler(w, httpReq)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("expected status 422, got %d", w.Code)
+	}
+}
+
 func TestHandler_MethodNotAllowed(t *testing.T) {
 	evaluator := &mockEvaluator{}
 	handler := policyserver.NewHandler(policyserver.Config{

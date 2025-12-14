@@ -50,6 +50,9 @@ var (
 
 	// ErrForbidden indicates token valid but access denied by policy (403)
 	ErrForbidden = &PolicyError{StatusCode: http.StatusForbidden, Message: "Forbidden"}
+
+	// ErrNotHandled indicates this policy server does not handle the connection (422)
+	ErrNotHandled = &PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: "connection not handled"}
 )
 
 // PolicyError represents a policy evaluation error with HTTP status code
@@ -75,6 +78,12 @@ func Forbidden(message string) error {
 // InternalError returns a 500 error with the given message
 func InternalError(message string) error {
 	return &PolicyError{StatusCode: http.StatusInternalServerError, Message: message}
+}
+
+// NotHandled returns a 422 error indicating this policy server does not handle
+// the requested connection. The CA will return 422 to the client.
+func NotHandled(message string) error {
+	return &PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: message}
 }
 
 // Config configures the policy server HTTP handler

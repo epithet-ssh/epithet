@@ -67,6 +67,19 @@ func (e *AllCAsUnavailableError) Error() string {
 	return fmt.Sprintf("all CAs unavailable: %s", e.Message)
 }
 
+// ConnectionNotHandledError indicates the CA/policy server does not handle this connection.
+// The broker should fail the match and let SSH fall through to other auth methods.
+type ConnectionNotHandledError struct {
+	Message string
+}
+
+func (e *ConnectionNotHandledError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("connection not handled: %s", e.Message)
+	}
+	return "connection not handled by CA"
+}
+
 // DefaultTimeout is the default per-request timeout for CA requests.
 const DefaultTimeout = 15 * time.Second
 
@@ -247,6 +260,8 @@ func (c *Client) doRequest(ctx context.Context, caURL string, body []byte) (*cas
 			return nil, &InvalidTokenError{Message: string(respBody)}
 		case http.StatusForbidden:
 			return nil, &PolicyDeniedError{Message: string(respBody)}
+		case http.StatusUnprocessableEntity:
+			return nil, &ConnectionNotHandledError{Message: string(respBody)}
 		default:
 			if res.StatusCode >= 500 {
 				return nil, &CAUnavailableError{Message: string(respBody)}
@@ -293,6 +308,12 @@ func isSuccessfulForCircuitBreaker(err error) bool {
 	// InvalidRequestError (4xx) - client issue, not infrastructure
 	var invalidReq *InvalidRequestError
 	if errors.As(err, &invalidReq) {
+		return true // Don't trip breaker
+	}
+
+	// ConnectionNotHandledError (422) - routing issue, not infrastructure
+	var connNotHandled *ConnectionNotHandledError
+	if errors.As(err, &connNotHandled) {
 		return true // Don't trip breaker
 	}
 

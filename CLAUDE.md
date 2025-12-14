@@ -135,7 +135,7 @@ The system consists of four main components (all fully implemented):
 
 1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet-ca`): The certificate authority that signs SSH certificates. It validates tokens against a policy server using cryptographic verification (SSH signature via Rekor/Sigstore), then signs public keys to create certificates. Returns certificates with policy metadata (hostPattern) for intelligent reuse.
 
-2. **CA Client** (`pkg/caclient`): HTTP client library that requests certificates from the CA server by submitting tokens, public keys, and connection details. Provides domain-specific error types for different failure modes (InvalidTokenError, PolicyDeniedError, CAUnavailableError).
+2. **CA Client** (`pkg/caclient`): HTTP client library that requests certificates from the CA server by submitting tokens, public keys, and connection details. Provides domain-specific error types for different failure modes (InvalidTokenError, PolicyDeniedError, ConnectionNotHandledError, CAUnavailableError).
 
 3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and authentication on endpoints. Orchestrates auth commands (stdin/stdout/fd3 protocol), CA requests with retry logic, and per-connection agent instances. Uses net/rpc over Unix domain socket for communication with `epithet match`. Implements policy-based certificate reuse and automatic expiry cleanup.
 
@@ -327,7 +327,7 @@ func main() {
 - **`policy.Connection`**: Connection details (%h, %p, %r, %C, %j) passed through Match → Broker → CA → Policy
 - **`policy.Policy`**: Policy metadata (hostPattern) returned with certificates for intelligent reuse
 - **`agent.Credential`**: Private key + certificate pair used by the agent
-- **`caclient.InvalidTokenError`, `PolicyDeniedError`, `CAUnavailableError`**: Domain-specific error types for CA failures
+- **`caclient.InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`**: Domain-specific error types for CA failures
 
 ### Policy Server Protocol
 
@@ -378,6 +378,7 @@ The CA validates authentication tokens by calling an external policy server over
 **Error Handling**:
 - HTTP 401: Token is invalid/expired (CA retries with fresh token from auth plugin)
 - HTTP 403: Token valid but policy denied (CA returns PolicyDeniedError immediately)
+- HTTP 422: Connection not handled by this CA/policy (CA returns ConnectionNotHandledError, broker fails match to let SSH fall through)
 - HTTP 5xx: CA/policy server unavailable (CA returns CAUnavailableError)
 - HTTP 4xx: Invalid request format (CA returns InvalidRequestError)
 
@@ -460,6 +461,12 @@ epithet agent --broker ~/.epithet/personal-broker.sock \
 1. Keep the token (it's valid, just not authorized for this connection)
 2. Fail the Match with clear error explaining policy denial
 3. Do not retry (policy decision is intentional)
+
+**HTTP 422 Unprocessable Content** - CA/policy server does not handle this connection:
+1. Keep the token (it's valid, just not for this CA)
+2. Fail the Match with clear error
+3. Do not retry (this CA simply doesn't handle this connection type/host)
+4. SSH will fall through to other auth methods (different CA, password, breakglass key, etc.)
 
 **HTTP 5xx Server Error** - Transient CA/policy server issue:
 1. Keep the token
@@ -663,9 +670,10 @@ All core components of the v2 architecture (described in README.md) are fully im
 **3. Broker ↔ CA Integration** (`pkg/broker/broker.go`, `pkg/caclient/`):
    - ✅ Certificate request flow: auth token → CA → signed certificate
    - ✅ Connection details passed to CA for principal determination
-   - ✅ Domain-specific error types (InvalidTokenError, PolicyDeniedError, CAUnavailableError)
+   - ✅ Domain-specific error types (InvalidTokenError, PolicyDeniedError, ConnectionNotHandledError, CAUnavailableError)
    - ✅ Retry logic for HTTP 401 (token expired, up to 3 attempts)
    - ✅ No retry for HTTP 403 (policy denial is intentional)
+   - ✅ No retry for HTTP 422 (connection not handled, let SSH fall through)
    - ✅ Certificate storage with expiry tracking
 
 **4. Broker ↔ Agent Management** (`pkg/broker/broker.go`, `pkg/agent/`):

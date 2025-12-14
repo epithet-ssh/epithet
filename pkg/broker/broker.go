@@ -324,6 +324,15 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 			return nil
 		}
 
+		var connNotHandled *caclient.ConnectionNotHandledError
+		if errors.As(err, &connNotHandled) {
+			// CA/policy does not handle this connection - fail match, let SSH fall through
+			b.log.Info("connection not handled by CA", "error", connNotHandled.Message)
+			output.Allow = false
+			output.Error = connNotHandled.Error()
+			return nil
+		}
+
 		// Other errors (network, etc.) - fail without retry
 		b.log.Error("failed to request certificate from CA", "error", err)
 		output.Allow = false
