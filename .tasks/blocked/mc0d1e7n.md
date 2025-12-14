@@ -2,12 +2,14 @@
 title: 'Token Encoding Infrastructure: Add base64url encoding for tokens using base64.RawURLEncoding. Files: pkg/caclient/caclient.go, pkg/broker/auth.go. Token stored as raw bytes, encoded only when sending in Authorization header.'
 id: mc0d1e7n
 created: 2025-12-14T05:16:30.485783Z
-updated: 2025-12-14T05:16:37.549621Z
+updated: 2025-12-14T16:14:52.370822Z
 author: Brian McCallister
 priority: high
 tags:
 - protocol
 - foundation
+blocked_by:
+- v94qdww4
 ---
 
 ---
@@ -26,3 +28,7 @@ Implementation details:
 - Add helper function: func encodeToken(token []byte) string { return base64.RawURLEncoding.EncodeToString(token) }
 - Token is stored as raw []byte internally, only encoded when placed in Authorization header
 - This is the foundation task - all other protocol tasks depend on this
+---
+# Log: 2025-12-14T16:14:52Z Brian McCallister
+
+Added blocker: v94qdww4
