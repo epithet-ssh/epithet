@@ -2,7 +2,7 @@
 title: Token encoding at broker
 id: mc0d1e7n
 created: 2025-12-14T05:16:30.485783Z
-updated: 2025-12-14T17:38:51.050948Z
+updated: 2025-12-14T18:49:14.448411Z
 author: Brian McCallister
 priority: high
 tags:
@@ -47,3 +47,7 @@ Added blocker: v94qdww4
 # Log: 2025-12-14T17:35:39Z Brian McCallister
 
 CONFIRMED: Token encoding at broker remains base64url. This feeds into the broker->CA Authorization header. No change from this design decision.
+---
+# Log: 2025-12-14T18:49:14Z Brian McCallister
+
+Closed: Implemented in b9bf433

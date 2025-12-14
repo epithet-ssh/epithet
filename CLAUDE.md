@@ -39,6 +39,7 @@ When working on tasks:
 4. **Log progress** - Use `bt log <id> "message"` to record progress throughout work
 5. **Dependencies matter** - Use `bt block` to track task dependencies when needed
 6. **Never use TodoWrite** - The TodoWrite tool is disabled for this project
+7. **ALWAYS close tasks when done** - When you finish implementing a task, immediately run `bt close <id> --reason "..."`. Check git commits if unsure whether a task was already completed.
 
 Example workflow:
 ```bash
