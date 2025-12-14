@@ -2,6 +2,7 @@ package policyserver_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,11 @@ func (m *mockEvaluator) Evaluate(token string, conn policy.Connection) (*policys
 		return nil, m.err
 	}
 	return m.response, nil
+}
+
+// encodeToken base64url encodes a token as the broker would
+func encodeToken(token string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(token))
 }
 
 func TestHandler_Success(t *testing.T) {
@@ -50,9 +56,9 @@ func TestHandler_Success(t *testing.T) {
 		Evaluator: evaluator,
 	})
 
-	// Create request
+	// Create request (token is base64url encoded as the broker would send it)
 	req := policyserver.Request{
-		Token:     "test-token",
+		Token:     encodeToken("test-token"),
 		Signature: "test-signature",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -68,7 +74,7 @@ func TestHandler_Success(t *testing.T) {
 	handler(w, httpReq)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var resp policyserver.Response
@@ -91,7 +97,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	})
 
 	req := policyserver.Request{
-		Token:     "invalid-token",
+		Token:     encodeToken("invalid-token"),
 		Signature: "test-signature",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -121,7 +127,7 @@ func TestHandler_Forbidden(t *testing.T) {
 	})
 
 	req := policyserver.Request{
-		Token:     "valid-token",
+		Token:     encodeToken("valid-token"),
 		Signature: "test-signature",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -151,7 +157,7 @@ func TestHandler_NotHandled(t *testing.T) {
 	})
 
 	req := policyserver.Request{
-		Token:     "valid-token",
+		Token:     encodeToken("valid-token"),
 		Signature: "test-signature",
 		Connection: policy.Connection{
 			RemoteHost: "unknown.example.com",
@@ -200,5 +206,36 @@ func TestHandler_InvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandler_InvalidTokenEncoding(t *testing.T) {
+	evaluator := &mockEvaluator{}
+	handler := policyserver.NewHandler(policyserver.Config{
+		Evaluator: evaluator,
+	})
+
+	// Send a token that is not valid base64url
+	req := policyserver.Request{
+		Token:     "!!!not-valid-base64!!!", // Invalid base64url characters
+		Signature: "test-signature",
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler(w, httpReq)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("Invalid token encoding")) {
+		t.Errorf("expected 'Invalid token encoding' in response, got %s", w.Body.String())
 	}
 }

@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,8 +29,8 @@ printf '%s' "my-token-1"
 	auth := NewAuth(script)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "my-token-1", token)
-	require.Empty(t, auth.state) // No state returned
+	require.Equal(t, "bXktdG9rZW4tMQ", token) // "my-token-1" base64url encoded
+	require.Empty(t, auth.state)              // No state returned
 }
 
 func TestAuth_Run_Success_WithStateUpdate(t *testing.T) {
@@ -47,7 +48,7 @@ printf '%s' '{"refresh":"xyz"}' >&3
 	auth := NewAuth(script)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "my-token-2", token)
+	require.Equal(t, "bXktdG9rZW4tMg", token) // "my-token-2" base64url encoded
 	require.Equal(t, []byte(`{"refresh":"xyz"}`), auth.state)
 }
 
@@ -62,7 +63,7 @@ printf '%s' '{"count":1}' >&3
 	auth := NewAuth(script1)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "token", token)
+	require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
 	require.Equal(t, []byte(`{"count":1}`), auth.state)
 
 	// Second call uses the state from first call
@@ -81,7 +82,7 @@ fi
 	auth.cmdLine = script2
 	token, err = auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "token-fresh", token)
+	require.Equal(t, "dG9rZW4tZnJlc2g", token) // "token-fresh" base64url encoded
 	require.Equal(t, []byte(`{"count":2}`), auth.state)
 }
 
@@ -128,7 +129,7 @@ func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 	auth := NewAuth(`printf '%s' "token-{{host}}"`)
 	token, err := auth.Run(map[string]string{"host": "ok"})
 	require.NoError(t, err)
-	require.Equal(t, "token-ok", token)
+	require.Equal(t, "dG9rZW4tb2s", token) // "token-ok" base64url encoded
 }
 
 func TestAuth_Run_MustacheTemplateError(t *testing.T) {
@@ -153,8 +154,9 @@ printf '%s' '{"count":1}' >&3
 	done := make(chan bool, 2)
 	for range 2 {
 		go func() {
-			_, err := auth.Run(nil)
+			token, err := auth.Run(nil)
 			require.NoError(t, err)
+			require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
 			done <- true
 		}()
 	}
@@ -195,7 +197,7 @@ fi
 	auth := NewAuth(script)
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "first-call-token", token)
+	require.Equal(t, "Zmlyc3QtY2FsbC10b2tlbg", token) // "first-call-token" base64url encoded
 }
 
 func TestAuth_Run_StateClearing(t *testing.T) {
@@ -211,8 +213,8 @@ printf '%s' "token"
 
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "token", token)
-	require.Empty(t, auth.state) // State should be cleared
+	require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
+	require.Empty(t, auth.state)       // State should be cleared
 }
 
 func TestIntegration_FullAuthFlow(t *testing.T) {
@@ -234,7 +236,7 @@ fi
 	auth := NewAuth(script1)
 	token, err := auth.Run(map[string]string{"user": "alice"})
 	require.NoError(t, err)
-	require.Equal(t, "initial-auth-token", token)
+	require.Equal(t, "aW5pdGlhbC1hdXRoLXRva2Vu", token) // "initial-auth-token" base64url encoded
 	require.NotEmpty(t, auth.state)
 
 	// Second auth call - uses state from first call
@@ -254,7 +256,7 @@ fi
 	auth.cmdLine = script2
 	token, err = auth.Run(map[string]string{"user": "alice"})
 	require.NoError(t, err)
-	require.Equal(t, "refreshed-token-123", token)
+	require.Equal(t, "cmVmcmVzaGVkLXRva2VuLTEyMw", token) // "refreshed-token-123" base64url encoded
 	require.Contains(t, string(auth.state), "r2")
 
 	// Third auth call - simulate token expiration, auth fails
@@ -293,10 +295,10 @@ printf '%s' "my-token-abc"
 	// Run auth
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
-	require.Equal(t, "my-token-abc", token)
+	require.Equal(t, "bXktdG9rZW4tYWJj", token) // "my-token-abc" base64url encoded
 
 	// Token() should return the stored token
-	require.Equal(t, "my-token-abc", auth.Token())
+	require.Equal(t, "bXktdG9rZW4tYWJj", auth.Token()) // "my-token-abc" base64url encoded
 }
 
 // TODO: Re-enable this test with a faster implementation
@@ -328,4 +330,31 @@ func TestAuth_ClearToken(t *testing.T) {
 
 	require.Empty(t, auth.Token())
 	require.Equal(t, []byte("existing-state"), auth.state) // State should be preserved
+}
+
+func TestAuth_Run_BinaryTokenPreservation(t *testing.T) {
+	// Test that binary tokens with invalid UTF-8 bytes are preserved correctly
+	// This is the key bug fix: without base64 encoding, these bytes would be corrupted
+	// when cast to string then JSON encoded (invalid UTF-8 → U+FFFD replacement)
+	script := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+# Output binary data including invalid UTF-8 sequences
+# \x80\x81\x82 are invalid UTF-8 continuation bytes without a leading byte
+# \xff\xfe are also invalid UTF-8
+printf '\x80\x81\x82token\xff\xfe'
+`)
+
+	auth := NewAuth(script)
+	token, err := auth.Run(nil)
+	require.NoError(t, err)
+
+	// The token should be base64url encoded, preserving the exact bytes
+	// Raw bytes: \x80\x81\x82token\xff\xfe
+	// Base64url: gIGCdG9rZW7__g
+	require.Equal(t, "gIGCdG9rZW7__g", token)
+
+	// Verify we can decode back to original bytes
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x80, 0x81, 0x82, 't', 'o', 'k', 'e', 'n', 0xff, 0xfe}, decoded)
 }

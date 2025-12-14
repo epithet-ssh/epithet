@@ -1,6 +1,7 @@
 package policyserver
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -132,7 +133,7 @@ func NewHandler(config Config) http.HandlerFunc {
 			return
 		}
 
-		// Verify CA signature if configured
+		// Verify CA signature if configured (signature is over the encoded token)
 		if config.CAPublicKey != "" {
 			if err := ca.Verify(config.CAPublicKey, req.Token, req.Signature); err != nil {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid CA signature: %v", err))
@@ -140,8 +141,16 @@ func NewHandler(config Config) http.HandlerFunc {
 			}
 		}
 
+		// Decode the base64url-encoded token
+		// Tokens are always base64url encoded by the broker to preserve arbitrary bytes
+		decodedToken, err := base64.RawURLEncoding.DecodeString(req.Token)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid token encoding: %v", err))
+			return
+		}
+
 		// Evaluate policy
-		resp, err := config.Evaluator.Evaluate(req.Token, req.Connection)
+		resp, err := config.Evaluator.Evaluate(string(decodedToken), req.Connection)
 		if err != nil {
 			// Check if it's a PolicyError with specific status code
 			if policyErr, ok := err.(*PolicyError); ok {

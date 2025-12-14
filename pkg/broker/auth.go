@@ -2,6 +2,7 @@ package broker
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -126,8 +127,8 @@ func (h *Auth) Run(attrs any) (string, error) {
 	// Update stored state
 	h.state = newState
 
-	// Store the token
-	h.token = string(token)
+	// Store the token (base64url encoded to preserve arbitrary bytes)
+	h.token = base64.RawURLEncoding.EncodeToString(token)
 
 	return h.token, nil
 }

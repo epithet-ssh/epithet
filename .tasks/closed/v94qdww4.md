@@ -2,7 +2,7 @@
 title: 'CRITICAL: Fix token encoding - arbitrary bytes cast to string then JSON encoded is lossy. Auth plugin outputs raw bytes, currently cast with string(token) then JSON marshaled. Invalid UTF-8 gets replaced with replacement char (data corruption). Must base64 encode before any string/JSON handling.'
 id: v94qdww4
 created: 2025-12-14T16:14:26.438529Z
-updated: 2025-12-14T16:20:29.356679Z
+updated: 2025-12-14T16:59:19.769867Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -74,3 +74,11 @@ Code change is minimal - just add encoding at the source:
   pkg/broker/auth.go:130
   BEFORE: h.token = string(token)
   AFTER:  h.token = base64.RawURLEncoding.EncodeToString(token)
+---
+# Log: 2025-12-14T16:57:04Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-14T16:59:19Z Brian McCallister
+
+Closed: Fixed: tokens are now base64url encoded immediately upon receipt from auth plugin. Added test for binary token preservation.
