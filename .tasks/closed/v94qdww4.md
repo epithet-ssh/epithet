@@ -1,8 +1,8 @@
 ---
-title: 'CRITICAL: Fix token encoding - arbitrary bytes cast to string then JSON encoded is lossy. Auth plugin outputs raw bytes, currently cast with string(token) then JSON marshaled. Invalid UTF-8 gets replaced with replacement char (data corruption). Must base64 encode before any string/JSON handling.'
+title: Fix token encoding bug
 id: v94qdww4
 created: 2025-12-14T16:14:26.438529Z
-updated: 2025-12-14T16:59:19.769867Z
+updated: 2025-12-14T17:39:32.012730Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -10,6 +10,18 @@ tags:
 - security
 - protocol
 ---
+
+CRITICAL BUG: Auth plugin raw bytes cast to string then JSON encoded was lossy.
+
+Problem:
+- Auth plugin outputs raw bytes to stdout
+- Code did string(token) then JSON marshaled
+- Invalid UTF-8 gets replaced with replacement char (data corruption)
+
+Fix applied:
+- Base64url encode immediately upon receipt from auth plugin
+- Token is always base64url encoded throughout the system
+- Only policy server decodes if it needs original bytes
 
 ---
 ## Log

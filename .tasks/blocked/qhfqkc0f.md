@@ -1,8 +1,8 @@
 ---
-title: 'CA Server - Bearer Auth Header: Update CA server to accept token in Authorization header instead of body. File: pkg/caserver/caserver.go. Add parseAuthHeader() to extract Bearer token, remove Token from request body, return 401 if missing/invalid, pass token through to policy server unchanged.'
+title: 'CA server: Accept Bearer auth from broker'
 id: qhfqkc0f
 created: 2025-12-14T05:16:43.284934Z
-updated: 2025-12-14T17:36:29.060070Z
+updated: 2025-12-14T17:38:51.162415Z
 author: Brian McCallister
 priority: high
 tags:
@@ -11,6 +11,17 @@ tags:
 blocked_by:
 - mc0d1e7n
 ---
+
+Update CA server to accept user token in Authorization header from broker.
+
+File: pkg/caserver/caserver.go
+
+Implementation:
+- Parse 'Authorization: Bearer <token>' header from incoming requests
+- Extract base64url-encoded user token
+- Remove Token field from request body struct
+- Return HTTP 401 if Authorization header missing/malformed
+- Pass token to policy server in request body (not header)
 
 ---
 ## Log

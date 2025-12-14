@@ -1,8 +1,8 @@
 ---
-title: 'Explore packed trie (DAWG) for efficient host encoding in discovery data. Reference: github.com/mckoss/dawg packed-trie format. Use ARPA-style reversed hostnames for better suffix compression. Port JavaScript implementation to Go. Use case: thousands of specific hosts without nice glob patterns.'
+title: Explore DAWG for host encoding
 id: 6v9zryht
 created: 2025-12-14T05:59:39.764919Z
-updated: 2025-12-14T05:59:55.614704Z
+updated: 2025-12-14T17:39:31.907945Z
 author: Brian McCallister
 priority: low
 tags:
@@ -12,6 +12,15 @@ tags:
 blocked_by:
 - xd0v5v9j
 ---
+
+Explore packed trie (DAWG) for efficient host encoding in discovery data.
+
+Reference: github.com/mckoss/dawg packed-trie format
+
+Considerations:
+- Use ARPA-style reversed hostnames for better suffix compression
+- Port JavaScript implementation to Go
+- Use case: thousands of specific hosts without nice glob patterns
 
 ---
 ## Log

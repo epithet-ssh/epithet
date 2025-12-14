@@ -1,8 +1,8 @@
 ---
-title: 'CA Client - Hello Request: Add hello/validate request support. Files: pkg/caclient/caclient.go, pkg/caclient/caclient_test.go. Add Hello(token []byte) method that sends empty JSON body with Bearer auth, returns HelloResponse with identity.'
+title: 'CA client: Hello request'
 id: xhr5v2pc
 created: 2025-12-14T05:18:26.298430Z
-updated: 2025-12-14T05:18:38.188857Z
+updated: 2025-12-14T17:39:04.916773Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -12,6 +12,18 @@ blocked_by:
 - bxt3mhas
 - 0e5x04z3
 ---
+
+Add hello/validate request support to CA client.
+
+Files: pkg/caclient/caclient.go, pkg/caclient/caclient_test.go
+
+Implementation:
+- Add Hello(token string) method
+- Send empty JSON body {} with Authorization Bearer header
+- Return HelloResponse with identity
+- Return http.Header so caller can access Link header for discovery
+
+Used by broker during bootstrap to validate token and get discovery URL.
 
 ---
 ## Log

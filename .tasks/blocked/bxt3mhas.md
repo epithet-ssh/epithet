@@ -1,8 +1,8 @@
 ---
-title: 'CA Server - Shape-Based Request Handling: Handle hello vs cert requests based on request body shape. File: pkg/caserver/caserver.go. Make PublicKey and Connection optional pointers. Empty body = hello request (validate token, return identity). Both present = cert request (existing flow).'
+title: 'CA server: Shape-based request routing'
 id: bxt3mhas
 created: 2025-12-14T05:17:00.490708Z
-updated: 2025-12-14T17:35:51.362847Z
+updated: 2025-12-14T17:39:04.815556Z
 author: Brian McCallister
 priority: high
 tags:
@@ -11,6 +11,20 @@ tags:
 blocked_by:
 - qhfqkc0f
 ---
+
+Handle hello vs cert requests based on request body shape.
+
+File: pkg/caserver/caserver.go
+
+Implementation:
+- Make PublicKey and Connection optional pointers in request struct
+- Empty body = hello request (validate token, return identity)
+- Both present = cert request (existing flow)
+- Otherwise = 400 Bad Request
+
+Response types:
+- HelloResponse: {identity: string}
+- CreateCertResponse: {certificate, policy} (unchanged)
 
 ---
 ## Log

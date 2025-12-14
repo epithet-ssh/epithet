@@ -1,8 +1,8 @@
 ---
-title: 'CA Server - Pass Through Link Header: CA reads Link header from policy server response and copies it to CA response. File: pkg/caserver/caserver.go. No caching, no discovery endpoint - just forward the header on all response types (hello, cert, errors).'
+title: 'CA server: Link header passthrough'
 id: eg21yfrr
 created: 2025-12-14T05:17:53.520494Z
-updated: 2025-12-14T17:35:51.470104Z
+updated: 2025-12-14T17:39:17.426613Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -13,6 +13,16 @@ blocked_by:
 - bxt3mhas
 - mfcdv2zf
 ---
+
+CA reads Link header from policy server and copies to response.
+
+File: pkg/caserver/caserver.go
+
+Implementation:
+- Read Link header from policy server response
+- Copy to CA response unchanged
+- No caching, no parsing, no discovery endpoint
+- Include on all response types (hello, cert, errors)
 
 ---
 ## Log

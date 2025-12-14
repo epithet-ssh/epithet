@@ -1,8 +1,8 @@
 ---
-title: 'Policy Server - Discovery Link Header: Policy server returns Link header with discovery URL on ALL responses. Files: pkg/policyserver/policyserver.go, cmd/epithet/policy.go. Set Link header, compute content-addressable URL from hash of patterns, include on success/error responses.'
+title: 'Policy server: Discovery Link header'
 id: mfcdv2zf
 created: 2025-12-14T05:17:35.488965Z
-updated: 2025-12-14T17:35:51.579940Z
+updated: 2025-12-14T17:39:17.532373Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -12,6 +12,16 @@ tags:
 blocked_by:
 - 2xd411gq
 ---
+
+Policy server returns Link header with discovery URL on all responses.
+
+Files: pkg/policyserver/policyserver.go, cmd/epithet/policy.go
+
+Implementation:
+- Set Link header: <url>; rel="discovery"
+- URL is content-addressable (hash of patterns)
+- Include on 200, 401, 403, 422, 500 responses
+- CA passes through unchanged
 
 ---
 ## Log

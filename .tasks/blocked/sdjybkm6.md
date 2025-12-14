@@ -1,8 +1,8 @@
 ---
-title: 'Policy Server - Discovery Endpoint: Add discovery endpoint to built-in policy server. Files: cmd/epithet/policy.go, pkg/policyserver/discovery.go (new). GET /discovery/<version> endpoint with Bearer auth, returns matchPatterns JSON, content-addressable URL, Cache-Control immutable.'
+title: 'Policy server: Discovery endpoint'
 id: sdjybkm6
 created: 2025-12-14T05:19:36.589626Z
-updated: 2025-12-14T05:19:50.678178Z
+updated: 2025-12-14T17:39:17.208799Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -11,6 +11,17 @@ tags:
 blocked_by:
 - mfcdv2zf
 ---
+
+Add discovery endpoint to policy server.
+
+Files: cmd/epithet/policy.go, pkg/policyserver/discovery.go (new)
+
+Implementation:
+- GET /discovery/<version> endpoint
+- Requires Bearer auth (validates token)
+- Returns matchPatterns JSON
+- Content-addressable URL (version = hash of patterns)
+- Cache-Control: immutable header
 
 ---
 ## Log

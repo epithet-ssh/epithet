@@ -1,8 +1,8 @@
 ---
-title: 'Broker - Match Short-Circuit: Use cached patterns to short-circuit non-matching hosts in Match(). File: pkg/broker/broker.go. Before cert request, check if host matches any cached pattern. If no match and have patterns, return not-handled immediately without HTTP request.'
+title: 'Broker: Match short-circuit'
 id: xd0v5v9j
 created: 2025-12-14T05:19:18.986354Z
-updated: 2025-12-14T05:19:31.663896Z
+updated: 2025-12-14T17:39:31.804327Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -11,6 +11,15 @@ tags:
 blocked_by:
 - 1827k84k
 ---
+
+Use cached patterns to short-circuit non-matching hosts in Match().
+
+File: pkg/broker/broker.go
+
+Implementation:
+- Before cert request, check if host matches any cached pattern
+- If no match and have patterns, return not-handled immediately
+- Avoids HTTP request when host clearly won't match
 
 ---
 ## Log
