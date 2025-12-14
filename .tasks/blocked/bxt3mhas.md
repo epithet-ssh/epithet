@@ -2,7 +2,7 @@
 title: 'CA Server - Shape-Based Request Handling: Handle hello vs cert requests based on request body shape. File: pkg/caserver/caserver.go. Make PublicKey and Connection optional pointers. Empty body = hello request (validate token, return identity). Both present = cert request (existing flow).'
 id: bxt3mhas
 created: 2025-12-14T05:17:00.490708Z
-updated: 2025-12-14T05:17:13.715085Z
+updated: 2025-12-14T17:35:51.362847Z
 author: Brian McCallister
 priority: high
 tags:
@@ -57,3 +57,7 @@ Flow:
 # Log: 2025-12-14T05:17:13Z Brian McCallister
 
 Added blocker: qhfqkc0f
+---
+# Log: 2025-12-14T17:35:51Z Brian McCallister
+
+NOTE: Shape-based request handling still applies. The Authorization header now contains user token (from broker), not CA signature. Body shape determines hello vs cert request.

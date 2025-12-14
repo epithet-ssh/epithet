@@ -2,7 +2,7 @@
 title: 'CA Server - Bearer Auth Header: Update CA server to accept token in Authorization header instead of body. File: pkg/caserver/caserver.go. Add parseAuthHeader() to extract Bearer token, remove Token from request body, return 401 if missing/invalid, pass token through to policy server unchanged.'
 id: qhfqkc0f
 created: 2025-12-14T05:16:43.284934Z
-updated: 2025-12-14T05:16:54.546383Z
+updated: 2025-12-14T17:36:29.060070Z
 author: Brian McCallister
 priority: high
 tags:
@@ -35,3 +35,39 @@ Implementation details:
 # Log: 2025-12-14T05:16:54Z Brian McCallister
 
 Added blocker: mc0d1e7n
+---
+# Log: 2025-12-14T17:35:39Z Brian McCallister
+
+DESIGN CHANGE: CA server has two different auth patterns now.
+
+INBOUND (Broker -> CA):
+- Authorization: Bearer <user_token_base64url>
+- Body: {"publicKey": "...", "connection": {...}}
+
+OUTBOUND (CA -> Policy Server):
+- Authorization: Bearer <base64_sshsig_of_body>
+- Body: {"token": "<user_token>", "connection": {...}}
+
+CA flow:
+1. Extract user token from inbound Authorization header
+2. Build policy request body with token + connection
+3. Sign the body bytes with CA private key
+4. Send to policy server with signature as Bearer token
+---
+# Log: 2025-12-14T17:36:29Z Brian McCallister
+
+CODE CHANGE NEEDED in pkg/ca/ca.go:RequestPolicy():
+
+CURRENT (lines 145-164):
+1. sig = c.Sign(token)
+2. body = {token, signature, connection}
+3. POST body
+
+NEW:
+1. body = {token, connection}  // no signature in body
+2. bodyBytes = json.Marshal(body)
+3. sig = c.Sign(string(bodyBytes))  // sign BODY, not token
+4. req.Header.Set("Authorization", "Bearer " + sig)
+5. POST body
+
+Key change: CA signs the body bytes, not just the token. This binds signature to full request.

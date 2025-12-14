@@ -2,7 +2,7 @@
 title: 'Policy Server - Discovery Link Header: Policy server returns Link header with discovery URL on ALL responses. Files: pkg/policyserver/policyserver.go, cmd/epithet/policy.go. Set Link header, compute content-addressable URL from hash of patterns, include on success/error responses.'
 id: mfcdv2zf
 created: 2025-12-14T05:17:35.488965Z
-updated: 2025-12-14T05:17:48.626627Z
+updated: 2025-12-14T17:35:51.579940Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -48,3 +48,7 @@ JSON body is unchanged - just certParams and policy fields
 # Log: 2025-12-14T05:17:48Z Brian McCallister
 
 Added blocker: 2xd411gq
+---
+# Log: 2025-12-14T17:35:51Z Brian McCallister
+
+NOTE: Policy server Link header is unaffected by auth design change. Still set on all responses.

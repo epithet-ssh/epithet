@@ -2,7 +2,7 @@
 title: 'Token Encoding Infrastructure: Add base64url encoding for tokens using base64.RawURLEncoding. Files: pkg/caclient/caclient.go, pkg/broker/auth.go. Token stored as raw bytes, encoded only when sending in Authorization header.'
 id: mc0d1e7n
 created: 2025-12-14T05:16:30.485783Z
-updated: 2025-12-14T16:14:52.370822Z
+updated: 2025-12-14T17:35:39.933905Z
 author: Brian McCallister
 priority: high
 tags:
@@ -32,3 +32,7 @@ Implementation details:
 # Log: 2025-12-14T16:14:52Z Brian McCallister
 
 Added blocker: v94qdww4
+---
+# Log: 2025-12-14T17:35:39Z Brian McCallister
+
+CONFIRMED: Token encoding at broker remains base64url. This feeds into the broker->CA Authorization header. No change from this design decision.
