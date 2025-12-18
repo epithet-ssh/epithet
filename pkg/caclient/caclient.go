@@ -200,7 +200,8 @@ func WithCooldown(d time.Duration) Option {
 
 // GetCert requests a certificate from the CA, with automatic failover to backup CAs.
 // It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
-func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
+// The token is sent in the Authorization header, not in the request body.
+func (c *Client) GetCert(ctx context.Context, token string, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -210,7 +211,7 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 		if c.logger != nil {
 			c.logger.Debug("trying CA", "url", caURL)
 		}
-		return c.doRequest(ctx, caURL, body)
+		return c.doRequest(ctx, caURL, token, body)
 	})
 
 	if err != nil {
@@ -228,7 +229,7 @@ func (c *Client) GetCert(ctx context.Context, req *caserver.CreateCertRequest) (
 }
 
 // doRequest makes a single HTTP request to a CA.
-func (c *Client) doRequest(ctx context.Context, caURL string, body []byte) (*caserver.CreateCertResponse, error) {
+func (c *Client) doRequest(ctx context.Context, caURL string, token string, body []byte) (*caserver.CreateCertResponse, error) {
 	if c.logger != nil {
 		c.logger.Debug("CA request", "url", caURL, "body", string(body))
 	}
@@ -238,6 +239,7 @@ func (c *Client) doRequest(ctx context.Context, caURL string, body []byte) (*cas
 		return nil, err
 	}
 	rq.Header.Set("Content-Type", "application/json")
+	rq.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
 	if err != nil {

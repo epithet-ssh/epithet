@@ -58,8 +58,7 @@ func TestHandler_Success(t *testing.T) {
 
 	// Create request (token is base64url encoded as the broker would send it)
 	req := policyserver.Request{
-		Token:     encodeToken("test-token"),
-		Signature: "test-signature",
+		Token: encodeToken("test-token"),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -97,8 +96,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	})
 
 	req := policyserver.Request{
-		Token:     encodeToken("invalid-token"),
-		Signature: "test-signature",
+		Token: encodeToken("invalid-token"),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -127,8 +125,7 @@ func TestHandler_Forbidden(t *testing.T) {
 	})
 
 	req := policyserver.Request{
-		Token:     encodeToken("valid-token"),
-		Signature: "test-signature",
+		Token: encodeToken("valid-token"),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -157,8 +154,7 @@ func TestHandler_NotHandled(t *testing.T) {
 	})
 
 	req := policyserver.Request{
-		Token:     encodeToken("valid-token"),
-		Signature: "test-signature",
+		Token: encodeToken("valid-token"),
 		Connection: policy.Connection{
 			RemoteHost: "unknown.example.com",
 			RemoteUser: "testuser",
@@ -217,8 +213,7 @@ func TestHandler_InvalidTokenEncoding(t *testing.T) {
 
 	// Send a token that is not valid base64url
 	req := policyserver.Request{
-		Token:     "!!!not-valid-base64!!!", // Invalid base64url characters
-		Signature: "test-signature",
+		Token: "!!!not-valid-base64!!!", // Invalid base64url characters
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
@@ -15,7 +16,6 @@ import (
 // Request from CA to policy server
 type Request struct {
 	Token      string            `json:"token"`
-	Signature  string            `json:"signature"`
 	Connection policy.Connection `json:"connection"`
 }
 
@@ -102,8 +102,8 @@ type Config struct {
 
 // NewHandler creates an HTTP handler for the policy server.
 // The handler:
-// 1. Parses the request body (token, signature, connection)
-// 2. Verifies the CA signature (if CAPublicKey provided)
+// 1. Parses the request body (token, connection)
+// 2. Verifies the CA signature from Authorization header (if CAPublicKey provided)
 // 3. Calls the evaluator to make authorization decision
 // 4. Returns appropriate HTTP response (200 with policy, or error)
 func NewHandler(config Config) http.HandlerFunc {
@@ -133,9 +133,27 @@ func NewHandler(config Config) http.HandlerFunc {
 			return
 		}
 
-		// Verify CA signature if configured (signature is over the encoded token)
+		// Verify CA signature if configured (signature is over the entire body)
 		if config.CAPublicKey != "" {
-			if err := ca.Verify(config.CAPublicKey, req.Token, req.Signature); err != nil {
+			// Extract signature from Authorization header
+			auth := r.Header.Get("Authorization")
+			if auth == "" {
+				writeError(w, http.StatusUnauthorized, "Missing Authorization header")
+				return
+			}
+			const prefix = "Bearer "
+			if !strings.HasPrefix(auth, prefix) {
+				writeError(w, http.StatusUnauthorized, "Authorization header must use Bearer scheme")
+				return
+			}
+			signature := strings.TrimPrefix(auth, prefix)
+			if signature == "" {
+				writeError(w, http.StatusUnauthorized, "Empty Bearer token in Authorization header")
+				return
+			}
+
+			// Verify signature against body bytes
+			if err := ca.Verify(config.CAPublicKey, string(body), signature); err != nil {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid CA signature: %v", err))
 				return
 			}

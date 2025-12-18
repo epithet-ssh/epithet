@@ -2,7 +2,7 @@
 title: 'CA server: Accept Bearer auth from broker'
 id: qhfqkc0f
 created: 2025-12-14T05:16:43.284934Z
-updated: 2025-12-14T17:38:51.162415Z
+updated: 2025-12-18T05:25:50.280927Z
 author: Brian McCallister
 priority: high
 tags:
@@ -82,3 +82,15 @@ NEW:
 5. POST body
 
 Key change: CA signs the body bytes, not just the token. This binds signature to full request.
+---
+# Log: 2025-12-18T05:23:02Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-18T05:25:50Z Brian McCallister
+
+Implemented Bearer auth for both Broker→CA and CA→Policy Server flows
+---
+# Log: 2025-12-18T05:25:50Z Brian McCallister
+
+Closed: Implemented: token in Authorization header for Broker→CA, signature over body in Authorization header for CA→Policy

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
@@ -56,11 +57,11 @@ func (s *caServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// CreateCertRequest asks for a signed cert
+// CreateCertRequest asks for a signed cert.
+// Both fields must be present for a certificate request, or both absent for a hello request.
 type CreateCertRequest struct {
-	PublicKey  sshcert.RawPublicKey `json:"publicKey"`
-	Token      string               `json:"token"`
-	Connection policy.Connection    `json:"connection"`
+	PublicKey  *sshcert.RawPublicKey `json:"publicKey,omitempty"`
+	Connection *policy.Connection    `json:"connection,omitempty"`
 }
 
 // CreateCertResponse is response from a CreateCert request
@@ -72,7 +73,37 @@ type CreateCertResponse struct {
 // RequestBodySizeLimit is the maximum request body size
 const RequestBodySizeLimit = 8192
 
+// parseAuthHeader extracts the Bearer token from the Authorization header.
+// Returns the token or an error if the header is missing/malformed.
+func parseAuthHeader(r *http.Request) (string, error) {
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		return "", errors.New("missing Authorization header")
+	}
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		return "", errors.New("Authorization header must use Bearer scheme")
+	}
+
+	token := strings.TrimPrefix(auth, prefix)
+	if token == "" {
+		return "", errors.New("empty Bearer token")
+	}
+
+	return token, nil
+}
+
 func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
+	// Extract token from Authorization header
+	token, err := parseAuthHeader(r)
+	if err != nil {
+		w.Header().Add("Content-type", "text/plain")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
 	ccr := CreateCertRequest{}
 	lr := io.LimitReader(r.Body, RequestBodySizeLimit)
 
@@ -95,7 +126,21 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyResp, err := s.c.RequestPolicy(r.Context(), ccr.Token, ccr.Connection)
+	// Route based on request body shape
+	if ccr.PublicKey == nil && ccr.Connection == nil {
+		// Hello request - validate token only
+		s.handleHello(w, r, token)
+		return
+	}
+	if ccr.PublicKey == nil || ccr.Connection == nil {
+		// Invalid - one field present but not the other
+		w.Header().Add("Content-type", "text/plain")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("both publicKey and connection must be present, or neither"))
+		return
+	}
+
+	policyResp, err := s.c.RequestPolicy(r.Context(), token, *ccr.Connection)
 	if err != nil {
 		// Check if it's a PolicyError with a specific status code
 		var policyErr *ca.PolicyError
@@ -113,7 +158,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cert, err := s.c.SignPublicKey(ccr.PublicKey, &policyResp.CertParams)
+	cert, err := s.c.SignPublicKey(*ccr.PublicKey, &policyResp.CertParams)
 	if err != nil {
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
@@ -122,7 +167,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log certificate issuance (best-effort)
-	if err := s.logCertIssuance(r.Context(), cert, ccr.PublicKey, policyResp, ccr.Connection); err != nil {
+	if err := s.logCertIssuance(r.Context(), cert, *ccr.PublicKey, policyResp, *ccr.Connection); err != nil {
 		s.log.Warn("failed to log certificate issuance", "error", err)
 	}
 
@@ -150,6 +195,31 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))
+}
+
+// handleHello handles hello requests (empty body) by validating the token
+// with the policy server and returning 200 on success.
+func (s *caServer) handleHello(w http.ResponseWriter, r *http.Request, token string) {
+	// Call policy server with empty connection to validate token
+	_, err := s.c.RequestPolicy(r.Context(), token, policy.Connection{})
+	if err != nil {
+		// Check if it's a PolicyError with a specific status code
+		var policyErr *ca.PolicyError
+		if errors.As(err, &policyErr) {
+			w.Header().Add("Content-type", "text/plain")
+			w.WriteHeader(policyErr.StatusCode)
+			w.Write([]byte(policyErr.Message))
+			return
+		}
+		// Other error - return 500
+		w.Header().Add("Content-type", "text/plain")
+		w.WriteHeader(500)
+		w.Write(fmt.Appendf(nil, "error validating token: %s", err))
+		return
+	}
+
+	// Success - return 200 (no body)
+	w.WriteHeader(http.StatusOK)
 }
 
 // logCertIssuance logs a certificate issuance event with all metadata.

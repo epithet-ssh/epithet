@@ -59,14 +59,15 @@ func TestClient_422_ReturnsConnectionNotHandledError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Make a request
-	_, err = client.GetCert(context.Background(), &caserver.CreateCertRequest{
-		Token:     "test-token",
-		PublicKey: sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB"),
-		Connection: policy.Connection{
-			RemoteHost: "unknown.example.com",
-			RemoteUser: "user",
-			Port:       22,
-		},
+	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
+	conn := policy.Connection{
+		RemoteHost: "unknown.example.com",
+		RemoteUser: "user",
+		Port:       22,
+	}
+	_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+		PublicKey:  &pubKey,
+		Connection: &conn,
 	})
 
 	// Should return ConnectionNotHandledError
@@ -92,6 +93,7 @@ func TestClient_422_DoesNotTripCircuitBreaker(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
+	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
 	conn := policy.Connection{
 		RemoteHost: "unknown.example.com",
 		RemoteUser: "user",
@@ -100,10 +102,9 @@ func TestClient_422_DoesNotTripCircuitBreaker(t *testing.T) {
 
 	// Make multiple requests - circuit breaker should NOT trip
 	for i := 0; i < 5; i++ {
-		_, err = client.GetCert(context.Background(), &caserver.CreateCertRequest{
-			Token:      "test-token",
-			PublicKey:  sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB"),
-			Connection: conn,
+		_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+			PublicKey:  &pubKey,
+			Connection: &conn,
 		})
 		require.Error(t, err)
 
@@ -170,14 +171,15 @@ func TestClient_StatusCodes(t *testing.T) {
 			client, err := caclient.New(endpoints)
 			require.NoError(t, err)
 
-			_, err = client.GetCert(context.Background(), &caserver.CreateCertRequest{
-				Token:     "test-token",
-				PublicKey: sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB"),
-				Connection: policy.Connection{
-					RemoteHost: "server.example.com",
-					RemoteUser: "user",
-					Port:       22,
-				},
+			pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
+			conn := policy.Connection{
+				RemoteHost: "server.example.com",
+				RemoteUser: "user",
+				Port:       22,
+			}
+			_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+				PublicKey:  &pubKey,
+				Connection: &conn,
 			})
 
 			require.Error(t, err)

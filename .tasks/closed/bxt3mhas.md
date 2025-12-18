@@ -2,7 +2,7 @@
 title: 'CA server: Shape-based request routing'
 id: bxt3mhas
 created: 2025-12-14T05:17:00.490708Z
-updated: 2025-12-14T17:39:04.815556Z
+updated: 2025-12-18T05:57:02.579821Z
 author: Brian McCallister
 priority: high
 tags:
@@ -75,3 +75,11 @@ Added blocker: qhfqkc0f
 # Log: 2025-12-14T17:35:51Z Brian McCallister
 
 NOTE: Shape-based request handling still applies. The Authorization header now contains user token (from broker), not CA signature. Body shape determines hello vs cert request.
+---
+# Log: 2025-12-18T05:55:23Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-18T05:57:02Z Brian McCallister
+
+Closed: Implemented shape-based request routing: empty body = hello (returns 200), both fields = cert request, otherwise 400

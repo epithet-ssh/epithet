@@ -268,10 +268,9 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		}
 
 		// Request certificate from CA
-		certResp, err = b.caClient.GetCert(context.Background(), &caserver.CreateCertRequest{
-			PublicKey:  publicKey,
-			Token:      token,
-			Connection: input.Connection,
+		certResp, err = b.caClient.GetCert(context.Background(), token, &caserver.CreateCertRequest{
+			PublicKey:  &publicKey,
+			Connection: &input.Connection,
 		})
 
 		if err == nil {

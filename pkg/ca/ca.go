@@ -143,25 +143,28 @@ func (c *CA) Sign(value string) (signature string, err error) {
 
 // RequestPolicy requests policy from the policy url
 func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*PolicyResponse, error) {
-	sig, err := c.Sign(token)
-	if err != nil {
-		return nil, fmt.Errorf("error creating signed nonce: %w", err)
-	}
-
+	// Build body with token and connection (no signature in body)
 	body, err := json.Marshal(&map[string]any{
 		"token":      token,
-		"signature":  sig,
 		"connection": conn,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("error parsing input: %w", err)
+		return nil, fmt.Errorf("error marshaling request body: %w", err)
 	}
+
+	// Sign the entire body bytes (not just the token)
+	sig, err := c.Sign(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("error signing request body: %w", err)
+	}
+
 	req, err := http.NewRequest("POST", c.policyURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Add("Content-type", "application/json")
+	req.Header.Add("Authorization", "Bearer "+sig)
 
 	res, err := c.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
