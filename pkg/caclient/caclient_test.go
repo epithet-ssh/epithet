@@ -187,3 +187,86 @@ func TestClient_StatusCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestHello_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify it's a hello request (empty body)
+		body, _ := ioutil.ReadAll(r.Body)
+		assert.Equal(t, "{}", string(body))
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	err = client.Hello(context.Background(), "test-token")
+	assert.NoError(t, err)
+}
+
+func TestHello_Unauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("invalid token"))
+	}))
+	defer server.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	err = client.Hello(context.Background(), "bad-token")
+	require.Error(t, err)
+
+	var invalidToken *caclient.InvalidTokenError
+	assert.True(t, errors.As(err, &invalidToken), "expected InvalidTokenError, got %T", err)
+}
+
+func TestHello_Forbidden(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("access denied"))
+	}))
+	defer server.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	err = client.Hello(context.Background(), "test-token")
+	require.Error(t, err)
+
+	var policyDenied *caclient.PolicyDeniedError
+	assert.True(t, errors.As(err, &policyDenied), "expected PolicyDeniedError, got %T", err)
+}
+
+func TestHello_Failover(t *testing.T) {
+	callCount := 0
+
+	// First server returns 500, second returns 200
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("server error"))
+	}))
+	defer server1.Close()
+
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server2.Close()
+
+	endpoints := []caclient.CAEndpoint{
+		{URL: server1.URL, Priority: caclient.DefaultPriority},
+		{URL: server2.URL, Priority: caclient.DefaultPriority - 1},
+	}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	err = client.Hello(context.Background(), "test-token")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, callCount, "should have tried both servers")
+}

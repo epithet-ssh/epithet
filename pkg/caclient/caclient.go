@@ -228,6 +228,83 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 	return result, nil
 }
 
+// Hello validates a token with the CA server.
+// Sends empty body {} with Authorization: Bearer header.
+// Returns nil on success, or appropriate error (InvalidTokenError, PolicyDeniedError, etc.)
+// Tries endpoints in priority order until one succeeds or all fail.
+func (c *Client) Hello(ctx context.Context, token string) error {
+	body := []byte("{}")
+
+	var lastErr error
+	for _, ep := range c.endpoints {
+		if c.logger != nil {
+			c.logger.Debug("hello request to CA", "url", ep.URL)
+		}
+		err := c.doHelloRequest(ctx, ep.URL, token, body)
+		if err == nil {
+			return nil
+		}
+
+		// Check if this is an infrastructure error (should try next CA)
+		var caUnavail *CAUnavailableError
+		if errors.As(err, &caUnavail) {
+			lastErr = err
+			continue
+		}
+
+		// Auth/policy errors - return immediately, don't try other CAs
+		return err
+	}
+
+	if lastErr != nil {
+		return &AllCAsUnavailableError{Message: lastErr.Error()}
+	}
+	return &AllCAsUnavailableError{Message: "no CA endpoints configured"}
+}
+
+// doHelloRequest makes a hello request to validate a token.
+func (c *Client) doHelloRequest(ctx context.Context, caURL string, token string, body []byte) error {
+	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	rq.Header.Set("Content-Type", "application/json")
+	rq.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	respBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	if c.logger != nil {
+		c.logger.Debug("CA hello response", "url", caURL, "status", res.StatusCode)
+	}
+
+	if res.StatusCode != http.StatusOK {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			return &InvalidTokenError{Message: string(respBody)}
+		case http.StatusForbidden:
+			return &PolicyDeniedError{Message: string(respBody)}
+		case http.StatusUnprocessableEntity:
+			return &ConnectionNotHandledError{Message: string(respBody)}
+		default:
+			if res.StatusCode >= 500 {
+				return &CAUnavailableError{Message: string(respBody)}
+			}
+			return &InvalidRequestError{Message: string(respBody)}
+		}
+	}
+
+	return nil
+}
+
 // doRequest makes a single HTTP request to a CA.
 func (c *Client) doRequest(ctx context.Context, caURL string, token string, body []byte) (*caserver.CreateCertResponse, error) {
 	if c.logger != nil {
