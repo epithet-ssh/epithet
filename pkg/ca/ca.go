@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/policy"
@@ -23,8 +25,9 @@ import (
 // PolicyError represents an error from the policy server.
 // The CA server should return the same status code to the client.
 type PolicyError struct {
-	StatusCode int
-	Message    string
+	StatusCode   int
+	Message      string
+	DiscoveryURL string // Resolved discovery URL from Link header
 }
 
 func (e *PolicyError) Error() string {
@@ -119,8 +122,9 @@ type CertParams struct {
 // PolicyResponse is the response from the policy server, containing both
 // the certificate parameters and the policy
 type PolicyResponse struct {
-	CertParams CertParams    `json:"certParams"`
-	Policy     policy.Policy `json:"policy"`
+	CertParams   CertParams    `json:"certParams"`
+	Policy       policy.Policy `json:"policy"`
+	DiscoveryURL string        `json:"-"` // Resolved URL from Link header
 }
 
 func Verify(pubkey sshcert.RawPublicKey, token, signature string) error {
@@ -139,6 +143,41 @@ func (c *CA) Sign(value string) (signature string, err error) {
 	}
 
 	return base64.StdEncoding.EncodeToString(sig), nil
+}
+
+// extractDiscoveryURL extracts and resolves the discovery URL from a Link header.
+// Link header format: <url>; rel="discovery"
+// Uses url.URL.ResolveReference for proper RFC 3986 resolution.
+// Returns the resolved URL or empty string if no/invalid Link header.
+func extractDiscoveryURL(linkHeader, baseURL string) string {
+	if linkHeader == "" {
+		return ""
+	}
+
+	// Parse Link header: <url>; rel="..."
+	start := strings.Index(linkHeader, "<")
+	end := strings.Index(linkHeader, ">")
+	if start == -1 || end == -1 || end <= start {
+		return "" // Can't parse
+	}
+
+	linkURL := linkHeader[start+1 : end]
+
+	// Parse base URL
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "" // Can't parse base
+	}
+
+	// Parse link URL
+	ref, err := url.Parse(linkURL)
+	if err != nil {
+		return "" // Can't parse link URL
+	}
+
+	// Resolve using standard library
+	resolved := base.ResolveReference(ref)
+	return resolved.String()
 }
 
 // RequestPolicy requests policy from the policy url
@@ -172,6 +211,9 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	}
 	defer res.Body.Close()
 
+	// Extract and resolve discovery URL from Link header
+	discoveryURL := extractDiscoveryURL(res.Header.Get("Link"), c.policyURL)
+
 	lim := io.LimitReader(res.Body, 8196)
 	buf, err := io.ReadAll(lim)
 	if err != nil {
@@ -183,8 +225,9 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		// Policy server returned an error - wrap it to signal to CA server
 		// CA server should return the same status code to the client
 		return nil, &PolicyError{
-			StatusCode: res.StatusCode,
-			Message:    string(buf),
+			StatusCode:   res.StatusCode,
+			Message:      string(buf),
+			DiscoveryURL: discoveryURL,
 		}
 	}
 
@@ -193,6 +236,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err != nil {
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
+	policyResp.DiscoveryURL = discoveryURL
 	return policyResp, nil
 }
 

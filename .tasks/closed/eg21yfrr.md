@@ -2,7 +2,7 @@
 title: 'CA server: Link header passthrough'
 id: eg21yfrr
 created: 2025-12-14T05:17:53.520494Z
-updated: 2025-12-14T17:39:17.426613Z
+updated: 2025-12-19T04:57:03.230115297Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -69,3 +69,11 @@ Added blocker: mfcdv2zf
 # Log: 2025-12-14T17:35:51Z Brian McCallister
 
 NOTE: Link header passthrough is unaffected by auth design change. CA still reads Link from policy response and copies to its response.
+---
+# Log: 2025-12-19T04:51:41Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-19T04:57:03Z Brian McCallister
+
+Closed: Implemented CA server Link header passthrough: CA reads Link header from policy server responses, resolves relative URLs against policy server URL using url.URL.ResolveReference (RFC 3986), and sets resolved Link header on its own responses. Includes DiscoveryURL fields in PolicyResponse/PolicyError, extractDiscoveryURL helper function with comprehensive unit tests, and integration tests for relative URLs, absolute URLs, no header, error responses, and hello requests.

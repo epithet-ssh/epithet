@@ -94,6 +94,13 @@ func parseAuthHeader(r *http.Request) (string, error) {
 	return token, nil
 }
 
+// setDiscoveryHeader sets the Link header with the discovery URL if present
+func setDiscoveryHeader(w http.ResponseWriter, discoveryURL string) {
+	if discoveryURL != "" {
+		w.Header().Set("Link", "<"+discoveryURL+">; rel=\"discovery\"")
+	}
+}
+
 func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	// Extract token from Authorization header
 	token, err := parseAuthHeader(r)
@@ -146,6 +153,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		var policyErr *ca.PolicyError
 		if errors.As(err, &policyErr) {
 			// Return the same status code the policy server returned
+			setDiscoveryHeader(w, policyErr.DiscoveryURL)
 			w.Header().Add("Content-type", "text/plain")
 			w.WriteHeader(policyErr.StatusCode)
 			w.Write([]byte(policyErr.Message))
@@ -182,6 +190,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setDiscoveryHeader(w, policyResp.DiscoveryURL)
 	w.Header().Add("Content-type", "application/json")
 	w.WriteHeader(200)
 	_, err = w.Write(out)
@@ -201,11 +210,12 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 // with the policy server and returning 200 on success.
 func (s *caServer) handleHello(w http.ResponseWriter, r *http.Request, token string) {
 	// Call policy server with empty connection to validate token
-	_, err := s.c.RequestPolicy(r.Context(), token, policy.Connection{})
+	policyResp, err := s.c.RequestPolicy(r.Context(), token, policy.Connection{})
 	if err != nil {
 		// Check if it's a PolicyError with a specific status code
 		var policyErr *ca.PolicyError
 		if errors.As(err, &policyErr) {
+			setDiscoveryHeader(w, policyErr.DiscoveryURL)
 			w.Header().Add("Content-type", "text/plain")
 			w.WriteHeader(policyErr.StatusCode)
 			w.Write([]byte(policyErr.Message))
@@ -219,6 +229,7 @@ func (s *caServer) handleHello(w http.ResponseWriter, r *http.Request, token str
 	}
 
 	// Success - return 200 (no body)
+	setDiscoveryHeader(w, policyResp.DiscoveryURL)
 	w.WriteHeader(http.StatusOK)
 }
 
