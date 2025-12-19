@@ -2,7 +2,7 @@
 title: 'Policy server: Discovery endpoint'
 id: sdjybkm6
 created: 2025-12-14T05:19:36.589626Z
-updated: 2025-12-14T17:39:17.208799Z
+updated: 2025-12-19T04:24:39.012678786Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -78,3 +78,12 @@ triggers clients to refetch, which is the important behavior.
 # Log: 2025-12-14T05:19:50Z Brian McCallister
 
 Added blocker: mfcdv2zf
+---
+# Log: 2025-12-19T04:24:39Z Brian McCallister
+
+From planning task mf:
+- Discovery path is /d/<hash> (hardcoded prefix)
+- GET /d/<hash> will serve the discovery data
+- Cache-Control headers go here (immutable for content-addressable URLs)
+- Must validate Bearer token before serving
+- Returns matchPatterns/policy rules JSON

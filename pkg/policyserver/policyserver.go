@@ -98,6 +98,16 @@ type Config struct {
 
 	// MaxRequestSize limits the request body size (default: 8192 bytes)
 	MaxRequestSize int64
+
+	// DiscoveryHash is the content-addressable hash for the Link header.
+	// If empty, no Link header is set.
+	// The path is hardcoded to "/d/" + hash.
+	DiscoveryHash string
+}
+
+// handler holds the config and implements the HTTP handler methods
+type handler struct {
+	config Config
 }
 
 // NewHandler creates an HTTP handler for the policy server.
@@ -107,99 +117,110 @@ type Config struct {
 // 3. Calls the evaluator to make authorization decision
 // 4. Returns appropriate HTTP response (200 with policy, or error)
 func NewHandler(config Config) http.HandlerFunc {
-	maxRequestSize := config.MaxRequestSize
-	if maxRequestSize == 0 {
-		maxRequestSize = 8192 // Default from caserver
+	if config.MaxRequestSize == 0 {
+		config.MaxRequestSize = 8192 // Default from caserver
+	}
+	h := &handler{config: config}
+	return h.ServeHTTP
+}
+
+// ServeHTTP handles the policy server request
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Only accept POST
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
 	}
 
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Only accept POST
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	// Parse request body
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.config.MaxRequestSize))
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request: %v", err))
+		return
+	}
+	defer r.Body.Close()
+
+	var req Request
+	if err := json.Unmarshal(body, &req); err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return
+	}
+
+	// Verify CA signature if configured (signature is over the entire body)
+	if h.config.CAPublicKey != "" {
+		// Extract signature from Authorization header
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			h.writeError(w, http.StatusUnauthorized, "Missing Authorization header")
+			return
+		}
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) {
+			h.writeError(w, http.StatusUnauthorized, "Authorization header must use Bearer scheme")
+			return
+		}
+		signature := strings.TrimPrefix(auth, prefix)
+		if signature == "" {
+			h.writeError(w, http.StatusUnauthorized, "Empty Bearer token in Authorization header")
 			return
 		}
 
-		// Parse request body
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestSize))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request: %v", err))
+		// Verify signature against body bytes
+		if err := ca.Verify(h.config.CAPublicKey, string(body), signature); err != nil {
+			h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid CA signature: %v", err))
 			return
 		}
-		defer r.Body.Close()
+	}
 
-		var req Request
-		if err := json.Unmarshal(body, &req); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+	// Decode the base64url-encoded token
+	// Tokens are always base64url encoded by the broker to preserve arbitrary bytes
+	decodedToken, err := base64.RawURLEncoding.DecodeString(req.Token)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid token encoding: %v", err))
+		return
+	}
+
+	// Evaluate policy
+	resp, err := h.config.Evaluator.Evaluate(string(decodedToken), req.Connection)
+	if err != nil {
+		// Check if it's a PolicyError with specific status code
+		if policyErr, ok := err.(*PolicyError); ok {
+			h.writeError(w, policyErr.StatusCode, policyErr.Message)
 			return
 		}
+		// Default to 500 for unknown errors
+		h.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
-		// Verify CA signature if configured (signature is over the entire body)
-		if config.CAPublicKey != "" {
-			// Extract signature from Authorization header
-			auth := r.Header.Get("Authorization")
-			if auth == "" {
-				writeError(w, http.StatusUnauthorized, "Missing Authorization header")
-				return
-			}
-			const prefix = "Bearer "
-			if !strings.HasPrefix(auth, prefix) {
-				writeError(w, http.StatusUnauthorized, "Authorization header must use Bearer scheme")
-				return
-			}
-			signature := strings.TrimPrefix(auth, prefix)
-			if signature == "" {
-				writeError(w, http.StatusUnauthorized, "Empty Bearer token in Authorization header")
-				return
-			}
+	// Success: return policy response
+	h.writeJSON(w, http.StatusOK, resp)
+}
 
-			// Verify signature against body bytes
-			if err := ca.Verify(config.CAPublicKey, string(body), signature); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid CA signature: %v", err))
-				return
-			}
-		}
-
-		// Decode the base64url-encoded token
-		// Tokens are always base64url encoded by the broker to preserve arbitrary bytes
-		decodedToken, err := base64.RawURLEncoding.DecodeString(req.Token)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid token encoding: %v", err))
-			return
-		}
-
-		// Evaluate policy
-		resp, err := config.Evaluator.Evaluate(string(decodedToken), req.Connection)
-		if err != nil {
-			// Check if it's a PolicyError with specific status code
-			if policyErr, ok := err.(*PolicyError); ok {
-				writeError(w, policyErr.StatusCode, policyErr.Message)
-				return
-			}
-			// Default to 500 for unknown errors
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-
-		// Success: return policy response
-		writeJSON(w, http.StatusOK, resp)
+// setDiscoveryHeader sets the Link header for discovery if configured
+func (h *handler) setDiscoveryHeader(w http.ResponseWriter) {
+	if h.config.DiscoveryHash != "" {
+		w.Header().Set("Link", "</d/"+h.config.DiscoveryHash+">; rel=\"discovery\"")
 	}
 }
 
 // writeError writes an error response as plain text
-func writeError(w http.ResponseWriter, statusCode int, message string) {
+func (h *handler) writeError(w http.ResponseWriter, statusCode int, message string) {
+	h.setDiscoveryHeader(w)
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(statusCode)
 	w.Write([]byte(message))
 }
 
 // writeJSON writes a JSON response
-func writeJSON(w http.ResponseWriter, statusCode int, data any) {
+func (h *handler) writeJSON(w http.ResponseWriter, statusCode int, data any) {
 	body, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to marshal response: %v", err))
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to marshal response: %v", err))
 		return
 	}
 
+	h.setDiscoveryHeader(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	w.Write(body)

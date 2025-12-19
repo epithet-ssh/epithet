@@ -2,7 +2,7 @@
 title: 'Policy server: Discovery Link header'
 id: mfcdv2zf
 created: 2025-12-14T05:17:35.488965Z
-updated: 2025-12-14T17:39:17.532373Z
+updated: 2025-12-19T04:31:17.627678349Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -62,3 +62,26 @@ Added blocker: 2xd411gq
 # Log: 2025-12-14T17:35:51Z Brian McCallister
 
 NOTE: Policy server Link header is unaffected by auth design change. Still set on all responses.
+---
+# Log: 2025-12-19T04:11:25Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-19T04:24:38Z Brian McCallister
+
+Design decisions from planning:
+- Policy server uses relative URLs: Link: </d/hash>; rel="discovery"
+- Path /d/ is hardcoded, not configurable
+- Hash computed from PolicyRulesConfig.DiscoveryHash() method
+- Hash covers match-relevant policy (hosts, defaults.allow) - extensible for future attributes
+- Config.DiscoveryHash field added to policyserver.Config
+- Link header set on ALL responses (200, 401, 403, 422, 500)
+- CA will rewrite relative URLs to absolute (task eg)
+---
+# Log: 2025-12-19T04:29:00Z Brian McCallister
+
+Started working.
+---
+# Log: 2025-12-19T04:31:17Z Brian McCallister
+
+Closed: Implemented Discovery Link header: policy server sets 'Link: </d/hash>; rel="discovery"' on all responses (200, 401, 403, 422, 500). Hash computed from PolicyRulesConfig.DiscoveryHash() covering hosts and defaults.allow. Added comprehensive tests.

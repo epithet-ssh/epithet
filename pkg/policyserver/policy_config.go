@@ -1,7 +1,11 @@
 package policyserver
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -92,4 +96,38 @@ func DefaultExtensions() map[string]string {
 // DefaultExpiration returns the default certificate expiration duration
 func DefaultExpiration() string {
 	return "5m"
+}
+
+// DiscoveryHash computes a content-addressable hash of the policy rules.
+// This hash changes when the matching policy changes (hosts, users, etc.).
+// Returns a 12-character hex string.
+func (c *PolicyRulesConfig) DiscoveryHash() string {
+	// Create a deterministic representation of match-relevant config
+	// Currently: Hosts map (keys define what hosts are handled)
+	//            Defaults.Allow (defines default match behavior)
+	// Future: could include user patterns, port patterns, etc.
+
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+
+	// Hash hosts map keys (sorted for determinism)
+	hostKeys := make([]string, 0, len(c.Hosts))
+	for k := range c.Hosts {
+		hostKeys = append(hostKeys, k)
+	}
+	sort.Strings(hostKeys)
+	enc.Encode(hostKeys)
+
+	// Hash defaults.Allow if present (sorted keys)
+	if c.Defaults != nil && len(c.Defaults.Allow) > 0 {
+		allowKeys := make([]string, 0, len(c.Defaults.Allow))
+		for k := range c.Defaults.Allow {
+			allowKeys = append(allowKeys, k)
+		}
+		sort.Strings(allowKeys)
+		enc.Encode(allowKeys)
+	}
+
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum)[:12]
 }

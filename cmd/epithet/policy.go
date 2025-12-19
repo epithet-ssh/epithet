@@ -82,8 +82,9 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 
 	// Create policy server handler
 	handler := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: sshcert.RawPublicKey(caPubkey),
-		Evaluator:   eval,
+		CAPublicKey:   sshcert.RawPublicKey(caPubkey),
+		Evaluator:     eval,
+		DiscoveryHash: cfg.DiscoveryHash(),
 	})
 
 	// Set up router with middleware
@@ -98,7 +99,8 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
-		"ca_pubkey_length", len(caPubkey))
+		"ca_pubkey_length", len(caPubkey),
+		"discovery_hash", cfg.DiscoveryHash())
 
 	return http.ListenAndServe(c.Listen, r)
 }

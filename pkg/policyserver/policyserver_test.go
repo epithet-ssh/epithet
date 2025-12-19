@@ -234,3 +234,140 @@ func TestHandler_InvalidTokenEncoding(t *testing.T) {
 		t.Errorf("expected 'Invalid token encoding' in response, got %s", w.Body.String())
 	}
 }
+
+func TestHandler_DiscoveryLinkHeader_Success(t *testing.T) {
+	evaluator := &mockEvaluator{
+		response: &policyserver.Response{
+			CertParams: ca.CertParams{
+				Identity:   "test@example.com",
+				Names:      []string{"testuser"},
+				Expiration: 5 * time.Minute,
+			},
+			Policy: policy.Policy{
+				HostUsers: map[string][]string{
+					"*": {"testuser"},
+				},
+			},
+		},
+	}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		Evaluator:     evaluator,
+		DiscoveryHash: "abc123def456",
+	})
+
+	req := policyserver.Request{
+		Token: encodeToken("test-token"),
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	link := w.Header().Get("Link")
+	expected := "</d/abc123def456>; rel=\"discovery\""
+	if link != expected {
+		t.Errorf("expected Link header %q, got %q", expected, link)
+	}
+}
+
+func TestHandler_DiscoveryLinkHeader_ErrorResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		statusCode int
+	}{
+		{"Unauthorized", policyserver.Unauthorized("invalid token"), http.StatusUnauthorized},
+		{"Forbidden", policyserver.Forbidden("access denied"), http.StatusForbidden},
+		{"NotHandled", policyserver.NotHandled("not handled"), http.StatusUnprocessableEntity},
+		{"InternalError", policyserver.InternalError("internal error"), http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evaluator := &mockEvaluator{err: tt.err}
+
+			handler := policyserver.NewHandler(policyserver.Config{
+				Evaluator:     evaluator,
+				DiscoveryHash: "abc123def456",
+			})
+
+			req := policyserver.Request{
+				Token: encodeToken("test-token"),
+				Connection: policy.Connection{
+					RemoteHost: "server.example.com",
+					RemoteUser: "testuser",
+					Port:       22,
+				},
+			}
+			body, _ := json.Marshal(req)
+
+			httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+
+			handler(w, httpReq)
+
+			if w.Code != tt.statusCode {
+				t.Errorf("expected status %d, got %d", tt.statusCode, w.Code)
+			}
+
+			link := w.Header().Get("Link")
+			expected := "</d/abc123def456>; rel=\"discovery\""
+			if link != expected {
+				t.Errorf("expected Link header %q, got %q", expected, link)
+			}
+		})
+	}
+}
+
+func TestHandler_DiscoveryLinkHeader_NotSetWhenEmpty(t *testing.T) {
+	evaluator := &mockEvaluator{
+		response: &policyserver.Response{
+			CertParams: ca.CertParams{
+				Identity:   "test@example.com",
+				Names:      []string{"testuser"},
+				Expiration: 5 * time.Minute,
+			},
+		},
+	}
+
+	// No DiscoveryHash set
+	handler := policyserver.NewHandler(policyserver.Config{
+		Evaluator: evaluator,
+	})
+
+	req := policyserver.Request{
+		Token: encodeToken("test-token"),
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	link := w.Header().Get("Link")
+	if link != "" {
+		t.Errorf("expected no Link header, got %q", link)
+	}
+}

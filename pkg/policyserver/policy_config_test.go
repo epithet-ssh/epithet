@@ -130,3 +130,113 @@ func TestValidateDuration(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoveryHash_Deterministic(t *testing.T) {
+	cfg := policyserver.PolicyRulesConfig{
+		Hosts: map[string]*policyserver.HostPolicy{
+			"host1.example.com": {},
+			"host2.example.com": {},
+		},
+		Defaults: &policyserver.DefaultPolicy{
+			Allow: map[string][]string{
+				"wheel":      {"admin"},
+				"developers": {"eng"},
+			},
+		},
+	}
+
+	hash1 := cfg.DiscoveryHash()
+	hash2 := cfg.DiscoveryHash()
+
+	if hash1 != hash2 {
+		t.Errorf("DiscoveryHash() not deterministic: %q != %q", hash1, hash2)
+	}
+
+	if len(hash1) != 12 {
+		t.Errorf("expected 12 character hash, got %d characters: %q", len(hash1), hash1)
+	}
+}
+
+func TestDiscoveryHash_OrderIndependent(t *testing.T) {
+	// Two configs with same hosts in different order should produce same hash
+	cfg1 := policyserver.PolicyRulesConfig{
+		Hosts: map[string]*policyserver.HostPolicy{
+			"host1.example.com": {},
+			"host2.example.com": {},
+			"host3.example.com": {},
+		},
+	}
+
+	cfg2 := policyserver.PolicyRulesConfig{
+		Hosts: map[string]*policyserver.HostPolicy{
+			"host3.example.com": {},
+			"host1.example.com": {},
+			"host2.example.com": {},
+		},
+	}
+
+	hash1 := cfg1.DiscoveryHash()
+	hash2 := cfg2.DiscoveryHash()
+
+	if hash1 != hash2 {
+		t.Errorf("DiscoveryHash() should be order-independent: %q != %q", hash1, hash2)
+	}
+}
+
+func TestDiscoveryHash_ChangesWithHosts(t *testing.T) {
+	cfg1 := policyserver.PolicyRulesConfig{
+		Hosts: map[string]*policyserver.HostPolicy{
+			"host1.example.com": {},
+		},
+	}
+
+	cfg2 := policyserver.PolicyRulesConfig{
+		Hosts: map[string]*policyserver.HostPolicy{
+			"host1.example.com": {},
+			"host2.example.com": {},
+		},
+	}
+
+	hash1 := cfg1.DiscoveryHash()
+	hash2 := cfg2.DiscoveryHash()
+
+	if hash1 == hash2 {
+		t.Errorf("DiscoveryHash() should change when hosts change: %q == %q", hash1, hash2)
+	}
+}
+
+func TestDiscoveryHash_ChangesWithDefaults(t *testing.T) {
+	cfg1 := policyserver.PolicyRulesConfig{
+		Defaults: &policyserver.DefaultPolicy{
+			Allow: map[string][]string{
+				"wheel": {"admin"},
+			},
+		},
+	}
+
+	cfg2 := policyserver.PolicyRulesConfig{
+		Defaults: &policyserver.DefaultPolicy{
+			Allow: map[string][]string{
+				"wheel":      {"admin"},
+				"developers": {"eng"},
+			},
+		},
+	}
+
+	hash1 := cfg1.DiscoveryHash()
+	hash2 := cfg2.DiscoveryHash()
+
+	if hash1 == hash2 {
+		t.Errorf("DiscoveryHash() should change when defaults.allow changes: %q == %q", hash1, hash2)
+	}
+}
+
+func TestDiscoveryHash_EmptyConfig(t *testing.T) {
+	cfg := policyserver.PolicyRulesConfig{}
+
+	hash := cfg.DiscoveryHash()
+
+	if len(hash) != 12 {
+		t.Errorf("expected 12 character hash even for empty config, got %d characters: %q", len(hash), hash)
+	}
+}
