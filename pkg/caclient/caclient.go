@@ -9,10 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/breakerpool"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	gobreaker "github.com/sony/gobreaker/v2"
 )
@@ -80,6 +83,18 @@ func (e *ConnectionNotHandledError) Error() string {
 	return "connection not handled by CA"
 }
 
+// Discovery contains information from the discovery endpoint.
+type Discovery struct {
+	MatchPatterns []string `json:"matchPatterns"`
+}
+
+// CertResponse contains a certificate and discovery information.
+type CertResponse struct {
+	Certificate  sshcert.RawCertificate
+	Policy       policy.Policy
+	DiscoveryURL string
+}
+
 // DefaultTimeout is the default per-request timeout for CA requests.
 const DefaultTimeout = 15 * time.Second
 
@@ -90,7 +105,7 @@ const DefaultCooldown = 10 * time.Minute
 type Client struct {
 	httpClient *http.Client
 	endpoints  []CAEndpoint
-	pool       *breakerpool.Pool[*caserver.CreateCertResponse, string]
+	pool       *breakerpool.Pool[*CertResponse, string]
 	timeout    time.Duration
 	cooldown   time.Duration
 	logger     *slog.Logger
@@ -136,7 +151,7 @@ func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
 		IsSuccessful: isSuccessfulForCircuitBreaker,
 	}
 
-	client.pool = breakerpool.New[*caserver.CreateCertResponse](entries, defaults)
+	client.pool = breakerpool.New[*CertResponse](entries, defaults)
 
 	return client, nil
 }
@@ -201,13 +216,14 @@ func WithCooldown(d time.Duration) Option {
 // GetCert requests a certificate from the CA, with automatic failover to backup CAs.
 // It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
 // The token is sent in the Authorization header, not in the request body.
-func (c *Client) GetCert(ctx context.Context, token string, req *caserver.CreateCertRequest) (*caserver.CreateCertResponse, error) {
+// Returns CertResponse containing the certificate, policy, and discovery URL.
+func (c *Client) GetCert(ctx context.Context, token string, req *caserver.CreateCertRequest) (*CertResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := c.pool.Execute(func(caURL string) (*caserver.CreateCertResponse, error) {
+	result, err := c.pool.Execute(func(caURL string) (*CertResponse, error) {
 		if c.logger != nil {
 			c.logger.Debug("trying CA", "url", caURL)
 		}
@@ -228,21 +244,24 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 	return result, nil
 }
 
-// Hello validates a token with the CA server.
-// Sends empty body {} with Authorization: Bearer header.
-// Returns nil on success, or appropriate error (InvalidTokenError, PolicyDeniedError, etc.)
+// GetDiscovery validates the token and fetches discovery data from the CA.
+// Returns nil Discovery if no discovery URL in response (not an error - token still validated).
 // Tries endpoints in priority order until one succeeds or all fail.
-func (c *Client) Hello(ctx context.Context, token string) error {
+func (c *Client) GetDiscovery(ctx context.Context, token string) (*Discovery, error) {
 	body := []byte("{}")
 
 	var lastErr error
+	var discoveryURL string
+	success := false
 	for _, ep := range c.endpoints {
 		if c.logger != nil {
-			c.logger.Debug("hello request to CA", "url", ep.URL)
+			c.logger.Debug("discovery request to CA", "url", ep.URL)
 		}
-		err := c.doHelloRequest(ctx, ep.URL, token, body)
+		url, err := c.doHelloRequest(ctx, ep.URL, token, body)
 		if err == nil {
-			return nil
+			discoveryURL = url
+			success = true
+			break
 		}
 
 		// Check if this is an infrastructure error (should try next CA)
@@ -253,33 +272,89 @@ func (c *Client) Hello(ctx context.Context, token string) error {
 		}
 
 		// Auth/policy errors - return immediately, don't try other CAs
-		return err
+		return nil, err
 	}
 
-	if lastErr != nil {
-		return &AllCAsUnavailableError{Message: lastErr.Error()}
+	if !success {
+		if lastErr != nil {
+			return nil, &AllCAsUnavailableError{Message: lastErr.Error()}
+		}
+		return nil, &AllCAsUnavailableError{Message: "no CA endpoints configured"}
 	}
-	return &AllCAsUnavailableError{Message: "no CA endpoints configured"}
+
+	// No discovery URL - token was validated but no discovery endpoint configured
+	if discoveryURL == "" {
+		return nil, nil
+	}
+
+	// Fetch discovery data from the discovery URL
+	return c.fetchDiscovery(ctx, discoveryURL, token)
+}
+
+// fetchDiscovery fetches discovery data from the given URL.
+func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*Discovery, error) {
+	rq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	rq.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	respBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.logger != nil {
+		c.logger.Debug("discovery response", "url", url, "status", res.StatusCode)
+	}
+
+	if res.StatusCode != http.StatusOK {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			return nil, &InvalidTokenError{Message: string(respBody)}
+		case http.StatusForbidden:
+			return nil, &PolicyDeniedError{Message: string(respBody)}
+		default:
+			if res.StatusCode >= 500 {
+				return nil, &CAUnavailableError{Message: string(respBody)}
+			}
+			return nil, &InvalidRequestError{Message: string(respBody)}
+		}
+	}
+
+	var discovery Discovery
+	if err := json.Unmarshal(respBody, &discovery); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal discovery response: %w", err)
+	}
+
+	return &discovery, nil
 }
 
 // doHelloRequest makes a hello request to validate a token.
-func (c *Client) doHelloRequest(ctx context.Context, caURL string, token string, body []byte) error {
+// Returns the discovery URL from the Link header (may be empty).
+func (c *Client) doHelloRequest(ctx context.Context, caURL string, token string, body []byte) (string, error) {
 	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	rq.Header.Set("Content-Type", "application/json")
 	rq.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer res.Body.Close()
 
 	respBody, err := io.ReadAll(res.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if c.logger != nil {
@@ -289,24 +364,26 @@ func (c *Client) doHelloRequest(ctx context.Context, caURL string, token string,
 	if res.StatusCode != http.StatusOK {
 		switch res.StatusCode {
 		case http.StatusUnauthorized:
-			return &InvalidTokenError{Message: string(respBody)}
+			return "", &InvalidTokenError{Message: string(respBody)}
 		case http.StatusForbidden:
-			return &PolicyDeniedError{Message: string(respBody)}
+			return "", &PolicyDeniedError{Message: string(respBody)}
 		case http.StatusUnprocessableEntity:
-			return &ConnectionNotHandledError{Message: string(respBody)}
+			return "", &ConnectionNotHandledError{Message: string(respBody)}
 		default:
 			if res.StatusCode >= 500 {
-				return &CAUnavailableError{Message: string(respBody)}
+				return "", &CAUnavailableError{Message: string(respBody)}
 			}
-			return &InvalidRequestError{Message: string(respBody)}
+			return "", &InvalidRequestError{Message: string(respBody)}
 		}
 	}
 
-	return nil
+	// Extract discovery URL from Link header
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+	return discoveryURL, nil
 }
 
-// doRequest makes a single HTTP request to a CA.
-func (c *Client) doRequest(ctx context.Context, caURL string, token string, body []byte) (*caserver.CreateCertResponse, error) {
+// doRequest makes a single HTTP request to a CA and returns the response with discovery URL.
+func (c *Client) doRequest(ctx context.Context, caURL string, token string, body []byte) (*CertResponse, error) {
 	if c.logger != nil {
 		c.logger.Debug("CA request", "url", caURL, "body", string(body))
 	}
@@ -349,13 +426,20 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 		}
 	}
 
-	resp := caserver.CreateCertResponse{}
-	err = json.Unmarshal(respBody, &resp)
+	var caResp caserver.CreateCertResponse
+	err = json.Unmarshal(respBody, &caResp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal CA response (body=%s): %w", string(respBody), err)
 	}
 
-	return &resp, nil
+	// Extract discovery URL from Link header
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+
+	return &CertResponse{
+		Certificate:  caResp.Certificate,
+		Policy:       caResp.Policy,
+		DiscoveryURL: discoveryURL,
+	}, nil
 }
 
 // isSuccessfulForCircuitBreaker determines whether an error should count as a
@@ -399,4 +483,30 @@ func isSuccessfulForCircuitBreaker(err error) bool {
 	// Unknown errors - treat as infrastructure failures to be safe
 	// This includes connection refused, DNS failures, TLS errors, etc.
 	return false
+}
+
+// parseLinkHeader extracts the URL for a given rel from a Link header.
+// Link header format: <url>; rel="name"
+// Returns empty string if not found or malformed.
+func parseLinkHeader(header, rel string) string {
+	if header == "" {
+		return ""
+	}
+
+	// Parse Link header: <url>; rel="..."
+	start := strings.Index(header, "<")
+	end := strings.Index(header, ">")
+	if start == -1 || end == -1 || end <= start {
+		return ""
+	}
+
+	url := header[start+1 : end]
+
+	// Check for the rel parameter
+	relParam := `rel="` + rel + `"`
+	if !strings.Contains(header, relParam) {
+		return ""
+	}
+
+	return url
 }

@@ -188,7 +188,7 @@ func TestClient_StatusCodes(t *testing.T) {
 	}
 }
 
-func TestHello_Success(t *testing.T) {
+func TestGetDiscovery_NoDiscoveryURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify it's a hello request (empty body)
 		body, _ := ioutil.ReadAll(r.Body)
@@ -202,11 +202,40 @@ func TestHello_Success(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	err = client.Hello(context.Background(), "test-token")
+	discovery, err := client.GetDiscovery(context.Background(), "test-token")
 	assert.NoError(t, err)
+	assert.Nil(t, discovery, "expected nil discovery when no Link header")
 }
 
-func TestHello_Unauthorized(t *testing.T) {
+func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
+	// Start discovery server first so we have its URL
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"matchPatterns": ["*.example.com", "*.test.local"]}`))
+	}))
+	defer discoveryServer.Close()
+
+	// Start CA server that returns Link header pointing to discovery server
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	discovery, err := client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	require.NotNil(t, discovery)
+	assert.Equal(t, []string{"*.example.com", "*.test.local"}, discovery.MatchPatterns)
+}
+
+func TestGetDiscovery_Unauthorized(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte("invalid token"))
@@ -217,14 +246,14 @@ func TestHello_Unauthorized(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	err = client.Hello(context.Background(), "bad-token")
+	_, err = client.GetDiscovery(context.Background(), "bad-token")
 	require.Error(t, err)
 
 	var invalidToken *caclient.InvalidTokenError
 	assert.True(t, errors.As(err, &invalidToken), "expected InvalidTokenError, got %T", err)
 }
 
-func TestHello_Forbidden(t *testing.T) {
+func TestGetDiscovery_Forbidden(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("access denied"))
@@ -235,14 +264,14 @@ func TestHello_Forbidden(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	err = client.Hello(context.Background(), "test-token")
+	_, err = client.GetDiscovery(context.Background(), "test-token")
 	require.Error(t, err)
 
 	var policyDenied *caclient.PolicyDeniedError
 	assert.True(t, errors.As(err, &policyDenied), "expected PolicyDeniedError, got %T", err)
 }
 
-func TestHello_Failover(t *testing.T) {
+func TestGetDiscovery_Failover(t *testing.T) {
 	callCount := 0
 
 	// First server returns 500, second returns 200
@@ -266,7 +295,36 @@ func TestHello_Failover(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	err = client.Hello(context.Background(), "test-token")
+	_, err = client.GetDiscovery(context.Background(), "test-token")
 	assert.NoError(t, err)
 	assert.Equal(t, 2, callCount, "should have tried both servers")
+}
+
+func TestGetCert_WithDiscoveryURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<https://discovery.example.com/d/abc123>; rel="discovery"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"certificate": "ssh-ed25519-cert-v01@openssh.com AAAA...", "policy": {"hostUsers": {"*.example.com": ["alice"]}}}`))
+	}))
+	defer server.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
+	conn := policy.Connection{
+		RemoteHost: "server.example.com",
+		RemoteUser: "alice",
+		Port:       22,
+	}
+	resp, err := client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+		PublicKey:  &pubKey,
+		Connection: &conn,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://discovery.example.com/d/abc123", resp.DiscoveryURL)
+	assert.Equal(t, sshcert.RawCertificate("ssh-ed25519-cert-v01@openssh.com AAAA..."), resp.Certificate)
 }
