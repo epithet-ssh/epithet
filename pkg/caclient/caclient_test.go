@@ -328,3 +328,78 @@ func TestGetCert_WithDiscoveryURL(t *testing.T) {
 	assert.Equal(t, "https://discovery.example.com/d/abc123", resp.DiscoveryURL)
 	assert.Equal(t, sshcert.RawCertificate("ssh-ed25519-cert-v01@openssh.com AAAA..."), resp.Certificate)
 }
+
+func TestGetDiscovery_HTTPCaching(t *testing.T) {
+	discoveryCallCount := 0
+
+	// Discovery server with Cache-Control header
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		discoveryCallCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "max-age=300") // Cache for 5 minutes
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
+	}))
+	defer discoveryServer.Close()
+
+	// CA server returns Link header pointing to discovery
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	// First request should hit the discovery server
+	discovery1, err := client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	require.NotNil(t, discovery1)
+	assert.Equal(t, 1, discoveryCallCount, "first request should hit discovery server")
+
+	// Second request should use cached response (same client)
+	discovery2, err := client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	require.NotNil(t, discovery2)
+	assert.Equal(t, 1, discoveryCallCount, "second request should use HTTP cache")
+
+	// Results should be the same
+	assert.Equal(t, discovery1.MatchPatterns, discovery2.MatchPatterns)
+}
+
+func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
+	discoveryCallCount := 0
+
+	// Discovery server WITHOUT Cache-Control header
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		discoveryCallCount++
+		w.Header().Set("Content-Type", "application/json")
+		// No Cache-Control header - should not be cached
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
+	}))
+	defer discoveryServer.Close()
+
+	// CA server returns Link header pointing to discovery
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	// First request
+	_, err = client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	assert.Equal(t, 1, discoveryCallCount)
+
+	// Second request - without Cache-Control, should hit server again
+	_, err = client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	assert.Equal(t, 2, discoveryCallCount, "without Cache-Control, each request should hit the server")
+}

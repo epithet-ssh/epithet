@@ -2,6 +2,8 @@ package broker
 
 import (
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/rpc"
 	"testing"
 	"time"
@@ -254,6 +256,82 @@ func testLogger(t *testing.T) *slog.Logger {
 		TimeFormat: "15:04:05",
 	}))
 	return logger
+}
+
+func Test_ShouldHandle_UsesDiscoveryPatterns(t *testing.T) {
+	// Start a discovery server that returns specific patterns
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "max-age=300")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
+	}))
+	defer discoveryServer.Close()
+
+	// CA server returns Link header pointing to discovery
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	authCommand := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:thello,"
+`)
+	socketPath := t.TempDir() + "/broker.sock"
+	agentSocketDir := t.TempDir() + "/sockets"
+
+	// Create broker with broad static patterns but CA returns more restrictive discovery
+	staticPatterns := []string{"*"}
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir, staticPatterns)
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	// Without a token, static patterns are used
+	require.True(t, b.shouldHandle("anything.com"), "without token, static patterns should match anything")
+
+	// Authenticate to get a token
+	_, err = b.auth.Run(nil)
+	require.NoError(t, err)
+
+	// Now with a token, discovery patterns should be fetched and used
+	require.True(t, b.shouldHandle("server.example.com"), "discovery pattern should match *.example.com")
+	require.False(t, b.shouldHandle("other.com"), "discovery pattern should not match other.com")
+}
+
+func Test_ShouldHandle_FallsBackToStaticPatterns(t *testing.T) {
+	// CA server with no discovery URL
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No Link header - no discovery available
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	authCommand := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "6:thello,"
+`)
+	socketPath := t.TempDir() + "/broker.sock"
+	agentSocketDir := t.TempDir() + "/sockets"
+
+	// Create broker with specific static patterns
+	staticPatterns := []string{"*.static.example.com"}
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir, staticPatterns)
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	// Without token, static patterns are used
+	require.True(t, b.shouldHandle("server.static.example.com"))
+	require.False(t, b.shouldHandle("server.dynamic.example.com"))
+
+	// Authenticate to get a token
+	_, err = b.auth.Run(nil)
+	require.NoError(t, err)
+
+	// With token but no discovery from CA, should still use static patterns
+	require.True(t, b.shouldHandle("server.static.example.com"), "no discovery should fall back to static")
+	require.False(t, b.shouldHandle("server.dynamic.example.com"))
 }
 
 func TestCleanupExpiredAgents(t *testing.T) {

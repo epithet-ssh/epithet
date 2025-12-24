@@ -65,7 +65,7 @@ type Broker struct {
 
 	caClient       *caclient.Client // Immutable after New()
 	agentSocketDir string           // Immutable after New()
-	matchPatterns  []string         // Immutable after New()
+	matchPatterns  []string         // Immutable after New() - static patterns from config
 
 	// For graceful shutdown: track in-flight RPC connections
 	activeRPC       sync.WaitGroup
@@ -181,11 +181,12 @@ type CertInfo struct {
 
 // InspectResponse contains the current broker state
 type InspectResponse struct {
-	SocketPath     string      `json:"socketPath"`
-	AgentSocketDir string      `json:"agentSocketDir"`
-	MatchPatterns  []string    `json:"matchPatterns"`
-	Agents         []AgentInfo `json:"agents"`
-	Certificates   []CertInfo  `json:"certificates"`
+	SocketPath        string      `json:"socketPath"`
+	AgentSocketDir    string      `json:"agentSocketDir"`
+	MatchPatterns     []string    `json:"matchPatterns"`
+	DiscoveryPatterns []string    `json:"discoveryPatterns,omitempty"` // Fetched live from CA (HTTP cached)
+	Agents            []AgentInfo `json:"agents"`
+	Certificates      []CertInfo  `json:"certificates"`
 }
 
 // Match is invoked via rpc from `epithet match` invocations
@@ -454,10 +455,26 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	return nil
 }
 
-// shouldHandle checks if the given hostname matches any of the configured match patterns.
+// shouldHandle checks if the given hostname matches configured patterns.
+// If we have an auth token, fetches discovery patterns from CA (HTTP cached).
+// Otherwise falls back to static patterns from config.
 // Returns true if epithet should handle this connection, false otherwise.
 func (b *Broker) shouldHandle(hostname string) bool {
-	for _, pattern := range b.matchPatterns {
+	patterns := b.matchPatterns // Default to static patterns
+
+	// If we have a token, try to get discovery patterns from CA
+	// The HTTP cache handles avoiding unnecessary network requests
+	if token := b.auth.Token(); token != "" {
+		discovery, err := b.caClient.GetDiscovery(context.Background(), token)
+		if err != nil {
+			b.log.Debug("failed to fetch discovery, using static patterns", "error", err)
+		} else if discovery != nil && len(discovery.MatchPatterns) > 0 {
+			patterns = discovery.MatchPatterns
+			b.log.Debug("using discovery patterns", "patterns", patterns)
+		}
+	}
+
+	for _, pattern := range patterns {
 		matched, err := filepath.Match(pattern, hostname)
 		if err != nil {
 			b.log.Warn("invalid match pattern", "pattern", pattern, "error", err)
@@ -634,6 +651,14 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 	output.SocketPath = b.brokerSocketPath
 	output.AgentSocketDir = b.agentSocketDir
 	output.MatchPatterns = b.matchPatterns
+
+	// Fetch discovery patterns live if we have a token (HTTP cached)
+	if token := b.auth.Token(); token != "" {
+		discovery, err := b.caClient.GetDiscovery(context.Background(), token)
+		if err == nil && discovery != nil {
+			output.DiscoveryPatterns = discovery.MatchPatterns
+		}
+	}
 
 	// Get agent info
 	output.Agents = make([]AgentInfo, 0, len(b.agents))

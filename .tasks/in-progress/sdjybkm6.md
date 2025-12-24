@@ -1,8 +1,9 @@
 ---
+yatl_version: 0
 title: 'Policy server: Discovery endpoint'
 id: sdjybkm6
 created: 2025-12-14T05:19:36.589626Z
-updated: 2025-12-19T04:24:39.012678786Z
+updated: 2025-12-24T23:26:23.557799Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -87,3 +88,17 @@ From planning task mf:
 - Cache-Control headers go here (immutable for content-addressable URLs)
 - Must validate Bearer token before serving
 - Returns matchPatterns/policy rules JSON
+
+---
+# Log: 2025-12-24T23:25:54Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2025-12-24T23:26:23Z Brian McCallister
+
+Starting implementation. Discovery endpoint needs:
+- GET /d/<hash> route
+- Bearer token validation (via evaluator)
+- Return matchPatterns JSON from Hosts keys
+- Cache-Control: immutable header

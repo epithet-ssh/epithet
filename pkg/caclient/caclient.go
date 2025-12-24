@@ -17,6 +17,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/gregjones/httpcache"
 	gobreaker "github.com/sony/gobreaker/v2"
 )
 
@@ -103,12 +104,13 @@ const DefaultCooldown = 10 * time.Minute
 
 // Client is a CA Client with support for multiple CA endpoints and failover.
 type Client struct {
-	httpClient *http.Client
-	endpoints  []CAEndpoint
-	pool       *breakerpool.Pool[*CertResponse, string]
-	timeout    time.Duration
-	cooldown   time.Duration
-	logger     *slog.Logger
+	httpClient      *http.Client
+	discoveryClient *http.Client // Uses HTTP caching for discovery responses
+	endpoints       []CAEndpoint
+	pool            *breakerpool.Pool[*CertResponse, string]
+	timeout         time.Duration
+	cooldown        time.Duration
+	logger          *slog.Logger
 }
 
 // New creates a new CA Client with the given endpoints.
@@ -118,12 +120,20 @@ func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
 		return nil, fmt.Errorf("at least one CA endpoint is required")
 	}
 
+	// Create a cached transport for discovery requests
+	// This uses in-memory caching with RFC 7234 compliance
+	cachedTransport := httpcache.NewMemoryCacheTransport()
+
 	client := &Client{
 		endpoints: endpoints,
 		timeout:   DefaultTimeout,
 		cooldown:  DefaultCooldown,
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
+		},
+		discoveryClient: &http.Client{
+			Transport: cachedTransport,
+			Timeout:   DefaultTimeout,
 		},
 	}
 
@@ -292,6 +302,7 @@ func (c *Client) GetDiscovery(ctx context.Context, token string) (*Discovery, er
 }
 
 // fetchDiscovery fetches discovery data from the given URL.
+// Uses the cached HTTP client for RFC 7234 compliant caching.
 func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*Discovery, error) {
 	rq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -299,7 +310,8 @@ func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (
 	}
 	rq.Header.Set("Authorization", "Bearer "+token)
 
-	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	// Use the cached client for discovery requests
+	res, err := c.discoveryClient.Do(rq.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
