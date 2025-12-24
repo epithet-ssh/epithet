@@ -131,6 +131,16 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 	return claims, nil
 }
 
+// ValidateAndExtractIdentity implements policyserver.TokenValidator.
+// It validates the token and returns the identity.
+func (v *Validator) ValidateAndExtractIdentity(token string) (string, error) {
+	claims, err := v.Validate(context.Background(), token)
+	if err != nil {
+		return "", err
+	}
+	return claims.Identity, nil
+}
+
 // ValidateAccessToken validates an OAuth2 access token.
 // This is a convenience wrapper that handles both ID tokens and access tokens.
 // For access tokens, it uses the UserInfo endpoint to get user information.

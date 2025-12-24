@@ -14,15 +14,14 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
-// Evaluator implements policyserver.PolicyEvaluator using OIDC token validation
-// and tag-based authorization
+// Evaluator implements policyserver.PolicyEvaluator using tag-based authorization
 type Evaluator struct {
 	config    *policyserver.PolicyRulesConfig
 	validator *oidc.Validator
 }
 
-// New creates a new policy evaluator
-func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlsconfig.Config) (*Evaluator, error) {
+// New creates a new policy evaluator with a new OIDC validator
+func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlsconfig.Config) (*Evaluator, *oidc.Validator, error) {
 	// Create OIDC validator
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
 		Issuer:    cfg.OIDC.Issuer,
@@ -30,26 +29,18 @@ func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlscon
 		TLSConfig: tlsCfg,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OIDC validator: %w", err)
+		return nil, nil, fmt.Errorf("failed to create OIDC validator: %w", err)
 	}
 
 	return &Evaluator{
 		config:    cfg,
 		validator: validator,
-	}, nil
+	}, validator, nil
 }
 
 // Evaluate implements policyserver.PolicyEvaluator
-func (e *Evaluator) Evaluate(token string, conn policy.Connection) (*policyserver.Response, error) {
-	// Validate OIDC token
-	claims, err := e.validator.Validate(context.Background(), token)
-	if err != nil {
-		return nil, policyserver.Unauthorized(fmt.Sprintf("Invalid token: %v", err))
-	}
-
-	// Extract user identity
-	identity := claims.Identity
-
+// The identity has already been extracted from a validated token by the handler.
+func (e *Evaluator) Evaluate(identity string, conn policy.Connection) (*policyserver.Response, error) {
 	// Get user's tags
 	userTags, exists := e.config.Users[identity]
 	if !exists {

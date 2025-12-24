@@ -14,13 +14,29 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 )
 
+// mockValidator is a simple test token validator
+type mockValidator struct {
+	identity string
+	err      error
+}
+
+func (m *mockValidator) ValidateAndExtractIdentity(token string) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
+	if m.identity != "" {
+		return m.identity, nil
+	}
+	return "test@example.com", nil
+}
+
 // mockEvaluator is a simple test evaluator
 type mockEvaluator struct {
 	response *policyserver.Response
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(token string, conn policy.Connection) (*policyserver.Response, error) {
+func (m *mockEvaluator) Evaluate(identity string, conn policy.Connection) (*policyserver.Response, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -53,6 +69,7 @@ func TestHandler_Success(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -92,6 +109,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -121,6 +139,7 @@ func TestHandler_Forbidden(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -150,6 +169,7 @@ func TestHandler_NotHandled(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -176,6 +196,7 @@ func TestHandler_NotHandled(t *testing.T) {
 func TestHandler_MethodNotAllowed(t *testing.T) {
 	evaluator := &mockEvaluator{}
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -192,6 +213,7 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 func TestHandler_InvalidJSON(t *testing.T) {
 	evaluator := &mockEvaluator{}
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -208,6 +230,7 @@ func TestHandler_InvalidJSON(t *testing.T) {
 func TestHandler_InvalidTokenEncoding(t *testing.T) {
 	evaluator := &mockEvaluator{}
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 
@@ -252,6 +275,7 @@ func TestHandler_DiscoveryLinkHeader_Success(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator:     &mockValidator{},
 		Evaluator:     evaluator,
 		DiscoveryHash: "abc123def456",
 	})
@@ -299,6 +323,7 @@ func TestHandler_DiscoveryLinkHeader_ErrorResponses(t *testing.T) {
 			evaluator := &mockEvaluator{err: tt.err}
 
 			handler := policyserver.NewHandler(policyserver.Config{
+				Validator:     &mockValidator{},
 				Evaluator:     evaluator,
 				DiscoveryHash: "abc123def456",
 			})
@@ -344,6 +369,7 @@ func TestHandler_DiscoveryLinkHeader_NotSetWhenEmpty(t *testing.T) {
 
 	// No DiscoveryHash set
 	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
 		Evaluator: evaluator,
 	})
 

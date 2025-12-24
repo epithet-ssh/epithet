@@ -3,7 +3,7 @@ yatl_version: 0
 title: 'Policy server: Discovery endpoint'
 id: sdjybkm6
 created: 2025-12-14T05:19:36.589626Z
-updated: 2025-12-24T23:26:23.557799Z
+updated: 2025-12-24T23:43:50.383362Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -102,3 +102,8 @@ Starting implementation. Discovery endpoint needs:
 - Bearer token validation (via evaluator)
 - Return matchPatterns JSON from Hosts keys
 - Cache-Control: immutable header
+
+---
+# Log: 2025-12-24T23:43:50Z Brian McCallister
+
+Closed: Implemented discovery endpoint with GET /d/<hash> route, Bearer token validation via TokenValidator interface, and tests. Also refactored to separate authentication (token validation) from authorization (policy evaluation).

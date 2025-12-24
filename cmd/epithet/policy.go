@@ -73,9 +73,9 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 		"oidc_issuer", cfg.OIDC.Issuer,
 		"oidc_audience", cfg.OIDC.Audience)
 
-	// Create policy evaluator
+	// Create policy evaluator and token validator
 	ctx := context.Background()
-	eval, err := evaluator.New(ctx, cfg, tlsCfg)
+	eval, validator, err := evaluator.New(ctx, cfg, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("failed to create policy evaluator: %w", err)
 	}
@@ -83,8 +83,21 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	// Create policy server handler
 	handler := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey:   sshcert.RawPublicKey(caPubkey),
+		Validator:     validator,
 		Evaluator:     eval,
 		DiscoveryHash: cfg.DiscoveryHash(),
+	})
+
+	// Create discovery handler
+	// Match patterns are the keys from the Hosts map
+	matchPatterns := make([]string, 0, len(cfg.Hosts))
+	for pattern := range cfg.Hosts {
+		matchPatterns = append(matchPatterns, pattern)
+	}
+	discoveryHandler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
+		Validator:     validator,
+		MatchPatterns: matchPatterns,
+		Hash:          cfg.DiscoveryHash(),
 	})
 
 	// Set up router with middleware
@@ -96,11 +109,13 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Post("/", handler)
+	r.Get("/d/*", discoveryHandler) // Discovery endpoint
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
 		"ca_pubkey_length", len(caPubkey),
-		"discovery_hash", cfg.DiscoveryHash())
+		"discovery_hash", cfg.DiscoveryHash(),
+		"match_patterns", matchPatterns)
 
 	return http.ListenAndServe(c.Listen, r)
 }

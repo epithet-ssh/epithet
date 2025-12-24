@@ -25,23 +25,31 @@ type Response struct {
 	Policy     policy.Policy `json:"policy"`
 }
 
-// PolicyEvaluator makes authorization decisions based on token and connection details.
+// PolicyEvaluator makes authorization decisions based on identity and connection details.
+// The token has already been validated and identity extracted by the handler.
 // Implementations must:
-// - Validate the authentication token (e.g., verify OIDC JWT signature)
-// - Make authorization decision (allow/deny)
+// - Make authorization decision (allow/deny) based on identity
 // - Return certificate parameters (principals, expiration, extensions) and policy (hostPattern)
 // - Return appropriate errors for different failure modes
 type PolicyEvaluator interface {
-	// Evaluate makes an authorization decision for the given token and connection.
+	// Evaluate makes an authorization decision for the given identity and connection.
+	// The identity has already been extracted from a validated token.
 	// Returns:
 	// - *Response: Certificate parameters and policy if authorized
-	// - error: If authorization denied or validation failed
+	// - error: If authorization denied
 	//
 	// Error handling:
-	// - Return ErrUnauthorized (401) if token is invalid/expired
-	// - Return ErrForbidden (403) if token valid but access denied by policy
+	// - Return ErrForbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(token string, conn policy.Connection) (*Response, error)
+	Evaluate(identity string, conn policy.Connection) (*Response, error)
+}
+
+// TokenValidator validates authentication tokens and extracts identity.
+// Used by handlers to authenticate requests before policy evaluation.
+type TokenValidator interface {
+	// ValidateAndExtractIdentity validates the token and returns the identity.
+	// Returns an error if the token is invalid or expired.
+	ValidateAndExtractIdentity(token string) (identity string, err error)
 }
 
 // Standard errors for policy evaluation
@@ -93,7 +101,10 @@ type Config struct {
 	// If empty, signature verification is skipped (not recommended for production).
 	CAPublicKey sshcert.RawPublicKey
 
-	// Evaluator makes authorization decisions
+	// Validator validates tokens and extracts identity (authentication)
+	Validator TokenValidator
+
+	// Evaluator makes authorization decisions based on identity
 	Evaluator PolicyEvaluator
 
 	// MaxRequestSize limits the request body size (default: 8192 bytes)
@@ -180,8 +191,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Evaluate policy
-	resp, err := h.config.Evaluator.Evaluate(string(decodedToken), req.Connection)
+	// Validate token and extract identity (authentication)
+	identity, err := h.config.Validator.ValidateAndExtractIdentity(string(decodedToken))
+	if err != nil {
+		h.writeError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid token: %v", err))
+		return
+	}
+
+	// Evaluate policy based on identity (authorization)
+	resp, err := h.config.Evaluator.Evaluate(identity, req.Connection)
 	if err != nil {
 		// Check if it's a PolicyError with specific status code
 		if policyErr, ok := err.(*PolicyError); ok {
