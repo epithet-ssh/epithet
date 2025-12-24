@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Note**: This project uses bt (Brian's Tasks) for task tracking. Use `bt` commands instead of markdown TODOs. Tasks are stored in `.tasks/` directory.
+**Note**: This project uses yatl (Yet Another Task List) for task tracking. Use `yatl` commands instead of markdown TODOs. Tasks are stored in `.tasks/` directory.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -28,44 +28,44 @@ You must NOT:
 
 The user prefers to review all changes and craft commit messages themselves.
 
-## Task Management with bt
+## Task Management with yatl
 
-**CRITICAL**: This project uses bt (Brian's Tasks) for ALL task tracking. Do NOT use TodoWrite under any circumstances.
+**CRITICAL**: This project uses yatl (Yet Another Task List) for ALL task tracking. Do NOT use TodoWrite under any circumstances.
 
 When working on tasks:
-1. **Always use bt** - Create tasks with `bt new`, start with `bt start`, close with `bt close`
-2. **Use bt proactively** - For any non-trivial work (multiple steps, complex tasks), create bt tasks immediately
-3. **Track progress** - Use `bt list` to show current work, `bt ready` to find unblocked tasks, `bt next` for suggested task
-4. **Log progress** - Use `bt log <id> "message"` to record progress throughout work
-5. **Dependencies matter** - Use `bt block` to track task dependencies when needed
+1. **Always use yatl** - Create tasks with `yatl new`, start with `yatl start`, close with `yatl close`
+2. **Use yatl proactively** - For any non-trivial work (multiple steps, complex tasks), create yatl tasks immediately
+3. **Track progress** - Use `yatl list` to show current work, `yatl ready` to find unblocked tasks, `yatl next` for suggested task
+4. **Log progress** - Use `yatl log <id> "message"` to record progress throughout work
+5. **Dependencies matter** - Use `yatl block` to track task dependencies when needed
 6. **Never use TodoWrite** - The TodoWrite tool is disabled for this project
-7. **ALWAYS close tasks when done** - When you finish implementing a task, immediately run `bt close <id> --reason "..."`. Check git commits if unsure whether a task was already completed.
+7. **ALWAYS close tasks when done** - When you finish implementing a task, immediately run `yatl close <id> --reason "..."`. Check git commits if unsure whether a task was already completed.
 
 Example workflow:
 ```bash
 # Start work on a feature
-bt new "Implement auth command protocol" --priority high --tags feature
+yatl new "Implement auth command protocol" --priority high --tags feature
 
 # Track subtasks
-bt new "Parse netstring input from stdin" --tags task
-bt new "Invoke auth command and capture output" --tags task
-bt block <task-2-id> <task-1-id>  # task-2 is blocked by task-1
+yatl new "Parse netstring input from stdin" --tags task
+yatl new "Invoke auth command and capture output" --tags task
+yatl block <task-2-id> <task-1-id>  # task-2 is blocked by task-1
 
 # Start working
-bt start <task-1-id>
+yatl start <task-1-id>
 
 # Log progress as you work
-bt log <task-1-id> "Found root cause, implementing fix"
+yatl log <task-1-id> "Found root cause, implementing fix"
 
 # Close completed work
-bt close <task-1-id> --reason "Completed netstring parser"
+yatl close <task-1-id> --reason "Completed netstring parser"
 ```
 
 ## High-Level Architecture
 
 Epithet is an SSH certificate management tool that creates on-demand SSH agents for outbound connections. The core concept is to replace traditional SSH key-based authentication with certificate-based authentication using per-connection agents.
 
-**Implementation Status**: The v2 architecture has all **mechanisms** implemented (protocols, communication paths, token flow), but has **critical gaps in policy logic** that prevent production use. Specifically: certificate matching only considers hostname (not user/identity), and there's no real policy server (only a trivial test stub). See "Current Development Status" section below for details.
+**Implementation Status**: The v2 architecture is **complete and production-ready**. All protocols, communication paths, and policy logic are fully implemented. See "Current Development Status" section below for details.
 
 ### Terminology
 
@@ -134,9 +134,9 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
 
 The system consists of four main components (all fully implemented):
 
-1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet-ca`): The certificate authority that signs SSH certificates. It validates tokens against a policy server using cryptographic verification (SSH signature via Rekor/Sigstore), then signs public keys to create certificates. Returns certificates with policy metadata (hostPattern) for intelligent reuse.
+1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet-ca`): The certificate authority that signs SSH certificates. Accepts tokens via `Authorization: Bearer` header. Uses shape-based routing: empty body for hello requests (token validation only), or full body with publicKey+connection for certificate requests. Validates tokens against a policy server using cryptographic verification (SSH signature via Rekor/Sigstore over the request body), then signs public keys to create certificates. Returns certificates with policy metadata (hostPattern) for intelligent reuse.
 
-2. **CA Client** (`pkg/caclient`): HTTP client library that requests certificates from the CA server by submitting tokens, public keys, and connection details. Provides domain-specific error types for different failure modes (InvalidTokenError, PolicyDeniedError, ConnectionNotHandledError, CAUnavailableError).
+2. **CA Client** (`pkg/caclient`): HTTP client library that requests certificates from the CA server. Sends tokens in the `Authorization: Bearer` header. Provides `GetCert()` for certificate requests and `Hello()` for token validation without requesting a certificate. Includes domain-specific error types for different failure modes (InvalidTokenError, PolicyDeniedError, ConnectionNotHandledError, CAUnavailableError). Supports multi-CA failover with circuit breakers.
 
 3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and authentication on endpoints. Orchestrates auth commands (stdin/stdout/fd3 protocol), CA requests with retry logic, and per-connection agent instances. Uses net/rpc over Unix domain socket for communication with `epithet match`. Implements policy-based certificate reuse and automatic expiry cleanup.
 
@@ -330,18 +330,80 @@ func main() {
 - **`agent.Credential`**: Private key + certificate pair used by the agent
 - **`caclient.InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`**: Domain-specific error types for CA failures
 
-### Policy Server Protocol
+### Broker → CA Protocol
+
+**Protocol Status**: ✅ Fully implemented
+
+The broker requests certificates from the CA server over HTTP. Authentication tokens are sent in the `Authorization` header, not the request body.
+
+**Request Format** (from broker to CA):
+```http
+POST /path/to/ca HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer <authentication-token>
+
+{
+  "publicKey": "ssh-ed25519 AAAA... user@host",
+  "connection": {
+    "localHost": "laptop.local",
+    "remoteHost": "server.example.com",
+    "remoteUser": "alice",
+    "port": 22,
+    "proxyJump": "",
+    "hash": "abc123..."
+  }
+}
+```
+
+**Response Format** (from CA to broker):
+```json
+{
+  "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA...",
+  "policy": {
+    "hostPattern": "*.example.com"
+  }
+}
+```
+
+**Shape-Based Request Routing**:
+The CA server routes requests based on the presence/absence of body fields:
+- **Both fields present** (`publicKey` + `connection`): Certificate request (existing flow)
+- **Both fields absent** (empty body `{}`): Hello request - validates token only, returns 200 on success
+- **One field present**: Invalid request, returns 400 Bad Request
+
+**Hello Request**:
+The `Hello()` method in `pkg/caclient` validates a token without requesting a certificate:
+```http
+POST /path/to/ca HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer <authentication-token>
+
+{}
+```
+Returns 200 on success, or appropriate error (401, 403, 422, 5xx).
+
+**Error Handling**:
+- HTTP 401: Token is invalid/expired (broker should re-authenticate)
+- HTTP 403: Token valid but policy denied access
+- HTTP 422: Connection not handled by this CA/policy
+- HTTP 5xx: CA unavailable (triggers circuit breaker failover to backup CAs)
+- HTTP 4xx: Invalid request format
+
+### CA → Policy Server Protocol
 
 **Protocol Status**: ✅ Fully implemented
 **Server Implementation**: ✅ Production-ready policy server (`epithet policy`) with OIDC token validation
 
-The CA validates authentication tokens by calling an external policy server over HTTP. The policy server is expected to verify the token and return certificate parameters.
+The CA validates authentication tokens by calling an external policy server over HTTP. The CA's signature is sent in the `Authorization` header, computed over the entire request body.
 
 **Request Format** (from CA to policy server):
-```json
+```http
+POST /policy HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer <base64-ssh-signature-over-body>
+
 {
-  "token": "authentication-token-from-user",
-  "signature": "base64-ssh-signature-from-CA-private-key",
+  "token": "<base64url-encoded-authentication-token>",
   "connection": {
     "localHost": "laptop.local",
     "remoteHost": "server.example.com",
@@ -372,9 +434,14 @@ The CA validates authentication tokens by calling an external policy server over
 ```
 
 **Cryptographic Verification**:
-- CA signs the authentication token using its SSH private key (Rekor/Sigstore SSH signing)
+- CA signs the **entire request body** (JSON bytes) using its SSH private key (Rekor/Sigstore SSH signing)
+- Signature is sent in the `Authorization: Bearer` header
 - Policy server verifies the signature using the CA's public key
-- This prevents token replay attacks and ensures policy requests come from the legitimate CA
+- This prevents request tampering and ensures policy requests come from the legitimate CA
+
+**Token Encoding**:
+- Tokens are base64url-encoded in the request body (preserves arbitrary bytes from auth plugins)
+- Policy server decodes the token before validation
 
 **Error Handling**:
 - HTTP 401: Token is invalid/expired (CA retries with fresh token from auth plugin)
