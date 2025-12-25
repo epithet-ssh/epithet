@@ -284,7 +284,8 @@ printf '%s' "6:thello,"
 
 	// Create broker with broad static patterns but CA returns more restrictive discovery
 	staticPatterns := []string{"*"}
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir, staticPatterns)
+	client := testCAClient(t, caServer.URL)
+	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir, staticPatterns)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -295,7 +296,10 @@ printf '%s' "6:thello,"
 	_, err = b.auth.Run(nil)
 	require.NoError(t, err)
 
-	// Now with a token, discovery patterns should be fetched and used
+	// Set the discovery URL on the CA client (simulates what happens after a cert request)
+	client.SetDiscoveryURL(discoveryServer.URL)
+
+	// Now with a token and cached discovery URL, discovery patterns should be used
 	require.True(t, b.shouldHandle("server.example.com"), "discovery pattern should match *.example.com")
 	require.False(t, b.shouldHandle("other.com"), "discovery pattern should not match other.com")
 }

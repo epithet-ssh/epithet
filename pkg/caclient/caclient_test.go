@@ -208,7 +208,7 @@ func TestGetDiscovery_NoDiscoveryURL(t *testing.T) {
 }
 
 func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
-	// Start discovery server first so we have its URL
+	// Discovery server
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method)
 		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
@@ -218,9 +218,8 @@ func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
 	}))
 	defer discoveryServer.Close()
 
-	// Start CA server that returns Link header pointing to discovery server
+	// CA server (not used directly, but needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer caServer.Close()
@@ -229,6 +228,9 @@ func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
+	// Set the discovery URL (normally learned from cert response Link header)
+	client.SetDiscoveryURL(discoveryServer.URL)
+
 	discovery, err := client.GetDiscovery(context.Background(), "test-token")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
@@ -236,15 +238,25 @@ func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
 }
 
 func TestGetDiscovery_Unauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Discovery server returns 401
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte("invalid token"))
 	}))
-	defer server.Close()
+	defer discoveryServer.Close()
 
-	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
+	// CA server (needed for client creation)
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
+
+	// Set discovery URL pointing to server that returns 401
+	client.SetDiscoveryURL(discoveryServer.URL)
 
 	_, err = client.GetDiscovery(context.Background(), "bad-token")
 	require.Error(t, err)
@@ -254,15 +266,25 @@ func TestGetDiscovery_Unauthorized(t *testing.T) {
 }
 
 func TestGetDiscovery_Forbidden(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Discovery server returns 403
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("access denied"))
 	}))
-	defer server.Close()
+	defer discoveryServer.Close()
 
-	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
+	// CA server (needed for client creation)
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
+
+	// Set discovery URL pointing to server that returns 403
+	client.SetDiscoveryURL(discoveryServer.URL)
 
 	_, err = client.GetDiscovery(context.Background(), "test-token")
 	require.Error(t, err)
@@ -271,33 +293,21 @@ func TestGetDiscovery_Forbidden(t *testing.T) {
 	assert.True(t, errors.As(err, &policyDenied), "expected PolicyDeniedError, got %T", err)
 }
 
-func TestGetDiscovery_Failover(t *testing.T) {
-	callCount := 0
-
-	// First server returns 500, second returns 200
-	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("server error"))
-	}))
-	defer server1.Close()
-
-	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+func TestGetDiscovery_NoCachedURL(t *testing.T) {
+	// CA server (needed for client creation)
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server2.Close()
+	defer caServer.Close()
 
-	endpoints := []caclient.CAEndpoint{
-		{URL: server1.URL, Priority: caclient.DefaultPriority},
-		{URL: server2.URL, Priority: caclient.DefaultPriority - 1},
-	}
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	_, err = client.GetDiscovery(context.Background(), "test-token")
+	// No discovery URL set - should return nil without error
+	discovery, err := client.GetDiscovery(context.Background(), "test-token")
 	assert.NoError(t, err)
-	assert.Equal(t, 2, callCount, "should have tried both servers")
+	assert.Nil(t, discovery, "expected nil when no discovery URL cached")
 }
 
 func TestGetCert_WithDiscoveryURL(t *testing.T) {
@@ -342,9 +352,8 @@ func TestGetDiscovery_HTTPCaching(t *testing.T) {
 	}))
 	defer discoveryServer.Close()
 
-	// CA server returns Link header pointing to discovery
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer caServer.Close()
@@ -352,6 +361,9 @@ func TestGetDiscovery_HTTPCaching(t *testing.T) {
 	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
+
+	// Set the discovery URL (normally learned from cert response)
+	client.SetDiscoveryURL(discoveryServer.URL)
 
 	// First request should hit the discovery server
 	discovery1, err := client.GetDiscovery(context.Background(), "test-token")
@@ -382,9 +394,8 @@ func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
 	}))
 	defer discoveryServer.Close()
 
-	// CA server returns Link header pointing to discovery
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer caServer.Close()
@@ -392,6 +403,9 @@ func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
 	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
+
+	// Set the discovery URL (normally learned from cert response)
+	client.SetDiscoveryURL(discoveryServer.URL)
 
 	// First request
 	_, err = client.GetDiscovery(context.Background(), "test-token")
@@ -402,4 +416,34 @@ func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
 	_, err = client.GetDiscovery(context.Background(), "test-token")
 	require.NoError(t, err)
 	assert.Equal(t, 2, discoveryCallCount, "without Cache-Control, each request should hit the server")
+}
+
+func TestGetCert_CachesDiscoveryURL(t *testing.T) {
+	// CA server returns Link header pointing to discovery
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<https://discovery.example.com/abc123>; rel="discovery"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"certificate": "ssh-ed25519-cert-v01@openssh.com AAAA...", "policy": {"hostUsers": {"*.example.com": ["alice"]}}}`))
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	// Before cert request, GetDiscovery returns nil (no cached URL)
+	discovery, err := client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	assert.Nil(t, discovery, "expected nil before cert request")
+
+	// Make a cert request to cache the discovery URL
+	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
+	conn := policy.Connection{RemoteHost: "server.example.com", RemoteUser: "alice", Port: 22}
+	resp, err := client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+		PublicKey:  &pubKey,
+		Connection: &conn,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "https://discovery.example.com/abc123", resp.DiscoveryURL)
 }
