@@ -38,7 +38,7 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Info("policy_url", "url", c.Policy)
 
 	// Create CA
-	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg))
+	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg), ca.WithLogger(logger))
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}

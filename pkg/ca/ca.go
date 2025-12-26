@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -40,6 +41,7 @@ type CA struct {
 	privateKey sshcert.RawPrivateKey
 	policyURL  string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // get the URL of the Policy Server
@@ -101,6 +103,14 @@ func WithTLSConfig(cfg tlsconfig.Config) Option {
 			return fmt.Errorf("failed to create HTTP client: %w", err)
 		}
 		c.httpClient = httpClient
+		return nil
+	})
+}
+
+// WithLogger configures the CA to use the specified logger
+func WithLogger(logger *slog.Logger) Option {
+	return optionFunc(func(c *CA) error {
+		c.logger = logger
 		return nil
 	})
 }
@@ -197,6 +207,10 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		return nil, fmt.Errorf("error signing request body: %w", err)
 	}
 
+	if c.logger != nil {
+		c.logger.Debug("http request", "method", "POST", "url", c.policyURL, "body_size", len(body))
+	}
+
 	req, err := http.NewRequest("POST", c.policyURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -205,11 +219,20 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	req.Header.Add("Content-type", "application/json")
 	req.Header.Add("Authorization", "Bearer "+sig)
 
+	start := time.Now()
 	res, err := c.httpClient.Do(req.WithContext(ctx))
+	duration := time.Since(start)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Debug("http request failed", "method", "POST", "url", c.policyURL, "duration_ms", duration.Milliseconds(), "error", err)
+		}
 		return nil, fmt.Errorf("error executing request: %w", err)
 	}
 	defer res.Body.Close()
+
+	if c.logger != nil {
+		c.logger.Debug("http response", "method", "POST", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
+	}
 
 	// Extract and resolve discovery URL from Link header
 	discoveryURL := extractDiscoveryURL(res.Header.Get("Link"), c.policyURL)

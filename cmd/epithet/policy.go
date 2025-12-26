@@ -56,7 +56,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	if cfg.CAPublicKey == "" {
 		return fmt.Errorf("ca_pubkey is required (via --ca-pubkey flag or policy.ca_pubkey in config)")
 	}
-	caPubkey, err := resolveCAPubkey(cfg.CAPublicKey, tlsCfg)
+	caPubkey, err := resolveCAPubkey(cfg.CAPublicKey, tlsCfg, logger)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func (c *PolicyServerCLI) applyOverrides(cfg *policyserver.PolicyRulesConfig) {
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key
-func resolveCAPubkey(input string, tlsCfg tlsconfig.Config) (string, error) {
+func resolveCAPubkey(input string, tlsCfg tlsconfig.Config, logger *slog.Logger) (string, error) {
 	// Check if it's a URL
 	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
 		// Validate URL requires TLS (unless --insecure)
@@ -181,11 +181,24 @@ func resolveCAPubkey(input string, tlsCfg tlsconfig.Config) (string, error) {
 			return "", fmt.Errorf("failed to create HTTP client: %w", err)
 		}
 
+		if logger != nil {
+			logger.Debug("http request", "method", "GET", "url", input)
+		}
+
+		start := time.Now()
 		resp, err := httpClient.Get(input)
+		duration := time.Since(start)
 		if err != nil {
+			if logger != nil {
+				logger.Debug("http request failed", "method", "GET", "url", input, "duration_ms", duration.Milliseconds(), "error", err)
+			}
 			return "", fmt.Errorf("failed to fetch CA public key from URL %s: %w", input, err)
 		}
 		defer resp.Body.Close()
+
+		if logger != nil {
+			logger.Debug("http response", "method", "GET", "url", input, "status", resp.StatusCode, "duration_ms", duration.Milliseconds())
+		}
 
 		if resp.StatusCode != 200 {
 			return "", fmt.Errorf("failed to fetch CA public key from URL %s: status %d", input, resp.StatusCode)

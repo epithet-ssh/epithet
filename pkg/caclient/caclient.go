@@ -316,6 +316,10 @@ func (c *Client) Hello(ctx context.Context, token string) error {
 
 // doHello makes a single hello request to a CA.
 func (c *Client) doHello(ctx context.Context, caURL string, token string, body []byte) error {
+	if c.logger != nil {
+		c.logger.Debug("http request", "method", "POST", "url", caURL, "body_size", len(body))
+	}
+
 	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -323,8 +327,13 @@ func (c *Client) doHello(ctx context.Context, caURL string, token string, body [
 	rq.Header.Set("Content-Type", "application/json")
 	rq.Header.Set("Authorization", "Bearer "+token)
 
+	start := time.Now()
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	duration := time.Since(start)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Debug("http request failed", "method", "POST", "url", caURL, "duration_ms", duration.Milliseconds(), "error", err)
+		}
 		return err
 	}
 	defer res.Body.Close()
@@ -335,7 +344,7 @@ func (c *Client) doHello(ctx context.Context, caURL string, token string, body [
 	}
 
 	if c.logger != nil {
-		c.logger.Debug("Hello response", "url", caURL, "status", res.StatusCode)
+		c.logger.Debug("http response", "method", "POST", "url", caURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
 	if res.StatusCode != http.StatusOK {
@@ -377,6 +386,10 @@ func (c *Client) SetDiscoveryURL(url string) {
 // fetchDiscovery fetches discovery data from the given URL.
 // Uses the cached HTTP client for RFC 7234 compliant caching.
 func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*Discovery, error) {
+	if c.logger != nil {
+		c.logger.Debug("http request", "method", "GET", "url", url)
+	}
+
 	rq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -384,8 +397,13 @@ func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (
 	rq.Header.Set("Authorization", "Bearer "+token)
 
 	// Use the cached client for discovery requests
+	start := time.Now()
 	res, err := c.discoveryClient.Do(rq.WithContext(ctx))
+	duration := time.Since(start)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Debug("http request failed", "method", "GET", "url", url, "duration_ms", duration.Milliseconds(), "error", err)
+		}
 		return nil, err
 	}
 	defer res.Body.Close()
@@ -396,7 +414,7 @@ func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (
 	}
 
 	if c.logger != nil {
-		c.logger.Debug("discovery response", "url", url, "status", res.StatusCode)
+		c.logger.Debug("http response", "method", "GET", "url", url, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
 	if res.StatusCode != http.StatusOK {
@@ -424,7 +442,7 @@ func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (
 // doRequest makes a single HTTP request to a CA and returns the response with discovery URL.
 func (c *Client) doRequest(ctx context.Context, caURL string, token string, body []byte) (*CertResponse, error) {
 	if c.logger != nil {
-		c.logger.Debug("CA request", "url", caURL, "body", string(body))
+		c.logger.Debug("http request", "method", "POST", "url", caURL, "body_size", len(body))
 	}
 
 	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
@@ -434,8 +452,13 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 	rq.Header.Set("Content-Type", "application/json")
 	rq.Header.Set("Authorization", "Bearer "+token)
 
+	start := time.Now()
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	duration := time.Since(start)
 	if err != nil {
+		if c.logger != nil {
+			c.logger.Debug("http request failed", "method", "POST", "url", caURL, "duration_ms", duration.Milliseconds(), "error", err)
+		}
 		return nil, err
 	}
 	defer res.Body.Close()
@@ -446,7 +469,7 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 	}
 
 	if c.logger != nil {
-		c.logger.Debug("CA response", "url", caURL, "status", res.StatusCode, "body", string(respBody))
+		c.logger.Debug("http response", "method", "POST", "url", caURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
 	if res.StatusCode != 200 {
