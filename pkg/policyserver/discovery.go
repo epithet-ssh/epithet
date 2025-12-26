@@ -1,6 +1,7 @@
 package policyserver
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -65,8 +66,15 @@ func (h *discoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Decode base64url-encoded token (broker encodes tokens for binary safety)
+	decodedToken, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "Invalid token encoding")
+		return
+	}
+
 	// Validate token (we don't need the identity for discovery, just auth)
-	if _, err := h.config.Validator.ValidateAndExtractIdentity(token); err != nil {
+	if _, err := h.config.Validator.ValidateAndExtractIdentity(string(decodedToken)); err != nil {
 		h.writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}

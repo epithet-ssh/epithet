@@ -1,6 +1,7 @@
 package policyserver_test
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,10 @@ func TestDiscoveryHandler_Success(t *testing.T) {
 		Hash:          "abc123",
 	})
 
+	// Token must be base64url-encoded (as broker encodes tokens)
+	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("test-token"))
 	req := httptest.NewRequest(http.MethodGet, "/d/abc123", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+encodedToken)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -73,8 +76,10 @@ func TestDiscoveryHandler_InvalidToken(t *testing.T) {
 		Hash:          "abc123",
 	})
 
+	// Token must be base64url-encoded (as broker encodes tokens)
+	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("invalid-token"))
 	req := httptest.NewRequest(http.MethodGet, "/d/abc123", nil)
-	req.Header.Set("Authorization", "Bearer invalid-token")
+	req.Header.Set("Authorization", "Bearer "+encodedToken)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -92,8 +97,10 @@ func TestDiscoveryHandler_MethodNotAllowed(t *testing.T) {
 		Hash:          "abc123",
 	})
 
+	// Token must be base64url-encoded (as broker encodes tokens)
+	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("test-token"))
 	req := httptest.NewRequest(http.MethodPost, "/d/abc123", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+encodedToken)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -149,8 +156,10 @@ func TestDiscoveryHandler_EmptyPatterns(t *testing.T) {
 		Hash:          "abc123",
 	})
 
+	// Token must be base64url-encoded (as broker encodes tokens)
+	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("test-token"))
 	req := httptest.NewRequest(http.MethodGet, "/d/abc123", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+encodedToken)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
