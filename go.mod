@@ -22,7 +22,6 @@ require (
 require (
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20251112093024-b12090c4dee0 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cockroachdb/apd/v3 v3.2.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/proto v1.14.2 // indirect
@@ -52,6 +51,7 @@ require (
 )
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/brianm/kongcue v0.1.5
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79
 	github.com/sony/gobreaker/v2 v2.3.0

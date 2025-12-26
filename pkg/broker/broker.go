@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
@@ -470,7 +471,7 @@ func (b *Broker) shouldHandle(hostname string) bool {
 
 	// Check if hostname matches any discovery pattern
 	for _, pattern := range discovery.MatchPatterns {
-		matched, err := filepath.Match(pattern, hostname)
+		matched, err := doublestar.Match(pattern, hostname)
 		if err != nil {
 			b.log.Warn("invalid match pattern", "pattern", pattern, "error", err)
 			continue

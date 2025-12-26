@@ -3,10 +3,10 @@ package evaluator
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
@@ -83,7 +83,7 @@ func (e *Evaluator) Evaluate(identity string, conn policy.Connection) (*policyse
 	var extensions map[string]string
 
 	for pattern, hostPolicy := range e.config.Hosts {
-		matched, err := filepath.Match(pattern, conn.RemoteHost)
+		matched, err := doublestar.Match(pattern, conn.RemoteHost)
 		if err != nil || !matched {
 			continue
 		}
@@ -196,7 +196,7 @@ func (e *Evaluator) computeHostUsers(userTags []string) map[string][]string {
 // isAuthorized checks if the connection is allowed by the hostUsers mapping
 func (e *Evaluator) isAuthorized(hostUsers map[string][]string, conn policy.Connection) bool {
 	for pattern, users := range hostUsers {
-		matched, err := filepath.Match(pattern, conn.RemoteHost)
+		matched, err := doublestar.Match(pattern, conn.RemoteHost)
 		if err != nil || !matched {
 			continue
 		}

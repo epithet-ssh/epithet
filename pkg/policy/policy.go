@@ -1,8 +1,9 @@
 package policy
 
 import (
-	"path/filepath"
 	"slices"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // ConnectionHash is the OpenSSH %C hash value that uniquely identifies a connection.
@@ -32,7 +33,7 @@ type Policy struct {
 // Matches checks if this policy matches the given connection's host AND user
 func (p *Policy) Matches(conn Connection) bool {
 	for pattern, users := range p.HostUsers {
-		matched, err := filepath.Match(pattern, conn.RemoteHost)
+		matched, err := doublestar.Match(pattern, conn.RemoteHost)
 		if err != nil || !matched {
 			continue
 		}
