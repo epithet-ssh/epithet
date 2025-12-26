@@ -303,3 +303,40 @@ func TestCertificateStore_EmptyStore(t *testing.T) {
 	_, ok := store.Lookup(policy.Connection{RemoteHost: "any.hostname.com"})
 	require.False(t, ok)
 }
+
+func TestCertificateStore_BraceExpansion(t *testing.T) {
+	store := NewCertificateStore()
+
+	// Use brace expansion pattern: badb{,.home} matches "badb" or "badb.home"
+	pc := PolicyCert{
+		Policy: policy.Policy{HostUsers: map[string][]string{
+			"badb{,.home}": {"alice"},
+		}},
+		Credential: agent.Credential{
+			PrivateKey:  sshcert.RawPrivateKey("test-key"),
+			Certificate: sshcert.RawCertificate("test-cert"),
+		},
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+	store.Store(pc)
+
+	tests := []struct {
+		hostname string
+		user     string
+		matches  bool
+	}{
+		{"badb", "alice", true},        // Short name matches
+		{"badb.home", "alice", true},   // FQDN matches
+		{"badb.other", "alice", false}, // Different suffix doesn't match
+		{"badbx", "alice", false},      // Extra chars don't match
+		{"xbadb", "alice", false},      // Prefix doesn't match
+		{"badb", "bob", false},         // Wrong user
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.hostname+"_"+tt.user, func(t *testing.T) {
+			_, ok := store.Lookup(policy.Connection{RemoteHost: tt.hostname, RemoteUser: tt.user})
+			require.Equal(t, tt.matches, ok, "hostname: %s, user: %s", tt.hostname, tt.user)
+		})
+	}
+}
