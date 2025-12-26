@@ -38,6 +38,15 @@ func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlscon
 	}, validator, nil
 }
 
+// NewForTesting creates an evaluator without OIDC validation for unit testing.
+// The Evaluate method doesn't use the validator (validation happens in the handler),
+// so this is safe for testing policy logic.
+func NewForTesting(cfg *policyserver.PolicyRulesConfig) *Evaluator {
+	return &Evaluator{
+		config: cfg,
+	}
+}
+
 // Evaluate implements policyserver.PolicyEvaluator
 // The identity has already been extracted from a validated token by the handler.
 func (e *Evaluator) Evaluate(identity string, conn policy.Connection) (*policyserver.Response, error) {
@@ -50,9 +59,19 @@ func (e *Evaluator) Evaluate(identity string, conn policy.Connection) (*policyse
 	// Compute HostUsers mapping: for each host pattern, which users can this identity access?
 	hostUsers := e.computeHostUsers(userTags)
 
-	// Check if the requested (host, user) is authorized
-	if !e.isAuthorized(hostUsers, conn) {
-		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for %s@%s", identity, conn.RemoteUser, conn.RemoteHost))
+	// For Hello requests (empty connection), just verify user has access to something
+	// For regular requests, check authorization for the specific host/user
+	isHelloRequest := conn.RemoteHost == "" && conn.RemoteUser == ""
+	if isHelloRequest {
+		// Hello request: user must have access to at least one host
+		if len(hostUsers) == 0 {
+			return nil, policyserver.Forbidden(fmt.Sprintf("User %s has no authorized hosts", identity))
+		}
+	} else {
+		// Regular request: check if the requested (host, user) is authorized
+		if !e.isAuthorized(hostUsers, conn) {
+			return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for %s@%s", identity, conn.RemoteUser, conn.RemoteHost))
+		}
 	}
 
 	// Compute ALL principals this user is authorized for (for the certificate)

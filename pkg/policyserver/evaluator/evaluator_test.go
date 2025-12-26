@@ -134,6 +134,159 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 	}
 }
 
+// Unit tests using NewForTesting (no OIDC validation required)
+
+// TestHelloRequest_NoDefaults verifies that Hello requests succeed when only
+// host-specific policies exist (no defaults). This was a bug where Hello requests
+// failed because isAuthorized couldn't match empty host against host-specific patterns.
+func TestHelloRequest_NoDefaults(t *testing.T) {
+	cfg := &policyserver.PolicyRulesConfig{
+		Users: map[string][]string{
+			"alice@example.com": {"dba"},
+		},
+		// No Defaults - only host-specific policies
+		Hosts: map[string]*policyserver.HostPolicy{
+			"prod-db-*": {
+				Allow: map[string][]string{
+					"postgres": {"dba"},
+				},
+				Expiration: "2m",
+			},
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	// Hello request has empty connection
+	resp, err := eval.Evaluate("alice@example.com", policy.Connection{})
+	if err != nil {
+		t.Fatalf("Hello request should succeed, got error: %v", err)
+	}
+
+	// Should return hostUsers mapping for discovery
+	if resp.Policy.HostUsers == nil {
+		t.Fatal("expected hostUsers in response")
+	}
+	if _, ok := resp.Policy.HostUsers["prod-db-*"]; !ok {
+		t.Error("expected 'prod-db-*' pattern in hostUsers")
+	}
+}
+
+// TestHelloRequest_WithDefaults verifies Hello requests work with defaults too
+func TestHelloRequest_WithDefaults(t *testing.T) {
+	cfg := &policyserver.PolicyRulesConfig{
+		Users: map[string][]string{
+			"alice@example.com": {"admin"},
+		},
+		Defaults: &policyserver.DefaultPolicy{
+			Allow: map[string][]string{
+				"root": {"admin"},
+			},
+			Expiration: "5m",
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	resp, err := eval.Evaluate("alice@example.com", policy.Connection{})
+	if err != nil {
+		t.Fatalf("Hello request should succeed, got error: %v", err)
+	}
+
+	if resp.Policy.HostUsers == nil {
+		t.Fatal("expected hostUsers in response")
+	}
+	if _, ok := resp.Policy.HostUsers["*"]; !ok {
+		t.Error("expected '*' pattern in hostUsers from defaults")
+	}
+}
+
+// TestCertRequest_AuthorizationEnforced verifies regular cert requests still check authorization
+func TestCertRequest_AuthorizationEnforced(t *testing.T) {
+	cfg := &policyserver.PolicyRulesConfig{
+		Users: map[string][]string{
+			"alice@example.com": {"dba"},
+		},
+		Hosts: map[string]*policyserver.HostPolicy{
+			"prod-db-*": {
+				Allow: map[string][]string{
+					"postgres": {"dba"},
+				},
+			},
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	// Authorized request should succeed
+	_, err := eval.Evaluate("alice@example.com", policy.Connection{
+		RemoteHost: "prod-db-01",
+		RemoteUser: "postgres",
+	})
+	if err != nil {
+		t.Errorf("authorized request should succeed, got error: %v", err)
+	}
+
+	// Unauthorized host should fail
+	_, err = eval.Evaluate("alice@example.com", policy.Connection{
+		RemoteHost: "web-server-01",
+		RemoteUser: "postgres",
+	})
+	if err == nil {
+		t.Error("unauthorized host should fail, got nil error")
+	}
+
+	// Unauthorized user should fail
+	_, err = eval.Evaluate("alice@example.com", policy.Connection{
+		RemoteHost: "prod-db-01",
+		RemoteUser: "root",
+	})
+	if err == nil {
+		t.Error("unauthorized user should fail, got nil error")
+	}
+}
+
+// TestEvaluate_UnknownUser verifies unknown users are rejected
+func TestEvaluate_UnknownUser(t *testing.T) {
+	cfg := &policyserver.PolicyRulesConfig{
+		Users: map[string][]string{
+			"alice@example.com": {"admin"},
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	// Unknown user should fail for Hello request
+	_, err := eval.Evaluate("unknown@example.com", policy.Connection{})
+	if err == nil {
+		t.Error("unknown user should fail, got nil error")
+	}
+}
+
+// TestHelloRequest_UserWithNoAccess verifies Hello rejects users who exist but have no authorized hosts
+func TestHelloRequest_UserWithNoAccess(t *testing.T) {
+	cfg := &policyserver.PolicyRulesConfig{
+		Users: map[string][]string{
+			"alice@example.com": {"guest"}, // Has 'guest' tag but no policies allow 'guest'
+		},
+		Hosts: map[string]*policyserver.HostPolicy{
+			"prod-db-*": {
+				Allow: map[string][]string{
+					"postgres": {"dba"}, // Only 'dba' tag is allowed
+				},
+			},
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	// User exists but has no authorized hosts (their tag doesn't grant access)
+	_, err := eval.Evaluate("alice@example.com", policy.Connection{})
+	if err == nil {
+		t.Error("user with no authorized hosts should fail, got nil error")
+	}
+}
+
 // Example showing how the evaluator would be used
 func ExampleEvaluator() {
 	cfg := &policyserver.PolicyRulesConfig{
