@@ -18,7 +18,7 @@ import (
 )
 
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
-// It inherits Match and CaURL from the parent AgentCLI.
+// It inherits CaURL from the parent AgentCLI.
 type AgentInspectCLI struct {
 	Broker string `help:"Broker socket path (overrides config-based discovery)" short:"b"`
 	JSON   bool   `help:"Output in JSON format" short:"j"`
@@ -40,10 +40,10 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("failed to get home directory: %w", err)
 		}
-		instanceID := hashString(fmt.Sprintf("%v%v", parent.CaURL, parent.Match))
+		instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
 		brokerSock = filepath.Join(homeDir, ".epithet", "run", instanceID, "broker.sock")
 	} else {
-		return fmt.Errorf("must specify either --broker or --ca-url (with optional --match)")
+		return fmt.Errorf("must specify either --broker or --ca-url")
 	}
 
 	// Connect to broker
@@ -72,7 +72,7 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	fmt.Printf("============\n\n")
 	fmt.Printf("Socket: %s\n", resp.SocketPath)
 	fmt.Printf("Agent Dir: %s\n", resp.AgentSocketDir)
-	fmt.Printf("Match Patterns: %v\n\n", resp.MatchPatterns)
+	fmt.Printf("Discovery Patterns: %v\n\n", resp.DiscoveryPatterns)
 
 	fmt.Printf("Agents (%d)\n", len(resp.Agents))
 	fmt.Printf("-----------\n")

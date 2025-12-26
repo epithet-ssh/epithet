@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,33 @@ func testCAClient(t *testing.T, url string) *caclient.Client {
 	return client
 }
 
+// testCAClientWithDiscovery creates a CA client with a mock discovery endpoint.
+// The discovery patterns are returned by the mock CA's Hello endpoint.
+func testCAClientWithDiscovery(t *testing.T, patterns []string) *caclient.Client {
+	t.Helper()
+
+	// Create a discovery server
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(caclient.Discovery{MatchPatterns: patterns})
+	}))
+	t.Cleanup(discoveryServer.Close)
+
+	// Create a CA server that returns the discovery URL in Link header
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(caServer.Close)
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	if err != nil {
+		t.Fatalf("failed to create test CA client: %v", err)
+	}
+	return client
+}
+
 func Test_RpcBasics(t *testing.T) {
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
@@ -34,7 +62,7 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -65,12 +93,14 @@ func Test_MatchRequestFields(t *testing.T) {
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:thello,"
+printf '%s' "test-token"
 `)
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
+	// Use discovery-enabled CA client
+	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
+	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -89,7 +119,7 @@ printf '%s' "6:thello,"
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
 
-	// Test with all fields populated
+	// Test with all fields populated - host matches discovery pattern
 	req := MatchRequest{
 		Connection: policy.Connection{
 			LocalHost:  "mylaptop.local",
@@ -105,9 +135,11 @@ printf '%s' "6:thello,"
 	err = client.Call("Broker.Match", req, &resp)
 	require.NoError(t, err)
 
-	// With no CA available, should return false with error
+	// Host matches discovery pattern, but no CA to issue cert
+	// The mock CA server doesn't return valid certs, so we expect an error
 	require.False(t, resp.Allow)
-	require.Contains(t, resp.Error, "all CAs unavailable")
+	// Error will be about failing to unmarshal CA response (mock doesn't return valid cert)
+	require.NotEmpty(t, resp.Error)
 }
 
 func Test_ShouldHandle(t *testing.T) {
@@ -171,12 +203,15 @@ func Test_ShouldHandle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:thello,"
+printf '%s' "test-token"
 `)
 			socketPath := t.TempDir() + "/broker.sock"
 			agentSocketDir := t.TempDir() + "/sockets"
 
-			b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, tt.patterns)
+			// Use testCAClientWithDiscovery to provide patterns via discovery
+			caClient := testCAClientWithDiscovery(t, tt.patterns)
+
+			b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
 			require.NoError(t, err)
 			b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -190,16 +225,16 @@ func Test_MatchWithPatternFiltering(t *testing.T) {
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:thello,"
+printf '%s' "test-token"
 `)
 	// Use short paths to avoid Unix socket path length limits
 	tmpDir := t.TempDir()
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	// Create broker that only handles *.example.com
-	patterns := []string{"*.example.com"}
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, patterns)
+	// Create broker with discovery that only handles *.example.com
+	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
+	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 
@@ -217,7 +252,7 @@ printf '%s' "6:thello,"
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
 
-	// Test 1: Host that matches pattern
+	// Test 1: Host that matches discovery pattern
 	req1 := MatchRequest{
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -229,11 +264,11 @@ printf '%s' "6:thello,"
 	resp1 := MatchResponse{}
 	err = client.Call("Broker.Match", req1, &resp1)
 	require.NoError(t, err)
-	// Should proceed past pattern check (will fail later for other reasons)
+	// Should proceed past pattern check (will fail later because mock CA doesn't return valid cert)
 	require.False(t, resp1.Allow)
-	require.Contains(t, resp1.Error, "all CAs unavailable") // Not "does not match"
+	require.NotContains(t, resp1.Error, "does not match") // Pattern matched, failed for other reason
 
-	// Test 2: Host that doesn't match pattern
+	// Test 2: Host that doesn't match discovery pattern
 	req2 := MatchRequest{
 		Connection: policy.Connection{
 			RemoteHost: "other.com",
@@ -247,7 +282,7 @@ printf '%s' "6:thello,"
 	require.NoError(t, err)
 	// Should be rejected at pattern check
 	require.False(t, resp2.Allow)
-	require.Contains(t, resp2.Error, "does not match any configured patterns")
+	require.Contains(t, resp2.Error, "does not match")
 }
 
 func testLogger(t *testing.T) *slog.Logger {
@@ -277,35 +312,24 @@ func Test_ShouldHandle_UsesDiscoveryPatterns(t *testing.T) {
 
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:thello,"
+printf '%s' "test-token"
 `)
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	// Create broker with broad static patterns but CA returns more restrictive discovery
-	staticPatterns := []string{"*"}
 	client := testCAClient(t, caServer.URL)
-	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir, staticPatterns)
+	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
-	// Without a token, static patterns are used
-	require.True(t, b.shouldHandle("anything.com"), "without token, static patterns should match anything")
-
-	// Authenticate to get a token
-	_, err = b.auth.Run(nil)
-	require.NoError(t, err)
-
-	// Set the discovery URL on the CA client (simulates what happens after a cert request)
-	client.SetDiscoveryURL(discoveryServer.URL)
-
-	// Now with a token and cached discovery URL, discovery patterns should be used
+	// shouldHandle triggers auth + Hello + discovery fetch
+	// Discovery patterns should be used for matching
 	require.True(t, b.shouldHandle("server.example.com"), "discovery pattern should match *.example.com")
 	require.False(t, b.shouldHandle("other.com"), "discovery pattern should not match other.com")
 }
 
-func Test_ShouldHandle_FallsBackToStaticPatterns(t *testing.T) {
-	// CA server with no discovery URL
+func Test_ShouldHandle_NoDiscovery_ReturnsFalse(t *testing.T) {
+	// CA server with no discovery URL (no Link header)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// No Link header - no discovery available
 		w.WriteHeader(http.StatusOK)
@@ -314,28 +338,18 @@ func Test_ShouldHandle_FallsBackToStaticPatterns(t *testing.T) {
 
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-printf '%s' "6:thello,"
+printf '%s' "test-token"
 `)
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	// Create broker with specific static patterns
-	staticPatterns := []string{"*.static.example.com"}
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir, staticPatterns)
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
-	// Without token, static patterns are used
-	require.True(t, b.shouldHandle("server.static.example.com"))
-	require.False(t, b.shouldHandle("server.dynamic.example.com"))
-
-	// Authenticate to get a token
-	_, err = b.auth.Run(nil)
-	require.NoError(t, err)
-
-	// With token but no discovery from CA, should still use static patterns
-	require.True(t, b.shouldHandle("server.static.example.com"), "no discovery should fall back to static")
-	require.False(t, b.shouldHandle("server.dynamic.example.com"))
+	// With no discovery available, shouldHandle returns false for all hosts
+	require.False(t, b.shouldHandle("server.example.com"), "no discovery should return false")
+	require.False(t, b.shouldHandle("anything.com"), "no discovery should return false")
 }
 
 func TestCleanupExpiredAgents(t *testing.T) {
@@ -346,7 +360,7 @@ printf '%s' "6:thello,"
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests
 

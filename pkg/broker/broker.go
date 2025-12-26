@@ -46,7 +46,7 @@ type agentEntry struct {
 //   - Match() holds b.lock for the entire operation to ensure atomic cert lookup + agent creation
 //   - ensureAgent() MUST be called with b.lock held (caller responsibility)
 //
-// Immutable after New(): brokerSocketPath, agentSocketDir, matchPatterns, caClient, log
+// Immutable after New(): brokerSocketPath, agentSocketDir, caClient, log
 // Protected by b.lock: agents map
 // Protected by closeOnce: brokerListener, done channel
 // Self-synchronized: auth (has internal lock), certStore (has internal lock)
@@ -65,7 +65,6 @@ type Broker struct {
 
 	caClient       *caclient.Client // Immutable after New()
 	agentSocketDir string           // Immutable after New()
-	matchPatterns  []string         // Immutable after New() - static patterns from config
 
 	// For graceful shutdown: track in-flight RPC connections
 	activeRPC       sync.WaitGroup
@@ -85,7 +84,7 @@ func (f optionFunc) apply(b *Broker) error {
 
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, authCommand string, caClient *caclient.Client, agentSocketDir string, matchPatterns []string, options ...Option) (*Broker, error) {
+func New(log slog.Logger, socketPath string, authCommand string, caClient *caclient.Client, agentSocketDir string, options ...Option) (*Broker, error) {
 	if caClient == nil {
 		return nil, fmt.Errorf("caClient is required")
 	}
@@ -96,7 +95,6 @@ func New(log slog.Logger, socketPath string, authCommand string, caClient *cacli
 		agents:           make(map[policy.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
-		matchPatterns:    matchPatterns,
 		caClient:         caClient,
 		done:             make(chan struct{}),
 		log:              log,
@@ -183,7 +181,6 @@ type CertInfo struct {
 type InspectResponse struct {
 	SocketPath        string      `json:"socketPath"`
 	AgentSocketDir    string      `json:"agentSocketDir"`
-	MatchPatterns     []string    `json:"matchPatterns"`
 	DiscoveryPatterns []string    `json:"discoveryPatterns,omitempty"` // Fetched live from CA (HTTP cached)
 	Agents            []AgentInfo `json:"agents"`
 	Certificates      []CertInfo  `json:"certificates"`
@@ -197,9 +194,9 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 
 	// Step 1: Check if this host should be handled by epithet at all
 	if !b.shouldHandle(input.Connection.RemoteHost) {
-		b.log.Debug("host does not match any patterns, ignoring", "host", input.Connection.RemoteHost, "patterns", b.matchPatterns)
+		b.log.Debug("host does not match discovery patterns", "host", input.Connection.RemoteHost)
 		output.Allow = false
-		output.Error = fmt.Sprintf("host %s does not match any configured patterns", input.Connection.RemoteHost)
+		output.Error = fmt.Sprintf("host %s does not match any discovery patterns", input.Connection.RemoteHost)
 		return nil
 	}
 
@@ -455,36 +452,72 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	return nil
 }
 
-// shouldHandle checks if the given hostname matches configured patterns.
-// If we have an auth token, fetches discovery patterns from CA (HTTP cached).
-// Otherwise falls back to static patterns from config.
+// shouldHandle checks if the given hostname matches discovery patterns.
+// Always fetches discovery patterns, authenticating if needed.
 // Returns true if epithet should handle this connection, false otherwise.
 func (b *Broker) shouldHandle(hostname string) bool {
-	patterns := b.matchPatterns // Default to static patterns
-
-	// If we have a token, try to get discovery patterns from CA
-	// The HTTP cache handles avoiding unnecessary network requests
-	if token := b.auth.Token(); token != "" {
-		discovery, err := b.caClient.GetDiscovery(context.Background(), token)
-		if err != nil {
-			b.log.Debug("failed to fetch discovery, using static patterns", "error", err)
-		} else if discovery != nil && len(discovery.MatchPatterns) > 0 {
-			patterns = discovery.MatchPatterns
-			b.log.Debug("using discovery patterns", "patterns", patterns)
-		}
+	// Always fetch discovery patterns (auth + Hello if needed)
+	discovery, err := b.getDiscoveryPatterns()
+	if err != nil {
+		b.log.Error("failed to get discovery patterns", "error", err)
+		return false // Can't determine - don't handle
 	}
 
-	for _, pattern := range patterns {
+	if discovery == nil || len(discovery.MatchPatterns) == 0 {
+		b.log.Debug("no discovery patterns available")
+		return false // No patterns = don't handle anything
+	}
+
+	// Check if hostname matches any discovery pattern
+	for _, pattern := range discovery.MatchPatterns {
 		matched, err := filepath.Match(pattern, hostname)
 		if err != nil {
 			b.log.Warn("invalid match pattern", "pattern", pattern, "error", err)
 			continue
 		}
 		if matched {
+			b.log.Debug("host matches discovery pattern", "host", hostname, "pattern", pattern)
 			return true
 		}
 	}
+
+	b.log.Debug("host does not match any discovery pattern", "host", hostname, "patterns", discovery.MatchPatterns)
 	return false
+}
+
+// getDiscoveryPatterns fetches discovery patterns, authenticating and calling Hello if needed.
+func (b *Broker) getDiscoveryPatterns() (*caclient.Discovery, error) {
+	ctx := context.Background()
+
+	// Fast path: try cached discovery first
+	token := b.auth.Token()
+	if token != "" {
+		discovery, err := b.caClient.GetDiscovery(ctx, token)
+		if err == nil && discovery != nil {
+			return discovery, nil
+		}
+		// Discovery fetch failed or no cached URL - continue to Hello
+	}
+
+	// Slow path: authenticate if needed, then Hello to learn discovery URL
+	if token == "" {
+		b.log.Debug("no auth token, authenticating to get discovery")
+		var err error
+		token, err = b.auth.Run(nil)
+		if err != nil {
+			return nil, fmt.Errorf("authentication failed: %w", err)
+		}
+	}
+
+	// Call Hello to learn discovery URL from Link header
+	b.log.Debug("calling Hello to learn discovery URL")
+	err := b.caClient.Hello(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("hello failed: %w", err)
+	}
+
+	// Now GetDiscovery should work (URL was cached by Hello)
+	return b.caClient.GetDiscovery(ctx, token)
 }
 
 // LookupCertificate finds a valid certificate for the given connection.
@@ -650,9 +683,8 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 
 	output.SocketPath = b.brokerSocketPath
 	output.AgentSocketDir = b.agentSocketDir
-	output.MatchPatterns = b.matchPatterns
 
-	// Fetch discovery patterns live if we have a token (HTTP cached)
+	// Fetch discovery patterns (HTTP cached)
 	if token := b.auth.Token(); token != "" {
 		discovery, err := b.caClient.GetDiscovery(context.Background(), token)
 		if err == nil && discovery != nil {

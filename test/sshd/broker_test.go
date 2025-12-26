@@ -41,6 +41,13 @@ func TestBrokerEndToEnd(t *testing.T) {
 	caPublicKey, caPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
+	// Create a discovery endpoint that returns match patterns
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(caclient.Discovery{MatchPatterns: []string{"*"}})
+	}))
+	defer discoveryServer.Close()
+
 	// Create a mock policy server that approves everything
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Simple policy that approves all requests
@@ -61,6 +68,9 @@ func TestBrokerEndToEnd(t *testing.T) {
 				},
 			},
 		}
+		// Set discovery URL in Link header (CA extracts from headers, not body)
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer policyServer.Close()
@@ -83,14 +93,13 @@ printf '%s' "6:ttoken,"
 	tmpDir := t.TempDir()
 	brokerSocketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a" // Very short to avoid socket path length issues
-	matchPatterns := []string{"*"}  // Accept all hosts
 
 	// Create CA client
 	caEndpoints := []caclient.CAEndpoint{{URL: caHTTPServer.URL, Priority: caclient.DefaultPriority}}
 	caClient, err := caclient.New(caEndpoints)
 	require.NoError(t, err)
 
-	b, err := broker.New(*logger, brokerSocketPath, authScript, caClient, agentSocketDir, matchPatterns)
+	b, err := broker.New(*logger, brokerSocketPath, authScript, caClient, agentSocketDir)
 	require.NoError(t, err)
 
 	// Start broker in background

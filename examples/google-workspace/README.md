@@ -25,47 +25,45 @@ Follow the [OIDC Setup Guide](../../docs/oidc-setup.md#google-workspace--google-
 
 ### 2. Configure Epithet
 
-Create `~/.epithet/config`:
+Create `~/.epithet/config.yaml`:
 
 **For UWP apps (recommended):**
-```
-# Match pattern: which hosts should use epithet
-match *.corp.example.com
+```yaml
+agent:
+  # CA server URL - host patterns are obtained from CA discovery
+  ca_url: https://ca.corp.example.com
 
-# CA server URL
-ca-url https://ca.corp.example.com
-
-# Authentication: Google Workspace via OIDC (no client secret needed)
-auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com
+  # Authentication: Google Workspace via OIDC (no client secret needed)
+  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com
 ```
 
 **For Desktop apps:**
-```
-# Match pattern: which hosts should use epithet
-match *.corp.example.com
+```yaml
+agent:
+  # CA server URL - host patterns are obtained from CA discovery
+  ca_url: https://ca.corp.example.com
 
-# CA server URL
-ca-url https://ca.corp.example.com
-
-# Authentication: Google Workspace via OIDC (client secret required)
-auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET
+  # Authentication: Google Workspace via OIDC (client secret required)
+  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET
 ```
 
 Replace `YOUR_CLIENT_ID` (and optionally `YOUR_CLIENT_SECRET`) with your actual credentials from step 1.
 
+**Note**: Host patterns (which hosts should use epithet) are obtained dynamically from the CA's discovery endpoint. The CA policy server determines which hosts are covered.
+
 ### 3. Configure SSH
 
-Add to `~/.ssh/config`:
+Add to `~/.ssh/config` to include epithet's auto-generated config:
 
 ```
-# Epithet certificate authentication
-Match exec "epithet match --host %h --port %p --user %r --hash %C" host *.corp.example.com
-    IdentityAgent ~/.epithet/agent/%C
+# Include epithet's auto-generated SSH config
+Include ~/.epithet/run/*/ssh-config.conf
 ```
 
-This tells SSH to:
-1. Run `epithet match` for connections to `*.corp.example.com`
-2. If epithet match succeeds, use the per-connection agent at `~/.epithet/agent/%C`
+When you start `epithet agent`, it generates an SSH config that tells SSH to:
+1. Run `epithet match` for all connections
+2. The broker checks CA discovery patterns and returns non-zero for hosts that don't match
+3. If epithet match succeeds, use the per-connection agent at `~/.epithet/run/<hash>/agent/%C`
 
 ### 4. Start the Broker
 
@@ -199,14 +197,13 @@ auth epithet auth oidc \
 
 ### Multiple Brokers
 
-Run separate brokers for different purposes:
+Run separate brokers for different purposes (host patterns come from each CA's discovery endpoint):
 
 **Work connections:**
 ```bash
 epithet agent \
   --broker ~/.epithet/work-broker.sock \
   --agent-dir ~/.epithet/work-agent/ \
-  --match '*.work.example.com' \
   --ca-url https://work-ca.example.com \
   --auth "epithet auth oidc --issuer https://accounts.google.com --client-id WORK_CLIENT_ID"
 ```
@@ -216,12 +213,11 @@ epithet agent \
 epithet agent \
   --broker ~/.epithet/personal-broker.sock \
   --agent-dir ~/.epithet/personal-agent/ \
-  --match '*.personal.example.com' \
   --ca-url https://personal-ca.example.com \
   --auth "epithet auth oidc --issuer https://accounts.google.com --client-id PERSONAL_CLIENT_ID"
 ```
 
-Update `~/.ssh/config`:
+Update `~/.ssh/config` (optional `host` filter for optimization, since broker checks discovery patterns dynamically):
 ```
 Match exec "epithet match --broker ~/.epithet/work-broker.sock --host %h --port %p --user %r --hash %C" host *.work.example.com
     IdentityAgent ~/.epithet/work-agent/%C

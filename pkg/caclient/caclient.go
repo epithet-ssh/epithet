@@ -281,6 +281,91 @@ func (c *Client) GetDiscovery(ctx context.Context, token string) (*Discovery, er
 	return c.fetchDiscovery(ctx, url, token)
 }
 
+// Hello validates a token with the CA and learns the discovery URL.
+// This sends an empty body to the CA's hello endpoint, which validates the token
+// with the policy server and returns the discovery URL in the Link header.
+// Returns nil on success. The discovery URL is cached for subsequent GetDiscovery calls.
+func (c *Client) Hello(ctx context.Context, token string) error {
+	// Hello sends an empty JSON object - the CA routes based on body shape
+	body := []byte("{}")
+
+	// Try each endpoint in order (Hello is infrequent, doesn't need full pool machinery)
+	var lastErr error
+	for _, ep := range c.endpoints {
+		if c.logger != nil {
+			c.logger.Debug("Hello request", "url", ep.URL)
+		}
+		err := c.doHello(ctx, ep.URL, token, body)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		// Don't failover on auth errors - they'll fail on all CAs
+		var invalidToken *InvalidTokenError
+		var policyDenied *PolicyDeniedError
+		if errors.As(err, &invalidToken) || errors.As(err, &policyDenied) {
+			return err
+		}
+		// Try next endpoint for infrastructure errors
+		if c.logger != nil {
+			c.logger.Debug("Hello failed, trying next endpoint", "url", ep.URL, "error", err)
+		}
+	}
+	return lastErr
+}
+
+// doHello makes a single hello request to a CA.
+func (c *Client) doHello(ctx context.Context, caURL string, token string, body []byte) error {
+	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	rq.Header.Set("Content-Type", "application/json")
+	rq.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.httpClient.Do(rq.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	respBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	if c.logger != nil {
+		c.logger.Debug("Hello response", "url", caURL, "status", res.StatusCode)
+	}
+
+	if res.StatusCode != http.StatusOK {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			return &InvalidTokenError{Message: string(respBody)}
+		case http.StatusForbidden:
+			return &PolicyDeniedError{Message: string(respBody)}
+		default:
+			if res.StatusCode >= 500 {
+				return &CAUnavailableError{Message: string(respBody)}
+			}
+			return &InvalidRequestError{Message: string(respBody)}
+		}
+	}
+
+	// Extract and cache discovery URL from Link header
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+	if discoveryURL != "" {
+		c.discoveryMu.Lock()
+		c.discoveryURL = discoveryURL
+		c.discoveryMu.Unlock()
+		if c.logger != nil {
+			c.logger.Debug("cached discovery URL from Hello", "url", discoveryURL)
+		}
+	}
+
+	return nil
+}
+
 // SetDiscoveryURL sets the cached discovery URL. This is primarily for testing.
 // In normal operation, the URL is learned from CA cert response Link headers.
 func (c *Client) SetDiscoveryURL(url string) {

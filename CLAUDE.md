@@ -97,13 +97,13 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
   - Returns success/failure to OpenSSH to control whether connection proceeds
   - Optional `--broker` flag specifies broker socket path (for multiple broker instances)
 
-- **`epithet agent --match <pattern> --ca-url <url> --auth <command> [--config <file>]`**:
+- **`epithet agent --ca-url <url> --auth <command> [--config <file>]`**:
   - **Status**: ✅ Fully implemented (`cmd/epithet/agent.go`, `pkg/broker/`)
   - Starts the broker daemon with RPC server on Unix domain socket
   - Required flags (can be set in config file with mustache template support):
-    - `--match`: Repeatable patterns defining which hosts epithet should handle
     - `--ca-url`: CA URL(s) - repeatable for multi-CA failover. Optionally prefix with `priority=N:` (e.g., `priority=50:https://backup.example.com`); plain URLs default to priority 100. Higher priority CAs are tried first; circuit breakers skip failed CAs.
     - `--auth`: Command to invoke for user authentication (can use templates)
+  - Host patterns are obtained dynamically from CA discovery (no static `--match` flag needed)
   - Auto-generates SSH config file at `~/.epithet/run/<instance-hash>/ssh-config.conf`
   - The broker maintains (with proper concurrency controls):
     - Map of connection hash → per-connection agent instance (`pkg/agent.Agent`)
@@ -485,10 +485,10 @@ Match host *.example.com user breakglass
 ```
 
 **Multiple Concurrent Brokers:**
-Epithet supports running multiple broker instances for different purposes (work vs personal, different CA servers, etc). Each broker needs a unique socket path:
+Epithet supports running multiple broker instances for different purposes (work vs personal, different CA servers, etc). Each broker needs a unique socket path. You can optionally add SSH `host` patterns for optimization (to skip broker calls for unrelated hosts), but this is not required since the broker checks discovery patterns dynamically:
 
 ```ssh_config
-# Work connections
+# Work connections (with optional host filter for optimization)
 Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/work-broker.sock" host *.work.example.com
     IdentityAgent ~/.epithet/work-agent/%C
 
@@ -500,9 +500,9 @@ Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.ep
 Start each broker with unique socket paths:
 ```bash
 # Work broker (with primary and backup CAs)
+# Host patterns come from CA discovery endpoint
 epithet agent --broker ~/.epithet/work-broker.sock \
               --agent-dir ~/.epithet/work-agent/ \
-              --match '*.work.example.com' \
               --ca-url https://work-ca.example.com \
               --ca-url 'priority=50:https://work-ca-backup.example.com' \
               --auth work-auth-plugin
@@ -510,7 +510,6 @@ epithet agent --broker ~/.epithet/work-broker.sock \
 # Personal broker (single CA)
 epithet agent --broker ~/.epithet/personal-broker.sock \
               --agent-dir ~/.epithet/personal-agent/ \
-              --match '*.personal.example.com' \
               --ca-url https://personal-ca.example.com \
               --auth personal-auth-plugin
 ```
@@ -700,16 +699,18 @@ Run all tests with `make test` or `go test ./...`.
 Epithet integrates with OpenSSH via auto-generated config files. When you start `epithet agent`, it creates an SSH config file at `~/.epithet/run/<instance-hash>/ssh-config.conf`:
 
 ```ssh_config
-Match exec "epithet match --broker ~/.epithet/run/<hash>/broker.sock --host %h --port %p --user %r --hash %C --jump %j" host <patterns>
+Match exec "epithet match --host %h --port %p --user %r --hash %C --jump %j --broker ~/.epithet/run/<hash>/broker.sock"
     IdentityAgent ~/.epithet/run/<hash>/agent/%C
 ```
+
+Note: The SSH config uses `Match exec` only (no `host` filter). The broker dynamically fetches host patterns from CA discovery and returns non-zero for hosts that don't match, allowing SSH to fall through to other configuration.
 
 Add this to your `~/.ssh/config` to use it:
 ```ssh_config
 Include ~/.epithet/run/*/ssh-config.conf
 ```
 
-The `%C` token represents a hash of the connection parameters (`%l%h%p%r%j`: local hostname, remote hostname, port, username, and ProxyJump), ensuring each unique connection gets its own agent socket. The Match exec pattern includes the host patterns from `--match` flags to avoid unnecessary broker calls.
+The `%C` token represents a hash of the connection parameters (`%l%h%p%r%j`: local hostname, remote hostname, port, username, and ProxyJump), ensuring each unique connection gets its own agent socket. The SSH config uses `Match exec` only - the broker dynamically fetches host patterns from CA discovery and returns non-zero for hosts that don't match, allowing SSH to fall through to other config.
 
 ### Current Development Status
 

@@ -26,7 +26,7 @@ func TestBroker_AgentMapInitialized(t *testing.T) {
 	socketPath := t.TempDir() + "/broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 
 	// Verify agents map is initialized
@@ -40,7 +40,7 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	socketPath := "/tmp/test-broker.sock"
 	agentSocketDir := t.TempDir() + "/sockets"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir, []string{"*"})
+	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 
 	// Serve in background

@@ -1,8 +1,7 @@
 # Example epithet client configuration
 # Place in ~/.epithet/ as config.yaml, config.cue, or config.json
 
+# Host patterns are obtained dynamically from CA discovery - no static match config needed
 agent:
   ca_url: https://ca.example.com/
-  match:
-    - "*.example.com"
   auth: epithet auth oidc --issuer https://accounts.google.com --client-id abc123 --client-secret xyz098

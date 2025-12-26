@@ -17,10 +17,8 @@
 # tls_ca_cert: /path/to/ca.crt
 
 # Agent configuration (epithet agent)
+# Host patterns are obtained dynamically from CA discovery - no static match config needed
 agent:
-  match:
-    - "*.example.com"
-    - "*.internal"
   ca_url: https://ca.example.com
   auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
 

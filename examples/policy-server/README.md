@@ -46,18 +46,19 @@ Update:
 
 ### 4. Configure Epithet Agent
 
-Create `~/.config/epithet/agent.conf`:
+Create `~/.epithet/config.yaml`:
 
-```
-match *.example.com
-ca-url http://localhost:8080
-auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
+```yaml
+# Host patterns are obtained from CA discovery - no static match config needed
+agent:
+  ca_url: http://localhost:8080
+  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
 ```
 
 Start the agent:
 
 ```bash
-epithet agent --config ~/.config/epithet/agent.conf
+epithet agent
 ```
 
 ### 5. Add SSH Configuration
