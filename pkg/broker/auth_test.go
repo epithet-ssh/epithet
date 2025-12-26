@@ -336,11 +336,12 @@ func TestAuth_Run_BinaryTokenPreservation(t *testing.T) {
 	// Test that binary tokens with invalid UTF-8 bytes are preserved correctly
 	// This is the key bug fix: without base64 encoding, these bytes would be corrupted
 	// when cast to string then JSON encoded (invalid UTF-8 → U+FFFD replacement)
-	script := writeTestScript(t, `#!/bin/sh
+	script := writeTestScript(t, `#!/bin/bash
 cat > /dev/null
 # Output binary data including invalid UTF-8 sequences
 # \x80\x81\x82 are invalid UTF-8 continuation bytes without a leading byte
 # \xff\xfe are also invalid UTF-8
+# Note: Using bash (not sh) because dash doesn't support \x hex escapes
 printf '\x80\x81\x82token\xff\xfe'
 `)
 
