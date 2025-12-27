@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/rpc"
+	"os"
 	"testing"
 	"time"
 
@@ -54,13 +55,16 @@ func testCAClientWithDiscovery(t *testing.T, patterns []string) *caclient.Client
 }
 
 func Test_RpcBasics(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 printf '%s' "6:thello,"
 `)
-	socketPath := t.TempDir() + "/broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
@@ -75,8 +79,8 @@ printf '%s' "6:thello,"
 	}()
 	defer b.Close()
 
-	// Give broker time to start listening
-	time.Sleep(10 * time.Millisecond)
+	// Wait for broker to be ready
+	<-b.Ready()
 
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
@@ -90,13 +94,16 @@ printf '%s' "6:thello,"
 }
 
 func Test_MatchRequestFields(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 printf '%s' "test-token"
 `)
-	socketPath := t.TempDir() + "/broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	// Use discovery-enabled CA client
 	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
@@ -113,8 +120,8 @@ printf '%s' "test-token"
 	}()
 	defer b.Close()
 
-	// Give broker time to start listening
-	time.Sleep(10 * time.Millisecond)
+	// Wait for broker to be ready
+	<-b.Ready()
 
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
@@ -143,6 +150,7 @@ printf '%s' "test-token"
 }
 
 func Test_ShouldHandle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		patterns []string
@@ -201,12 +209,15 @@ func Test_ShouldHandle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 printf '%s' "test-token"
 `)
-			socketPath := t.TempDir() + "/broker.sock"
-			agentSocketDir := t.TempDir() + "/sockets"
+			// Use short paths to avoid Unix socket path length limits
+			tmpDir := shortTempDir(t)
+			socketPath := tmpDir + "/b.sock"
+			agentSocketDir := tmpDir + "/a"
 
 			// Use testCAClientWithDiscovery to provide patterns via discovery
 			caClient := testCAClientWithDiscovery(t, tt.patterns)
@@ -222,13 +233,14 @@ printf '%s' "test-token"
 }
 
 func Test_MatchWithPatternFiltering(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 printf '%s' "test-token"
 `)
 	// Use short paths to avoid Unix socket path length limits
-	tmpDir := t.TempDir()
+	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
@@ -247,7 +259,8 @@ printf '%s' "test-token"
 	}()
 	defer b.Close()
 
-	time.Sleep(10 * time.Millisecond)
+	// Wait for broker to be ready
+	<-b.Ready()
 
 	client, err := rpc.Dial("unix", socketPath)
 	require.NoError(t, err)
@@ -293,7 +306,22 @@ func testLogger(t *testing.T) *slog.Logger {
 	return logger
 }
 
+// shortTempDir creates a short temporary directory suitable for Unix sockets.
+// Unix sockets have a path length limit (~104 bytes on macOS), so we use
+// /tmp with a short random suffix instead of t.TempDir() which includes
+// the full test name and can be too long.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "bt")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func Test_ShouldHandle_UsesDiscoveryPatterns(t *testing.T) {
+	t.Parallel()
 	// Start a discovery server that returns specific patterns
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -314,8 +342,10 @@ func Test_ShouldHandle_UsesDiscoveryPatterns(t *testing.T) {
 cat > /dev/null
 printf '%s' "test-token"
 `)
-	socketPath := t.TempDir() + "/broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	client := testCAClient(t, caServer.URL)
 	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir)
@@ -329,6 +359,7 @@ printf '%s' "test-token"
 }
 
 func Test_ShouldHandle_NoDiscovery_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	// CA server with no discovery URL (no Link header)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// No Link header - no discovery available
@@ -340,8 +371,10 @@ func Test_ShouldHandle_NoDiscovery_ReturnsFalse(t *testing.T) {
 cat > /dev/null
 printf '%s' "test-token"
 `)
-	socketPath := t.TempDir() + "/broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir)
 	require.NoError(t, err)
@@ -353,12 +386,15 @@ printf '%s' "test-token"
 }
 
 func TestCleanupExpiredAgents(t *testing.T) {
+	t.Parallel()
 	authCommand := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 printf '%s' "6:thello,"
 `)
-	socketPath := t.TempDir() + "/broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)

@@ -3,7 +3,6 @@ package broker
 import (
 	"net/rpc"
 	"testing"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
@@ -22,9 +21,12 @@ func testClient(t *testing.T, url string) *caclient.Client {
 }
 
 func TestBroker_AgentMapInitialized(t *testing.T) {
+	t.Parallel()
 	authCommand := "echo '6:thello,'"
-	socketPath := t.TempDir() + "/broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
@@ -35,10 +37,13 @@ func TestBroker_AgentMapInitialized(t *testing.T) {
 }
 
 func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	authCommand := "echo '6:thello,'"
-	socketPath := "/tmp/test-broker.sock"
-	agentSocketDir := t.TempDir() + "/sockets"
+	// Use short paths to avoid Unix socket path length limits
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
 
 	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
@@ -52,8 +57,8 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	}()
 	defer b.Close()
 
-	// Give broker time to start
-	time.Sleep(50 * time.Millisecond)
+	// Wait for broker to be ready
+	<-b.Ready()
 
 	// Connect via RPC
 	client, err := rpc.Dial("unix", socketPath)

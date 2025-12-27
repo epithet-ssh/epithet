@@ -54,6 +54,7 @@ type agentEntry struct {
 type Broker struct {
 	lock      sync.Mutex // Protects agents map
 	done      chan struct{}
+	ready     chan struct{} // Closed when broker is ready to accept connections
 	closeOnce sync.Once
 	log       slog.Logger // Immutable after New()
 
@@ -98,6 +99,7 @@ func New(log slog.Logger, socketPath string, authCommand string, caClient *cacli
 		agentSocketDir:   agentSocketDir,
 		caClient:         caClient,
 		done:             make(chan struct{}),
+		ready:            make(chan struct{}),
 		log:              log,
 		shutdownTimeout:  2 * time.Second, // Default timeout for graceful shutdown
 	}
@@ -117,12 +119,21 @@ func (b *Broker) SetShutdownTimeout(d time.Duration) {
 	b.shutdownTimeout = d
 }
 
+// Ready returns a channel that is closed when the broker is ready to accept connections.
+// Use this to wait for the broker to start: <-b.Ready()
+func (b *Broker) Ready() <-chan struct{} {
+	return b.ready
+}
+
 // Serve starts the broker listening on the configured socket and blocks until the context is cancelled.
 // Returns an error if the listener cannot be started, otherwise returns ctx.Err() when shutdown completes.
 func (b *Broker) Serve(ctx context.Context) error {
 	if err := b.startBrokerListener(); err != nil {
 		return fmt.Errorf("unable to start broker socket: %w", err)
 	}
+
+	// Signal that we're ready to accept connections
+	close(b.ready)
 
 	// Serve connections in background
 	go b.serve(ctx)

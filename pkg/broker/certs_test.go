@@ -11,6 +11,7 @@ import (
 )
 
 func TestCertificateStore_BasicStoreAndLookup(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Create a test certificate
@@ -44,6 +45,7 @@ func TestCertificateStore_BasicStoreAndLookup(t *testing.T) {
 }
 
 func TestCertificateStore_PatternMatching(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	pc := PolicyCert{
@@ -80,6 +82,7 @@ func TestCertificateStore_PatternMatching(t *testing.T) {
 }
 
 func TestCertificateStore_ExpiredCertificate(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Create an expired certificate
@@ -107,6 +110,7 @@ func TestCertificateStore_ExpiredCertificate(t *testing.T) {
 }
 
 func TestCertificateStore_ExpiryBuffer(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Create a certificate that expires in 3 seconds (within the 5s buffer)
@@ -131,6 +135,7 @@ func TestCertificateStore_ExpiryBuffer(t *testing.T) {
 }
 
 func TestCertificateStore_ValidWithBuffer(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Create a certificate that expires in 10 seconds (outside the 5s buffer)
@@ -156,6 +161,7 @@ func TestCertificateStore_ValidWithBuffer(t *testing.T) {
 }
 
 func TestCertificateStore_OverlappingPolicies(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Store certificate for alice
@@ -199,6 +205,7 @@ func TestCertificateStore_OverlappingPolicies(t *testing.T) {
 }
 
 func TestCertificateStore_MultiplePatterns(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Store certificates for different patterns
@@ -238,6 +245,7 @@ func TestCertificateStore_MultiplePatterns(t *testing.T) {
 }
 
 func TestCertificateStore_FirstMatchWins(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Store a broad pattern first
@@ -273,6 +281,7 @@ func TestCertificateStore_FirstMatchWins(t *testing.T) {
 }
 
 func TestCertificateStore_NoMatch(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	pc := PolicyCert{
@@ -297,6 +306,7 @@ func TestCertificateStore_NoMatch(t *testing.T) {
 }
 
 func TestCertificateStore_EmptyStore(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Lookup in empty store should return false
@@ -305,6 +315,7 @@ func TestCertificateStore_EmptyStore(t *testing.T) {
 }
 
 func TestCertificateStore_BraceExpansion(t *testing.T) {
+	t.Parallel()
 	store := NewCertificateStore()
 
 	// Use brace expansion pattern: badb{,.home} matches "badb" or "badb.home"

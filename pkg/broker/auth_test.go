@@ -10,6 +10,7 @@ import (
 )
 
 func TestAuth_New(t *testing.T) {
+	t.Parallel()
 	auth := NewAuth("my-auth-command --flag")
 	require.NotNil(t, auth)
 	require.Equal(t, "my-auth-command --flag", auth.cmdLine)
@@ -17,6 +18,7 @@ func TestAuth_New(t *testing.T) {
 }
 
 func TestAuth_Run_Success_InitialAuth(t *testing.T) {
+	t.Parallel()
 	// Create a test auth script that returns a token
 	script := writeTestScript(t, `#!/bin/sh
 # Read and ignore stdin
@@ -34,6 +36,7 @@ printf '%s' "my-token-1"
 }
 
 func TestAuth_Run_Success_WithStateUpdate(t *testing.T) {
+	t.Parallel()
 	script := writeTestScript(t, `#!/bin/sh
 # Read and ignore stdin
 cat > /dev/null
@@ -53,6 +56,7 @@ printf '%s' '{"refresh":"xyz"}' >&3
 }
 
 func TestAuth_Run_Success_StatePreservedAcrossCalls(t *testing.T) {
+	t.Parallel()
 	// First call returns token and state
 	script1 := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
@@ -87,6 +91,7 @@ fi
 }
 
 func TestAuth_Run_AuthFailure(t *testing.T) {
+	t.Parallel()
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 echo "Authentication failed" >&2
@@ -100,6 +105,7 @@ exit 1
 }
 
 func TestAuth_Run_CommandExecutionError(t *testing.T) {
+	t.Parallel()
 	script := writeTestScript(t, `#!/bin/sh
 echo "Something went wrong" >&2
 exit 1
@@ -113,6 +119,7 @@ exit 1
 }
 
 func TestAuth_Run_EmptyToken(t *testing.T) {
+	t.Parallel()
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 # No output to stdout - empty token
@@ -125,6 +132,7 @@ cat > /dev/null
 }
 
 func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
+	t.Parallel()
 	// Test that mustache template is rendered in command line
 	auth := NewAuth(`printf '%s' "token-{{host}}"`)
 	token, err := auth.Run(map[string]string{"host": "ok"})
@@ -133,6 +141,7 @@ func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 }
 
 func TestAuth_Run_MustacheTemplateError(t *testing.T) {
+	t.Parallel()
 	auth := NewAuth("echo {{unclosed}")
 	_, err := auth.Run(nil)
 	require.Error(t, err)
@@ -140,6 +149,7 @@ func TestAuth_Run_MustacheTemplateError(t *testing.T) {
 }
 
 func TestAuth_Run_Concurrent(t *testing.T) {
+	t.Parallel()
 	// Test that concurrent calls are properly serialized by the lock
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
@@ -183,6 +193,7 @@ func writeTestScript(t *testing.T, content string) string {
 }
 
 func TestAuth_Run_EmptyStateHandling(t *testing.T) {
+	t.Parallel()
 	// Test that empty state is sent on first call
 	script := writeTestScript(t, `#!/bin/sh
 input=$(cat)
@@ -201,6 +212,7 @@ fi
 }
 
 func TestAuth_Run_StateClearing(t *testing.T) {
+	t.Parallel()
 	// Test that plugin can clear state by not writing to fd 3
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
@@ -218,6 +230,7 @@ printf '%s' "token"
 }
 
 func TestIntegration_FullAuthFlow(t *testing.T) {
+	t.Parallel()
 	// Integration test: simulate a full auth flow with state management
 
 	// First auth call - no state, returns token and state
@@ -282,6 +295,7 @@ fi
 }
 
 func TestAuth_Token(t *testing.T) {
+	t.Parallel()
 	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
 printf '%s' "my-token-abc"
@@ -322,6 +336,7 @@ head -c 11534336 /dev/zero >&3
 */
 
 func TestAuth_ClearToken(t *testing.T) {
+	t.Parallel()
 	auth := NewAuth("echo token")
 	auth.token = "existing-token"
 	auth.state = []byte("existing-state")
@@ -333,6 +348,7 @@ func TestAuth_ClearToken(t *testing.T) {
 }
 
 func TestAuth_Run_BinaryTokenPreservation(t *testing.T) {
+	t.Parallel()
 	// Test that binary tokens with invalid UTF-8 bytes are preserved correctly
 	// This is the key bug fix: without base64 encoding, these bytes would be corrupted
 	// when cast to string then JSON encoded (invalid UTF-8 → U+FFFD replacement)
