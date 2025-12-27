@@ -173,3 +173,29 @@ func TestDiscoveryHandler_EmptyPatterns(t *testing.T) {
 		t.Errorf("unexpected response body: %s", body)
 	}
 }
+
+func TestDiscoveryRedirectHandler(t *testing.T) {
+	handler := policyserver.NewDiscoveryRedirectHandler("abc123def456")
+
+	req := httptest.NewRequest(http.MethodGet, "/d/current", nil)
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	// Check status code is 302 Found (temporary redirect)
+	if w.Code != http.StatusFound {
+		t.Errorf("expected status 302, got %d", w.Code)
+	}
+
+	// Check Location header points to content-addressed URL
+	location := w.Header().Get("Location")
+	if location != "/d/abc123def456" {
+		t.Errorf("expected Location '/d/abc123def456', got %q", location)
+	}
+
+	// Check Cache-Control header is short-lived (5 minutes)
+	cacheControl := w.Header().Get("Cache-Control")
+	if cacheControl != "max-age=300" {
+		t.Errorf("expected Cache-Control 'max-age=300', got %q", cacheControl)
+	}
+}

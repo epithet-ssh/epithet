@@ -109,7 +109,10 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Post("/", handler)
-	r.Get("/d/*", discoveryHandler) // Discovery endpoint
+	// Redirect endpoint: /d/current -> /d/{hash} (cached 5 min)
+	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(cfg.DiscoveryHash()))
+	// Content-addressed endpoint: /d/{hash} (immutable)
+	r.Get("/d/*", discoveryHandler)
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,

@@ -215,10 +215,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// setDiscoveryHeader sets the Link header for discovery if configured
+// setDiscoveryHeader sets the Link header for discovery if configured.
+// Always points to /d/current which redirects to the content-addressed URL.
 func (h *handler) setDiscoveryHeader(w http.ResponseWriter) {
 	if h.config.DiscoveryHash != "" {
-		w.Header().Set("Link", "</d/"+h.config.DiscoveryHash+">; rel=\"discovery\"")
+		w.Header().Set("Link", "</d/current>; rel=\"discovery\"")
 	}
 }
 

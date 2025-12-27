@@ -39,6 +39,18 @@ func NewDiscoveryHandler(config DiscoveryConfig) http.HandlerFunc {
 	return h.ServeHTTP
 }
 
+// NewDiscoveryRedirectHandler returns a handler that redirects to the content-addressed discovery URL.
+// The redirect response is cached for 5 minutes to allow policy changes to propagate.
+// Clients should request /d/current and follow the redirect to /d/{hash}.
+// Uses 302 Found (temporary) rather than 301 (permanent) since the redirect target may change.
+func NewDiscoveryRedirectHandler(hash string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "max-age=300")
+		w.Header().Set("Location", "/d/"+hash)
+		w.WriteHeader(http.StatusFound)
+	}
+}
+
 // ServeHTTP handles the discovery request
 func (h *discoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only accept GET

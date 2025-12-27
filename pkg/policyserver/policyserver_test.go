@@ -300,7 +300,8 @@ func TestHandler_DiscoveryLinkHeader_Success(t *testing.T) {
 	}
 
 	link := w.Header().Get("Link")
-	expected := "</d/abc123def456>; rel=\"discovery\""
+	// Link header always points to /d/current which redirects to content-addressed URL
+	expected := "</d/current>; rel=\"discovery\""
 	if link != expected {
 		t.Errorf("expected Link header %q, got %q", expected, link)
 	}
@@ -348,7 +349,8 @@ func TestHandler_DiscoveryLinkHeader_ErrorResponses(t *testing.T) {
 			}
 
 			link := w.Header().Get("Link")
-			expected := "</d/abc123def456>; rel=\"discovery\""
+			// Link header always points to /d/current which redirects to content-addressed URL
+			expected := "</d/current>; rel=\"discovery\""
 			if link != expected {
 				t.Errorf("expected Link header %q, got %q", expected, link)
 			}

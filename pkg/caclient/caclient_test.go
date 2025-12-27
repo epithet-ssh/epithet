@@ -418,6 +418,61 @@ func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
 	assert.Equal(t, 2, discoveryCallCount, "without Cache-Control, each request should hit the server")
 }
 
+func TestGetDiscovery_FollowsRedirect(t *testing.T) {
+	redirectCallCount := 0
+	contentCallCount := 0
+	var receivedAuthHeader string
+
+	// Server that handles both /d/current (redirect) and /d/{hash} (content)
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/d/current" {
+			redirectCallCount++
+			w.Header().Set("Cache-Control", "max-age=300")
+			w.Header().Set("Location", "/d/abc123hash")
+			w.WriteHeader(http.StatusFound) // 302 temporary redirect
+			return
+		}
+		if r.URL.Path == "/d/abc123hash" {
+			contentCallCount++
+			// Capture the Authorization header to verify it's forwarded
+			receivedAuthHeader = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer discoveryServer.Close()
+
+	// CA server (needed for client creation)
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
+	client, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	// Set the discovery URL to the redirect endpoint
+	client.SetDiscoveryURL(discoveryServer.URL + "/d/current")
+
+	// Request should follow redirect and get content
+	discovery, err := client.GetDiscovery(context.Background(), "test-token")
+	require.NoError(t, err)
+	require.NotNil(t, discovery)
+	assert.Equal(t, []string{"*.example.com"}, discovery.MatchPatterns)
+
+	// Verify both endpoints were hit
+	assert.Equal(t, 1, redirectCallCount, "redirect endpoint should be hit")
+	assert.Equal(t, 1, contentCallCount, "content endpoint should be hit after redirect")
+
+	// Verify Authorization header was forwarded on redirect
+	assert.Equal(t, "Bearer test-token", receivedAuthHeader, "Authorization header should be forwarded on redirect")
+}
+
 func TestGetCert_CachesDiscoveryURL(t *testing.T) {
 	// CA server returns Link header pointing to discovery
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
