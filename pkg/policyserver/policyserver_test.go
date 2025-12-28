@@ -399,3 +399,98 @@ func TestHandler_DiscoveryLinkHeader_NotSetWhenEmpty(t *testing.T) {
 		t.Errorf("expected no Link header, got %q", link)
 	}
 }
+
+func TestHandler_DiscoveryLinkHeader_WithBaseURL(t *testing.T) {
+	evaluator := &mockEvaluator{
+		response: &policyserver.Response{
+			CertParams: ca.CertParams{
+				Identity:   "test@example.com",
+				Names:      []string{"testuser"},
+				Expiration: 5 * time.Minute,
+			},
+			Policy: policy.Policy{
+				HostUsers: map[string][]string{
+					"*": {"testuser"},
+				},
+			},
+		},
+	}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator:        &mockValidator{},
+		Evaluator:        evaluator,
+		DiscoveryHash:    "abc123def456",
+		DiscoveryBaseURL: "https://cdn.example.com",
+	})
+
+	req := policyserver.Request{
+		Token: encodeToken("test-token"),
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	link := w.Header().Get("Link")
+	// Link header uses absolute URL when DiscoveryBaseURL is set
+	expected := "<https://cdn.example.com/d/current>; rel=\"discovery\""
+	if link != expected {
+		t.Errorf("expected Link header %q, got %q", expected, link)
+	}
+}
+
+func TestHandler_DiscoveryLinkHeader_WithBaseURLTrailingSlash(t *testing.T) {
+	evaluator := &mockEvaluator{
+		response: &policyserver.Response{
+			CertParams: ca.CertParams{
+				Identity:   "test@example.com",
+				Names:      []string{"testuser"},
+				Expiration: 5 * time.Minute,
+			},
+		},
+	}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator:        &mockValidator{},
+		Evaluator:        evaluator,
+		DiscoveryHash:    "abc123def456",
+		DiscoveryBaseURL: "https://cdn.example.com/", // trailing slash
+	})
+
+	req := policyserver.Request{
+		Token: encodeToken("test-token"),
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	link := w.Header().Get("Link")
+	// Trailing slash should be stripped to avoid double slashes
+	expected := "<https://cdn.example.com/d/current>; rel=\"discovery\""
+	if link != expected {
+		t.Errorf("expected Link header %q, got %q", expected, link)
+	}
+}

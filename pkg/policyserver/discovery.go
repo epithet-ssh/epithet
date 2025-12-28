@@ -43,10 +43,15 @@ func NewDiscoveryHandler(config DiscoveryConfig) http.HandlerFunc {
 // The redirect response is cached for 5 minutes to allow policy changes to propagate.
 // Clients should request /d/current and follow the redirect to /d/{hash}.
 // Uses 302 Found (temporary) rather than 301 (permanent) since the redirect target may change.
-func NewDiscoveryRedirectHandler(hash string) http.HandlerFunc {
+// If baseURL is set, redirects to an absolute URL on that base; otherwise uses relative URLs.
+func NewDiscoveryRedirectHandler(hash string, baseURL string) http.HandlerFunc {
+	location := "/d/" + hash
+	if baseURL != "" {
+		location = strings.TrimSuffix(baseURL, "/") + "/d/" + hash
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "max-age=300")
-		w.Header().Set("Location", "/d/"+hash)
+		w.Header().Set("Location", location)
 		w.WriteHeader(http.StatusFound)
 	}
 }

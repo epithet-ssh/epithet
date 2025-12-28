@@ -40,6 +40,9 @@ type PolicyServerCLI struct {
 
 	// Default expiration
 	DefaultExpiration string `help:"Default certificate expiration (e.g., 5m)" name:"default-expiration"`
+
+	// Discovery base URL for CDN support
+	DiscoveryBaseURL string `help:"Base URL for discovery endpoints (e.g., https://cdn.example.com)" name:"discovery-base-url"`
 }
 
 func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unifiedConfig cue.Value) error {
@@ -82,10 +85,11 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 
 	// Create policy server handler
 	handler := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey:   sshcert.RawPublicKey(caPubkey),
-		Validator:     validator,
-		Evaluator:     eval,
-		DiscoveryHash: cfg.DiscoveryHash(),
+		CAPublicKey:      sshcert.RawPublicKey(caPubkey),
+		Validator:        validator,
+		Evaluator:        eval,
+		DiscoveryHash:    cfg.DiscoveryHash(),
+		DiscoveryBaseURL: c.DiscoveryBaseURL,
 	})
 
 	// Create discovery handler
@@ -110,7 +114,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 
 	r.Post("/", handler)
 	// Redirect endpoint: /d/current -> /d/{hash} (cached 5 min)
-	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(cfg.DiscoveryHash()))
+	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(cfg.DiscoveryHash(), c.DiscoveryBaseURL))
 	// Content-addressed endpoint: /d/{hash} (immutable)
 	r.Get("/d/*", discoveryHandler)
 

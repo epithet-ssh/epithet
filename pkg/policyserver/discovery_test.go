@@ -175,7 +175,7 @@ func TestDiscoveryHandler_EmptyPatterns(t *testing.T) {
 }
 
 func TestDiscoveryRedirectHandler(t *testing.T) {
-	handler := policyserver.NewDiscoveryRedirectHandler("abc123def456")
+	handler := policyserver.NewDiscoveryRedirectHandler("abc123def456", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/d/current", nil)
 	w := httptest.NewRecorder()
@@ -197,5 +197,40 @@ func TestDiscoveryRedirectHandler(t *testing.T) {
 	cacheControl := w.Header().Get("Cache-Control")
 	if cacheControl != "max-age=300" {
 		t.Errorf("expected Cache-Control 'max-age=300', got %q", cacheControl)
+	}
+}
+
+func TestDiscoveryRedirectHandler_WithBaseURL(t *testing.T) {
+	handler := policyserver.NewDiscoveryRedirectHandler("abc123def456", "https://cdn.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/d/current", nil)
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	// Check status code is 302 Found (temporary redirect)
+	if w.Code != http.StatusFound {
+		t.Errorf("expected status 302, got %d", w.Code)
+	}
+
+	// Check Location header points to absolute URL on base
+	location := w.Header().Get("Location")
+	if location != "https://cdn.example.com/d/abc123def456" {
+		t.Errorf("expected Location 'https://cdn.example.com/d/abc123def456', got %q", location)
+	}
+}
+
+func TestDiscoveryRedirectHandler_WithBaseURLTrailingSlash(t *testing.T) {
+	handler := policyserver.NewDiscoveryRedirectHandler("abc123def456", "https://cdn.example.com/")
+
+	req := httptest.NewRequest(http.MethodGet, "/d/current", nil)
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	// Check Location header correctly handles trailing slash
+	location := w.Header().Get("Location")
+	if location != "https://cdn.example.com/d/abc123def456" {
+		t.Errorf("expected Location 'https://cdn.example.com/d/abc123def456', got %q", location)
 	}
 }

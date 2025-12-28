@@ -114,6 +114,11 @@ type Config struct {
 	// If empty, no Link header is set.
 	// The path is hardcoded to "/d/" + hash.
 	DiscoveryHash string
+
+	// DiscoveryBaseURL is the base URL for discovery endpoints.
+	// If set, discovery URLs will be absolute URLs on this base (e.g., "https://cdn.example.com").
+	// If empty, discovery URLs will be relative (e.g., "/d/current").
+	DiscoveryBaseURL string
 }
 
 // handler holds the config and implements the HTTP handler methods
@@ -217,9 +222,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // setDiscoveryHeader sets the Link header for discovery if configured.
 // Always points to /d/current which redirects to the content-addressed URL.
+// If DiscoveryBaseURL is set, uses absolute URLs; otherwise uses relative URLs.
 func (h *handler) setDiscoveryHeader(w http.ResponseWriter) {
 	if h.config.DiscoveryHash != "" {
-		w.Header().Set("Link", "</d/current>; rel=\"discovery\"")
+		url := "/d/current"
+		if h.config.DiscoveryBaseURL != "" {
+			url = strings.TrimSuffix(h.config.DiscoveryBaseURL, "/") + "/d/current"
+		}
+		w.Header().Set("Link", "<"+url+">; rel=\"discovery\"")
 	}
 }
 
