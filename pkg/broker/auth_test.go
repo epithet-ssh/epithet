@@ -417,6 +417,28 @@ func TestAuthConfigToCommand_OIDC_NoScopes(t *testing.T) {
 	require.NotContains(t, cmd, "--scopes")
 }
 
+func TestAuthConfigToCommand_OIDC_WithClientSecret(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type:         "oidc",
+		Issuer:       "https://example.com",
+		ClientID:     "test-client",
+		ClientSecret: "super-secret",
+		Scopes:       []string{"openid"},
+	}
+
+	cmd, err := AuthConfigToCommand(auth)
+	require.NoError(t, err)
+
+	// Command should contain --client-secret when present
+	require.Contains(t, cmd, "auth oidc")
+	require.Contains(t, cmd, "--issuer https://example.com")
+	require.Contains(t, cmd, "--client-id test-client")
+	require.Contains(t, cmd, "--client-secret super-secret")
+	require.Contains(t, cmd, "--scopes openid")
+}
+
 func TestAuthConfigToCommand_Command(t *testing.T) {
 	t.Parallel()
 

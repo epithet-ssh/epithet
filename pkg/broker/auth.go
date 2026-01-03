@@ -148,12 +148,16 @@ func AuthConfigToCommand(auth caclient.BootstrapAuth) (string, error) {
 			return "", fmt.Errorf("failed to get executable path: %w", err)
 		}
 
-		// Build command: <executable> auth oidc --issuer X --client-id Y --scopes A,B,C
+		// Build command: <executable> auth oidc --issuer X --client-id Y [--client-secret Z] --scopes A,B,C
 		parts := []string{
 			executable,
 			"auth", "oidc",
 			"--issuer", auth.Issuer,
 			"--client-id", auth.ClientID,
+		}
+
+		if auth.ClientSecret != "" {
+			parts = append(parts, "--client-secret", auth.ClientSecret)
 		}
 
 		if len(auth.Scopes) > 0 {

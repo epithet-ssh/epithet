@@ -21,9 +21,10 @@ type PolicyRulesConfig struct {
 
 // OIDCConfig represents OIDC configuration for token validation
 type OIDCConfig struct {
-	Issuer   string   `yaml:"issuer" json:"issuer"`
-	ClientID string   `yaml:"client_id" json:"client_id"`
-	Scopes   []string `yaml:"scopes,omitempty" json:"scopes,omitempty"` // Optional, defaults to ["openid", "profile", "email"]
+	Issuer       string   `yaml:"issuer" json:"issuer"`
+	ClientID     string   `yaml:"client_id" json:"client_id"`
+	ClientSecret string   `yaml:"client_secret,omitempty" json:"client_secret,omitempty"` // Optional, for confidential clients
+	Scopes       []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`               // Optional, defaults to ["openid", "profile", "email"]
 }
 
 // DefaultScopes returns the default OIDC scopes
@@ -38,9 +39,10 @@ type BootstrapAuth struct {
 	Type string `json:"type"`
 
 	// OIDC fields (when type="oidc")
-	Issuer   string   `json:"issuer,omitempty"`
-	ClientID string   `json:"client_id,omitempty"`
-	Scopes   []string `json:"scopes,omitempty"`
+	Issuer       string   `json:"issuer,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
 
 	// Command field (when type="command") - opaque string
 	Command string `json:"command,omitempty"`
@@ -167,10 +169,11 @@ func (c *PolicyRulesConfig) BootstrapAuth() BootstrapAuth {
 	}
 
 	return BootstrapAuth{
-		Type:     "oidc",
-		Issuer:   c.OIDC.Issuer,
-		ClientID: c.OIDC.ClientID,
-		Scopes:   scopes,
+		Type:         "oidc",
+		Issuer:       c.OIDC.Issuer,
+		ClientID:     c.OIDC.ClientID,
+		ClientSecret: c.OIDC.ClientSecret,
+		Scopes:       scopes,
 	}
 }
 

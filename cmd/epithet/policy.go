@@ -22,8 +22,9 @@ import (
 // PolicyOIDCConfig holds OIDC configuration for the policy server.
 // This is embedded in PolicyServerCLI to enable nested config paths like policy.oidc.issuer
 type PolicyOIDCConfig struct {
-	Issuer   string `help:"OIDC issuer URL" name:"issuer"`
-	ClientID string `help:"OIDC client ID" name:"client-id"`
+	Issuer       string `help:"OIDC issuer URL" name:"issuer"`
+	ClientID     string `help:"OIDC client ID" name:"client-id"`
+	ClientSecret string `help:"OIDC client secret (for confidential clients)" name:"client-secret"`
 }
 
 // PolicyServerCLI defines the CLI flags for the policy server.
@@ -170,6 +171,9 @@ func (c *PolicyServerCLI) applyOverrides(cfg *policyserver.PolicyRulesConfig) {
 	}
 	if c.OIDC.ClientID != "" {
 		cfg.OIDC.ClientID = c.OIDC.ClientID
+	}
+	if c.OIDC.ClientSecret != "" {
+		cfg.OIDC.ClientSecret = c.OIDC.ClientSecret
 	}
 	if c.DefaultExpiration != "" {
 		if cfg.Defaults == nil {

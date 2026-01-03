@@ -97,9 +97,10 @@ type BootstrapAuth struct {
 	Type string `json:"type"`
 
 	// OIDC fields (when type="oidc")
-	Issuer   string   `json:"issuer,omitempty"`
-	ClientID string   `json:"client_id,omitempty"`
-	Scopes   []string `json:"scopes,omitempty"`
+	Issuer       string   `json:"issuer,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
 
 	// Command field (when type="command") - opaque string
 	Command string `json:"command,omitempty"`
