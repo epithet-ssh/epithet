@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -374,4 +375,100 @@ printf '\x80\x81\x82token\xff\xfe'
 	decoded, err := base64.RawURLEncoding.DecodeString(token)
 	require.NoError(t, err)
 	require.Equal(t, []byte{0x80, 0x81, 0x82, 't', 'o', 'k', 'e', 'n', 0xff, 0xfe}, decoded)
+}
+
+func TestAuthConfigToCommand_OIDC(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "my-client-id",
+		Scopes:   []string{"openid", "profile", "email"},
+	}
+
+	cmd, err := AuthConfigToCommand(auth)
+	require.NoError(t, err)
+
+	// Command should contain the executable path (we can't predict exact path)
+	require.Contains(t, cmd, "auth oidc")
+	require.Contains(t, cmd, "--issuer https://accounts.google.com")
+	require.Contains(t, cmd, "--client-id my-client-id")
+	require.Contains(t, cmd, "--scopes openid,profile,email")
+}
+
+func TestAuthConfigToCommand_OIDC_NoScopes(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://example.com",
+		ClientID: "test-client",
+		Scopes:   nil,
+	}
+
+	cmd, err := AuthConfigToCommand(auth)
+	require.NoError(t, err)
+
+	// Command should not contain --scopes when empty
+	require.Contains(t, cmd, "auth oidc")
+	require.Contains(t, cmd, "--issuer https://example.com")
+	require.Contains(t, cmd, "--client-id test-client")
+	require.NotContains(t, cmd, "--scopes")
+}
+
+func TestAuthConfigToCommand_Command(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type:    "command",
+		Command: "/usr/local/bin/custom-auth --tenant prod",
+	}
+
+	cmd, err := AuthConfigToCommand(auth)
+	require.NoError(t, err)
+
+	// Command should be passed through as-is
+	require.Equal(t, "/usr/local/bin/custom-auth --tenant prod", cmd)
+}
+
+func TestAuthConfigToCommand_Command_WithEpithetSubstitution(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type:    "command",
+		Command: "epithet auth oidc --issuer https://example.com",
+	}
+
+	cmd, err := AuthConfigToCommand(auth)
+	require.NoError(t, err)
+
+	// "epithet" should be replaced with actual executable path
+	require.NotContains(t, cmd, "epithet auth")
+	require.Contains(t, cmd, "auth oidc --issuer https://example.com")
+}
+
+func TestAuthConfigToCommand_Command_Empty(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type:    "command",
+		Command: "",
+	}
+
+	_, err := AuthConfigToCommand(auth)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-empty command")
+}
+
+func TestAuthConfigToCommand_UnknownType(t *testing.T) {
+	t.Parallel()
+
+	auth := caclient.BootstrapAuth{
+		Type: "saml",
+	}
+
+	_, err := AuthConfigToCommand(auth)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown auth type: saml")
 }

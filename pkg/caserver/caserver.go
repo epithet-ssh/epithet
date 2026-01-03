@@ -18,21 +18,27 @@ import (
 )
 
 type caServer struct {
-	c          *ca.CA
-	httpClient *http.Client
-	log        *slog.Logger
-	certLogger CertLogger
+	c            *ca.CA
+	httpClient   *http.Client
+	log          *slog.Logger
+	certLogger   CertLogger
+	bootstrapURL string
 }
 
 // New creates a new CA Server which needs to then
 // be attached to some http server, a la
 // `http.ListenAndServeTLS(...)`
 func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLogger) http.Handler {
+	// Derive bootstrap URL from policy URL
+	// Policy URL is like https://policy.example.com/ and bootstrap is at /d/bootstrap
+	bootstrapURL := strings.TrimSuffix(c.PolicyURL(), "/") + "/d/bootstrap"
+
 	cas := &caServer{
-		c:          c,
-		log:        log,
-		httpClient: httpClient,
-		certLogger: certLogger,
+		c:            c,
+		log:          log,
+		httpClient:   httpClient,
+		certLogger:   certLogger,
+		bootstrapURL: bootstrapURL,
 	}
 
 	if cas.httpClient == nil {
@@ -201,6 +207,8 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
+	// Add bootstrap Link header for client discovery
+	w.Header().Set("Link", "<"+s.bootstrapURL+">; rel=\"bootstrap\"")
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))

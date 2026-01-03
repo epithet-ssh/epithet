@@ -23,7 +23,7 @@ import (
 // This is embedded in PolicyServerCLI to enable nested config paths like policy.oidc.issuer
 type PolicyOIDCConfig struct {
 	Issuer   string `help:"OIDC issuer URL" name:"issuer"`
-	Audience string `help:"OIDC audience (client ID)" name:"audience"`
+	ClientID string `help:"OIDC client ID" name:"client-id"`
 }
 
 // PolicyServerCLI defines the CLI flags for the policy server.
@@ -74,7 +74,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 		"users", len(cfg.Users),
 		"hosts", len(cfg.Hosts),
 		"oidc_issuer", cfg.OIDC.Issuer,
-		"oidc_audience", cfg.OIDC.Audience)
+		"oidc_client_id", cfg.OIDC.ClientID)
 
 	// Create policy evaluator and token validator
 	ctx := context.Background()
@@ -101,7 +101,9 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	discoveryHandler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
 		Validator:     validator,
 		MatchPatterns: matchPatterns,
-		Hash:          cfg.DiscoveryHash(),
+		DiscoveryHash: cfg.DiscoveryHash(),
+		BootstrapHash: cfg.BootstrapHash(),
+		AuthConfig:    cfg.BootstrapAuth(),
 	})
 
 	// Set up router with middleware
@@ -113,15 +115,18 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Post("/", handler)
-	// Redirect endpoint: /d/current -> /d/{hash} (cached 5 min)
+	// Bootstrap redirect endpoint: /d/bootstrap -> /d/{bootstrap-hash} (cached 5 min, no auth)
+	r.Get("/d/bootstrap", policyserver.NewBootstrapRedirectHandler(cfg.BootstrapHash(), c.DiscoveryBaseURL))
+	// Discovery redirect endpoint: /d/current -> /d/{discovery-hash} (cached 5 min, requires auth)
 	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(cfg.DiscoveryHash(), c.DiscoveryBaseURL))
-	// Content-addressed endpoint: /d/{hash} (immutable)
+	// Content-addressed endpoint: /d/{hash} (immutable, serves bootstrap or discovery based on hash)
 	r.Get("/d/*", discoveryHandler)
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
 		"ca_pubkey_length", len(caPubkey),
 		"discovery_hash", cfg.DiscoveryHash(),
+		"bootstrap_hash", cfg.BootstrapHash(),
 		"match_patterns", matchPatterns)
 
 	return http.ListenAndServe(c.Listen, r)
@@ -162,8 +167,8 @@ func (c *PolicyServerCLI) applyOverrides(cfg *policyserver.PolicyRulesConfig) {
 	if c.OIDC.Issuer != "" {
 		cfg.OIDC.Issuer = c.OIDC.Issuer
 	}
-	if c.OIDC.Audience != "" {
-		cfg.OIDC.Audience = c.OIDC.Audience
+	if c.OIDC.ClientID != "" {
+		cfg.OIDC.ClientID = c.OIDC.ClientID
 	}
 	if c.DefaultExpiration != "" {
 		if cfg.Defaults == nil {

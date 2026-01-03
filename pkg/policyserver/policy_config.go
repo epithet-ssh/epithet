@@ -21,8 +21,34 @@ type PolicyRulesConfig struct {
 
 // OIDCConfig represents OIDC configuration for token validation
 type OIDCConfig struct {
-	Issuer   string `yaml:"issuer" json:"issuer"`
-	Audience string `yaml:"audience" json:"audience"`
+	Issuer   string   `yaml:"issuer" json:"issuer"`
+	ClientID string   `yaml:"client_id" json:"client_id"`
+	Scopes   []string `yaml:"scopes,omitempty" json:"scopes,omitempty"` // Optional, defaults to ["openid", "profile", "email"]
+}
+
+// DefaultScopes returns the default OIDC scopes
+func DefaultScopes() []string {
+	return []string{"openid", "profile", "email"}
+}
+
+// BootstrapAuth represents the auth configuration returned by the bootstrap endpoint.
+// The Type field discriminates between auth methods.
+type BootstrapAuth struct {
+	// Type identifies the auth method: "oidc" or "command"
+	Type string `json:"type"`
+
+	// OIDC fields (when type="oidc")
+	Issuer   string   `json:"issuer,omitempty"`
+	ClientID string   `json:"client_id,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
+
+	// Command field (when type="command") - opaque string
+	Command string `json:"command,omitempty"`
+}
+
+// Bootstrap represents the bootstrap endpoint response
+type Bootstrap struct {
+	Auth BootstrapAuth `json:"auth"`
 }
 
 // DefaultPolicy defines default policy settings
@@ -49,8 +75,8 @@ func (c *PolicyRulesConfig) Validate() error {
 		return fmt.Errorf("oidc.issuer is required")
 	}
 
-	if c.OIDC.Audience == "" {
-		return fmt.Errorf("oidc.audience is required")
+	if c.OIDC.ClientID == "" {
+		return fmt.Errorf("oidc.client_id is required")
 	}
 
 	if c.Users == nil {
@@ -127,6 +153,37 @@ func (c *PolicyRulesConfig) DiscoveryHash() string {
 		sort.Strings(allowKeys)
 		enc.Encode(allowKeys)
 	}
+
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum)[:12]
+}
+
+// BootstrapAuth returns the auth configuration for the bootstrap endpoint.
+// Currently only supports OIDC auth type.
+func (c *PolicyRulesConfig) BootstrapAuth() BootstrapAuth {
+	scopes := c.OIDC.Scopes
+	if len(scopes) == 0 {
+		scopes = DefaultScopes()
+	}
+
+	return BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   c.OIDC.Issuer,
+		ClientID: c.OIDC.ClientID,
+		Scopes:   scopes,
+	}
+}
+
+// BootstrapHash computes a content-addressable hash of the auth configuration.
+// This hash changes when the auth config changes (issuer, client_id, scopes).
+// Returns a 12-character hex string.
+func (c *PolicyRulesConfig) BootstrapHash() string {
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+
+	// Hash the bootstrap auth config (deterministic JSON)
+	auth := c.BootstrapAuth()
+	enc.Encode(auth)
 
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)[:12]

@@ -23,7 +23,7 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
-			Audience: "test-client-id",
+			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
@@ -57,7 +57,7 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
-			Audience: "test-client-id",
+			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
@@ -89,7 +89,7 @@ func TestEvaluateHostPolicy(t *testing.T) {
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
-			Audience: "test-client-id",
+			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
@@ -118,7 +118,7 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://invalid-oidc-provider.example.com",
-			Audience: "test-client-id",
+			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
@@ -477,7 +477,7 @@ func ExampleEvaluator() {
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
 			Issuer:   "https://accounts.google.com",
-			Audience: "test-client-id",
+			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},

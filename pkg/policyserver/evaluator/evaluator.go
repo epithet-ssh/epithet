@@ -25,7 +25,7 @@ func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlscon
 	// Create OIDC validator
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
 		Issuer:    cfg.OIDC.Issuer,
-		ClientID:  cfg.OIDC.Audience,
+		ClientID:  cfg.OIDC.ClientID,
 		TLSConfig: tlsCfg,
 	})
 	if err != nil {

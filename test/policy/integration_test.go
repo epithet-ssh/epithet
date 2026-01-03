@@ -161,7 +161,7 @@ func TestPolicyServerCommand(t *testing.T) {
 	// Verify help output contains expected flags
 	expectedStrings := []string{
 		"--oidc-issuer",
-		"--oidc-audience",
+		"--oidc-client-id",
 		"--ca-pubkey",
 		"--listen",
 		"OIDC-based authorization",

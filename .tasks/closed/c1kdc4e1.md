@@ -3,7 +3,7 @@ yatl_version: 1
 title: 'Two-tier discovery: public and authenticated endpoints'
 id: c1kdc4e1
 created: 2025-12-24T23:08:50.420228Z
-updated: 2025-12-24T23:09:16.320617Z
+updated: 2026-01-03T00:47:24.678182Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -88,3 +88,23 @@ Authenticated discovery:
 ### Open Items
 
 - Need to add client_id to OIDC config (currently only has issuer and audience)
+
+---
+# Log: 2026-01-02T23:56:52Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-01-03T00:36:11Z Brian McCallister
+
+-
+
+---
+# Log: 2026-01-03T00:47:20Z Brian McCallister
+
+Implemented two-tier discovery. Changes: (1) Renamed OIDCConfig.Audience to ClientID, (2) Added BootstrapHash/BootstrapAuth methods, (3) Updated discovery handler for bootstrap+discovery tiers, (4) Added bootstrap Link header to CA GET /, (5) Added Bootstrap/GetPublicKey/GetBootstrap to caclient, (6) Added AuthConfigToCommand function. All tests pass.
+
+---
+# Log: 2026-01-03T00:47:24Z Brian McCallister
+
+Closed: Implemented two-tier discovery: public bootstrap (no auth) and authenticated discovery. All 7 implementation steps complete with tests.

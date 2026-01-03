@@ -4,6 +4,40 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Correctness over convenience
+
+* Model the full error space—no shortcuts or simplified error handling. 
+* Handle all edge cases, including race conditions, signal timing, and platform differences.
+* Use the type system to encode correctness constraints.
+* Prefer compile-time guarantees over runtime checks where possible.
+
+## User experience as a primary driver
+
+* Provide structured, helpful error messages for diagnostics
+* Make progress reporting responsive and informative.
+* Maintain consistency across platforms even when underlying OS capabilities differ. Use OS-native logic rather than trying to emulate Unix on Windows (or vice versa).
+* Write user-facing messages in clear, present tense: "Epithet now supports..." not "Epithet now supported..."
+
+## Pragmatic incrementalism
+
+* "Not overly generic"—prefer specific, composable logic over abstract frameworks.
+* Evolve the design incrementally rather than attempting perfect upfront architecture.
+* Document design decisions and trade-offs in design docs
+* When uncertain, explore and iterate
+
+## Production-grade engineering
+
+* Test comprehensively, including edge cases, race conditions, and stress tests.
+* Pay attention to what facilities already exist, and aim to reuse them.
+* Getting the details right is really important!
+
+## Documentation
+
+* Use inline comments to explain "why," not just "what".
+* Module-level documentation should explain purpose and responsibilities.
+* Always use periods at the end of code comments.
+* Never use title case in headings and titles. Always use sentence case.
+
 ## Project Overview
 
 Epithet is an SSH certificate authority system that makes SSH certificates easy to use. The project is currently undergoing a v2 rewrite (see README.md for v2 architecture details).
