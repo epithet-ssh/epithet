@@ -18,27 +18,21 @@ import (
 )
 
 type caServer struct {
-	c            *ca.CA
-	httpClient   *http.Client
-	log          *slog.Logger
-	certLogger   CertLogger
-	bootstrapURL string
+	c          *ca.CA
+	httpClient *http.Client
+	log        *slog.Logger
+	certLogger CertLogger
 }
 
 // New creates a new CA Server which needs to then
 // be attached to some http server, a la
 // `http.ListenAndServeTLS(...)`
 func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLogger) http.Handler {
-	// Derive bootstrap URL from policy URL
-	// Policy URL is like https://policy.example.com/ and bootstrap is at /d/bootstrap
-	bootstrapURL := strings.TrimSuffix(c.PolicyURL(), "/") + "/d/bootstrap"
-
 	cas := &caServer{
-		c:            c,
-		log:          log,
-		httpClient:   httpClient,
-		certLogger:   certLogger,
-		bootstrapURL: bootstrapURL,
+		c:          c,
+		log:        log,
+		httpClient: httpClient,
+		certLogger: certLogger,
 	}
 
 	if cas.httpClient == nil {
@@ -207,8 +201,15 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
+	// Use bootstrap URL learned from policy server, or derive from policy URL
+	bootstrapURL := s.c.BootstrapURL()
+	if bootstrapURL == "" {
+		// Fallback: derive from policy URL until we've made a request to policy server
+		bootstrapURL = strings.TrimSuffix(s.c.PolicyURL(), "/") + "/d/bootstrap"
+	}
+
 	// Add bootstrap Link header for client discovery
-	w.Header().Set("Link", "<"+s.bootstrapURL+">; rel=\"bootstrap\"")
+	w.Header().Set("Link", "<"+bootstrapURL+">; rel=\"bootstrap\"")
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))

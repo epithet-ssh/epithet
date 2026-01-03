@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/policy"
@@ -29,6 +30,7 @@ type PolicyError struct {
 	StatusCode   int
 	Message      string
 	DiscoveryURL string // Resolved discovery URL from Link header
+	BootstrapURL string // Resolved bootstrap URL from Link header
 }
 
 func (e *PolicyError) Error() string {
@@ -42,11 +44,24 @@ type CA struct {
 	policyURL  string
 	httpClient *http.Client
 	logger     *slog.Logger
+
+	// Cached bootstrap URL learned from policy server Link header.
+	// Protected by bootstrapMu.
+	bootstrapMu  sync.RWMutex
+	bootstrapURL string
 }
 
 // get the URL of the Policy Server
 func (c *CA) PolicyURL() string {
 	return c.policyURL
+}
+
+// BootstrapURL returns the cached bootstrap URL learned from the policy server.
+// Returns empty string if not yet learned.
+func (c *CA) BootstrapURL() string {
+	c.bootstrapMu.RLock()
+	defer c.bootstrapMu.RUnlock()
+	return c.bootstrapURL
 }
 
 // New creates a new CA
@@ -135,6 +150,7 @@ type PolicyResponse struct {
 	CertParams   CertParams    `json:"certParams"`
 	Policy       policy.Policy `json:"policy"`
 	DiscoveryURL string        `json:"-"` // Resolved URL from Link header
+	BootstrapURL string        `json:"-"` // Resolved URL from Link header
 }
 
 func Verify(pubkey sshcert.RawPublicKey, token, signature string) error {
@@ -155,39 +171,60 @@ func (c *CA) Sign(value string) (signature string, err error) {
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
 
-// extractDiscoveryURL extracts and resolves the discovery URL from a Link header.
-// Link header format: <url>; rel="discovery"
+// extractLinkURLs extracts and resolves URLs from a Link header by rel type.
+// Link header format: <url1>; rel="discovery", <url2>; rel="bootstrap"
 // Uses url.URL.ResolveReference for proper RFC 3986 resolution.
-// Returns the resolved URL or empty string if no/invalid Link header.
-func extractDiscoveryURL(linkHeader, baseURL string) string {
+// Returns a map of rel type to resolved URL.
+func extractLinkURLs(linkHeader, baseURL string) map[string]string {
+	result := make(map[string]string)
 	if linkHeader == "" {
-		return ""
+		return result
 	}
-
-	// Parse Link header: <url>; rel="..."
-	start := strings.Index(linkHeader, "<")
-	end := strings.Index(linkHeader, ">")
-	if start == -1 || end == -1 || end <= start {
-		return "" // Can't parse
-	}
-
-	linkURL := linkHeader[start+1 : end]
 
 	// Parse base URL
 	base, err := url.Parse(baseURL)
 	if err != nil {
-		return "" // Can't parse base
+		return result // Can't parse base
 	}
 
-	// Parse link URL
-	ref, err := url.Parse(linkURL)
-	if err != nil {
-		return "" // Can't parse link URL
+	// Split on comma to handle multiple links
+	// Link: <url1>; rel="discovery", <url2>; rel="bootstrap"
+	for _, part := range strings.Split(linkHeader, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Extract URL from <...>
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start == -1 || end == -1 || end <= start {
+			continue
+		}
+		linkURL := part[start+1 : end]
+
+		// Extract rel type from rel="..."
+		relStart := strings.Index(part, `rel="`)
+		if relStart == -1 {
+			continue
+		}
+		relStart += 5 // len(`rel="`)
+		relEnd := strings.Index(part[relStart:], `"`)
+		if relEnd == -1 {
+			continue
+		}
+		relType := part[relStart : relStart+relEnd]
+
+		// Parse and resolve link URL
+		ref, err := url.Parse(linkURL)
+		if err != nil {
+			continue
+		}
+		resolved := base.ResolveReference(ref)
+		result[relType] = resolved.String()
 	}
 
-	// Resolve using standard library
-	resolved := base.ResolveReference(ref)
-	return resolved.String()
+	return result
 }
 
 // RequestPolicy requests policy from the policy url
@@ -234,8 +271,17 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		c.logger.Debug("http response", "method", "POST", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
-	// Extract and resolve discovery URL from Link header
-	discoveryURL := extractDiscoveryURL(res.Header.Get("Link"), c.policyURL)
+	// Extract and resolve URLs from Link header
+	linkURLs := extractLinkURLs(res.Header.Get("Link"), c.policyURL)
+	discoveryURL := linkURLs["discovery"]
+	bootstrapURL := linkURLs["bootstrap"]
+
+	// Cache bootstrap URL if present (for use by CA server)
+	if bootstrapURL != "" {
+		c.bootstrapMu.Lock()
+		c.bootstrapURL = bootstrapURL
+		c.bootstrapMu.Unlock()
+	}
 
 	lim := io.LimitReader(res.Body, 8196)
 	buf, err := io.ReadAll(lim)
@@ -251,6 +297,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 			StatusCode:   res.StatusCode,
 			Message:      string(buf),
 			DiscoveryURL: discoveryURL,
+			BootstrapURL: bootstrapURL,
 		}
 	}
 
@@ -260,6 +307,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
 	policyResp.DiscoveryURL = discoveryURL
+	policyResp.BootstrapURL = bootstrapURL
 	return policyResp, nil
 }
 

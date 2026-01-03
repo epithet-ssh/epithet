@@ -89,6 +89,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 		Validator:        validator,
 		Evaluator:        eval,
 		DiscoveryHash:    cfg.DiscoveryHash(),
+		BootstrapHash:    cfg.BootstrapHash(),
 		DiscoveryBaseURL: c.DiscoveryBaseURL,
 	})
 

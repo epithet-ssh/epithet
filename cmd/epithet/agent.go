@@ -23,7 +23,7 @@ import (
 // Shared flags (CaURL, Auth) are defined here and inherited by subcommands.
 type AgentCLI struct {
 	CaURL      []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
-	Auth       string        `help:"Authentication command" short:"a"`
+	Auth       string        `help:"Authentication command (optional if CA provides bootstrap discovery)" short:"a"`
 	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 
@@ -38,9 +38,6 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	// Validate required fields for start
 	if len(parent.CaURL) == 0 {
 		return fmt.Errorf("--ca-url is required (at least one)")
-	}
-	if parent.Auth == "" {
-		return fmt.Errorf("--auth is required")
 	}
 
 	// Parse CA URLs into endpoints
@@ -114,8 +111,34 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return fmt.Errorf("failed to create CA client: %w", err)
 	}
 
+	// Resolve auth command: use --auth if provided, otherwise discover from CA
+	authCommand := parent.Auth
+	if authCommand == "" {
+		logger.Debug("no --auth provided, discovering from CA bootstrap")
+
+		// Fetch public key (also caches bootstrap URL)
+		_, err := caClient.GetPublicKey(context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to get CA public key: %w", err)
+		}
+
+		// Fetch bootstrap config
+		bootstrap, err := caClient.GetBootstrap(context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to get bootstrap config (try --auth to specify manually): %w", err)
+		}
+
+		// Convert bootstrap auth config to command
+		authCommand, err = broker.AuthConfigToCommand(bootstrap.Auth)
+		if err != nil {
+			return fmt.Errorf("failed to convert bootstrap auth config: %w", err)
+		}
+
+		logger.Info("discovered auth config from CA", "type", bootstrap.Auth.Type, "issuer", bootstrap.Auth.Issuer)
+	}
+
 	// Create broker
-	b, err := broker.New(*logger, brokerSock, parent.Auth, caClient, agentDir)
+	b, err := broker.New(*logger, brokerSock, authCommand, caClient, agentDir)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}
