@@ -33,7 +33,8 @@ type PolicyOIDCConfig struct {
 type PolicyServerCLI struct {
 	Listen string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
 
-	// Nested struct for OIDC - gives us policy.oidc.issuer in config
+	// Embedded struct for OIDC - CLI flags are --oidc-issuer, --oidc-client-id, etc.
+	// Config file uses nested policy.oidc.issuer (handled by loadPolicyFromCUE, allowed via AllowUnknownFields)
 	OIDC PolicyOIDCConfig `embed:"" prefix:"oidc-"`
 
 	// CA public key - can be URL, file path, or literal key

@@ -9,6 +9,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/brianm/kongcue"
+	"github.com/epithet-ssh/epithet/pkg/slogoslog"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/lmittmann/tint"
 )
@@ -20,10 +21,11 @@ var (
 )
 
 var cli struct {
-	Version kong.VersionFlag `short:"V" help:"Print version information"`
-	Verbose int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
-	LogFile string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
-	Config  kongcue.Config   `help:"Path to config file" sep:";" default:"/etc/epithet/*.{cue,yaml,yml,json};~/.epithet/*.{cue,yaml,yml,json}"`
+	Version   kong.VersionFlag `short:"V" help:"Print version information"`
+	Verbose   int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
+	LogFile   string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
+	NativeLog bool             `name:"native-log" help:"Use native OS logging (macOS: Console.app)" env:"EPITHET_NATIVE_LOG"`
+	Config    kongcue.Config   `help:"Path to config file" sep:";" default:"/etc/epithet/*.{cue,yaml,yml,json};~/.epithet/*.{cue,yaml,yml,json}"`
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
@@ -50,7 +52,7 @@ func main() {
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
 		kong.ShortUsageOnError(),
-		kongcue.AllowUnknownFields("policy.users", "policy.defaults", "policy.hosts"),
+		kongcue.AllowUnknownFields("policy.users", "policy.defaults", "policy.hosts", "policy.oidc"),
 	)
 	logger := setupLogger()
 
@@ -82,7 +84,7 @@ func expandPath(path string) (string, error) {
 }
 
 func setupLogger() *slog.Logger {
-	// Determine log level based on verbosity
+	// Determine log level based on verbosity.
 	level := slog.LevelWarn
 	switch cli.Verbose {
 	case 0:
@@ -93,15 +95,24 @@ func setupLogger() *slog.Logger {
 		level = slog.LevelDebug
 	}
 
-	// Determine output writer
+	// If native logging requested, try to use it.
+	if cli.NativeLog {
+		if handler := slogoslog.NewHandler(level); handler != nil {
+			return slog.New(handler)
+		}
+		// Fall through to default handler if native not available.
+		slog.Warn("native logging not available on this platform, using console")
+	}
+
+	// Determine output writer.
 	var w io.Writer = os.Stderr
 	if cli.LogFile != "" {
 		path, err := expandPath(cli.LogFile)
 		if err != nil {
-			// Fall back to stderr if path expansion fails
+			// Fall back to stderr if path expansion fails.
 			slog.Error("failed to expand log file path", "error", err)
 		} else {
-			// Ensure parent directory exists
+			// Ensure parent directory exists.
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				slog.Error("failed to create log directory", "error", err)
 			} else {
