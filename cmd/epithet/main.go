@@ -66,7 +66,7 @@ func main() {
 	ktx.FatalIfErrorf(err)
 }
 
-// expandPath expands ~ to the user's home directory
+// expandPath expands ~ to the user's home directory.
 func expandPath(path string) (string, error) {
 	if path == "" {
 		return path, nil
