@@ -178,6 +178,10 @@ make clean    # Clean build artifacts
 
 Requirements: Go 1.25+
 
+## Releases
+
+Releases are coordinated via the [packaging](https://github.com/epithet-ssh/packaging) repository, which orchestrates unified releases across all epithet-ssh projects.
+
 ## License
 
 Apache 2.0
