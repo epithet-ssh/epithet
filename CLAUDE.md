@@ -44,7 +44,27 @@ Epithet is an SSH certificate authority system that makes SSH certificates easy 
 
 Design notes, future ideas, and exploratory documents are kept in the `ideas/` directory for future reference.
 
-## Version Control Policy
+## Commit message conventions
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
+This enables automatic version bumping via `svu next`.
+
+**Format:** `<type>[optional scope]: <description>`
+
+**Types and their version impact:**
+- `fix:` → patch bump (0.6.0 → 0.6.1)
+- `feat:` → minor bump (0.6.0 → 0.7.0)
+- `feat!:` or `BREAKING CHANGE:` → major bump (0.6.0 → 1.0.0)
+- `docs:`, `chore:`, `test:`, `refactor:` → no version bump
+
+**Examples:**
+- `fix: handle nil pointer in broker auth`
+- `feat: add OIDC token refresh support`
+- `feat!: change auth command protocol to use fd3`
+- `docs: update README with new config format`
+- `chore: update dependencies`
+
+## Version control policy
 
 **CRITICAL**: Do NOT create commits or interact with git to make new commits. The user will handle all commit creation.
 
