@@ -725,6 +725,99 @@ The project includes:
 
 Run all tests with `make test` or `go test ./...`.
 
+### Manual local testing with binaries
+
+To test the full stack with actual binaries (not Go test harness), use a mock OIDC server:
+
+**1. Install mock OIDC server:**
+```bash
+# Using uvx (recommended) or pip
+uvx oidc-provider-mock --port 9400
+```
+
+**2. Create test directory and keys:**
+```bash
+mkdir -p /tmp/epithet-test/auth_principals
+ssh-keygen -t ed25519 -f /tmp/epithet-test/ca-key -N ""
+ssh-keygen -t ed25519 -f /tmp/epithet-test/ssh_host_key -N ""
+```
+
+**3. Create policy config (`/tmp/epithet-test/policy.yaml`):**
+```yaml
+policy:
+  ca_pubkey: "/tmp/epithet-test/ca-key.pub"
+  oidc:
+    issuer: "http://localhost:9400"
+    client_id: "test-client"
+  defaults:
+    expiration: "5m"
+    extensions:
+      permit-pty: ""
+    allow:
+      YOUR_USERNAME: [admin]
+  users:
+    "sub": [admin]        # Mock OIDC returns "sub" or username
+    "YOUR_USERNAME": [admin]
+  hosts:
+    "*":
+      allow:
+        YOUR_USERNAME: [admin]
+```
+
+**4. Create sshd config (`/tmp/epithet-test/sshd_config`):**
+```
+Port 2222
+PasswordAuthentication no
+PubkeyAuthentication yes
+StrictModes no
+UsePAM no
+HostKey /tmp/epithet-test/ssh_host_key
+TrustedUserCAKeys /tmp/epithet-test/ca-key.pub
+AuthorizedPrincipalsFile /tmp/epithet-test/auth_principals/%u
+```
+
+**5. Create principals file:**
+```bash
+echo "YOUR_USERNAME" > /tmp/epithet-test/auth_principals/YOUR_USERNAME
+```
+
+**6. Start components (5 terminals):**
+```bash
+# Terminal 1: Mock OIDC
+uvx oidc-provider-mock --port 9400
+
+# Terminal 2: Policy server
+./epithet policy --config /tmp/epithet-test/policy.yaml --listen 127.0.0.1:9999 --insecure -vv
+
+# Terminal 3: CA server
+./epithet ca --key /tmp/epithet-test/ca-key --policy http://127.0.0.1:9999 --listen 127.0.0.1:8080 --insecure -vv
+
+# Terminal 4: sshd (debug mode, single-threaded)
+/usr/sbin/sshd -d -D -f /tmp/epithet-test/sshd_config
+
+# Terminal 5: Agent (use custom HOME to avoid ~/.epithet)
+HOME=/tmp/epithet-test/home ./epithet agent \
+  --ca-url http://127.0.0.1:8080 \
+  --auth "./epithet auth oidc --issuer http://localhost:9400 --client-id test-client --client-secret test-secret --insecure" \
+  --insecure -vv
+```
+
+**7. Test SSH:**
+```bash
+# Create SSH config with Include
+echo 'Include /tmp/epithet-test/home/.epithet/run/*/ssh-config.conf' > /tmp/epithet-test/ssh_config
+
+# SSH (first time opens browser for OIDC login)
+HOME=/tmp/epithet-test/home ssh -F /tmp/epithet-test/ssh_config \
+  -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+  -p 2222 YOUR_USERNAME@localhost
+```
+
+**Notes:**
+- Mock OIDC requires `--client-secret` (doesn't support PKCE)
+- sshd in `-d` mode exits after one connection - restart for each test
+- The `Include` wildcard pattern finds the agent config automatically
+
 ## Project Structure Notes
 
 - Currently on branch `v2.go` with v2 implementation complete
