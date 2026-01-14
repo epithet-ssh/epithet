@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -26,18 +27,20 @@ const MaxStateBlobSize = 10 * 1024 * 1024
 //   - lock protects: state, token
 //   - Token() reads token under lock
 //   - Run() holds lock for entire auth command execution and state update (atomic operation)
-//   - cmdLine is immutable after NewAuth()
+//   - cmdLine and logger are immutable after NewAuth()
 type Auth struct {
-	cmdLine string     // Immutable after NewAuth()
-	lock    sync.Mutex // Protects state and token
-	state   []byte     // Protected by lock
-	token   string     // Protected by lock
+	cmdLine string      // Immutable after NewAuth()
+	logger  *slog.Logger // Optional logger for auth command output
+	lock    sync.Mutex  // Protects state and token
+	state   []byte      // Protected by lock
+	token   string      // Protected by lock
 }
 
-// NewAuth creates a new Auth with an unparsed command line.
-func NewAuth(cmdLine string) *Auth {
+// NewAuth creates a new Auth with an unparsed command line and logger.
+func NewAuth(cmdLine string, logger *slog.Logger) *Auth {
 	return &Auth{
 		cmdLine: cmdLine,
+		logger:  logger,
 		state:   []byte{},
 		token:   "",
 	}
@@ -87,11 +90,18 @@ func (h *Auth) Run(attrs any) (string, error) {
 	defer stateReader.Close()
 
 	// Execute the auth command
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
 	cmd := exec.Command("sh", "-c", cmdLine)
 	cmd.Stdin = bytes.NewReader(h.state)
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+
+	// Stream stderr to logger in real-time (for auth URLs), also capture for errors
+	var stderrBuf bytes.Buffer
+	if h.logger != nil {
+		cmd.Stderr = io.MultiWriter(&stderrBuf, &logWriter{logger: h.logger})
+	} else {
+		cmd.Stderr = &stderrBuf
+	}
 	cmd.ExtraFiles = []*os.File{stateWriter} // fd 3 in child process
 
 	if err := cmd.Start(); err != nil {
@@ -117,7 +127,7 @@ func (h *Auth) Run(attrs any) (string, error) {
 
 	// Wait for command to complete
 	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("auth command failed: %w: %s", err, stderr.String())
+		return "", fmt.Errorf("auth command failed: %w: %s", err, stderrBuf.String())
 	}
 
 	// Extract token from stdout
@@ -185,4 +195,20 @@ func AuthConfigToCommand(auth caclient.BootstrapAuth) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown auth type: %s", auth.Type)
 	}
+}
+
+// logWriter is an io.Writer that logs each write to an slog.Logger.
+type logWriter struct {
+	logger *slog.Logger
+}
+
+func (w *logWriter) Write(p []byte) (n int, err error) {
+	if len(p) > 0 {
+		// Trim trailing newline for cleaner log output
+		msg := strings.TrimRight(string(p), "\n")
+		if msg != "" {
+			w.logger.Info("auth", "stderr", msg)
+		}
+	}
+	return len(p), nil
 }

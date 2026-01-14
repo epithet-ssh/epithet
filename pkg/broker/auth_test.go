@@ -12,7 +12,7 @@ import (
 
 func TestAuth_New(t *testing.T) {
 	t.Parallel()
-	auth := NewAuth("my-auth-command --flag")
+	auth := NewAuth("my-auth-command --flag", testLogger(t))
 	require.NotNil(t, auth)
 	require.Equal(t, "my-auth-command --flag", auth.cmdLine)
 	require.Empty(t, auth.state)
@@ -29,7 +29,7 @@ cat > /dev/null
 printf '%s' "my-token-1"
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "bXktdG9rZW4tMQ", token) // "my-token-1" base64url encoded
@@ -49,7 +49,7 @@ printf '%s' "my-token-2"
 printf '%s' '{"refresh":"xyz"}' >&3
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "bXktdG9rZW4tMg", token) // "my-token-2" base64url encoded
@@ -65,7 +65,7 @@ printf '%s' "token"
 printf '%s' '{"count":1}' >&3
 `)
 
-	auth := NewAuth(script1)
+	auth := NewAuth(script1, testLogger(t))
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
@@ -99,7 +99,7 @@ echo "Authentication failed" >&2
 exit 1
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Authentication failed")
@@ -112,7 +112,7 @@ echo "Something went wrong" >&2
 exit 1
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "auth command failed")
@@ -126,7 +126,7 @@ cat > /dev/null
 # No output to stdout - empty token
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty token")
@@ -135,7 +135,7 @@ cat > /dev/null
 func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 	t.Parallel()
 	// Test that mustache template is rendered in command line
-	auth := NewAuth(`printf '%s' "token-{{host}}"`)
+	auth := NewAuth(`printf '%s' "token-{{host}}"`, testLogger(t))
 	token, err := auth.Run(map[string]string{"host": "ok"})
 	require.NoError(t, err)
 	require.Equal(t, "dG9rZW4tb2s", token) // "token-ok" base64url encoded
@@ -143,7 +143,7 @@ func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 
 func TestAuth_Run_MustacheTemplateError(t *testing.T) {
 	t.Parallel()
-	auth := NewAuth("echo {{unclosed}")
+	auth := NewAuth("echo {{unclosed}", testLogger(t))
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to render command template")
@@ -159,7 +159,7 @@ printf '%s' "token"
 printf '%s' '{"count":1}' >&3
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 
 	// Run two calls concurrently
 	done := make(chan bool, 2)
@@ -206,7 +206,7 @@ else
 fi
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 	require.Equal(t, "Zmlyc3QtY2FsbC10b2tlbg", token) // "first-call-token" base64url encoded
@@ -221,7 +221,7 @@ printf '%s' "token"
 # No output to fd 3 - should clear existing state
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	auth.state = []byte("old-state") // Set some initial state
 
 	token, err := auth.Run(nil)
@@ -247,7 +247,7 @@ else
 fi
 `)
 
-	auth := NewAuth(script1)
+	auth := NewAuth(script1, testLogger(t))
 	token, err := auth.Run(map[string]string{"user": "alice"})
 	require.NoError(t, err)
 	require.Equal(t, "aW5pdGlhbC1hdXRoLXRva2Vu", token) // "initial-auth-token" base64url encoded
@@ -302,7 +302,7 @@ cat > /dev/null
 printf '%s' "my-token-abc"
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 
 	// Token should be empty initially
 	require.Empty(t, auth.Token())
@@ -329,7 +329,7 @@ printf '%s' "token"
 head -c 11534336 /dev/zero >&3
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	_, err := auth.Run(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exceeds maximum size")
@@ -338,7 +338,7 @@ head -c 11534336 /dev/zero >&3
 
 func TestAuth_ClearToken(t *testing.T) {
 	t.Parallel()
-	auth := NewAuth("echo token")
+	auth := NewAuth("echo token", testLogger(t))
 	auth.token = "existing-token"
 	auth.state = []byte("existing-state")
 
@@ -362,7 +362,7 @@ cat > /dev/null
 printf '\x80\x81\x82token\xff\xfe'
 `)
 
-	auth := NewAuth(script)
+	auth := NewAuth(script, testLogger(t))
 	token, err := auth.Run(nil)
 	require.NoError(t, err)
 
