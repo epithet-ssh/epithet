@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -21,6 +22,7 @@ type Config struct {
 	ClientSecret string // Optional for PKCE
 	Scopes       []string
 	TLSConfig    tlsconfig.Config
+	Browser      string // Optional browser command (e.g., "open -a 'Google Chrome'" on macOS)
 }
 
 // Run performs OIDC authentication following the epithet auth plugin protocol.
@@ -77,7 +79,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			// Refresh failed, need full auth
 			fmt.Fprintf(os.Stderr, "Token refresh failed, performing full authentication: %v\n", err)
-			newToken, err = performFullAuth(ctx, oauth2Config)
+			newToken, err = performFullAuth(ctx, oauth2Config, cfg.Browser)
 			if err != nil {
 				return err
 			}
@@ -86,7 +88,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	} else {
 		// No valid token, perform full authentication
-		newToken, err = performFullAuth(ctx, oauth2Config)
+		newToken, err = performFullAuth(ctx, oauth2Config, cfg.Browser)
 		if err != nil {
 			return err
 		}
@@ -125,7 +127,8 @@ func Run(ctx context.Context, cfg Config) error {
 
 // performFullAuth performs the full OAuth2 authorization code flow with PKCE.
 // It starts a local HTTP server, opens the browser, and waits for the callback.
-func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.Token, error) {
+// If browserCmd is non-empty, it is used to open the URL (e.g., "open -a 'Google Chrome'").
+func performFullAuth(ctx context.Context, oauth2Config oauth2.Config, browserCmd string) (*oauth2.Token, error) {
 	// Create a channel to receive the local server URL
 	readyChan := make(chan string, 1)
 
@@ -175,7 +178,7 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	case url := <-readyChan:
 		fmt.Fprintf(os.Stderr, "\nIf your browser doesn't open automatically, visit:\n%s\n\n", url)
 		// Attempt to open the browser
-		if err := browser.OpenURL(url); err != nil {
+		if err := openBrowser(url, browserCmd); err != nil {
 			fmt.Fprintf(os.Stderr, "Could not open browser automatically: %v\n", err)
 			fmt.Fprintf(os.Stderr, "Please open the URL above manually.\n")
 		}
@@ -193,4 +196,36 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// openBrowser opens a URL in the browser. If browserCmd is non-empty, it is
+// executed as a shell command with the URL appended. Otherwise, the system
+// default browser is used.
+func openBrowser(url, browserCmd string) error {
+	if browserCmd == "" {
+		return browser.OpenURL(url)
+	}
+	// Use shell to execute the command with the URL appended.
+	cmd := exec.Command("sh", "-c", browserCmd+" "+shellQuote(url))
+	return cmd.Start()
+}
+
+// shellQuote quotes a string for safe use in a shell command.
+func shellQuote(s string) string {
+	// Use single quotes and escape any single quotes in the string.
+	return "'" + escapeShellArg(s) + "'"
+}
+
+// escapeShellArg escapes a string for use inside single quotes in a shell.
+func escapeShellArg(s string) string {
+	// In single quotes, only single quote needs escaping: ' -> '\''
+	result := ""
+	for _, r := range s {
+		if r == '\'' {
+			result += `'\''`
+		} else {
+			result += string(r)
+		}
+	}
+	return result
 }

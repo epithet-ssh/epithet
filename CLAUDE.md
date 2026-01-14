@@ -795,20 +795,21 @@ uvx oidc-provider-mock --port 9400
 # Terminal 4: sshd (debug mode, single-threaded)
 /usr/sbin/sshd -d -D -f /tmp/epithet-test/sshd_config
 
-# Terminal 5: Agent (use custom HOME to avoid ~/.epithet)
-HOME=/tmp/epithet-test/home ./epithet agent \
+# Terminal 5: Agent (use --run-dir to avoid ~/.epithet)
+./epithet agent \
   --ca-url http://127.0.0.1:8080 \
-  --auth "./epithet auth oidc --issuer http://localhost:9400 --client-id test-client --client-secret test-secret --insecure" \
+  --run-dir /tmp/epithet-test/run \
+  --auth "./epithet auth oidc --issuer http://localhost:9400 --client-id test-client --client-secret test-secret --browser 'open -a \"Google Chrome\"' --insecure" \
   --insecure -vv
 ```
 
 **7. Test SSH:**
 ```bash
 # Create SSH config with Include
-echo 'Include /tmp/epithet-test/home/.epithet/run/*/ssh-config.conf' > /tmp/epithet-test/ssh_config
+echo 'Include /tmp/epithet-test/run/*/ssh-config.conf' > /tmp/epithet-test/ssh_config
 
 # SSH (first time opens browser for OIDC login)
-HOME=/tmp/epithet-test/home ssh -F /tmp/epithet-test/ssh_config \
+ssh -F /tmp/epithet-test/ssh_config \
   -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -p 2222 YOUR_USERNAME@localhost
 ```
@@ -817,6 +818,8 @@ HOME=/tmp/epithet-test/home ssh -F /tmp/epithet-test/ssh_config \
 - Mock OIDC requires `--client-secret` (doesn't support PKCE)
 - sshd in `-d` mode exits after one connection - restart for each test
 - The `Include` wildcard pattern finds the agent config automatically
+- Use `--browser` to specify a browser (e.g., `--browser 'open -a "Google Chrome"'` on macOS)
+- Use `--run-dir` to place runtime files in a custom directory
 
 ## Project Structure Notes
 
