@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/rpc"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,10 +13,12 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/epithet-ssh/epithet/pkg/agent"
+	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -83,7 +84,6 @@ type optionFunc func(*Broker) error
 func (f optionFunc) apply(b *Broker) error {
 	return f(b)
 }
-
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
 func New(log slog.Logger, socketPath string, authCommand string, caClient *caclient.Client, agentSocketDir string, options ...Option) (*Broker, error) {
@@ -198,89 +198,89 @@ type InspectResponse struct {
 	Certificates      []CertInfo  `json:"certificates"`
 }
 
-// Match is invoked via rpc from `epithet match` invocations
+// Match is invoked via rpc from `epithet match` invocations.
 func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
+	result := b.MatchWithStderr(input.Connection, nil)
+	output.Allow = result.Allow
+	output.Error = result.Error
+	return nil
+}
+
+// MatchWithStderr performs the match operation, streaming auth stderr via the callback.
+// This is the core match implementation that supports stderr streaming for gRPC.
+func (b *Broker) MatchWithStderr(conn policy.Connection, stderrCallback func([]byte) error) MatchResponse {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.log.Debug("match request received", "request", input)
+	b.log.Debug("match request received", "connection", conn)
 
-	// Step 1: Check if this host should be handled by epithet at all
-	if !b.shouldHandle(input.Connection.RemoteHost) {
-		b.log.Debug("host does not match discovery patterns", "host", input.Connection.RemoteHost)
-		output.Allow = false
-		// No error - this is normal, just means epithet doesn't handle this host
-		return nil
+	// Step 1: Check if this host should be handled by epithet at all.
+	if !b.shouldHandle(conn.RemoteHost) {
+		b.log.Debug("host does not match discovery patterns", "host", conn.RemoteHost)
+		// No error - this is normal, just means epithet doesn't handle this host.
+		return MatchResponse{Allow: false}
 	}
 
-	// Step 2: Check if agent already exists for this connection hash
-	if entry, exists := b.agents[input.Connection.Hash]; exists {
-		// Check if agent's certificate is still valid (with buffer)
+	// Step 2: Check if agent already exists for this connection hash.
+	if entry, exists := b.agents[conn.Hash]; exists {
+		// Check if agent's certificate is still valid (with buffer).
 		if time.Now().Add(expiryBuffer).Before(entry.expiresAt) {
-			b.log.Debug("found existing valid agent", "hash", input.Connection.Hash, "expires", entry.expiresAt)
-			output.Allow = true
-			return nil
+			b.log.Debug("found existing valid agent", "hash", conn.Hash, "expires", entry.expiresAt)
+			return MatchResponse{Allow: true}
 		}
-		// Agent expired - clean it up
-		b.log.Debug("cleaning up expired agent", "hash", input.Connection.Hash, "expired", entry.expiresAt)
+		// Agent expired - clean it up.
+		b.log.Debug("cleaning up expired agent", "hash", conn.Hash, "expired", entry.expiresAt)
 		entry.agent.Close()
-		delete(b.agents, input.Connection.Hash)
+		delete(b.agents, conn.Hash)
 	}
 
-	// Step 3: Check for existing, valid certificate in cert store
-	cred, found := b.certStore.Lookup(input.Connection)
+	// Step 3: Check for existing, valid certificate in cert store.
+	cred, found := b.certStore.Lookup(conn)
 	if found {
-		b.log.Debug("found valid certificate in store", "host", input.Connection.RemoteHost)
-		// Step 4: Set up agent with existing certificate
-		err := b.ensureAgent(input.Connection.Hash, cred)
+		b.log.Debug("found valid certificate in store", "host", conn.RemoteHost)
+		// Step 4: Set up agent with existing certificate.
+		err := b.ensureAgent(conn.Hash, cred)
 		if err != nil {
 			b.log.Error("failed to create agent", "error", err)
-			output.Allow = false
-			output.Error = fmt.Sprintf("failed to create agent: %v", err)
-			return nil
+			return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to create agent: %v", err)}
 		}
-		output.Allow = true
-		return nil
+		return MatchResponse{Allow: true}
 	}
 
-	// Step 5: No valid certificate exists, request one from CA
-	b.log.Debug("no valid certificate found, requesting from CA", "host", input.Connection.RemoteHost)
+	// Step 5: No valid certificate exists, request one from CA.
+	b.log.Debug("no valid certificate found, requesting from CA", "host", conn.RemoteHost)
 
-	// Generate ephemeral keypair for this connection
+	// Generate ephemeral keypair for this connection.
 	publicKey, privateKey, err := sshcert.GenerateKeys()
 	if err != nil {
 		b.log.Error("failed to generate keypair", "error", err)
-		output.Allow = false
-		output.Error = fmt.Sprintf("failed to generate keypair: %v", err)
-		return nil
+		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to generate keypair: %v", err)}
 	}
 
-	// Request certificate with retry logic for 401 errors
+	// Request certificate with retry logic for 401 errors.
 	var certResp *caclient.CertResponse
 	for attempt := range maxRetries {
 		if attempt > 0 {
 			b.log.Debug("retrying certificate request", "attempt", attempt+1, "max", maxRetries)
 		}
 
-		// Ensure we have an auth token
+		// Ensure we have an auth token.
 		token := b.auth.Token()
 		if token == "" {
 			b.log.Debug("no auth token, authenticating")
-			token, err = b.auth.Run(nil) // TODO(epithet-42): pass connection details for template rendering
+			token, err = b.auth.RunWithStderr(nil, stderrCallback)
 			if err != nil {
-				// Auth command failed - don't retry automatically
-				// User should fix the issue and retry the SSH connection
+				// Auth command failed - don't retry automatically.
+				// User should fix the issue and retry the SSH connection.
 				b.log.Error("authentication failed", "error", err)
-				output.Allow = false
-				output.Error = fmt.Sprintf("authentication failed: %v", err)
-				return nil
+				return MatchResponse{Allow: false, Error: fmt.Sprintf("authentication failed: %v", err)}
 			}
 			b.log.Debug("authentication successful")
 		}
 
-		// Request certificate from CA
+		// Request certificate from CA.
 		certResp, err = b.caClient.GetCert(context.Background(), token, &caserver.CreateCertRequest{
 			PublicKey:  &publicKey,
-			Connection: &input.Connection,
+			Connection: &conn,
 		})
 
 		if err == nil {
@@ -288,10 +288,10 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 			break
 		}
 
-		// Check error type for appropriate handling
+		// Check error type for appropriate handling.
 		var invalidToken *caclient.InvalidTokenError
 		if errors.As(err, &invalidToken) {
-			// Token is invalid/expired - clear and retry
+			// Token is invalid/expired - clear and retry.
 			b.log.Warn("token invalid or expired, clearing and retrying", "attempt", attempt+1)
 			b.auth.ClearToken()
 			continue
@@ -299,71 +299,55 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 
 		var policyDenied *caclient.PolicyDeniedError
 		if errors.As(err, &policyDenied) {
-			// Policy denied - don't retry, keep token
+			// Policy denied - don't retry, keep token.
 			b.log.Error("CA policy denied access", "error", policyDenied.Message)
-			output.Allow = false
-			output.Error = policyDenied.Error()
-			return nil
+			return MatchResponse{Allow: false, Error: policyDenied.Error()}
 		}
 
 		var caUnavailable *caclient.CAUnavailableError
 		if errors.As(err, &caUnavailable) {
-			// CA unavailable - don't retry, keep token
+			// CA unavailable - don't retry, keep token.
 			b.log.Error("CA service unavailable", "error", caUnavailable.Message)
-			output.Allow = false
-			output.Error = caUnavailable.Error()
-			return nil
+			return MatchResponse{Allow: false, Error: caUnavailable.Error()}
 		}
 
 		var allCAsUnavailable *caclient.AllCAsUnavailableError
 		if errors.As(err, &allCAsUnavailable) {
-			// All CAs are in circuit breaker - don't retry
+			// All CAs are in circuit breaker - don't retry.
 			b.log.Error("all CA servers unavailable", "error", allCAsUnavailable.Message)
-			output.Allow = false
-			output.Error = allCAsUnavailable.Error()
-			return nil
+			return MatchResponse{Allow: false, Error: allCAsUnavailable.Error()}
 		}
 
 		var invalidRequest *caclient.InvalidRequestError
 		if errors.As(err, &invalidRequest) {
-			// Invalid request - don't retry, keep token
+			// Invalid request - don't retry, keep token.
 			b.log.Error("invalid certificate request", "error", invalidRequest.Message)
-			output.Allow = false
-			output.Error = invalidRequest.Error()
-			return nil
+			return MatchResponse{Allow: false, Error: invalidRequest.Error()}
 		}
 
 		var connNotHandled *caclient.ConnectionNotHandledError
 		if errors.As(err, &connNotHandled) {
-			// CA/policy does not handle this connection - fail match, let SSH fall through
+			// CA/policy does not handle this connection - fail match, let SSH fall through.
 			b.log.Info("connection not handled by CA", "error", connNotHandled.Message)
-			output.Allow = false
-			output.Error = connNotHandled.Error()
-			return nil
+			return MatchResponse{Allow: false, Error: connNotHandled.Error()}
 		}
 
-		// Other errors (network, etc.) - fail without retry
+		// Other errors (network, etc.) - fail without retry.
 		b.log.Error("failed to request certificate from CA", "error", err)
-		output.Allow = false
-		output.Error = fmt.Sprintf("failed to request certificate: %v", err)
-		return nil
+		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to request certificate: %v", err)}
 	}
 
-	// Check if we exhausted retries
+	// Check if we exhausted retries.
 	if err != nil {
 		b.log.Error("exhausted retries requesting certificate", "attempts", maxRetries)
-		output.Allow = false
-		output.Error = "authentication failed after multiple attempts"
-		return nil
+		return MatchResponse{Allow: false, Error: "authentication failed after multiple attempts"}
 	}
 
-	// Store the certificate with policy and expiration
+	// Store the certificate with policy and expiration.
 	expiresAt, err := certResp.Certificate.Expiry()
 	if err != nil {
 		b.log.Error("failed to parse certificate expiry", "error", err)
-		output.Allow = false
-		output.Error = fmt.Sprintf("failed to parse certificate expiry: %v", err)
-		return nil
+		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to parse certificate expiry: %v", err)}
 	}
 	b.certStore.Store(PolicyCert{
 		Policy:     certResp.Policy,
@@ -371,23 +355,20 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 		ExpiresAt:  expiresAt,
 	})
 
-	b.log.Debug("certificate obtained and stored", "host", input.Connection.RemoteHost, "user", input.Connection.RemoteUser, "policy", certResp.Policy.HostUsers)
+	b.log.Debug("certificate obtained and stored", "host", conn.RemoteHost, "user", conn.RemoteUser, "policy", certResp.Policy.HostUsers)
 
-	// Step 4: Create agent with new certificate
+	// Step 6: Create agent with new certificate.
 	credential := agent.Credential{
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
 	}
-	err = b.ensureAgent(input.Connection.Hash, credential)
+	err = b.ensureAgent(conn.Hash, credential)
 	if err != nil {
 		b.log.Error("failed to create agent", "error", err)
-		output.Allow = false
-		output.Error = fmt.Sprintf("failed to create agent: %v", err)
-		return nil
+		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to create agent: %v", err)}
 	}
 
-	output.Allow = true
-	return nil
+	return MatchResponse{Allow: true}
 }
 
 // ensureAgent ensures an agent exists for the given connection hash with the given credential.
@@ -555,40 +536,25 @@ func (b *Broker) StoreCertificate(pc PolicyCert) {
 }
 
 func (b *Broker) serve(ctx context.Context) {
-	server := rpc.NewServer()
-	server.Register(b)
-	for {
-		// Check if context is done
+	server := grpc.NewServer()
+	pb.RegisterBrokerServiceServer(server, NewBrokerServer(b))
+
+	// Monitor context cancellation to trigger graceful shutdown.
+	go func() {
+		<-ctx.Done()
+		server.GracefulStop()
+	}()
+
+	// Serve blocks until GracefulStop is called.
+	if err := server.Serve(b.brokerListener); err != nil {
+		// Check if error is from shutdown.
 		select {
 		case <-ctx.Done():
+			// Expected during shutdown.
 			return
 		default:
+			b.log.Error("gRPC server error", "error", err)
 		}
-
-		conn, err := b.brokerListener.Accept()
-		if err != nil {
-			// Check if error is from listener being closed
-			if errors.Is(err, net.ErrClosed) {
-				// Listener closed, exit gracefully
-				return
-			}
-			// Check context again before logging
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				b.log.Warn("Unable to accept connection", "error", err)
-				continue
-			}
-		}
-
-		// Track this RPC connection for graceful shutdown
-		b.activeRPC.Add(1)
-		go func() {
-			defer conn.Close()
-			defer b.activeRPC.Done()
-			server.ServeConn(conn)
-		}()
 	}
 }
 

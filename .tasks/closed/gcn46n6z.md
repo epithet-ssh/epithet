@@ -1,8 +1,9 @@
 ---
+yatl_version: 0
 title: Consider weighted round-robin for CA load balancing
 id: gcn46n6z
 created: 2025-11-30T00:34:48.081228Z
-updated: 2025-11-30T00:35:18.782835Z
+updated: 2026-01-28T16:26:46.516751Z
 author: Brian McCallister
 priority: low
 tags:
@@ -61,3 +62,8 @@ Revisit weighted if canary/load-balancing needs arise.
 # Log: 2025-11-30T00:35:18Z Brian McCallister
 
 Added blocker: htbx21b7
+
+---
+# Log: 2026-01-28T16:26:46Z Brian McCallister
+
+Closed.

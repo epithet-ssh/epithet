@@ -1,8 +1,9 @@
 ---
+yatl_version: 0
 title: 'Auth command: Connection details in templates'
 id: njhqwbcg
 created: 2025-10-25T12:11:30Z
-updated: 2025-12-14T17:39:45.593974Z
+updated: 2026-01-28T16:27:41.850615Z
 priority: medium
 tags:
 - task
@@ -20,3 +21,7 @@ Add these to the template context so auth commands can use them.
 ---
 ## Log
 
+---
+# Log: 2026-01-28T16:27:06Z Brian McCallister
+
+Closed, no plan to implement right now

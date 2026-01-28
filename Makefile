@@ -1,6 +1,10 @@
 .PHONY: all
 all: clean test build		## run tests and build binaries
 
+.PHONY: generate
+generate:		## generate protobuf code
+	buf generate
+
 epithet:
 	go build ./cmd/epithet
 

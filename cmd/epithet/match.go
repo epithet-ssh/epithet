@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
-	"net/rpc"
 	"os"
 
-	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type MatchCLI struct {
@@ -22,50 +24,78 @@ type MatchCLI struct {
 func (m *MatchCLI) Run(logger *slog.Logger) error {
 	logger.Debug("match command called", "match", m)
 
-	// Expand broker socket path (handles ~ expansion)
+	// Expand broker socket path (handles ~ expansion).
 	brokerSock, err := expandPath(m.Broker)
 	if err != nil {
 		return fmt.Errorf("failed to expand broker socket path: %w", err)
 	}
 
-	// Get local hostname
+	// Get local hostname.
 	localHost, err := os.Hostname()
 	if err != nil {
 		return fmt.Errorf("failed to get local hostname: %w", err)
 	}
 
-	// Connect to broker
-	client, err := rpc.Dial("unix", brokerSock)
+	// Connect to broker via gRPC over Unix socket.
+	conn, err := grpc.NewClient(
+		"unix://"+brokerSock,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to connect to broker at %s: %w", brokerSock, err)
 	}
-	defer client.Close()
+	defer conn.Close()
 
-	// Build request
-	req := broker.MatchRequest{
-		Connection: policy.Connection{
+	client := pb.NewBrokerServiceClient(conn)
+
+	// Build request.
+	req := &pb.MatchRequest{
+		Connection: &pb.Connection{
 			LocalHost:  localHost,
 			RemoteHost: m.Host,
 			RemoteUser: m.User,
-			Port:       m.Port,
+			Port:       uint32(m.Port),
 			ProxyJump:  m.Jump,
-			Hash:       policy.ConnectionHash(m.Hash),
+			Hash:       m.Hash,
 		},
 	}
 
-	// Call broker
-	var resp broker.MatchResponse
-	err = client.Call("Broker.Match", req, &resp)
+	// Call broker with streaming to receive stderr and result.
+	stream, err := client.Match(context.Background(), req)
 	if err != nil {
 		return fmt.Errorf("broker RPC call failed: %w", err)
 	}
 
-	// Handle response
-	if resp.Error != "" {
-		return fmt.Errorf("broker error: %s", resp.Error)
+	// Process stream events.
+	var result *pb.MatchResult
+	for {
+		event, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("stream error: %w", err)
+		}
+
+		switch e := event.Event.(type) {
+		case *pb.MatchEvent_Stderr:
+			// Write auth command stderr to our stderr.
+			os.Stderr.Write(e.Stderr)
+		case *pb.MatchEvent_Result:
+			result = e.Result
+		}
 	}
 
-	if !resp.Allow {
+	if result == nil {
+		return fmt.Errorf("no result received from broker")
+	}
+
+	// Handle response.
+	if result.Error != "" {
+		return fmt.Errorf("broker error: %s", result.Error)
+	}
+
+	if !result.Allow {
 		// Not an error - just means epithet doesn't handle this host.
 		// Exit silently with non-zero status so SSH knows the match failed.
 		os.Exit(1)

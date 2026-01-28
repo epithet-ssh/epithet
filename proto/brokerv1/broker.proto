@@ -1,0 +1,68 @@
+syntax = "proto3";
+package epithet.broker.v1;
+option go_package = "github.com/epithet-ssh/epithet/pkg/broker/brokerv1;brokerv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Connection represents the complete tuple of SSH connection parameters.
+message Connection {
+  string local_host = 1;
+  string remote_host = 2;
+  string remote_user = 3;
+  uint32 port = 4;
+  string proxy_jump = 5;
+  string hash = 6;
+}
+
+message MatchRequest {
+  Connection connection = 1;
+}
+
+// MatchEvent is streamed during Match - stderr chunks then final result.
+message MatchEvent {
+  oneof event {
+    bytes stderr = 1;           // Auth plugin stderr chunk
+    MatchResult result = 2;     // Final result (exactly one, last)
+  }
+}
+
+message MatchResult {
+  bool allow = 1;
+  string error = 2;
+}
+
+message InspectRequest {}
+
+message InspectResponse {
+  string socket_path = 1;
+  string agent_socket_dir = 2;
+  repeated string discovery_patterns = 3;
+  repeated AgentInfo agents = 4;
+  repeated CertInfo certificates = 5;
+}
+
+message AgentInfo {
+  string hash = 1;
+  string socket_path = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  string certificate = 4;
+}
+
+message CertInfo {
+  string certificate = 1;
+  map<string, StringList> host_users = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// StringList is needed because protobuf map values cannot be repeated.
+message StringList {
+  repeated string values = 1;
+}
+
+service BrokerService {
+  // Match checks if a connection should be allowed and streams auth stderr.
+  rpc Match(MatchRequest) returns (stream MatchEvent);
+
+  // Inspect returns the current broker state.
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+}
