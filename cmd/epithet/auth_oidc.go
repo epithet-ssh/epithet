@@ -19,6 +19,8 @@ type AuthOIDCCLI struct {
 	ClientID     string   `required:"" name:"client-id" help:"OAuth2 client ID"`
 	ClientSecret string   `optional:"" name:"client-secret" help:"OAuth2 client secret (optional if using PKCE)"`
 	Scopes       []string `optional:"" help:"OAuth2 scopes (comma-separated)" default:"openid,profile,email"`
+	Browser      string   `optional:"" help:"Browser to use for authentication (e.g., 'open -a \"Google Chrome\"' on macOS)"`
+	NoBrowser    bool     `optional:"" name:"no-browser" help:"Don't open browser, just print the URL (for automated testing)"`
 }
 
 // Run executes the OIDC authentication flow following the epithet auth plugin protocol.
@@ -63,6 +65,16 @@ func (c *AuthOIDCCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 		"scopes", scopes,
 	)
 
+	// Determine how to open the browser
+	var opener oidc.BrowserOpener
+	if c.NoBrowser {
+		opener = oidc.PrintURLOnly()
+	} else if c.Browser != "" {
+		opener = oidc.CustomBrowser(c.Browser)
+	} else {
+		opener = oidc.DefaultBrowser()
+	}
+
 	// Configure OIDC
 	cfg := oidc.Config{
 		IssuerURL:    c.Issuer,
@@ -70,6 +82,7 @@ func (c *AuthOIDCCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 		ClientSecret: c.ClientSecret,
 		Scopes:       scopes,
 		TLSConfig:    tlsCfg,
+		OpenBrowser:  opener,
 	}
 
 	// Run the authentication flow

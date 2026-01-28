@@ -92,7 +92,7 @@ func New(log slog.Logger, socketPath string, authCommand string, caClient *cacli
 	}
 
 	b := &Broker{
-		auth:             NewAuth(authCommand),
+		auth:             NewAuth(authCommand, &log),
 		certStore:        NewCertificateStore(),
 		agents:           make(map[policy.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,

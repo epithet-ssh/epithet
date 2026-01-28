@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -14,6 +15,30 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// BrowserOpener opens a URL in a browser. Returns nil error on success.
+type BrowserOpener func(url string) error
+
+// DefaultBrowser returns a BrowserOpener that uses the system default browser.
+func DefaultBrowser() BrowserOpener {
+	return browser.OpenURL
+}
+
+// CustomBrowser returns a BrowserOpener that uses the specified shell command.
+func CustomBrowser(cmd string) BrowserOpener {
+	return func(url string) error {
+		c := exec.Command("sh", "-c", cmd+" "+shellQuote(url))
+		return c.Start()
+	}
+}
+
+// PrintURLOnly returns a BrowserOpener that does nothing (URL is already printed).
+// Used for automated testing and headless environments.
+func PrintURLOnly() BrowserOpener {
+	return func(url string) error {
+		return nil
+	}
+}
+
 // Config holds OIDC authentication configuration.
 type Config struct {
 	IssuerURL    string
@@ -21,6 +46,7 @@ type Config struct {
 	ClientSecret string // Optional for PKCE
 	Scopes       []string
 	TLSConfig    tlsconfig.Config
+	OpenBrowser  BrowserOpener // How to open the auth URL in a browser
 }
 
 // Run performs OIDC authentication following the epithet auth plugin protocol.
@@ -77,7 +103,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			// Refresh failed, need full auth
 			fmt.Fprintf(os.Stderr, "Token refresh failed, performing full authentication: %v\n", err)
-			newToken, err = performFullAuth(ctx, oauth2Config)
+			newToken, err = performFullAuth(ctx, oauth2Config, cfg.OpenBrowser)
 			if err != nil {
 				return err
 			}
@@ -86,7 +112,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	} else {
 		// No valid token, perform full authentication
-		newToken, err = performFullAuth(ctx, oauth2Config)
+		newToken, err = performFullAuth(ctx, oauth2Config, cfg.OpenBrowser)
 		if err != nil {
 			return err
 		}
@@ -125,7 +151,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 // performFullAuth performs the full OAuth2 authorization code flow with PKCE.
 // It starts a local HTTP server, opens the browser, and waits for the callback.
-func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.Token, error) {
+func performFullAuth(ctx context.Context, oauth2Config oauth2.Config, openBrowser BrowserOpener) (*oauth2.Token, error) {
 	// Create a channel to receive the local server URL
 	readyChan := make(chan string, 1)
 
@@ -155,8 +181,9 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 		oauth2.VerifierOption(verifier), // PKCE verifier
 	}
 
-	// Notify user that browser is opening
+	// Notify user that browser is opening (flush to ensure it appears when stderr is a pipe)
 	fmt.Fprintln(os.Stderr, "Opening browser for authentication...")
+	os.Stderr.Sync()
 
 	// Start authentication in background
 	tokenChan := make(chan *oauth2.Token, 1)
@@ -174,8 +201,9 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	select {
 	case url := <-readyChan:
 		fmt.Fprintf(os.Stderr, "\nIf your browser doesn't open automatically, visit:\n%s\n\n", url)
+		os.Stderr.Sync() // Flush to ensure URL appears when stderr is a pipe
 		// Attempt to open the browser
-		if err := browser.OpenURL(url); err != nil {
+		if err := openBrowser(url); err != nil {
 			fmt.Fprintf(os.Stderr, "Could not open browser automatically: %v\n", err)
 			fmt.Fprintf(os.Stderr, "Please open the URL above manually.\n")
 		}
@@ -193,4 +221,24 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// shellQuote quotes a string for safe use in a shell command.
+func shellQuote(s string) string {
+	// Use single quotes and escape any single quotes in the string.
+	return "'" + escapeShellArg(s) + "'"
+}
+
+// escapeShellArg escapes a string for use inside single quotes in a shell.
+func escapeShellArg(s string) string {
+	// In single quotes, only single quote needs escaping: ' -> '\''
+	result := ""
+	for _, r := range s {
+		if r == '\'' {
+			result += `'\''`
+		} else {
+			result += string(r)
+		}
+	}
+	return result
 }
