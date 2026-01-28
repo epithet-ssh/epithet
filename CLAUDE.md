@@ -202,120 +202,13 @@ The broker uses an external **auth command** to obtain authentication tokens. Th
 
 **Implementation Status**: ✅ Fully implemented in `pkg/broker/auth.go` with comprehensive test coverage (18 tests). The built-in `epithet auth oidc` command (`cmd/epithet/auth_oidc.go`) provides production-ready OAuth2/OIDC support.
 
-#### Auth Command Protocol
+#### Auth command protocol
 
-The broker communicates with auth plugins using a simple **file descriptor protocol** (fully implemented). This protocol requires no encoding/decoding - plugins work with raw bytes.
+The broker communicates with auth plugins using a file descriptor protocol: stdin receives previous state, stdout returns the token, fd 3 returns new state, stderr receives errors. State is opaque to the broker (max 10 MiB) and never touches disk.
 
-**Protocol:**
-- **stdin (fd 0)**: State bytes from previous invocation (empty on first call)
-- **stdout (fd 1)**: Authentication token (raw bytes)
-- **fd 3**: New state bytes to persist for next invocation (max 10 MiB)
-- **stderr (fd 2)**: Human-readable error messages (on failure)
-- **Exit code**: 0 = success, non-zero = failure
+See `docs/authentication.md` for full protocol details, examples in Bash/Python/Go, and the `examples/bash_auth_example.bash` reference implementation.
 
-**State Management:**
-- State is **completely opaque** to the broker (arbitrary byte blob, max 10 MiB)
-- Auth plugin owns session management (refresh tokens, token expiry, etc)
-- Broker stores state in memory and passes it to next invocation
-- State never touches disk (security: refresh tokens remain in memory only)
-
-**Protocol Flow:**
-
-**Initial authentication (no prior state):**
-```bash
-# INPUT: stdin is empty
-# Plugin performs authentication (browser flow, etc)
-# OUTPUT: stdout = access token, fd 3 = refresh token blob
-```
-
-**Token refresh (with existing state):**
-```bash
-# INPUT: stdin = previous state blob (e.g., refresh token)
-# Plugin uses refresh token to get new access token
-# OUTPUT: stdout = new access token, fd 3 = updated state blob
-```
-
-**Authentication failure:**
-```bash
-# Plugin writes error to stderr and exits non-zero
-# Broker presents error to user
-```
-
-**Example Implementations:**
-
-**Bash:**
-```bash
-#!/bin/bash
-# Read state from stdin
-state=$(cat)
-
-# Authenticate (using state if available)
-if [ -n "$state" ]; then
-    # Refresh flow
-    token=$(curl -s "https://auth.example.com/refresh" -d "$state")
-else
-    # Initial auth flow
-    token=$(do_browser_auth)
-fi
-
-# Output token to stdout
-echo -n "$token"
-
-# Output new state to fd 3
-echo -n "$new_state_blob" >&3
-```
-
-**Python:**
-```python
-import sys, os
-
-# Read state from stdin
-state = sys.stdin.buffer.read()
-
-# Authenticate
-token, new_state = authenticate(state)
-
-# Output token to stdout
-sys.stdout.buffer.write(token)
-
-# Output new state to fd 3
-os.write(3, new_state)
-```
-
-**Go:**
-```go
-package main
-
-import (
-    "io"
-    "os"
-)
-
-func main() {
-    // Read state from stdin
-    state, _ := io.ReadAll(os.Stdin)
-
-    // Authenticate
-    token, newState := authenticate(state)
-
-    // Output token to stdout
-    os.Stdout.Write(token)
-
-    // Output new state to fd 3
-    stateFd := os.NewFile(3, "state")
-    defer stateFd.Close()
-    stateFd.Write(newState)
-}
-```
-
-**Design Properties:**
-- Zero encoding/decoding burden for plugin authors
-- Binary-safe (tokens and state can be arbitrary bytes)
-- State never touches disk (security property)
-- Simple to implement (basic file I/O in any language)
-- Size-limited (10 MiB max state) to prevent memory exhaustion
-
-#### Certificate Lifecycle with Short-Lived Certificates
+#### Certificate lifecycle with short-lived certificates
 
 **Key Timing Decision**: SSH certificates are **short-lived (2-10 minutes)** to enable real-time policy enforcement.
 
@@ -384,125 +277,17 @@ func main() {
 - **`agent.Credential`**: Private key + certificate pair used by the agent
 - **`caclient.InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`**: Domain-specific error types for CA failures
 
-### Broker → CA Protocol
+### Broker → CA protocol
 
-**Protocol Status**: ✅ Fully implemented
+The broker requests certificates from the CA over HTTP with tokens in `Authorization: Bearer` header. Shape-based routing: both `publicKey` + `connection` for cert requests, empty body for hello/validation requests.
 
-The broker requests certificates from the CA server over HTTP. Authentication tokens are sent in the `Authorization` header, not the request body.
+**Error codes**: 401 (re-auth needed), 403 (policy denied), 422 (connection not handled), 5xx (CA unavailable, triggers failover).
 
-**Request Format** (from broker to CA):
-```http
-POST /path/to/ca HTTP/1.1
-Content-Type: application/json
-Authorization: Bearer <authentication-token>
+### CA → Policy server protocol
 
-{
-  "publicKey": "ssh-ed25519 AAAA... user@host",
-  "connection": {
-    "localHost": "laptop.local",
-    "remoteHost": "server.example.com",
-    "remoteUser": "alice",
-    "port": 22,
-    "proxyJump": "",
-    "hash": "abc123..."
-  }
-}
-```
+The CA validates tokens by calling the policy server over HTTP. The CA signs the request body using its SSH private key (Sigstore SSH signing); the policy server verifies this signature to ensure requests come from the legitimate CA.
 
-**Response Format** (from CA to broker):
-```json
-{
-  "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA...",
-  "policy": {
-    "hostPattern": "*.example.com"
-  }
-}
-```
-
-**Shape-Based Request Routing**:
-The CA server routes requests based on the presence/absence of body fields:
-- **Both fields present** (`publicKey` + `connection`): Certificate request (existing flow)
-- **Both fields absent** (empty body `{}`): Hello request - validates token only, returns 200 on success
-- **One field present**: Invalid request, returns 400 Bad Request
-
-**Hello Request**:
-The `Hello()` method in `pkg/caclient` validates a token without requesting a certificate:
-```http
-POST /path/to/ca HTTP/1.1
-Content-Type: application/json
-Authorization: Bearer <authentication-token>
-
-{}
-```
-Returns 200 on success, or appropriate error (401, 403, 422, 5xx).
-
-**Error Handling**:
-- HTTP 401: Token is invalid/expired (broker should re-authenticate)
-- HTTP 403: Token valid but policy denied access
-- HTTP 422: Connection not handled by this CA/policy
-- HTTP 5xx: CA unavailable (triggers circuit breaker failover to backup CAs)
-- HTTP 4xx: Invalid request format
-
-### CA → Policy Server Protocol
-
-**Protocol Status**: ✅ Fully implemented
-**Server Implementation**: ✅ Production-ready policy server (`epithet policy`) with OIDC token validation
-
-The CA validates authentication tokens by calling an external policy server over HTTP. The CA's signature is sent in the `Authorization` header, computed over the entire request body.
-
-**Request Format** (from CA to policy server):
-```http
-POST /policy HTTP/1.1
-Content-Type: application/json
-Authorization: Bearer <base64-ssh-signature-over-body>
-
-{
-  "token": "<base64url-encoded-authentication-token>",
-  "connection": {
-    "localHost": "laptop.local",
-    "remoteHost": "server.example.com",
-    "remoteUser": "alice",
-    "port": 22,
-    "proxyJump": "",
-    "hash": "abc123..."
-  }
-}
-```
-
-**Response Format** (from policy server to CA):
-```json
-{
-  "certParams": {
-    "identity": "alice@example.com",
-    "principals": ["alice", "admin"],
-    "expiration": "5m",
-    "extensions": {
-      "permit-pty": "",
-      "permit-agent-forwarding": ""
-    }
-  },
-  "policy": {
-    "hostPattern": "*.example.com"
-  }
-}
-```
-
-**Cryptographic Verification**:
-- CA signs the **entire request body** (JSON bytes) using its SSH private key (Rekor/Sigstore SSH signing)
-- Signature is sent in the `Authorization: Bearer` header
-- Policy server verifies the signature using the CA's public key
-- This prevents request tampering and ensures policy requests come from the legitimate CA
-
-**Token Encoding**:
-- Tokens are base64url-encoded in the request body (preserves arbitrary bytes from auth plugins)
-- Policy server decodes the token before validation
-
-**Error Handling**:
-- HTTP 401: Token is invalid/expired (CA retries with fresh token from auth plugin)
-- HTTP 403: Token valid but policy denied (CA returns PolicyDeniedError immediately)
-- HTTP 422: Connection not handled by this CA/policy (CA returns ConnectionNotHandledError, broker fails match to let SSH fall through)
-- HTTP 5xx: CA/policy server unavailable (CA returns CAUnavailableError)
-- HTTP 4xx: Invalid request format (CA returns InvalidRequestError)
+See `docs/policy-server.md` for the full HTTP API specification, request/response formats, and error handling details.
 
 ### Error Handling and Match Behavior
 
@@ -525,50 +310,9 @@ When epithet cannot obtain a certificate (auth failures, CA errors, agent creati
 - Trade-off: May leak connection attempts to fallback systems, but this is acceptable to enable legitimate escape hatches
 - Users who need strict security can configure SSH with no fallbacks after epithet Match blocks
 
-**Recommended SSH Config Structure:**
-```ssh_config
-# Epithet handling - first so it gets priority
-Match exec "epithet match --host %h --port %p --user %r --hash %C"
-    IdentityAgent ~/.epithet/agent/%C
+**Multiple Concurrent Brokers**: Epithet supports multiple broker instances (work vs personal, different CAs). Each needs a unique socket path via `--broker`. See `examples/` for configuration patterns.
 
-# Breakglass/special cases - after epithet
-Match host *.example.com user breakglass
-    IdentityFile ~/.ssh/breakglass_cert
-
-# Default config last
-```
-
-**Multiple Concurrent Brokers:**
-Epithet supports running multiple broker instances for different purposes (work vs personal, different CA servers, etc). Each broker needs a unique socket path. You can optionally add SSH `host` patterns for optimization (to skip broker calls for unrelated hosts), but this is not required since the broker checks discovery patterns dynamically:
-
-```ssh_config
-# Work connections (with optional host filter for optimization)
-Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/work-broker.sock" host *.work.example.com
-    IdentityAgent ~/.epithet/work-agent/%C
-
-# Personal connections
-Match exec "epithet match --host %h --port %p --user %r --hash %C --broker ~/.epithet/personal-broker.sock" host *.personal.example.com
-    IdentityAgent ~/.epithet/personal-agent/%C
-```
-
-Start each broker with unique socket paths:
-```bash
-# Work broker (with primary and backup CAs)
-# Host patterns come from CA discovery endpoint
-epithet agent --broker ~/.epithet/work-broker.sock \
-              --agent-dir ~/.epithet/work-agent/ \
-              --ca-url https://work-ca.example.com \
-              --ca-url 'priority=50:https://work-ca-backup.example.com' \
-              --auth work-auth-plugin
-
-# Personal broker (single CA)
-epithet agent --broker ~/.epithet/personal-broker.sock \
-              --agent-dir ~/.epithet/personal-agent/ \
-              --ca-url https://personal-ca.example.com \
-              --auth personal-auth-plugin
-```
-
-#### CA Error Handling
+#### CA error handling
 
 **HTTP 401 Unauthorized** - Token is invalid or expired:
 1. Clear the current token
@@ -626,51 +370,11 @@ epithet agent --broker ~/.epithet/personal-broker.sock \
 - Fail the Match with clear error explaining the local issue (not a cert/auth problem)
 - User can fix local issue and retry
 
-### Configuration and SSH Integration
+### Configuration and SSH integration
 
-#### Auto-Generated SSH Config
+When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<instance-hash>/ssh-config.conf`. Include it via `Include ~/.epithet/run/*/ssh-config.conf` in your `~/.ssh/config`.
 
-When `epithet agent` starts, it automatically generates an SSH config file at `~/.epithet/run/<instance-hash>/ssh-config.conf` that you can include in your `~/.ssh/config`:
-
-```ssh_config
-# Generated by epithet agent
-Match exec "epithet match --broker /home/user/.epithet/run/abc123/broker.sock --host %h --port %p --user %r --hash %C --jump %j" host *.example.com
-    IdentityAgent /home/user/.epithet/run/abc123/agent/%C
-```
-
-**Usage**: Add this to your `~/.ssh/config`:
-```ssh_config
-Include ~/.epithet/run/*/ssh-config.conf
-```
-
-This automatically updates when you start new broker instances and ensures the correct broker socket and agent paths are used.
-
-#### Config File Format
-
-Epithet uses structured config files in YAML, CUE, or JSON format. Config sections mirror the CLI command structure.
-
-**Location**: `~/.epithet/*.yaml` (or `.yml`, `.cue`, `.json`)
-
-**Multi-file unification**: All config files in `~/.epithet/` are loaded and merged using CUE's `Value.Unify()`. This allows splitting config across multiple files (e.g., `base.yaml`, `work.yaml`). Conflicting values (same field, different values) cause an error at startup.
-
-**Example** (`~/.epithet/config.yaml`):
-```yaml
-# Global flags
-insecure: false
-verbose: 1
-
-# Agent configuration
-agent:
-  match:
-    - "*.work.example.com"
-    - "*.dev.example.com"
-  ca_url:
-    - "https://ca-primary.example.com"               # Default priority (100)
-    - "priority=50:https://ca-backup.example.com"    # Lower priority = backup
-  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
-```
-
-**Config key naming**: Use `snake_case` in config files (e.g., `ca_url`), which maps to CLI flags with `kebab-case` (e.g., `--ca-url`).
+Config files use YAML, CUE, or JSON in `~/.epithet/`. Multi-file unification via CUE merges all config files; conflicting values cause startup errors. Use `snake_case` in configs (maps to `--kebab-case` flags). See `examples/epithet.config.example` for a complete example.
 
 ## Development Commands
 
@@ -748,114 +452,10 @@ Run all tests with `make test` or `go test ./...`.
 - `pkg/broker/broker.go:expiryBuffer = 5 seconds`: Safety margin for certificate expiry checks
 - `pkg/broker/broker.go:cleanupInterval = 30 seconds`: Frequency of expired agent cleanup
 
-### Integration with OpenSSH
+### Current development status
 
-Epithet integrates with OpenSSH via auto-generated config files. When you start `epithet agent`, it creates an SSH config file at `~/.epithet/run/<instance-hash>/ssh-config.conf`:
+**v2 is complete and production-ready.** All components are fully implemented, tested, and functional: broker with auth command protocol, match command, CA/policy servers, OIDC authentication, per-connection agents, and end-to-end integration tests. See README.md for architecture details.
 
-```ssh_config
-Match exec "epithet match --host %h --port %p --user %r --hash %C --jump %j --broker ~/.epithet/run/<hash>/broker.sock"
-    IdentityAgent ~/.epithet/run/<hash>/agent/%C
-```
+**Minor remaining task**: Auth command mustache templates don't yet receive connection details (%h, %p, %r, %C).
 
-Note: The SSH config uses `Match exec` only (no `host` filter). The broker dynamically fetches host patterns from CA discovery and returns non-zero for hosts that don't match, allowing SSH to fall through to other configuration.
-
-Add this to your `~/.ssh/config` to use it:
-```ssh_config
-Include ~/.epithet/run/*/ssh-config.conf
-```
-
-The `%C` token represents a hash of the connection parameters (`%l%h%p%r%j`: local hostname, remote hostname, port, username, and ProxyJump), ensuring each unique connection gets its own agent socket. The SSH config uses `Match exec` only - the broker dynamically fetches host patterns from CA discovery and returns non-zero for hosts that don't match, allowing SSH to fall through to other config.
-
-### Current Development Status
-
-**v2 is complete and production-ready!** 🎉
-
-All core components of the v2 architecture (described in README.md) are fully implemented, tested, and functional. The system is ready for production deployment.
-
-#### ✅ Fully Implemented Components
-
-**1. Broker with Auth Command Protocol** (`pkg/broker/`):
-   - ✅ Auth command invocation with stdin/stdout/fd3 protocol (`auth.go`)
-   - ✅ Auth state storage with 10 MiB limit enforcement
-   - ✅ Certificate store with policy-based matching (`certs.go`)
-   - ✅ Token refresh on certificate expiry with retry logic
-   - ✅ Comprehensive error handling for CA and auth failures
-   - ✅ 18 unit tests covering all auth flows
-   - ✅ Mustache template support in config files
-
-**2. Match Command** (`cmd/epithet/match.go`):
-   - ✅ Full argument parsing (`--host`, `--port`, `--user`, `--hash`, `--jump`, `--broker`)
-   - ✅ RPC communication with broker over Unix domain socket
-   - ✅ Complete 5-step certificate validation workflow
-   - ✅ Host pattern eligibility checking
-   - ✅ Proper exit codes for OpenSSH Match exec integration
-
-**3. Broker ↔ CA Integration** (`pkg/broker/broker.go`, `pkg/caclient/`):
-   - ✅ Certificate request flow: auth token → CA → signed certificate
-   - ✅ Connection details passed to CA for principal determination
-   - ✅ Domain-specific error types (InvalidTokenError, PolicyDeniedError, ConnectionNotHandledError, CAUnavailableError)
-   - ✅ Retry logic for HTTP 401 (token expired, up to 3 attempts)
-   - ✅ No retry for HTTP 403 (policy denial is intentional)
-   - ✅ No retry for HTTP 422 (connection not handled, let SSH fall through)
-   - ✅ Certificate storage with expiry tracking
-
-**4. Broker ↔ Agent Management** (`pkg/broker/broker.go`, `pkg/agent/`):
-   - ✅ Per-connection agent creation using `pkg/agent.Agent`
-   - ✅ Map of connection hash (%C) → agent instance with expiry
-   - ✅ Agent socket paths at `~/.epithet/run/<instance-hash>/agent/%C`
-   - ✅ Certificate swapping/renewal via `Agent.UseCredential()`
-   - ✅ Automatic cleanup of expired agents (every 30 seconds)
-   - ✅ Graceful shutdown with proper resource cleanup
-
-**5. CA and Policy Server** (`pkg/ca/`, `pkg/caserver/`, `pkg/policyserver/`):
-   - ✅ Standalone CA server (`epithet ca`)
-   - ✅ Policy server protocol with cryptographic verification (SSH signatures)
-   - ✅ Production policy server with OIDC validation (`epithet policy`)
-   - ✅ Error code propagation (401, 403, 5xx, 4xx)
-   - For AWS Lambda deployment, see [epithet-aws](https://github.com/epithet-ssh/epithet-aws)
-
-**6. Authentication** (`cmd/epithet/auth_oidc.go`):
-   - ✅ Built-in OIDC/OAuth2 authentication
-   - ✅ PKCE support for public clients
-   - ✅ Token refresh with refresh tokens
-   - ✅ Browser-based auth flow with local callback
-   - ✅ Works with Google Workspace, Okta, Azure AD
-
-**7. Infrastructure**:
-   - ✅ Match pattern evaluation (glob patterns with `*` wildcard)
-   - ✅ Comprehensive error handling throughout
-   - ✅ Auto-generated SSH config files
-   - ✅ Config file support with mustache templates
-   - ✅ Multiple concurrent broker support
-   - ✅ Proper logging and error messages
-   - ✅ Graceful shutdown and cleanup
-   - ✅ Full end-to-end integration tests
-
-#### ✅ Current Status: Production Ready
-
-**v2 is complete and production-ready!** All critical components are fully implemented:
-
-- ✅ Certificate matching with HostUsers (matches host AND remote user)
-- ✅ Production policy server with OIDC token validation (`epithet policy`)
-- ✅ All protocols and communication paths working
-- ✅ Auth command protocol with state management
-- ✅ OIDC authentication with token refresh
-- ✅ Certificate signing and SSH agent integration
-- ✅ Multi-user scenarios supported
-- ✅ Full end-to-end integration tests
-
-**Minor remaining tasks**:
-- Connection details in auth templates (`pkg/broker/broker.go`) - auth command mustache templates don't yet receive connection details (%h, %p, %r, %C)
-
-### Available Examples
-
-The `examples/` directory contains deployment guides and reference implementations:
-
-- **`examples/bash_auth_example.bash`**: Reference bash auth plugin demonstrating the stdin/stdout/fd3 protocol
-- **`examples/epithet.config.example`**: Sample config file in YAML format (also supports CUE and JSON)
-- **`examples/google-workspace/`**: OIDC setup guide for Google Workspace integration (referenced in code)
-- **`examples/README.md`**: Overview of deployment options and architecture choices
-
-For AWS Lambda deployment, see the [epithet-aws](https://github.com/epithet-ssh/epithet-aws) repository.
-
-These examples demonstrate real-world usage patterns and serve as templates for custom deployments.
+For deployment examples and reference implementations, see the `examples/` directory and [epithet-aws](https://github.com/epithet-ssh/epithet-aws) for AWS Lambda deployment.
