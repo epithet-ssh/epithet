@@ -293,9 +293,9 @@ printf '%s' "test-token"
 	resp2 := MatchResponse{}
 	err = client.Call("Broker.Match", req2, &resp2)
 	require.NoError(t, err)
-	// Should be rejected at pattern check
+	// Should be rejected at pattern check - Allow=false, no error (not an error condition)
 	require.False(t, resp2.Allow)
-	require.Contains(t, resp2.Error, "does not match")
+	require.Empty(t, resp2.Error)
 }
 
 func testLogger(t *testing.T) *slog.Logger {

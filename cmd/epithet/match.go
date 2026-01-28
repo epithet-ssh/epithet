@@ -62,13 +62,13 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 
 	// Handle response
 	if resp.Error != "" {
-		logger.Error("broker returned error", "error", resp.Error)
 		return fmt.Errorf("broker error: %s", resp.Error)
 	}
 
 	if !resp.Allow {
-		logger.Info("connection not allowed by broker")
-		return fmt.Errorf("connection denied by broker")
+		// Not an error - just means epithet doesn't handle this host.
+		// Exit silently with non-zero status so SSH knows the match failed.
+		os.Exit(1)
 	}
 
 	logger.Debug("connection allowed by broker")

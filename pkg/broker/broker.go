@@ -208,7 +208,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 	if !b.shouldHandle(input.Connection.RemoteHost) {
 		b.log.Debug("host does not match discovery patterns", "host", input.Connection.RemoteHost)
 		output.Allow = false
-		output.Error = fmt.Sprintf("host %s does not match any discovery patterns", input.Connection.RemoteHost)
+		// No error - this is normal, just means epithet doesn't handle this host
 		return nil
 	}
 
