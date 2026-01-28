@@ -155,9 +155,6 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 		oauth2.VerifierOption(verifier), // PKCE verifier
 	}
 
-	// Notify user that browser is opening
-	fmt.Fprintln(os.Stderr, "Opening browser for authentication...")
-
 	// Start authentication in background
 	tokenChan := make(chan *oauth2.Token, 1)
 	errChan := make(chan error, 1)
@@ -173,11 +170,11 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	// Wait for the local server to be ready, then open browser
 	select {
 	case url := <-readyChan:
-		fmt.Fprintf(os.Stderr, "\nIf your browser doesn't open automatically, visit:\n%s\n\n", url)
 		// Attempt to open the browser
 		if err := browser.OpenURL(url); err != nil {
+			// Browser failed to open - user needs the URL to authenticate manually
 			fmt.Fprintf(os.Stderr, "Could not open browser automatically: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Please open the URL above manually.\n")
+			fmt.Fprintf(os.Stderr, "Please visit: %s\n", url)
 		}
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -186,7 +183,6 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	// Wait for authentication to complete
 	select {
 	case token := <-tokenChan:
-		fmt.Fprintln(os.Stderr, "Authentication successful!")
 		return token, nil
 	case err := <-errChan:
 		return nil, fmt.Errorf("authentication failed: %w", err)
