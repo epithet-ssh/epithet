@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -200,7 +201,7 @@ type InspectResponse struct {
 
 // Match is invoked via rpc from `epithet match` invocations.
 func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
-	result := b.MatchWithStderr(input.Connection, nil)
+	result := b.MatchWithUserOutput(input.Connection, nil)
 	output.Allow = result.Allow
 	output.Error = result.Error
 	return nil
@@ -208,7 +209,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 
 // MatchWithStderr performs the match operation, streaming auth stderr via the callback.
 // This is the core match implementation that supports stderr streaming for gRPC.
-func (b *Broker) MatchWithStderr(conn policy.Connection, stderrCallback func([]byte) error) MatchResponse {
+func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Writer) MatchResponse {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	b.log.Debug("match request received", "connection", conn)
@@ -267,7 +268,7 @@ func (b *Broker) MatchWithStderr(conn policy.Connection, stderrCallback func([]b
 		token := b.auth.Token()
 		if token == "" {
 			b.log.Debug("no auth token, authenticating")
-			token, err = b.auth.RunWithStderr(nil, stderrCallback)
+			token, err = b.auth.Run(nil, userOutput)
 			if err != nil {
 				// Auth command failed - don't retry automatically.
 				// User should fix the issue and retry the SSH connection.
@@ -496,7 +497,7 @@ func (b *Broker) getDiscoveryPatterns() (*caclient.Discovery, error) {
 	if token == "" {
 		b.log.Debug("no auth token, authenticating to get discovery")
 		var err error
-		token, err = b.auth.Run(nil)
+		token, err = b.auth.Run(nil, nil)
 		if err != nil {
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}

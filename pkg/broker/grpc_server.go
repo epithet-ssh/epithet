@@ -21,17 +21,28 @@ func NewBrokerServer(broker *Broker) *BrokerServer {
 	return &BrokerServer{broker: broker}
 }
 
+// userOutputStreamWriter implements io.Writer by sending user output chunks over gRPC.
+type userOutputStreamWriter struct {
+	stream grpc.ServerStreamingServer[pb.MatchEvent]
+}
+
+func (w *userOutputStreamWriter) Write(p []byte) (int, error) {
+	err := w.stream.Send(&pb.MatchEvent{
+		Event: &pb.MatchEvent_UserOutput{UserOutput: p},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 // Match implements the BrokerService Match RPC.
-// It streams stderr from the auth command (if any) and returns the final result.
+// It streams user output from the auth command (if any) and returns the final result.
 func (s *BrokerServer) Match(req *pb.MatchRequest, stream grpc.ServerStreamingServer[pb.MatchEvent]) error {
 	conn := protoToConnection(req.Connection)
 
-	// Run the match logic with stderr streaming.
-	result := s.broker.MatchWithStderr(conn, func(stderr []byte) error {
-		return stream.Send(&pb.MatchEvent{
-			Event: &pb.MatchEvent_Stderr{Stderr: stderr},
-		})
-	})
+	// Run the match logic with user output streaming.
+	result := s.broker.MatchWithUserOutput(conn, &userOutputStreamWriter{stream: stream})
 
 	// Send the final result.
 	return stream.Send(&pb.MatchEvent{

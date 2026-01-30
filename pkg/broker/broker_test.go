@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -472,28 +473,23 @@ printf '%s' "6:thello,"
 	require.False(t, exists, "expiring-soon agent should be cleaned up")
 }
 
-// Test_StderrStreaming tests that stderr from auth commands is streamed to the client.
-func Test_StderrStreaming(t *testing.T) {
+// Test_UserOutputStreaming tests that user output from fd 4 is streamed to the writer.
+func Test_UserOutputStreaming(t *testing.T) {
 	t.Parallel()
 
-	// Test the underlying RunWithStderr method directly since the full Match
-	// flow requires complex CA setup. The gRPC streaming layer is tested in
-	// the other Match tests.
-	stderrScript := writeTestScript(t, `#!/bin/sh
+	// Test the underlying Run method with user output writer directly since the
+	// full Match flow requires complex CA setup. The gRPC streaming layer is
+	// tested in the other Match tests.
+	script := writeTestScript(t, `#!/bin/sh
 cat > /dev/null
-echo "auth stderr message" >&2
+echo "Visit https://example.com and enter code ABC-123" >&4
 printf '%s' "test-token"
 `)
-	auth := NewAuth(stderrScript)
+	auth := NewAuth(script)
 
-	var collectedStderr []byte
-	callback := func(data []byte) error {
-		collectedStderr = append(collectedStderr, data...)
-		return nil
-	}
-
-	token, err := auth.RunWithStderr(nil, callback)
+	var userOutput bytes.Buffer
+	token, err := auth.Run(nil, &userOutput)
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
-	require.Contains(t, string(collectedStderr), "auth stderr message")
+	require.Contains(t, userOutput.String(), "Visit https://example.com")
 }

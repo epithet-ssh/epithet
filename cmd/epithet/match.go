@@ -60,7 +60,7 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 		},
 	}
 
-	// Call broker with streaming to receive stderr and result.
+	// Call broker with streaming to receive user output and result.
 	stream, err := client.Match(context.Background(), req)
 	if err != nil {
 		return fmt.Errorf("broker RPC call failed: %w", err)
@@ -78,9 +78,9 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 		}
 
 		switch e := event.Event.(type) {
-		case *pb.MatchEvent_Stderr:
-			// Write auth command stderr to our stderr.
-			os.Stderr.Write(e.Stderr)
+		case *pb.MatchEvent_UserOutput:
+			// Write auth command user output to our stderr for display.
+			os.Stderr.Write(e.UserOutput)
 		case *pb.MatchEvent_Result:
 			result = e.Result
 		}

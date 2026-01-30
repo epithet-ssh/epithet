@@ -30,7 +30,7 @@ printf '%s' "my-token-1"
 `)
 
 	auth := NewAuth(script)
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "bXktdG9rZW4tMQ", token) // "my-token-1" base64url encoded
 	require.Empty(t, auth.state)              // No state returned
@@ -50,7 +50,7 @@ printf '%s' '{"refresh":"xyz"}' >&3
 `)
 
 	auth := NewAuth(script)
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "bXktdG9rZW4tMg", token) // "my-token-2" base64url encoded
 	require.Equal(t, []byte(`{"refresh":"xyz"}`), auth.state)
@@ -66,7 +66,7 @@ printf '%s' '{"count":1}' >&3
 `)
 
 	auth := NewAuth(script1)
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
 	require.Equal(t, []byte(`{"count":1}`), auth.state)
@@ -85,7 +85,7 @@ fi
 `)
 
 	auth.cmdLine = script2
-	token, err = auth.Run(nil)
+	token, err = auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "dG9rZW4tZnJlc2g", token) // "token-fresh" base64url encoded
 	require.Equal(t, []byte(`{"count":2}`), auth.state)
@@ -100,7 +100,7 @@ exit 1
 `)
 
 	auth := NewAuth(script)
-	_, err := auth.Run(nil)
+	_, err := auth.Run(nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Authentication failed")
 }
@@ -113,7 +113,7 @@ exit 1
 `)
 
 	auth := NewAuth(script)
-	_, err := auth.Run(nil)
+	_, err := auth.Run(nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "auth command failed")
 	require.Contains(t, err.Error(), "Something went wrong")
@@ -127,7 +127,7 @@ cat > /dev/null
 `)
 
 	auth := NewAuth(script)
-	_, err := auth.Run(nil)
+	_, err := auth.Run(nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty token")
 }
@@ -136,7 +136,7 @@ func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 	t.Parallel()
 	// Test that mustache template is rendered in command line
 	auth := NewAuth(`printf '%s' "token-{{host}}"`)
-	token, err := auth.Run(map[string]string{"host": "ok"})
+	token, err := auth.Run(map[string]string{"host": "ok"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "dG9rZW4tb2s", token) // "token-ok" base64url encoded
 }
@@ -144,7 +144,7 @@ func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
 func TestAuth_Run_MustacheTemplateError(t *testing.T) {
 	t.Parallel()
 	auth := NewAuth("echo {{unclosed}")
-	_, err := auth.Run(nil)
+	_, err := auth.Run(nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to render command template")
 }
@@ -165,7 +165,7 @@ printf '%s' '{"count":1}' >&3
 	done := make(chan bool, 2)
 	for range 2 {
 		go func() {
-			token, err := auth.Run(nil)
+			token, err := auth.Run(nil, nil)
 			require.NoError(t, err)
 			require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
 			done <- true
@@ -207,7 +207,7 @@ fi
 `)
 
 	auth := NewAuth(script)
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "Zmlyc3QtY2FsbC10b2tlbg", token) // "first-call-token" base64url encoded
 }
@@ -224,7 +224,7 @@ printf '%s' "token"
 	auth := NewAuth(script)
 	auth.state = []byte("old-state") // Set some initial state
 
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "dG9rZW4", token) // "token" base64url encoded
 	require.Empty(t, auth.state)       // State should be cleared
@@ -248,7 +248,7 @@ fi
 `)
 
 	auth := NewAuth(script1)
-	token, err := auth.Run(map[string]string{"user": "alice"})
+	token, err := auth.Run(map[string]string{"user": "alice"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "aW5pdGlhbC1hdXRoLXRva2Vu", token) // "initial-auth-token" base64url encoded
 	require.NotEmpty(t, auth.state)
@@ -268,7 +268,7 @@ fi
 `)
 
 	auth.cmdLine = script2
-	token, err = auth.Run(map[string]string{"user": "alice"})
+	token, err = auth.Run(map[string]string{"user": "alice"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "cmVmcmVzaGVkLXRva2VuLTEyMw", token) // "refreshed-token-123" base64url encoded
 	require.Contains(t, string(auth.state), "r2")
@@ -287,7 +287,7 @@ fi
 `)
 
 	auth.cmdLine = script3
-	_, err = auth.Run(nil)
+	_, err = auth.Run(nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Refresh token expired, full re-auth required")
 	// State should NOT be updated on error - the code returns early before state update
@@ -308,7 +308,7 @@ printf '%s' "my-token-abc"
 	require.Empty(t, auth.Token())
 
 	// Run auth
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "bXktdG9rZW4tYWJj", token) // "my-token-abc" base64url encoded
 
@@ -330,7 +330,7 @@ head -c 11534336 /dev/zero >&3
 `)
 
 	auth := NewAuth(script)
-	_, err := auth.Run(nil)
+	_, err := auth.Run(nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exceeds maximum size")
 }
@@ -363,7 +363,7 @@ printf '\x80\x81\x82token\xff\xfe'
 `)
 
 	auth := NewAuth(script)
-	token, err := auth.Run(nil)
+	token, err := auth.Run(nil, nil)
 	require.NoError(t, err)
 
 	// The token should be base64url encoded, preserving the exact bytes

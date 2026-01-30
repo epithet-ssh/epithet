@@ -151,12 +151,12 @@ func (x *MatchRequest) GetConnection() *Connection {
 	return nil
 }
 
-// MatchEvent is streamed during Match - stderr chunks then final result.
+// MatchEvent is streamed during Match - user output chunks then final result.
 type MatchEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
 	//
-	//	*MatchEvent_Stderr
+	//	*MatchEvent_UserOutput
 	//	*MatchEvent_Result
 	Event         isMatchEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
@@ -200,10 +200,10 @@ func (x *MatchEvent) GetEvent() isMatchEvent_Event {
 	return nil
 }
 
-func (x *MatchEvent) GetStderr() []byte {
+func (x *MatchEvent) GetUserOutput() []byte {
 	if x != nil {
-		if x, ok := x.Event.(*MatchEvent_Stderr); ok {
-			return x.Stderr
+		if x, ok := x.Event.(*MatchEvent_UserOutput); ok {
+			return x.UserOutput
 		}
 	}
 	return nil
@@ -222,15 +222,15 @@ type isMatchEvent_Event interface {
 	isMatchEvent_Event()
 }
 
-type MatchEvent_Stderr struct {
-	Stderr []byte `protobuf:"bytes,1,opt,name=stderr,proto3,oneof"` // Auth plugin stderr chunk
+type MatchEvent_UserOutput struct {
+	UserOutput []byte `protobuf:"bytes,1,opt,name=user_output,json=userOutput,proto3,oneof"` // Auth plugin user-visible output (fd 4)
 }
 
 type MatchEvent_Result struct {
 	Result *MatchResult `protobuf:"bytes,2,opt,name=result,proto3,oneof"` // Final result (exactly one, last)
 }
 
-func (*MatchEvent_Stderr) isMatchEvent_Event() {}
+func (*MatchEvent_UserOutput) isMatchEvent_Event() {}
 
 func (*MatchEvent_Result) isMatchEvent_Event() {}
 
@@ -591,10 +591,11 @@ const file_brokerv1_broker_proto_rawDesc = "" +
 	"\fMatchRequest\x12=\n" +
 	"\n" +
 	"connection\x18\x01 \x01(\v2\x1d.epithet.broker.v1.ConnectionR\n" +
-	"connection\"i\n" +
+	"connection\"r\n" +
 	"\n" +
-	"MatchEvent\x12\x18\n" +
-	"\x06stderr\x18\x01 \x01(\fH\x00R\x06stderr\x128\n" +
+	"MatchEvent\x12!\n" +
+	"\vuser_output\x18\x01 \x01(\fH\x00R\n" +
+	"userOutput\x128\n" +
 	"\x06result\x18\x02 \x01(\v2\x1e.epithet.broker.v1.MatchResultH\x00R\x06resultB\a\n" +
 	"\x05event\"9\n" +
 	"\vMatchResult\x12\x14\n" +
@@ -683,7 +684,7 @@ func file_brokerv1_broker_proto_init() {
 		return
 	}
 	file_brokerv1_broker_proto_msgTypes[2].OneofWrappers = []any{
-		(*MatchEvent_Stderr)(nil),
+		(*MatchEvent_UserOutput)(nil),
 		(*MatchEvent_Result)(nil),
 	}
 	type x struct{}

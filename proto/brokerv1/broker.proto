@@ -18,10 +18,10 @@ message MatchRequest {
   Connection connection = 1;
 }
 
-// MatchEvent is streamed during Match - stderr chunks then final result.
+// MatchEvent is streamed during Match - user output chunks then final result.
 message MatchEvent {
   oneof event {
-    bytes stderr = 1;           // Auth plugin stderr chunk
+    bytes user_output = 1;      // Auth plugin user-visible output (fd 4)
     MatchResult result = 2;     // Final result (exactly one, last)
   }
 }
