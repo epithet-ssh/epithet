@@ -2,6 +2,7 @@ package policyserver_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -36,7 +37,7 @@ type mockEvaluator struct {
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(identity string, conn policy.Connection) (*policyserver.Response, error) {
+func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*policyserver.Response, error) {
 	if m.err != nil {
 		return nil, m.err
 	}

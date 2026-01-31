@@ -45,71 +45,129 @@ type PolicyServerCLI struct {
 
 	// Discovery base URL for CDN support
 	DiscoveryBaseURL string `help:"Base URL for discovery endpoints (e.g., https://cdn.example.com)" name:"discovery-base-url"`
+
+	// PolicySource is the URL/path to load dynamic policy from (users, hosts, defaults).
+	// Can be http://, https://, file://, or a bare path. When set, policy is reloaded
+	// on each request, enabling updates without server restart.
+	PolicySource string `help:"URL/path to load policy from (http://, file://, or path)" name:"policy-source"`
 }
 
 func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unifiedConfig cue.Value) error {
-	// Load policy configuration from unified CUE config (handles maps like users, hosts)
-	cfg, err := c.loadPolicyFromCUE(unifiedConfig)
+	// Load server configuration from unified CUE config.
+	serverCfg, err := c.loadServerConfigFromCUE(unifiedConfig)
 	if err != nil {
-		return fmt.Errorf("failed to load policy config: %w", err)
+		return fmt.Errorf("failed to load server config: %w", err)
 	}
 
-	// Apply CLI overrides (scalar values take precedence over config file)
-	c.applyOverrides(cfg)
+	// Apply CLI overrides for server config.
+	c.applyServerOverrides(serverCfg)
 
-	// Resolve CA public key (may fetch from URL)
-	if cfg.CAPublicKey == "" {
+	// Resolve CA public key (may fetch from URL).
+	if serverCfg.CAPublicKey == "" {
 		return fmt.Errorf("ca_pubkey is required (via --ca-pubkey flag or policy.ca_pubkey in config)")
 	}
-	caPubkey, err := resolveCAPubkey(cfg.CAPublicKey, tlsCfg, logger)
+	caPubkey, err := resolveCAPubkey(serverCfg.CAPublicKey, tlsCfg, logger)
 	if err != nil {
 		return err
 	}
-	cfg.CAPublicKey = caPubkey
+	serverCfg.CAPublicKey = caPubkey
 
-	// Validate policy configuration
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid policy config: %w", err)
+	// Validate server configuration.
+	if err := serverCfg.Validate(); err != nil {
+		return fmt.Errorf("invalid server config: %w", err)
 	}
 
-	logger.Info("policy configuration loaded",
-		"users", len(cfg.Users),
-		"hosts", len(cfg.Hosts),
-		"oidc_issuer", cfg.OIDC.Issuer,
-		"oidc_client_id", cfg.OIDC.ClientID)
-
-	// Create policy evaluator and token validator
 	ctx := context.Background()
-	eval, validator, err := evaluator.New(ctx, cfg, tlsCfg)
-	if err != nil {
-		return fmt.Errorf("failed to create policy evaluator: %w", err)
+
+	// Determine policy source: --policy-source flag, config file, or inline policy.
+	policySource := c.PolicySource
+	if policySource == "" {
+		policySource = serverCfg.PolicyURL
 	}
 
-	// Create policy server handler
+	var eval *evaluator.Evaluator
+	var validator policyserver.TokenValidator
+	var policyProvider policyserver.PolicyProvider
+
+	if policySource != "" {
+		// Dynamic policy mode: load policy from URL/file on each request.
+		logger.Info("using dynamic policy loading", "source", policySource)
+
+		loader := policyserver.NewPolicyLoader(policySource)
+		policyProvider = policyserver.NewLoaderProvider(loader)
+
+		// Validate we can load policy at startup.
+		initialPolicy, err := loader.Load(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to load initial policy from %s: %w", policySource, err)
+		}
+
+		logger.Info("initial policy loaded",
+			"users", len(initialPolicy.Users),
+			"hosts", len(initialPolicy.Hosts))
+
+		eval, validator, err = evaluator.NewWithProvider(ctx, serverCfg, policyProvider, tlsCfg)
+		if err != nil {
+			return fmt.Errorf("failed to create policy evaluator: %w", err)
+		}
+	} else {
+		// Static policy mode: load policy from inline config (backwards compatible).
+		cfg, err := c.loadPolicyFromCUE(unifiedConfig)
+		if err != nil {
+			return fmt.Errorf("failed to load policy config: %w", err)
+		}
+
+		// Apply CLI overrides.
+		c.applyOverrides(cfg)
+
+		// Validate policy configuration.
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("invalid policy config: %w", err)
+		}
+
+		logger.Info("policy configuration loaded (static)",
+			"users", len(cfg.Users),
+			"hosts", len(cfg.Hosts),
+			"oidc_issuer", cfg.OIDC.Issuer,
+			"oidc_client_id", cfg.OIDC.ClientID)
+
+		eval, validator, err = evaluator.New(ctx, cfg, tlsCfg)
+		if err != nil {
+			return fmt.Errorf("failed to create policy evaluator: %w", err)
+		}
+
+		// Use static provider for discovery handlers.
+		policyProvider = policyserver.NewStaticProvider(cfg.ExtractPolicyConfig())
+	}
+
+	// Create policy server handler.
+	// Note: Discovery hashes are computed from current policy and may change with dynamic loading.
+	// For now, we compute initial hashes; a future enhancement could make these dynamic.
+	initialPolicy, err := policyProvider.GetPolicy(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get initial policy for hashes: %w", err)
+	}
+
 	handler := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey:      sshcert.RawPublicKey(caPubkey),
 		Validator:        validator,
 		Evaluator:        eval,
-		DiscoveryHash:    cfg.DiscoveryHash(),
-		BootstrapHash:    cfg.BootstrapHash(),
+		DiscoveryHash:    initialPolicy.DiscoveryHash(),
+		BootstrapHash:    serverCfg.BootstrapHash(),
 		DiscoveryBaseURL: c.DiscoveryBaseURL,
 	})
 
-	// Create discovery handler
-	// Match patterns are the keys from the Hosts map
-	matchPatterns := make([]string, 0, len(cfg.Hosts))
-	for pattern := range cfg.Hosts {
-		matchPatterns = append(matchPatterns, pattern)
-	}
+	// Create discovery handler.
+	matchPatterns := initialPolicy.HostPatterns()
 	discoveryHandler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
 		Validator:     validator,
 		MatchPatterns: matchPatterns,
-		DiscoveryHash: cfg.DiscoveryHash(),
-		BootstrapHash: cfg.BootstrapHash(),
-		AuthConfig:    cfg.BootstrapAuth(),
+		DiscoveryHash: initialPolicy.DiscoveryHash(),
+		BootstrapHash: serverCfg.BootstrapHash(),
+		AuthConfig:    serverCfg.BootstrapAuth(),
 	})
 
-	// Set up router with middleware
+	// Set up router with middleware.
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -118,47 +176,85 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Post("/", handler)
-	// Bootstrap redirect endpoint: /d/bootstrap -> /d/{bootstrap-hash} (cached 5 min, no auth)
-	r.Get("/d/bootstrap", policyserver.NewBootstrapRedirectHandler(cfg.BootstrapHash(), c.DiscoveryBaseURL))
-	// Discovery redirect endpoint: /d/current -> /d/{discovery-hash} (cached 5 min, requires auth)
-	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(cfg.DiscoveryHash(), c.DiscoveryBaseURL))
-	// Content-addressed endpoint: /d/{hash} (immutable, serves bootstrap or discovery based on hash)
+	// Bootstrap redirect endpoint: /d/bootstrap -> /d/{bootstrap-hash} (cached 5 min, no auth).
+	r.Get("/d/bootstrap", policyserver.NewBootstrapRedirectHandler(serverCfg.BootstrapHash(), c.DiscoveryBaseURL))
+	// Discovery redirect endpoint: /d/current -> /d/{discovery-hash} (cached 5 min, requires auth).
+	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(initialPolicy.DiscoveryHash(), c.DiscoveryBaseURL))
+	// Content-addressed endpoint: /d/{hash} (immutable, serves bootstrap or discovery based on hash).
 	r.Get("/d/*", discoveryHandler)
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
 		"ca_pubkey_length", len(caPubkey),
-		"discovery_hash", cfg.DiscoveryHash(),
-		"bootstrap_hash", cfg.BootstrapHash(),
-		"match_patterns", matchPatterns)
+		"discovery_hash", initialPolicy.DiscoveryHash(),
+		"bootstrap_hash", serverCfg.BootstrapHash(),
+		"match_patterns", matchPatterns,
+		"dynamic_policy", policySource != "")
 
 	return http.ListenAndServe(c.Listen, r)
+}
+
+// loadServerConfigFromCUE decodes the server configuration (static) from CUE config.
+func (c *PolicyServerCLI) loadServerConfigFromCUE(unifiedConfig cue.Value) (*policyserver.ServerConfig, error) {
+	// Look up policy section.
+	policyVal := unifiedConfig.LookupPath(cue.ParsePath("policy"))
+	if !policyVal.Exists() {
+		// Return empty config - CLI flags will provide required values.
+		return &policyserver.ServerConfig{}, nil
+	}
+
+	// Decode into ServerConfig.
+	var cfg policyserver.ServerConfig
+	if err := policyVal.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to decode server config: %w", err)
+	}
+
+	return &cfg, nil
 }
 
 // loadPolicyFromCUE decodes the policy section from the unified CUE config.
 // This handles maps (users, hosts) that cannot be represented as CLI flags.
 func (c *PolicyServerCLI) loadPolicyFromCUE(unifiedConfig cue.Value) (*policyserver.PolicyRulesConfig, error) {
-	// Look up policy section
+	// Look up policy section.
 	policyVal := unifiedConfig.LookupPath(cue.ParsePath("policy"))
 	if !policyVal.Exists() {
-		// Return empty config - CLI flags will provide required values
+		// Return empty config - CLI flags will provide required values.
 		return &policyserver.PolicyRulesConfig{
 			Users: make(map[string][]string),
 		}, nil
 	}
 
-	// Decode into PolicyRulesConfig (CUE handles maps correctly)
+	// Decode into PolicyRulesConfig (CUE handles maps correctly).
 	var cfg policyserver.PolicyRulesConfig
 	if err := policyVal.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to decode policy config: %w", err)
 	}
 
-	// Ensure Users map is not nil
+	// Ensure Users map is not nil.
 	if cfg.Users == nil {
 		cfg.Users = make(map[string][]string)
 	}
 
 	return &cfg, nil
+}
+
+// applyServerOverrides applies CLI-provided values over server config values.
+func (c *PolicyServerCLI) applyServerOverrides(cfg *policyserver.ServerConfig) {
+	if c.CAPubkey != "" {
+		cfg.CAPublicKey = c.CAPubkey
+	}
+	if c.OIDC.Issuer != "" {
+		cfg.OIDC.Issuer = c.OIDC.Issuer
+	}
+	if c.OIDC.ClientID != "" {
+		cfg.OIDC.ClientID = c.OIDC.ClientID
+	}
+	if c.OIDC.ClientSecret != "" {
+		cfg.OIDC.ClientSecret = c.OIDC.ClientSecret
+	}
+	if c.PolicySource != "" {
+		cfg.PolicyURL = c.PolicySource
+	}
 }
 
 // applyOverrides applies CLI-provided values over config file values.

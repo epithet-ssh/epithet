@@ -1,6 +1,7 @@
 package policyserver
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,7 @@ type Response struct {
 type PolicyEvaluator interface {
 	// Evaluate makes an authorization decision for the given identity and connection.
 	// The identity has already been extracted from a validated token.
+	// The context is used for loading dynamic policy if configured.
 	// Returns:
 	// - *Response: Certificate parameters and policy if authorized
 	// - error: If authorization denied
@@ -41,7 +43,7 @@ type PolicyEvaluator interface {
 	// Error handling:
 	// - Return ErrForbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(identity string, conn policy.Connection) (*Response, error)
+	Evaluate(ctx context.Context, identity string, conn policy.Connection) (*Response, error)
 }
 
 // TokenValidator validates authentication tokens and extracts identity.
@@ -208,7 +210,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Evaluate policy based on identity (authorization)
-	resp, err := h.config.Evaluator.Evaluate(identity, req.Connection)
+	resp, err := h.config.Evaluator.Evaluate(r.Context(), identity, req.Connection)
 	if err != nil {
 		// Check if it's a PolicyError with specific status code
 		if policyErr, ok := err.(*PolicyError); ok {

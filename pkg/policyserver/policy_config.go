@@ -11,12 +11,90 @@ import (
 
 // PolicyRulesConfig represents the policy server rules configuration.
 // This defines users, hosts, and access policies - not CLI flags.
+// For new deployments, consider using ServerConfig + PolicyConfig separately
+// to enable dynamic policy loading via policy_url.
 type PolicyRulesConfig struct {
 	CAPublicKey string                 `yaml:"ca_pubkey" json:"ca_pubkey"`
 	OIDC        OIDCConfig             `yaml:"oidc" json:"oidc"`
 	Users       map[string][]string    `yaml:"users" json:"users"` // user identity → tags
 	Defaults    *DefaultPolicy         `yaml:"defaults,omitempty" json:"defaults,omitempty"`
 	Hosts       map[string]*HostPolicy `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host policy
+}
+
+// ServerConfig contains static server configuration loaded at startup.
+// These settings cannot be changed without restarting the server.
+type ServerConfig struct {
+	CAPublicKey string     `yaml:"ca_pubkey" json:"ca_pubkey"`
+	OIDC        OIDCConfig `yaml:"oidc" json:"oidc"`
+	PolicyURL   string     `yaml:"policy_url,omitempty" json:"policy_url,omitempty"` // URL to load dynamic policy from
+}
+
+// Validate checks that the ServerConfig is valid.
+func (c *ServerConfig) Validate() error {
+	if c.CAPublicKey == "" {
+		return fmt.Errorf("ca_pubkey is required")
+	}
+
+	if c.OIDC.Issuer == "" {
+		return fmt.Errorf("oidc.issuer is required")
+	}
+
+	if c.OIDC.ClientID == "" {
+		return fmt.Errorf("oidc.client_id is required")
+	}
+
+	return nil
+}
+
+// BootstrapAuth returns the auth configuration for the bootstrap endpoint.
+// Currently only supports OIDC auth type.
+func (c *ServerConfig) BootstrapAuth() BootstrapAuth {
+	scopes := c.OIDC.Scopes
+	if len(scopes) == 0 {
+		scopes = DefaultScopes()
+	}
+
+	return BootstrapAuth{
+		Type:         "oidc",
+		Issuer:       c.OIDC.Issuer,
+		ClientID:     c.OIDC.ClientID,
+		ClientSecret: c.OIDC.ClientSecret,
+		Scopes:       scopes,
+	}
+}
+
+// BootstrapHash computes a content-addressable hash of the auth configuration.
+// This hash changes when the auth config changes (issuer, client_id, scopes).
+// Returns a 12-character hex string.
+func (c *ServerConfig) BootstrapHash() string {
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+
+	// Hash the bootstrap auth config (deterministic JSON).
+	auth := c.BootstrapAuth()
+	enc.Encode(auth)
+
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum)[:12]
+}
+
+// ExtractPolicyConfig extracts the dynamic policy portion from PolicyRulesConfig.
+// Used for backwards compatibility when policy is defined inline.
+func (c *PolicyRulesConfig) ExtractPolicyConfig() *PolicyConfig {
+	return &PolicyConfig{
+		Users:    c.Users,
+		Defaults: c.Defaults,
+		Hosts:    c.Hosts,
+	}
+}
+
+// ExtractServerConfig extracts the static server portion from PolicyRulesConfig.
+// Used for backwards compatibility when all config is in one file.
+func (c *PolicyRulesConfig) ExtractServerConfig() *ServerConfig {
+	return &ServerConfig{
+		CAPublicKey: c.CAPublicKey,
+		OIDC:        c.OIDC,
+	}
 }
 
 // OIDCConfig represents OIDC configuration for token validation
