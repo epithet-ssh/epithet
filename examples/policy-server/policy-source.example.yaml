@@ -1,0 +1,33 @@
+# Epithet Policy Server - Dynamic Policy Source Example
+#
+# Use this FLAT format with --policy-source flag or policy_url config.
+# This file is loaded directly - no "policy:" wrapper needed.
+#
+# Usage:
+#   epithet policy --policy-source ./policy.yaml
+#   epithet policy --policy-source https://example.com/policy.yaml
+#   epithet policy --policy-source file:///etc/epithet/policy.yaml
+
+# Map users to tags
+users:
+  alice@example.com: [admin, eng]
+  bob@example.com: [eng]
+  charlie@example.com: [ops]
+
+# Global defaults
+defaults:
+  allow:
+    wheel: [admin]
+    developers: [eng]
+    operators: [ops]
+  expiration: "5m"
+  extensions:
+    permit-pty: ""
+    permit-agent-forwarding: ""
+
+# Per-host overrides
+hosts:
+  prod-db-01:
+    allow:
+      postgres: [admin]
+    expiration: "2m"

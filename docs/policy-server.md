@@ -34,6 +34,7 @@ cat ~/.epithet/ca_key.pub
 Create `~/.epithet/policy.yaml` (the policy server loads config from `~/.epithet/*.yaml`):
 
 ```yaml
+# Inline format: requires "policy:" wrapper
 policy:
   # Address to listen on
   listen: "0.0.0.0:9999"
@@ -128,7 +129,48 @@ users: {
 
 The format is auto-detected based on file extension.
 
-### Configuration Structure
+### Configuration modes
+
+The policy server supports two configuration modes with **different formats**:
+
+#### Inline configuration (in ~/.epithet/*.yaml)
+
+Policy is defined inside your main config file under a `policy:` section:
+
+```yaml
+policy:
+  ca_pubkey: "ssh-ed25519 ..."
+  oidc:
+    issuer: "https://accounts.google.com"
+  users:
+    alice@example.com: [admin]
+  defaults:
+    allow:
+      wheel: [admin]
+```
+
+#### Dynamic policy source (--policy-source)
+
+Policy is loaded from a separate file or URL using a **flat format** (no `policy:` wrapper):
+
+```yaml
+# No "policy:" wrapper - file is parsed directly
+users:
+  alice@example.com: [admin]
+defaults:
+  allow:
+    wheel: [admin]
+hosts:
+  prod-db:
+    allow:
+      postgres: [admin]
+```
+
+Start with: `epithet policy --policy-source ./policy.yaml`
+
+Dynamic sources are reloaded on each request, enabling policy updates without restart.
+
+### Configuration structure
 
 #### Top-Level Fields
 
@@ -548,6 +590,7 @@ Check policy server logs for:
 ### Small Team (3-5 developers)
 
 ```yaml
+# Inline format: requires "policy:" wrapper
 policy:
   ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
   oidc:
@@ -569,6 +612,7 @@ policy:
 ### Development and Production Separation
 
 ```yaml
+# Inline format: requires "policy:" wrapper
 policy:
   ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
   oidc:
@@ -600,6 +644,7 @@ policy:
 ### Multiple Environments with Different Access Levels
 
 ```yaml
+# Inline format: requires "policy:" wrapper
 policy:
   ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
   oidc:

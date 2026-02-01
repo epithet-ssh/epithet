@@ -1,10 +1,13 @@
-# Epithet Policy Server Configuration Example
+# Epithet Policy Server - Inline Configuration Example
+#
+# Use this format for INLINE configuration in ~/.epithet/*.yaml files.
+# The "policy:" wrapper is required because kongcue looks up this section.
+#
+# For DYNAMIC policy sources (--policy-source flag), use a flat format
+# WITHOUT the "policy:" wrapper. See policy-source.example.yaml.
 #
 # This configuration uses group names as principals, designed to work with
 # SSH's AuthorizedPrincipalsFile feature for fine-grained access control.
-#
-# LOCATION: This config should be placed in ~/.epithet/policy.yaml
-# The policy server loads config from ~/.epithet/*.yaml under the "policy:" section.
 
 policy:
   # CA public key for signature verification
