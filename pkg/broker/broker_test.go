@@ -257,7 +257,7 @@ printf '%s' "test-token"
 			require.NoError(t, err)
 			b.SetShutdownTimeout(0) // Skip waiting in tests.
 
-			result := b.shouldHandle(tt.hostname)
+			result := b.shouldHandle(tt.hostname, nil)
 			require.Equal(t, tt.expected, result, "hostname: %s, patterns: %v", tt.hostname, tt.patterns)
 		})
 	}
@@ -380,8 +380,8 @@ printf '%s' "test-token"
 
 	// shouldHandle triggers auth + Hello + discovery fetch.
 	// Discovery patterns should be used for matching.
-	require.True(t, b.shouldHandle("server.example.com"), "discovery pattern should match *.example.com")
-	require.False(t, b.shouldHandle("other.com"), "discovery pattern should not match other.com")
+	require.True(t, b.shouldHandle("server.example.com", nil), "discovery pattern should match *.example.com")
+	require.False(t, b.shouldHandle("other.com", nil), "discovery pattern should not match other.com")
 }
 
 func Test_ShouldHandle_NoDiscovery_ReturnsFalse(t *testing.T) {
@@ -407,8 +407,8 @@ printf '%s' "test-token"
 	b.SetShutdownTimeout(0)
 
 	// With no discovery available, shouldHandle returns false for all hosts.
-	require.False(t, b.shouldHandle("server.example.com"), "no discovery should return false")
-	require.False(t, b.shouldHandle("anything.com"), "no discovery should return false")
+	require.False(t, b.shouldHandle("server.example.com", nil), "no discovery should return false")
+	require.False(t, b.shouldHandle("anything.com", nil), "no discovery should return false")
 }
 
 func TestCleanupExpiredAgents(t *testing.T) {
@@ -471,6 +471,74 @@ printf '%s' "6:thello,"
 
 	_, exists = b.agents[policy.ConnectionHash("expiring-soon")]
 	require.False(t, exists, "expiring-soon agent should be cleaned up")
+}
+
+// Test_MatchStreamsUserOutput verifies that fd 4 output from the auth script flows
+// through the full gRPC Match stream as UserOutput events.
+func Test_MatchStreamsUserOutput(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	// Auth script writes to fd 4 (user output) and stdout (token).
+	authCommand := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+echo "Visit https://example.com and enter code ABC-123" >&4
+printf '%s' "test-token"
+`)
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
+
+	// Discovery-enabled CA so the match proceeds past shouldHandle.
+	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
+	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	go func() {
+		err := b.Serve(ctx)
+		if err != nil && err != ctx.Err() {
+			t.Errorf("broker.Serve error: %v", err)
+		}
+	}()
+	defer b.Close()
+	<-b.Ready()
+
+	client := testGRPCClient(t, socketPath)
+
+	// Call Match directly (not callMatch, which discards UserOutput events).
+	stream, err := client.Match(context.Background(), &pb.MatchRequest{
+		Connection: &pb.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "user",
+			Port:       22,
+			Hash:       "stream-test",
+		},
+	})
+	require.NoError(t, err)
+
+	var userOutput bytes.Buffer
+	var result *pb.MatchResult
+	for {
+		event, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		switch e := event.Event.(type) {
+		case *pb.MatchEvent_UserOutput:
+			userOutput.Write(e.UserOutput)
+		case *pb.MatchEvent_Result:
+			result = e.Result
+		}
+	}
+
+	require.Contains(t, userOutput.String(), "Visit https://example.com",
+		"fd 4 output should be streamed as UserOutput events")
+	require.NotNil(t, result, "should receive a MatchResult")
+	// Allow will be false because the mock CA can't issue real certs — that's fine,
+	// we're testing that user output streams through, not cert issuance.
+	require.False(t, result.Allow)
 }
 
 // Test_UserOutputStreaming tests that user output from fd 4 is streamed to the writer.

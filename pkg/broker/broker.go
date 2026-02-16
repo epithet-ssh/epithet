@@ -215,7 +215,7 @@ func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Write
 	b.log.Debug("match request received", "connection", conn)
 
 	// Step 1: Check if this host should be handled by epithet at all.
-	if !b.shouldHandle(conn.RemoteHost) {
+	if !b.shouldHandle(conn.RemoteHost, userOutput) {
 		b.log.Debug("host does not match discovery patterns", "host", conn.RemoteHost)
 		// No error - this is normal, just means epithet doesn't handle this host.
 		return MatchResponse{Allow: false}
@@ -449,9 +449,9 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 // shouldHandle checks if the given hostname matches discovery patterns.
 // Always fetches discovery patterns, authenticating if needed.
 // Returns true if epithet should handle this connection, false otherwise.
-func (b *Broker) shouldHandle(hostname string) bool {
-	// Always fetch discovery patterns (auth + Hello if needed)
-	discovery, err := b.getDiscoveryPatterns()
+func (b *Broker) shouldHandle(hostname string, userOutput io.Writer) bool {
+	// Always fetch discovery patterns (auth + Hello if needed).
+	discovery, err := b.getDiscoveryPatterns(userOutput)
 	if err != nil {
 		b.log.Error("failed to get discovery patterns", "error", err)
 		return false // Can't determine - don't handle
@@ -480,24 +480,24 @@ func (b *Broker) shouldHandle(hostname string) bool {
 }
 
 // getDiscoveryPatterns fetches discovery patterns, authenticating and calling Hello if needed.
-func (b *Broker) getDiscoveryPatterns() (*caclient.Discovery, error) {
+func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery, error) {
 	ctx := context.Background()
 
-	// Fast path: try cached discovery first
+	// Fast path: try cached discovery first.
 	token := b.auth.Token()
 	if token != "" {
 		discovery, err := b.caClient.GetDiscovery(ctx, token)
 		if err == nil && discovery != nil {
 			return discovery, nil
 		}
-		// Discovery fetch failed or no cached URL - continue to Hello
+		// Discovery fetch failed or no cached URL - continue to Hello.
 	}
 
-	// Slow path: authenticate if needed, then Hello to learn discovery URL
+	// Slow path: authenticate if needed, then Hello to learn discovery URL.
 	if token == "" {
 		b.log.Debug("no auth token, authenticating to get discovery")
 		var err error
-		token, err = b.auth.Run(nil, nil)
+		token, err = b.auth.Run(nil, userOutput)
 		if err != nil {
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}

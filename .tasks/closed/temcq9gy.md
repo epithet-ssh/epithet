@@ -3,7 +3,7 @@ yatl_version: 1
 title: Stream auth plugin stderr to match command for display
 id: temcq9gy
 created: 2026-01-28T16:32:38.554061Z
-updated: 2026-01-28T16:34:00.199505Z
+updated: 2026-02-16T22:31:48.215087Z
 author: Brian McCallister
 priority: high
 tags:
@@ -31,3 +31,8 @@ Decision: Use gRPC server streaming. Match RPC returns stream of {stderr_chunk} 
 # Log: 2026-01-28T16:34:00Z Brian McCallister
 
 Added blocker: m66az1s7
+
+---
+# Log: 2026-02-16T22:31:48Z Brian McCallister
+
+Closed: Added e2e gRPC streaming test (Test_MatchStreamsUserOutput) that verifies fd 4 output flows through the full Match stream as UserOutput events. Fixed bug where getDiscoveryPatterns called auth.Run with nil userOutput, discarding fd 4 output during the initial auth triggered by shouldHandle. Now threads userOutput writer through shouldHandle → getDiscoveryPatterns → auth.Run.
