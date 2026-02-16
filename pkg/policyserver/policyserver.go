@@ -117,10 +117,6 @@ type Config struct {
 	// The path is hardcoded to "/d/" + hash.
 	DiscoveryHash string
 
-	// BootstrapHash is the content-addressable hash for the bootstrap Link header.
-	// If empty, no bootstrap Link header is set.
-	BootstrapHash string
-
 	// DiscoveryBaseURL is the base URL for discovery endpoints.
 	// If set, discovery URLs will be absolute URLs on this base (e.g., "https://cdn.example.com").
 	// If empty, discovery URLs will be relative (e.g., "/d/current").
@@ -226,31 +222,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// setLinkHeaders sets the Link headers for discovery and bootstrap if configured.
-// Discovery points to /d/current, bootstrap points to /d/bootstrap.
+// setLinkHeaders sets the Link header for discovery if configured.
+// Points to /d/current which is the auth-aware redirect endpoint.
 // If DiscoveryBaseURL is set, uses absolute URLs; otherwise uses relative URLs.
 func (h *handler) setLinkHeaders(w http.ResponseWriter) {
-	var links []string
-
-	if h.config.DiscoveryHash != "" {
-		url := "/d/current"
-		if h.config.DiscoveryBaseURL != "" {
-			url = strings.TrimSuffix(h.config.DiscoveryBaseURL, "/") + "/d/current"
-		}
-		links = append(links, "<"+url+">; rel=\"discovery\"")
+	if h.config.DiscoveryHash == "" {
+		return
 	}
 
-	if h.config.BootstrapHash != "" {
-		url := "/d/bootstrap"
-		if h.config.DiscoveryBaseURL != "" {
-			url = strings.TrimSuffix(h.config.DiscoveryBaseURL, "/") + "/d/bootstrap"
-		}
-		links = append(links, "<"+url+">; rel=\"bootstrap\"")
+	url := "/d/current"
+	if h.config.DiscoveryBaseURL != "" {
+		url = strings.TrimSuffix(h.config.DiscoveryBaseURL, "/") + "/d/current"
 	}
-
-	if len(links) > 0 {
-		w.Header().Set("Link", strings.Join(links, ", "))
-	}
+	w.Header().Set("Link", "<"+url+">; rel=\"discovery\"")
 }
 
 // writeError writes an error response as plain text

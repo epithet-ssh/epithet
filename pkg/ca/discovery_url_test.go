@@ -142,39 +142,39 @@ func TestExtractLinkURLs_MultipleLinks(t *testing.T) {
 		wantURLs   map[string]string
 	}{
 		{
-			name:       "discovery and bootstrap",
-			linkHeader: `</d/current>; rel="discovery", </d/bootstrap>; rel="bootstrap"`,
+			name:       "discovery and alternate",
+			linkHeader: `</d/current>; rel="discovery", </d/other>; rel="alternate"`,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
 				"discovery": "https://policy.example.com/d/current",
-				"bootstrap": "https://policy.example.com/d/bootstrap",
+				"alternate": "https://policy.example.com/d/other",
 			},
 		},
 		{
 			name:       "absolute URLs",
-			linkHeader: `<https://cdn.example.com/d/current>; rel="discovery", <https://cdn.example.com/d/bootstrap>; rel="bootstrap"`,
+			linkHeader: `<https://cdn.example.com/d/current>; rel="discovery", <https://cdn.example.com/d/other>; rel="alternate"`,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
 				"discovery": "https://cdn.example.com/d/current",
-				"bootstrap": "https://cdn.example.com/d/bootstrap",
+				"alternate": "https://cdn.example.com/d/other",
 			},
 		},
 		{
 			name:       "mixed relative and absolute",
-			linkHeader: `</d/current>; rel="discovery", <https://cdn.example.com/d/bootstrap>; rel="bootstrap"`,
+			linkHeader: `</d/current>; rel="discovery", <https://cdn.example.com/d/other>; rel="alternate"`,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
 				"discovery": "https://policy.example.com/d/current",
-				"bootstrap": "https://cdn.example.com/d/bootstrap",
+				"alternate": "https://cdn.example.com/d/other",
 			},
 		},
 		{
 			name:       "extra whitespace",
-			linkHeader: `  </d/current>; rel="discovery"  ,   </d/bootstrap>; rel="bootstrap"  `,
+			linkHeader: `  </d/current>; rel="discovery"  ,   </d/other>; rel="alternate"  `,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
 				"discovery": "https://policy.example.com/d/current",
-				"bootstrap": "https://policy.example.com/d/bootstrap",
+				"alternate": "https://policy.example.com/d/other",
 			},
 		},
 	}

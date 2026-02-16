@@ -30,7 +30,6 @@ type PolicyError struct {
 	StatusCode   int
 	Message      string
 	DiscoveryURL string // Resolved discovery URL from Link header
-	BootstrapURL string // Resolved bootstrap URL from Link header
 }
 
 func (e *PolicyError) Error() string {
@@ -45,10 +44,10 @@ type CA struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 
-	// Cached bootstrap URL learned from policy server Link header.
-	// Protected by bootstrapMu.
-	bootstrapMu  sync.RWMutex
-	bootstrapURL string
+	// Cached discovery URL learned from policy server Link header.
+	// Protected by discoveryMu.
+	discoveryMu  sync.RWMutex
+	discoveryURL string
 }
 
 // get the URL of the Policy Server
@@ -56,12 +55,12 @@ func (c *CA) PolicyURL() string {
 	return c.policyURL
 }
 
-// BootstrapURL returns the cached bootstrap URL learned from the policy server.
+// DiscoveryURL returns the cached discovery URL learned from the policy server.
 // Returns empty string if not yet learned.
-func (c *CA) BootstrapURL() string {
-	c.bootstrapMu.RLock()
-	defer c.bootstrapMu.RUnlock()
-	return c.bootstrapURL
+func (c *CA) DiscoveryURL() string {
+	c.discoveryMu.RLock()
+	defer c.discoveryMu.RUnlock()
+	return c.discoveryURL
 }
 
 // New creates a new CA
@@ -150,7 +149,6 @@ type PolicyResponse struct {
 	CertParams   CertParams    `json:"certParams"`
 	Policy       policy.Policy `json:"policy"`
 	DiscoveryURL string        `json:"-"` // Resolved URL from Link header
-	BootstrapURL string        `json:"-"` // Resolved URL from Link header
 }
 
 func Verify(pubkey sshcert.RawPublicKey, token, signature string) error {
@@ -172,7 +170,7 @@ func (c *CA) Sign(value string) (signature string, err error) {
 }
 
 // extractLinkURLs extracts and resolves URLs from a Link header by rel type.
-// Link header format: <url1>; rel="discovery", <url2>; rel="bootstrap"
+// Link header format: <url1>; rel="discovery", <url2>; rel="alternate"
 // Uses url.URL.ResolveReference for proper RFC 3986 resolution.
 // Returns a map of rel type to resolved URL.
 func extractLinkURLs(linkHeader, baseURL string) map[string]string {
@@ -188,7 +186,7 @@ func extractLinkURLs(linkHeader, baseURL string) map[string]string {
 	}
 
 	// Split on comma to handle multiple links
-	// Link: <url1>; rel="discovery", <url2>; rel="bootstrap"
+	// Link: <url1>; rel="discovery", <url2>; rel="alternate"
 	for _, part := range strings.Split(linkHeader, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -271,16 +269,15 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		c.logger.Debug("http response", "method", "POST", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
-	// Extract and resolve URLs from Link header
+	// Extract and resolve discovery URL from Link header.
 	linkURLs := extractLinkURLs(res.Header.Get("Link"), c.policyURL)
 	discoveryURL := linkURLs["discovery"]
-	bootstrapURL := linkURLs["bootstrap"]
 
-	// Cache bootstrap URL if present (for use by CA server)
-	if bootstrapURL != "" {
-		c.bootstrapMu.Lock()
-		c.bootstrapURL = bootstrapURL
-		c.bootstrapMu.Unlock()
+	// Cache discovery URL if present (for use by CA server).
+	if discoveryURL != "" {
+		c.discoveryMu.Lock()
+		c.discoveryURL = discoveryURL
+		c.discoveryMu.Unlock()
 	}
 
 	lim := io.LimitReader(res.Body, 8196)
@@ -289,15 +286,14 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		return nil, fmt.Errorf("error reading response: %w", err)
 	}
 
-	// Check HTTP status code
+	// Check HTTP status code.
 	if res.StatusCode != 200 {
-		// Policy server returned an error - wrap it to signal to CA server
-		// CA server should return the same status code to the client
+		// Policy server returned an error - wrap it to signal to CA server.
+		// CA server should return the same status code to the client.
 		return nil, &PolicyError{
 			StatusCode:   res.StatusCode,
 			Message:      string(buf),
 			DiscoveryURL: discoveryURL,
-			BootstrapURL: bootstrapURL,
 		}
 	}
 
@@ -307,7 +303,6 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
 	policyResp.DiscoveryURL = discoveryURL
-	policyResp.BootstrapURL = bootstrapURL
 	return policyResp, nil
 }
 

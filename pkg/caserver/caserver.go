@@ -201,15 +201,15 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
-	// Use bootstrap URL learned from policy server, or derive from policy URL
-	bootstrapURL := s.c.BootstrapURL()
-	if bootstrapURL == "" {
-		// Fallback: derive from policy URL until we've made a request to policy server
-		bootstrapURL = strings.TrimSuffix(s.c.PolicyURL(), "/") + "/d/bootstrap"
+	// Use discovery URL learned from policy server, or derive from policy URL.
+	discoveryURL := s.c.DiscoveryURL()
+	if discoveryURL == "" {
+		// Fallback: derive from policy URL until we've made a request to policy server.
+		discoveryURL = strings.TrimSuffix(s.c.PolicyURL(), "/") + "/d/current"
 	}
 
-	// Add bootstrap Link header for client discovery
-	w.Header().Set("Link", "<"+bootstrapURL+">; rel=\"bootstrap\"")
+	// Add discovery Link header for client discovery.
+	w.Header().Set("Link", "<"+discoveryURL+">; rel=\"discovery\"")
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))

@@ -15,19 +15,21 @@ type DiscoveryConfig struct {
 	// MatchPatterns are the host patterns to return
 	MatchPatterns []string
 
-	// DiscoveryHash is the content-addressable hash for discovery (authenticated)
-	DiscoveryHash string
+	// UnauthHash is the content-addressable hash for unauthenticated discovery (auth config only)
+	UnauthHash string
 
-	// BootstrapHash is the content-addressable hash for bootstrap (unauthenticated)
-	BootstrapHash string
+	// AuthHash is the content-addressable hash for authenticated discovery (auth config + match patterns)
+	AuthHash string
 
-	// AuthConfig is the bootstrap auth configuration to return
+	// AuthConfig is the auth configuration to return
 	AuthConfig BootstrapAuth
 }
 
-// Discovery is the response format for the discovery endpoint
+// Discovery is the unified response format for the discovery endpoint.
+// Unauthenticated: returns Auth only. Authenticated: returns Auth + MatchPatterns.
 type Discovery struct {
-	MatchPatterns []string `json:"matchPatterns"`
+	Auth          *BootstrapAuth `json:"auth,omitempty"`
+	MatchPatterns []string       `json:"matchPatterns,omitempty"`
 }
 
 // contentHandler handles both bootstrap and discovery content-addressed endpoints.
@@ -47,36 +49,27 @@ func NewDiscoveryHandler(config DiscoveryConfig) http.HandlerFunc {
 	return h.ServeHTTP
 }
 
-// NewDiscoveryRedirectHandler returns a handler that redirects to the content-addressed discovery URL.
-// The redirect response is cached for 5 minutes to allow policy changes to propagate.
-// Clients should request /d/current and follow the redirect to /d/{hash}.
-// Uses 302 Found (temporary) rather than 301 (permanent) since the redirect target may change.
-// If baseURL is set, redirects to an absolute URL on that base; otherwise uses relative URLs.
-func NewDiscoveryRedirectHandler(hash string, baseURL string) http.HandlerFunc {
-	location := "/d/" + hash
+// NewDiscoveryRedirectHandler returns an auth-aware handler that redirects to the
+// content-addressed discovery URL. Unauthenticated requests redirect to unauthHash
+// (auth config only); authenticated requests redirect to authHash (auth config + match patterns).
+// Sets Vary: Authorization so caches don't serve the wrong response.
+// Uses 302 Found (temporary) since the redirect target may change.
+func NewDiscoveryRedirectHandler(unauthHash, authHash, baseURL string) http.HandlerFunc {
+	unauthLocation := "/d/" + unauthHash
+	authLocation := "/d/" + authHash
 	if baseURL != "" {
-		location = strings.TrimSuffix(baseURL, "/") + "/d/" + hash
+		base := strings.TrimSuffix(baseURL, "/")
+		unauthLocation = base + "/d/" + unauthHash
+		authLocation = base + "/d/" + authHash
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "max-age=300")
-		w.Header().Set("Location", location)
-		w.WriteHeader(http.StatusFound)
-	}
-}
-
-// NewBootstrapRedirectHandler returns a handler that redirects to the content-addressed bootstrap URL.
-// The redirect response is cached for 5 minutes to allow config changes to propagate.
-// Clients should request /d/bootstrap and follow the redirect to /d/{hash}.
-// Uses 302 Found (temporary) rather than 301 (permanent) since the redirect target may change.
-// If baseURL is set, redirects to an absolute URL on that base; otherwise uses relative URLs.
-func NewBootstrapRedirectHandler(hash string, baseURL string) http.HandlerFunc {
-	location := "/d/" + hash
-	if baseURL != "" {
-		location = strings.TrimSuffix(baseURL, "/") + "/d/" + hash
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "max-age=300")
-		w.Header().Set("Location", location)
+		w.Header().Set("Vary", "Authorization")
+		if r.Header.Get("Authorization") != "" {
+			w.Header().Set("Location", authLocation)
+		} else {
+			w.Header().Set("Location", unauthLocation)
+		}
 		w.WriteHeader(http.StatusFound)
 	}
 }
@@ -94,40 +87,41 @@ func (h *contentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path = strings.TrimSuffix(path, "/")
 	hash := path
 
-	// Route based on hash match
+	// Route based on hash match.
 	switch hash {
-	case h.config.BootstrapHash:
-		h.serveBootstrap(w, r)
-	case h.config.DiscoveryHash:
-		h.serveDiscovery(w, r)
+	case h.config.UnauthHash:
+		h.serveUnauthDiscovery(w)
+	case h.config.AuthHash:
+		h.serveAuthDiscovery(w, r)
 	default:
-		// Unknown hash - return 404 to force client to follow redirect
+		// Unknown hash - return 404 to force client to follow redirect.
 		h.writeError(w, http.StatusNotFound, "Unknown discovery hash")
 	}
 }
 
-// serveBootstrap serves the bootstrap auth config (no authentication required).
-func (h *contentHandler) serveBootstrap(w http.ResponseWriter, r *http.Request) {
-	bootstrap := Bootstrap{
-		Auth: h.config.AuthConfig,
+// serveUnauthDiscovery serves the auth config (no authentication required).
+func (h *contentHandler) serveUnauthDiscovery(w http.ResponseWriter) {
+	authConfig := h.config.AuthConfig
+	discovery := Discovery{
+		Auth: &authConfig,
 	}
 
-	body, err := json.Marshal(bootstrap)
+	body, err := json.Marshal(discovery)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, "Failed to marshal response")
 		return
 	}
 
-	// Content-addressable URL = immutable caching
+	// Content-addressable URL = immutable caching.
 	w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(body)
 }
 
-// serveDiscovery serves the discovery match patterns (authentication required).
-func (h *contentHandler) serveDiscovery(w http.ResponseWriter, r *http.Request) {
-	// Parse Bearer token from Authorization header
+// serveAuthDiscovery serves auth config + match patterns (authentication required).
+func (h *contentHandler) serveAuthDiscovery(w http.ResponseWriter, r *http.Request) {
+	// Parse Bearer token from Authorization header.
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		h.writeError(w, http.StatusUnauthorized, "Missing Authorization header")
@@ -146,21 +140,23 @@ func (h *contentHandler) serveDiscovery(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Decode base64url-encoded token (broker encodes tokens for binary safety)
+	// Decode base64url-encoded token (broker encodes tokens for binary safety).
 	decodedToken, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, "Invalid token encoding")
 		return
 	}
 
-	// Validate token (we don't need the identity for discovery, just auth)
+	// Validate token (we don't need the identity for discovery, just auth).
 	if _, err := h.config.Validator.ValidateAndExtractIdentity(string(decodedToken)); err != nil {
 		h.writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
-	// Return discovery data
+	// Return full discovery data (auth config + match patterns).
+	authConfig := h.config.AuthConfig
 	discovery := Discovery{
+		Auth:          &authConfig,
 		MatchPatterns: h.config.MatchPatterns,
 	}
 
@@ -170,7 +166,7 @@ func (h *contentHandler) serveDiscovery(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Content-addressable URL = immutable caching
+	// Content-addressable URL = immutable caching.
 	w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

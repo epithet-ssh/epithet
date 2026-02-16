@@ -312,7 +312,9 @@ func TestPolicyLoader_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestPolicyConfig_DiscoveryHash(t *testing.T) {
+func TestPolicyConfig_AuthDiscoveryHash(t *testing.T) {
+	auth := policyserver.BootstrapAuth{Type: "oidc", Issuer: "https://example.com", ClientID: "test"}
+
 	policy1 := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
@@ -334,7 +336,9 @@ func TestPolicyConfig_DiscoveryHash(t *testing.T) {
 	}
 
 	// Same hosts, different order - should have same hash.
-	if policy1.DiscoveryHash() != policy2.DiscoveryHash() {
+	hash1 := policyserver.ComputeAuthDiscoveryHash(auth, policy1.HostPatterns())
+	hash2 := policyserver.ComputeAuthDiscoveryHash(auth, policy2.HostPatterns())
+	if hash1 != hash2 {
 		t.Error("expected same hash for same hosts in different order")
 	}
 
@@ -348,7 +352,8 @@ func TestPolicyConfig_DiscoveryHash(t *testing.T) {
 		},
 	}
 
-	if policy1.DiscoveryHash() == policy3.DiscoveryHash() {
+	hash3 := policyserver.ComputeAuthDiscoveryHash(auth, policy3.HostPatterns())
+	if hash1 == hash3 {
 		t.Error("expected different hash for different hosts")
 	}
 }

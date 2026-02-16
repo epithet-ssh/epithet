@@ -111,30 +111,33 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return fmt.Errorf("failed to create CA client: %w", err)
 	}
 
-	// Resolve auth command: use --auth if provided, otherwise discover from CA
+	// Resolve auth command: use --auth if provided, otherwise discover from CA.
 	authCommand := parent.Auth
 	if authCommand == "" {
-		logger.Debug("no --auth provided, discovering from CA bootstrap")
+		logger.Debug("no --auth provided, discovering from CA")
 
-		// Fetch public key (also caches bootstrap URL)
+		// Fetch public key (also caches discovery URL).
 		_, err := caClient.GetPublicKey(context.Background())
 		if err != nil {
 			return fmt.Errorf("failed to get CA public key: %w", err)
 		}
 
-		// Fetch bootstrap config
-		bootstrap, err := caClient.GetBootstrap(context.Background())
+		// Fetch unauthenticated discovery (auth config only, no token needed).
+		discovery, err := caClient.GetDiscovery(context.Background(), "")
 		if err != nil {
-			return fmt.Errorf("failed to get bootstrap config (try --auth to specify manually): %w", err)
+			return fmt.Errorf("failed to get discovery config (try --auth to specify manually): %w", err)
+		}
+		if discovery == nil || discovery.Auth == nil {
+			return fmt.Errorf("CA did not return auth config in discovery (try --auth to specify manually)")
 		}
 
-		// Convert bootstrap auth config to command
-		authCommand, err = broker.AuthConfigToCommand(bootstrap.Auth)
+		// Convert auth config to command.
+		authCommand, err = broker.AuthConfigToCommand(*discovery.Auth)
 		if err != nil {
-			return fmt.Errorf("failed to convert bootstrap auth config: %w", err)
+			return fmt.Errorf("failed to convert discovery auth config: %w", err)
 		}
 
-		logger.Info("discovered auth config from CA", "type", bootstrap.Auth.Type, "issuer", bootstrap.Auth.Issuer)
+		logger.Info("discovered auth config from CA", "type", discovery.Auth.Type, "issuer", discovery.Auth.Issuer)
 	}
 
 	// Create broker

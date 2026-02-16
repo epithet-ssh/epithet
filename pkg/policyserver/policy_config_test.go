@@ -131,25 +131,20 @@ func TestValidateDuration(t *testing.T) {
 	}
 }
 
-func TestDiscoveryHash_Deterministic(t *testing.T) {
-	cfg := policyserver.PolicyRulesConfig{
-		Hosts: map[string]*policyserver.HostPolicy{
-			"host1.example.com": {},
-			"host2.example.com": {},
-		},
-		Defaults: &policyserver.DefaultPolicy{
-			Allow: map[string][]string{
-				"wheel":      {"admin"},
-				"developers": {"eng"},
-			},
-		},
+func TestComputeAuthDiscoveryHash_Deterministic(t *testing.T) {
+	auth := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "test-client-id",
+		Scopes:   []string{"openid", "profile", "email"},
 	}
+	patterns := []string{"host1.example.com", "host2.example.com"}
 
-	hash1 := cfg.DiscoveryHash()
-	hash2 := cfg.DiscoveryHash()
+	hash1 := policyserver.ComputeAuthDiscoveryHash(auth, patterns)
+	hash2 := policyserver.ComputeAuthDiscoveryHash(auth, patterns)
 
 	if hash1 != hash2 {
-		t.Errorf("DiscoveryHash() not deterministic: %q != %q", hash1, hash2)
+		t.Errorf("ComputeAuthDiscoveryHash() not deterministic: %q != %q", hash1, hash2)
 	}
 
 	if len(hash1) != 12 {
@@ -157,87 +152,51 @@ func TestDiscoveryHash_Deterministic(t *testing.T) {
 	}
 }
 
-func TestDiscoveryHash_OrderIndependent(t *testing.T) {
-	// Two configs with same hosts in different order should produce same hash
-	cfg1 := policyserver.PolicyRulesConfig{
-		Hosts: map[string]*policyserver.HostPolicy{
-			"host1.example.com": {},
-			"host2.example.com": {},
-			"host3.example.com": {},
-		},
+func TestComputeAuthDiscoveryHash_OrderIndependent(t *testing.T) {
+	auth := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "test-client-id",
 	}
 
-	cfg2 := policyserver.PolicyRulesConfig{
-		Hosts: map[string]*policyserver.HostPolicy{
-			"host3.example.com": {},
-			"host1.example.com": {},
-			"host2.example.com": {},
-		},
-	}
+	// Same patterns in different order should produce same hash.
+	patterns1 := []string{"host1.example.com", "host2.example.com", "host3.example.com"}
+	patterns2 := []string{"host3.example.com", "host1.example.com", "host2.example.com"}
 
-	hash1 := cfg1.DiscoveryHash()
-	hash2 := cfg2.DiscoveryHash()
+	hash1 := policyserver.ComputeAuthDiscoveryHash(auth, patterns1)
+	hash2 := policyserver.ComputeAuthDiscoveryHash(auth, patterns2)
 
 	if hash1 != hash2 {
-		t.Errorf("DiscoveryHash() should be order-independent: %q != %q", hash1, hash2)
+		t.Errorf("ComputeAuthDiscoveryHash() should be order-independent: %q != %q", hash1, hash2)
 	}
 }
 
-func TestDiscoveryHash_ChangesWithHosts(t *testing.T) {
-	cfg1 := policyserver.PolicyRulesConfig{
-		Hosts: map[string]*policyserver.HostPolicy{
-			"host1.example.com": {},
-		},
+func TestComputeAuthDiscoveryHash_ChangesWithPatterns(t *testing.T) {
+	auth := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "test-client-id",
 	}
 
-	cfg2 := policyserver.PolicyRulesConfig{
-		Hosts: map[string]*policyserver.HostPolicy{
-			"host1.example.com": {},
-			"host2.example.com": {},
-		},
-	}
+	patterns1 := []string{"host1.example.com"}
+	patterns2 := []string{"host1.example.com", "host2.example.com"}
 
-	hash1 := cfg1.DiscoveryHash()
-	hash2 := cfg2.DiscoveryHash()
+	hash1 := policyserver.ComputeAuthDiscoveryHash(auth, patterns1)
+	hash2 := policyserver.ComputeAuthDiscoveryHash(auth, patterns2)
 
 	if hash1 == hash2 {
-		t.Errorf("DiscoveryHash() should change when hosts change: %q == %q", hash1, hash2)
+		t.Errorf("ComputeAuthDiscoveryHash() should change when patterns change: %q == %q", hash1, hash2)
 	}
 }
 
-func TestDiscoveryHash_ChangesWithDefaults(t *testing.T) {
-	cfg1 := policyserver.PolicyRulesConfig{
-		Defaults: &policyserver.DefaultPolicy{
-			Allow: map[string][]string{
-				"wheel": {"admin"},
-			},
-		},
-	}
+func TestComputeAuthDiscoveryHash_EmptyInputs(t *testing.T) {
+	auth := policyserver.BootstrapAuth{}
+	var patterns []string
 
-	cfg2 := policyserver.PolicyRulesConfig{
-		Defaults: &policyserver.DefaultPolicy{
-			Allow: map[string][]string{
-				"wheel":      {"admin"},
-				"developers": {"eng"},
-			},
-		},
-	}
-
-	hash1 := cfg1.DiscoveryHash()
-	hash2 := cfg2.DiscoveryHash()
-
-	if hash1 == hash2 {
-		t.Errorf("DiscoveryHash() should change when defaults.allow changes: %q == %q", hash1, hash2)
-	}
-}
-
-func TestDiscoveryHash_EmptyConfig(t *testing.T) {
-	cfg := policyserver.PolicyRulesConfig{}
-
-	hash := cfg.DiscoveryHash()
+	hash := policyserver.ComputeAuthDiscoveryHash(auth, patterns)
 
 	if len(hash) != 12 {
-		t.Errorf("expected 12 character hash even for empty config, got %d characters: %q", len(hash), hash)
+		t.Errorf("expected 12 character hash even for empty inputs, got %d characters: %q", len(hash), hash)
 	}
 }
 
@@ -294,19 +253,19 @@ func TestBootstrapAuth_WithCustomScopes(t *testing.T) {
 	}
 }
 
-func TestBootstrapHash_Deterministic(t *testing.T) {
-	cfg := policyserver.PolicyRulesConfig{
-		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "test-client-id",
-		},
+func TestComputeUnauthDiscoveryHash_Deterministic(t *testing.T) {
+	auth := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "test-client-id",
+		Scopes:   []string{"openid", "profile", "email"},
 	}
 
-	hash1 := cfg.BootstrapHash()
-	hash2 := cfg.BootstrapHash()
+	hash1 := policyserver.ComputeUnauthDiscoveryHash(auth)
+	hash2 := policyserver.ComputeUnauthDiscoveryHash(auth)
 
 	if hash1 != hash2 {
-		t.Errorf("BootstrapHash() not deterministic: %q != %q", hash1, hash2)
+		t.Errorf("ComputeUnauthDiscoveryHash() not deterministic: %q != %q", hash1, hash2)
 	}
 
 	if len(hash1) != 12 {
@@ -314,50 +273,48 @@ func TestBootstrapHash_Deterministic(t *testing.T) {
 	}
 }
 
-func TestBootstrapHash_ChangesWithConfig(t *testing.T) {
-	cfg1 := policyserver.PolicyRulesConfig{
-		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "client-id-1",
-		},
+func TestComputeUnauthDiscoveryHash_ChangesWithConfig(t *testing.T) {
+	auth1 := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "client-id-1",
+		Scopes:   []string{"openid", "profile", "email"},
 	}
 
-	cfg2 := policyserver.PolicyRulesConfig{
-		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "client-id-2",
-		},
+	auth2 := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "client-id-2",
+		Scopes:   []string{"openid", "profile", "email"},
 	}
 
-	hash1 := cfg1.BootstrapHash()
-	hash2 := cfg2.BootstrapHash()
+	hash1 := policyserver.ComputeUnauthDiscoveryHash(auth1)
+	hash2 := policyserver.ComputeUnauthDiscoveryHash(auth2)
 
 	if hash1 == hash2 {
-		t.Errorf("BootstrapHash() should change when client_id changes: %q == %q", hash1, hash2)
+		t.Errorf("ComputeUnauthDiscoveryHash() should change when client_id changes: %q == %q", hash1, hash2)
 	}
 }
 
-func TestBootstrapHash_ChangesWithScopes(t *testing.T) {
-	cfg1 := policyserver.PolicyRulesConfig{
-		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "test-client-id",
-			Scopes:   []string{"openid"},
-		},
+func TestComputeUnauthDiscoveryHash_ChangesWithScopes(t *testing.T) {
+	auth1 := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "test-client-id",
+		Scopes:   []string{"openid"},
 	}
 
-	cfg2 := policyserver.PolicyRulesConfig{
-		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "test-client-id",
-			Scopes:   []string{"openid", "profile"},
-		},
+	auth2 := policyserver.BootstrapAuth{
+		Type:     "oidc",
+		Issuer:   "https://accounts.google.com",
+		ClientID: "test-client-id",
+		Scopes:   []string{"openid", "profile"},
 	}
 
-	hash1 := cfg1.BootstrapHash()
-	hash2 := cfg2.BootstrapHash()
+	hash1 := policyserver.ComputeUnauthDiscoveryHash(auth1)
+	hash2 := policyserver.ComputeUnauthDiscoveryHash(auth2)
 
 	if hash1 == hash2 {
-		t.Errorf("BootstrapHash() should change when scopes change: %q == %q", hash1, hash2)
+		t.Errorf("ComputeUnauthDiscoveryHash() should change when scopes change: %q == %q", hash1, hash2)
 	}
 }

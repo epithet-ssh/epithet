@@ -63,16 +63,31 @@ func (c *ServerConfig) BootstrapAuth() BootstrapAuth {
 	}
 }
 
-// BootstrapHash computes a content-addressable hash of the auth configuration.
-// This hash changes when the auth config changes (issuer, client_id, scopes).
+// ComputeUnauthDiscoveryHash computes a content-addressable hash of the auth configuration.
+// This is the hash used for unauthenticated discovery (the bootstrap replacement).
 // Returns a 12-character hex string.
-func (c *ServerConfig) BootstrapHash() string {
+func ComputeUnauthDiscoveryHash(auth BootstrapAuth) string {
 	h := sha256.New()
 	enc := json.NewEncoder(h)
-
-	// Hash the bootstrap auth config (deterministic JSON).
-	auth := c.BootstrapAuth()
 	enc.Encode(auth)
+
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum)[:12]
+}
+
+// ComputeAuthDiscoveryHash computes a content-addressable hash of auth config + match patterns.
+// This is the hash used for authenticated discovery (returns auth + match patterns).
+// Returns a 12-character hex string.
+func ComputeAuthDiscoveryHash(auth BootstrapAuth, matchPatterns []string) string {
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+	enc.Encode(auth)
+
+	// Sort patterns for determinism.
+	sorted := make([]string, len(matchPatterns))
+	copy(sorted, matchPatterns)
+	sort.Strings(sorted)
+	enc.Encode(sorted)
 
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)[:12]
@@ -124,11 +139,6 @@ type BootstrapAuth struct {
 
 	// Command field (when type="command") - opaque string
 	Command string `json:"command,omitempty"`
-}
-
-// Bootstrap represents the bootstrap endpoint response
-type Bootstrap struct {
-	Auth BootstrapAuth `json:"auth"`
 }
 
 // DefaultPolicy defines default policy settings
@@ -204,40 +214,6 @@ func DefaultExpiration() string {
 	return "5m"
 }
 
-// DiscoveryHash computes a content-addressable hash of the policy rules.
-// This hash changes when the matching policy changes (hosts, users, etc.).
-// Returns a 12-character hex string.
-func (c *PolicyRulesConfig) DiscoveryHash() string {
-	// Create a deterministic representation of match-relevant config
-	// Currently: Hosts map (keys define what hosts are handled)
-	//            Defaults.Allow (defines default match behavior)
-	// Future: could include user patterns, port patterns, etc.
-
-	h := sha256.New()
-	enc := json.NewEncoder(h)
-
-	// Hash hosts map keys (sorted for determinism)
-	hostKeys := make([]string, 0, len(c.Hosts))
-	for k := range c.Hosts {
-		hostKeys = append(hostKeys, k)
-	}
-	sort.Strings(hostKeys)
-	enc.Encode(hostKeys)
-
-	// Hash defaults.Allow if present (sorted keys)
-	if c.Defaults != nil && len(c.Defaults.Allow) > 0 {
-		allowKeys := make([]string, 0, len(c.Defaults.Allow))
-		for k := range c.Defaults.Allow {
-			allowKeys = append(allowKeys, k)
-		}
-		sort.Strings(allowKeys)
-		enc.Encode(allowKeys)
-	}
-
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum)[:12]
-}
-
 // BootstrapAuth returns the auth configuration for the bootstrap endpoint.
 // Currently only supports OIDC auth type.
 func (c *PolicyRulesConfig) BootstrapAuth() BootstrapAuth {
@@ -253,19 +229,4 @@ func (c *PolicyRulesConfig) BootstrapAuth() BootstrapAuth {
 		ClientSecret: c.OIDC.ClientSecret,
 		Scopes:       scopes,
 	}
-}
-
-// BootstrapHash computes a content-addressable hash of the auth configuration.
-// This hash changes when the auth config changes (issuer, client_id, scopes).
-// Returns a 12-character hex string.
-func (c *PolicyRulesConfig) BootstrapHash() string {
-	h := sha256.New()
-	enc := json.NewEncoder(h)
-
-	// Hash the bootstrap auth config (deterministic JSON)
-	auth := c.BootstrapAuth()
-	enc.Encode(auth)
-
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum)[:12]
 }

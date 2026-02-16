@@ -86,11 +86,13 @@ func (e *ConnectionNotHandledError) Error() string {
 }
 
 // Discovery contains information from the discovery endpoint.
+// Unauthenticated: Auth only. Authenticated: Auth + MatchPatterns.
 type Discovery struct {
-	MatchPatterns []string `json:"matchPatterns"`
+	Auth          *BootstrapAuth `json:"auth,omitempty"`
+	MatchPatterns []string       `json:"matchPatterns,omitempty"`
 }
 
-// BootstrapAuth represents the auth configuration from the bootstrap endpoint.
+// BootstrapAuth represents the auth configuration from the discovery endpoint.
 // The Type field discriminates between auth methods.
 type BootstrapAuth struct {
 	// Type identifies the auth method: "oidc" or "command"
@@ -104,11 +106,6 @@ type BootstrapAuth struct {
 
 	// Command field (when type="command") - opaque string
 	Command string `json:"command,omitempty"`
-}
-
-// Bootstrap contains information from the bootstrap endpoint.
-type Bootstrap struct {
-	Auth BootstrapAuth `json:"auth"`
 }
 
 // CertResponse contains a certificate and discovery information.
@@ -134,13 +131,8 @@ type Client struct {
 	cooldown        time.Duration
 	logger          *slog.Logger
 
-	// Cached bootstrap URL from Link header. Protected by bootstrapMu.
-	// Learned from GetPublicKey() response.
-	bootstrapMu  sync.RWMutex
-	bootstrapURL string
-
 	// Cached discovery URL from Link header. Protected by discoveryMu.
-	// Allows GetDiscovery() to skip hello request when URL is already known.
+	// Learned from GetPublicKey() or Hello() response.
 	discoveryMu  sync.RWMutex
 	discoveryURL string
 }
@@ -409,8 +401,8 @@ func (c *Client) SetDiscoveryURL(url string) {
 	c.discoveryMu.Unlock()
 }
 
-// GetPublicKey fetches the CA's public key and extracts the bootstrap URL from the Link header.
-// This is the first step in the bootstrap flow - no authentication required.
+// GetPublicKey fetches the CA's public key and extracts the discovery URL from the Link header.
+// This is the first step in the discovery flow - no authentication required.
 // Returns the public key as a string.
 func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 	// Try each endpoint in order
@@ -470,96 +462,23 @@ func (c *Client) doGetPublicKey(ctx context.Context, caURL string) (string, erro
 		return "", &InvalidRequestError{Message: string(respBody)}
 	}
 
-	// Extract and cache bootstrap URL from Link header
-	bootstrapURL := parseLinkHeader(res.Header.Get("Link"), "bootstrap")
-	if bootstrapURL != "" {
-		c.bootstrapMu.Lock()
-		c.bootstrapURL = bootstrapURL
-		c.bootstrapMu.Unlock()
+	// Extract and cache discovery URL from Link header.
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+	if discoveryURL != "" {
+		c.discoveryMu.Lock()
+		c.discoveryURL = discoveryURL
+		c.discoveryMu.Unlock()
 		if c.logger != nil {
-			c.logger.Debug("cached bootstrap URL from GetPublicKey", "url", bootstrapURL)
+			c.logger.Debug("cached discovery URL from GetPublicKey", "url", discoveryURL)
 		}
 	}
 
 	return strings.TrimSpace(string(respBody)), nil
 }
 
-// GetBootstrap fetches the bootstrap configuration from the cached bootstrap URL.
-// Returns the bootstrap auth config. No authentication required.
-// If no bootstrap URL is cached (GetPublicKey not called), returns an error.
-func (c *Client) GetBootstrap(ctx context.Context) (*Bootstrap, error) {
-	c.bootstrapMu.RLock()
-	url := c.bootstrapURL
-	c.bootstrapMu.RUnlock()
-
-	if url == "" {
-		return nil, fmt.Errorf("bootstrap URL not available; call GetPublicKey first")
-	}
-
-	if c.logger != nil {
-		c.logger.Debug("fetching bootstrap from cached URL", "url", url)
-	}
-
-	return c.fetchBootstrap(ctx, url)
-}
-
-// SetBootstrapURL sets the cached bootstrap URL. This is primarily for testing.
-func (c *Client) SetBootstrapURL(url string) {
-	c.bootstrapMu.Lock()
-	c.bootstrapURL = url
-	c.bootstrapMu.Unlock()
-}
-
-// fetchBootstrap fetches bootstrap data from the given URL.
-// Uses the cached HTTP client for RFC 7234 compliant caching.
-func (c *Client) fetchBootstrap(ctx context.Context, url string) (*Bootstrap, error) {
-	if c.logger != nil {
-		c.logger.Debug("http request", "method", "GET", "url", url)
-	}
-
-	rq, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Use the cached client for bootstrap requests (immutable, long-lived cache)
-	start := time.Now()
-	res, err := c.discoveryClient.Do(rq.WithContext(ctx))
-	duration := time.Since(start)
-	if err != nil {
-		if c.logger != nil {
-			c.logger.Debug("http request failed", "method", "GET", "url", url, "duration_ms", duration.Milliseconds(), "error", err)
-		}
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	respBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if c.logger != nil {
-		c.logger.Debug("http response", "method", "GET", "url", url, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
-	}
-
-	if res.StatusCode != http.StatusOK {
-		if res.StatusCode >= 500 {
-			return nil, &CAUnavailableError{Message: string(respBody)}
-		}
-		return nil, &InvalidRequestError{Message: string(respBody)}
-	}
-
-	var bootstrap Bootstrap
-	if err := json.Unmarshal(respBody, &bootstrap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal bootstrap response: %w", err)
-	}
-
-	return &bootstrap, nil
-}
-
 // fetchDiscovery fetches discovery data from the given URL.
 // Uses the cached HTTP client for RFC 7234 compliant caching.
+// When token is empty, no Authorization header is sent (unauthenticated bootstrap path).
 func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*Discovery, error) {
 	if c.logger != nil {
 		c.logger.Debug("http request", "method", "GET", "url", url)
@@ -569,7 +488,9 @@ func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (
 	if err != nil {
 		return nil, err
 	}
-	rq.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		rq.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	// Use the cached client for discovery requests
 	start := time.Now()

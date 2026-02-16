@@ -148,23 +148,26 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 		return fmt.Errorf("failed to get initial policy for hashes: %w", err)
 	}
 
+	authConfig := serverCfg.BootstrapAuth()
+	matchPatterns := initialPolicy.HostPatterns()
+	unauthHash := policyserver.ComputeUnauthDiscoveryHash(authConfig)
+	authHash := policyserver.ComputeAuthDiscoveryHash(authConfig, matchPatterns)
+
 	handler := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey:      sshcert.RawPublicKey(caPubkey),
 		Validator:        validator,
 		Evaluator:        eval,
-		DiscoveryHash:    initialPolicy.DiscoveryHash(),
-		BootstrapHash:    serverCfg.BootstrapHash(),
+		DiscoveryHash:    unauthHash,
 		DiscoveryBaseURL: c.DiscoveryBaseURL,
 	})
 
 	// Create discovery handler.
-	matchPatterns := initialPolicy.HostPatterns()
 	discoveryHandler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
 		Validator:     validator,
 		MatchPatterns: matchPatterns,
-		DiscoveryHash: initialPolicy.DiscoveryHash(),
-		BootstrapHash: serverCfg.BootstrapHash(),
-		AuthConfig:    serverCfg.BootstrapAuth(),
+		UnauthHash:    unauthHash,
+		AuthHash:      authHash,
+		AuthConfig:    authConfig,
 	})
 
 	// Set up router with middleware.
@@ -176,18 +179,17 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Post("/", handler)
-	// Bootstrap redirect endpoint: /d/bootstrap -> /d/{bootstrap-hash} (cached 5 min, no auth).
-	r.Get("/d/bootstrap", policyserver.NewBootstrapRedirectHandler(serverCfg.BootstrapHash(), c.DiscoveryBaseURL))
-	// Discovery redirect endpoint: /d/current -> /d/{discovery-hash} (cached 5 min, requires auth).
-	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(initialPolicy.DiscoveryHash(), c.DiscoveryBaseURL))
-	// Content-addressed endpoint: /d/{hash} (immutable, serves bootstrap or discovery based on hash).
+	// Auth-aware discovery redirect: /d/current -> /d/{unauthHash} or /d/{authHash}
+	// depending on whether Authorization header is present.
+	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(unauthHash, authHash, c.DiscoveryBaseURL))
+	// Content-addressed endpoint: /d/{hash} (immutable, serves unauth or auth discovery based on hash).
 	r.Get("/d/*", discoveryHandler)
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
 		"ca_pubkey_length", len(caPubkey),
-		"discovery_hash", initialPolicy.DiscoveryHash(),
-		"bootstrap_hash", serverCfg.BootstrapHash(),
+		"unauth_hash", unauthHash,
+		"auth_hash", authHash,
 		"match_patterns", matchPatterns,
 		"dynamic_policy", policySource != "")
 

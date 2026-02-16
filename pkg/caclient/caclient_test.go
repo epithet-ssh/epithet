@@ -503,9 +503,9 @@ func TestGetCert_CachesDiscoveryURL(t *testing.T) {
 	assert.Equal(t, "https://discovery.example.com/abc123", resp.DiscoveryURL)
 }
 
-// Bootstrap flow tests
+// Discovery flow tests
 
-func TestGetPublicKey_ReturnsKeyAndBootstrapURL(t *testing.T) {
+func TestGetPublicKey_ReturnsKeyAndDiscoveryURL(t *testing.T) {
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -515,7 +515,7 @@ func TestGetPublicKey_ReturnsKeyAndBootstrapURL(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Link", `</d/bootstrap>; rel="bootstrap"`)
+		w.Header().Set("Link", `</d/current>; rel="discovery"`)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... CA public key"))
@@ -532,11 +532,11 @@ func TestGetPublicKey_ReturnsKeyAndBootstrapURL(t *testing.T) {
 	assert.Contains(t, pubKey, "CA public key")
 }
 
-func TestGetPublicKey_CachesBootstrapURL(t *testing.T) {
+func TestGetPublicKey_CachesDiscoveryURL(t *testing.T) {
 	callCount := 0
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Link", `</d/boot123>; rel="bootstrap"`)
+		w.Header().Set("Link", `</d/current>; rel="discovery"`)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
@@ -553,15 +553,15 @@ func TestGetPublicKey_CachesBootstrapURL(t *testing.T) {
 	assert.Equal(t, 1, callCount)
 
 	// Second call should still hit server (public key is not cached)
-	// But the bootstrap URL should be cached internally
+	// But the discovery URL should be cached internally
 	_, err = client.GetPublicKey(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount)
 }
 
-func TestGetPublicKey_NoBootstrapLinkHeader(t *testing.T) {
+func TestGetPublicKey_NoDiscoveryLinkHeader(t *testing.T) {
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// No Link header - legacy CA
+		// No Link header - legacy CA without discovery URL
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
@@ -572,14 +572,14 @@ func TestGetPublicKey_NoBootstrapLinkHeader(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// Should still return public key even without bootstrap URL
+	// Should still return public key even without discovery URL
 	pubKey, err := client.GetPublicKey(context.Background())
 	require.NoError(t, err)
 	assert.Contains(t, pubKey, "ssh-ed25519")
 }
 
-func TestGetBootstrap_Success(t *testing.T) {
-	bootstrapServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestGetDiscovery_Unauth_Success(t *testing.T) {
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -589,14 +589,11 @@ func TestGetBootstrap_Success(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"123.apps.googleusercontent.com","scopes":["openid","profile","email"]}}`))
 	}))
-	defer bootstrapServer.Close()
+	defer discoveryServer.Close()
 
-	// CA server that returns the bootstrap URL
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+bootstrapServer.URL+`>; rel="bootstrap"`)
-		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
 	}))
 	defer caServer.Close()
 
@@ -604,35 +601,30 @@ func TestGetBootstrap_Success(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// First get public key to cache bootstrap URL
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
+	client.SetDiscoveryURL(discoveryServer.URL)
 
-	// Now get bootstrap config
-	bootstrap, err := client.GetBootstrap(context.Background())
+	// Get discovery config without auth token
+	discovery, err := client.GetDiscovery(context.Background(), "")
 	require.NoError(t, err)
-	require.NotNil(t, bootstrap)
+	require.NotNil(t, discovery)
 
-	assert.Equal(t, "oidc", bootstrap.Auth.Type)
-	assert.Equal(t, "https://accounts.google.com", bootstrap.Auth.Issuer)
-	assert.Equal(t, "123.apps.googleusercontent.com", bootstrap.Auth.ClientID)
-	assert.Equal(t, []string{"openid", "profile", "email"}, bootstrap.Auth.Scopes)
+	assert.Equal(t, "oidc", discovery.Auth.Type)
+	assert.Equal(t, "https://accounts.google.com", discovery.Auth.Issuer)
+	assert.Equal(t, "123.apps.googleusercontent.com", discovery.Auth.ClientID)
+	assert.Equal(t, []string{"openid", "profile", "email"}, discovery.Auth.Scopes)
 }
 
-func TestGetBootstrap_CommandType(t *testing.T) {
-	bootstrapServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestGetDiscovery_Unauth_CommandType(t *testing.T) {
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"auth":{"type":"command","command":"/usr/local/bin/custom-sso --tenant prod"}}`))
 	}))
-	defer bootstrapServer.Close()
+	defer discoveryServer.Close()
 
-	// CA server that returns the bootstrap URL
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+bootstrapServer.URL+`>; rel="bootstrap"`)
-		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
 	}))
 	defer caServer.Close()
 
@@ -640,26 +632,21 @@ func TestGetBootstrap_CommandType(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// First get public key to cache bootstrap URL
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
+	client.SetDiscoveryURL(discoveryServer.URL)
 
-	// Now get bootstrap config
-	bootstrap, err := client.GetBootstrap(context.Background())
+	// Get discovery config without auth token
+	discovery, err := client.GetDiscovery(context.Background(), "")
 	require.NoError(t, err)
-	require.NotNil(t, bootstrap)
+	require.NotNil(t, discovery)
 
-	assert.Equal(t, "command", bootstrap.Auth.Type)
-	assert.Equal(t, "/usr/local/bin/custom-sso --tenant prod", bootstrap.Auth.Command)
+	assert.Equal(t, "command", discovery.Auth.Type)
+	assert.Equal(t, "/usr/local/bin/custom-sso --tenant prod", discovery.Auth.Command)
 }
 
-func TestGetBootstrap_NoBootstrapURL(t *testing.T) {
-	// CA server without bootstrap Link header
+func TestGetDiscovery_Unauth_NoDiscoveryURL(t *testing.T) {
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// No Link header
-		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
 	}))
 	defer caServer.Close()
 
@@ -667,31 +654,26 @@ func TestGetBootstrap_NoBootstrapURL(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// Get public key (which won't cache a bootstrap URL since there's no Link header)
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
-
-	// GetBootstrap should return an error when no bootstrap URL is available
-	// This indicates the CA doesn't support bootstrap discovery
-	_, err = client.GetBootstrap(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bootstrap URL not available")
+	// GetDiscovery should return nil when no discovery URL is cached
+	discovery, err := client.GetDiscovery(context.Background(), "")
+	assert.NoError(t, err)
+	assert.Nil(t, discovery)
 }
 
-func TestGetBootstrap_FollowsRedirect(t *testing.T) {
+func TestGetDiscovery_Unauth_FollowsRedirect(t *testing.T) {
 	redirectCallCount := 0
 	contentCallCount := 0
 
-	// Server that handles both /d/bootstrap (redirect) and /d/{hash} (content)
-	bootstrapServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/d/bootstrap" {
+	// Server that handles both /d/current (redirect) and /d/{hash} (content)
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/d/current" {
 			redirectCallCount++
 			w.Header().Set("Cache-Control", "max-age=300")
-			w.Header().Set("Location", "/d/boot123hash")
+			w.Header().Set("Location", "/d/disc123hash")
 			w.WriteHeader(http.StatusFound)
 			return
 		}
-		if r.URL.Path == "/d/boot123hash" {
+		if r.URL.Path == "/d/disc123hash" {
 			contentCallCount++
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
@@ -701,14 +683,11 @@ func TestGetBootstrap_FollowsRedirect(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
-	defer bootstrapServer.Close()
+	defer discoveryServer.Close()
 
-	// CA server that returns the bootstrap URL
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+bootstrapServer.URL+`/d/bootstrap>; rel="bootstrap"`)
-		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
 	}))
 	defer caServer.Close()
 
@@ -716,38 +695,33 @@ func TestGetBootstrap_FollowsRedirect(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// First get public key to cache bootstrap URL
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
+	client.SetDiscoveryURL(discoveryServer.URL + "/d/current")
 
-	// Get bootstrap config
-	bootstrap, err := client.GetBootstrap(context.Background())
+	// Get discovery config without auth token
+	discovery, err := client.GetDiscovery(context.Background(), "")
 	require.NoError(t, err)
-	require.NotNil(t, bootstrap)
+	require.NotNil(t, discovery)
 
-	assert.Equal(t, "oidc", bootstrap.Auth.Type)
+	assert.Equal(t, "oidc", discovery.Auth.Type)
 	assert.Equal(t, 1, redirectCallCount, "redirect endpoint should be hit")
 	assert.Equal(t, 1, contentCallCount, "content endpoint should be hit after redirect")
 }
 
-func TestGetBootstrap_HTTPCaching(t *testing.T) {
+func TestGetDiscovery_Unauth_HTTPCaching(t *testing.T) {
 	callCount := 0
 
-	bootstrapServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://example.com","client_id":"test"}}`))
 	}))
-	defer bootstrapServer.Close()
+	defer discoveryServer.Close()
 
-	// CA server that returns the bootstrap URL
+	// CA server (needed for client creation)
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+bootstrapServer.URL+`>; rel="bootstrap"`)
-		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
 	}))
 	defer caServer.Close()
 
@@ -755,75 +729,77 @@ func TestGetBootstrap_HTTPCaching(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// First get public key
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
+	client.SetDiscoveryURL(discoveryServer.URL)
 
-	// First bootstrap call should hit server
-	_, err = client.GetBootstrap(context.Background())
+	// First discovery call should hit server
+	_, err = client.GetDiscovery(context.Background(), "")
 	require.NoError(t, err)
-	assert.Equal(t, 1, callCount, "first request should hit bootstrap server")
+	assert.Equal(t, 1, callCount, "first request should hit discovery server")
 
-	// Second bootstrap call should use HTTP cache (same client has caching transport)
-	_, err = client.GetBootstrap(context.Background())
+	// Second discovery call should use HTTP cache (same client has caching transport)
+	_, err = client.GetDiscovery(context.Background(), "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount, "second request should use HTTP cache")
 }
 
-// End-to-end integration test for the complete two-tier discovery flow
-func TestIntegration_TwoTierDiscovery(t *testing.T) {
-	// This test simulates the full bootstrap flow:
-	// 1. Client calls GET / on CA → gets public key + bootstrap Link header
-	// 2. Client follows bootstrap Link → gets auth config (no auth required)
-	// 3. Client uses auth config to authenticate
-	// 4. Client calls Hello() with token → gets discovery Link header
-	// 5. Client follows discovery Link → gets match patterns (auth required)
+// End-to-end integration test for the unified discovery flow.
+func TestIntegration_UnifiedDiscovery(t *testing.T) {
+	// This test simulates the full unified discovery flow:
+	// 1. Client calls GET / on CA → gets public key + Link rel="discovery"
+	// 2. Client calls GetDiscovery(ctx, "") → follows /d/current → gets auth config (no auth)
+	// 3. Client uses auth config to authenticate (simulated)
+	// 4. Client calls Hello() with token → learns discovery URL
+	// 5. Client calls GetDiscovery(ctx, token) → follows /d/current → gets auth config + match patterns
 
 	// Track which endpoints are called
 	caRootCalls := 0
-	bootstrapCalls := 0
 	helloCalls := 0
-	discoveryCalls := 0
+	unauthDiscoveryCalls := 0
+	authDiscoveryCalls := 0
 
-	// Policy server handles discovery
+	// Policy server handles discovery. /d/current is auth-aware:
+	// without Authorization header, redirect to unauth hash;
+	// with Authorization header, redirect to auth hash.
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/d/bootstrap" || r.URL.Path == "/d/boot123":
-			bootstrapCalls++
-			if r.URL.Path == "/d/bootstrap" {
-				// Redirect to content-addressed URL
-				w.Header().Set("Location", "/d/boot123")
+		switch r.URL.Path {
+		case "/d/current":
+			// Vary by Authorization so HTTP cache distinguishes auth vs unauth.
+			w.Header().Set("Vary", "Authorization")
+			auth := r.Header.Get("Authorization")
+			if auth == "" {
+				// Unauthenticated: redirect to unauth content hash
+				w.Header().Set("Location", "/d/unauth123")
 				w.Header().Set("Cache-Control", "max-age=300")
 				w.WriteHeader(http.StatusFound)
-				return
+			} else {
+				// Authenticated: redirect to auth content hash
+				w.Header().Set("Location", "/d/auth456")
+				w.Header().Set("Cache-Control", "max-age=300")
+				w.WriteHeader(http.StatusFound)
 			}
-			// Serve bootstrap content - no auth required
+
+		case "/d/unauth123":
+			unauthDiscoveryCalls++
+			// Serve auth config only - no match patterns without auth
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client","scopes":["openid","profile"]}}`))
 
-		case r.URL.Path == "/d/current" || r.URL.Path == "/d/disc456":
-			discoveryCalls++
-			// Discovery requires authentication
+		case "/d/auth456":
+			authDiscoveryCalls++
+			// Authenticated: require valid token
 			auth := r.Header.Get("Authorization")
 			if auth != "Bearer test-token" {
 				w.WriteHeader(http.StatusUnauthorized)
 				w.Write([]byte("unauthorized"))
 				return
 			}
-			if r.URL.Path == "/d/current" {
-				// Redirect to content-addressed URL
-				w.Header().Set("Location", "/d/disc456")
-				w.Header().Set("Cache-Control", "max-age=300")
-				w.WriteHeader(http.StatusFound)
-				return
-			}
-			// Serve discovery content
+			// Serve auth config + match patterns
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"matchPatterns":["*.example.com","prod-*"]}`))
+			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client","scopes":["openid","profile"]},"matchPatterns":["*.example.com","prod-*"]}`))
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -837,8 +813,8 @@ func TestIntegration_TwoTierDiscovery(t *testing.T) {
 		case http.MethodGet:
 			if r.URL.Path == "/" {
 				caRootCalls++
-				// Return public key with bootstrap Link header
-				w.Header().Set("Link", `<`+policyServer.URL+`/d/bootstrap>; rel="bootstrap"`)
+				// Return public key with discovery Link header
+				w.Header().Set("Link", `<`+policyServer.URL+`/d/current>; rel="discovery"`)
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... test-ca-key"))
@@ -870,35 +846,35 @@ func TestIntegration_TwoTierDiscovery(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Step 1: Get public key (also caches bootstrap URL)
+	// Step 1: Get public key (also caches discovery URL from Link header)
 	pubKey, err := client.GetPublicKey(ctx)
 	require.NoError(t, err)
 	assert.Contains(t, pubKey, "ssh-ed25519")
 	assert.Equal(t, 1, caRootCalls, "should call CA root exactly once")
 
-	// Step 2: Get bootstrap config (no auth required)
-	bootstrap, err := client.GetBootstrap(ctx)
+	// Step 2: Get discovery without auth → follows /d/current → unauth hash → auth config only
+	discovery, err := client.GetDiscovery(ctx, "")
 	require.NoError(t, err)
-	require.NotNil(t, bootstrap)
-	assert.Equal(t, "oidc", bootstrap.Auth.Type)
-	assert.Equal(t, "https://accounts.google.com", bootstrap.Auth.Issuer)
-	assert.Equal(t, "test-client", bootstrap.Auth.ClientID)
-	assert.Equal(t, []string{"openid", "profile"}, bootstrap.Auth.Scopes)
-	assert.Equal(t, 2, bootstrapCalls, "should hit bootstrap redirect then content")
+	require.NotNil(t, discovery)
+	assert.Equal(t, "oidc", discovery.Auth.Type)
+	assert.Equal(t, "https://accounts.google.com", discovery.Auth.Issuer)
+	assert.Equal(t, "test-client", discovery.Auth.ClientID)
+	assert.Equal(t, []string{"openid", "profile"}, discovery.Auth.Scopes)
+	assert.Equal(t, 1, unauthDiscoveryCalls, "should hit unauth content endpoint")
 
-	// Step 3: Client would use bootstrap config to authenticate
-	// (simulated - in real flow, broker runs auth command based on bootstrap config)
+	// Step 3: Client uses auth config to authenticate (simulated)
 	token := "test-token"
 
-	// Step 4: Hello() to validate token and get discovery URL
+	// Step 4: Hello() to validate token and learn discovery URL
 	err = client.Hello(ctx, token)
 	require.NoError(t, err)
 	assert.Equal(t, 1, helloCalls, "should call hello exactly once")
 
-	// Step 5: Get discovery (requires auth)
-	discovery, err := client.GetDiscovery(ctx, token)
+	// Step 5: Get discovery with auth → follows /d/current → auth hash → auth config + match patterns
+	discovery, err = client.GetDiscovery(ctx, token)
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
+	assert.Equal(t, "oidc", discovery.Auth.Type)
 	assert.Equal(t, []string{"*.example.com", "prod-*"}, discovery.MatchPatterns)
-	assert.Equal(t, 2, discoveryCalls, "should hit discovery redirect then content")
+	assert.Equal(t, 1, authDiscoveryCalls, "should hit auth content endpoint")
 }
