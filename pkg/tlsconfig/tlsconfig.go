@@ -66,7 +66,11 @@ func NewHTTPClientWithTimeout(cfg Config, timeout time.Duration) (*http.Client, 
 
 // ValidateURL checks if a URL is allowed given this TLS configuration.
 // Returns an error if the URL uses http:// without insecure mode enabled.
+// Unix socket URLs (unix://) are always allowed since they are local-only.
 func (c Config) ValidateURL(url string) error {
+	if strings.HasPrefix(url, "unix://") {
+		return nil
+	}
 	if strings.HasPrefix(url, "http://") && !c.Insecure {
 		return fmt.Errorf("URL %q uses insecure http:// protocol; use https:// or pass --insecure flag to allow insecure connections", url)
 	}
