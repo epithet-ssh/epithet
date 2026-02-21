@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"time"
 
@@ -59,10 +58,5 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	r.Handle("/", caserver.New(caInstance, logger, nil, certLogger))
 
 	logger.Info("listening", "address", c.Listen)
-	err = http.ListenAndServe(c.Listen, r)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return listenAndServe(c.Listen, r)
 }

@@ -33,6 +33,7 @@ var cli struct {
 	Match     MatchCLI          `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
 	CA        CACLI             `cmd:"ca" help:"Run the epithet CA server"`
 	Policy    PolicyServerCLI   `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
+	Server    ServerCLI         `cmd:"server" help:"Run CA and policy as supervised subprocesses behind a single port"`
 	Auth      AuthCLI           `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 	ConfigDoc kongcue.ConfigDoc `cmd:"" help:"Print the configuration file schema and docs"`
 }

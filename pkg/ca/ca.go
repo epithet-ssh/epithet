@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -85,6 +86,18 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 		ca.httpClient = &http.Client{
 			Timeout: time.Second * 30,
 		}
+	}
+
+	// When the policy URL is a unix socket, configure the HTTP transport
+	// to dial the socket and rewrite the URL to http://localhost.
+	if socketPath, ok := strings.CutPrefix(ca.policyURL, "unix://"); ok {
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			},
+		}
+		ca.httpClient.Transport = transport
+		ca.policyURL = "http://localhost"
 	}
 
 	return ca, nil

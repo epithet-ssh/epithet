@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -193,7 +192,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 		"match_patterns", matchPatterns,
 		"dynamic_policy", policySource != "")
 
-	return http.ListenAndServe(c.Listen, r)
+	return listenAndServe(c.Listen, r)
 }
 
 // loadServerConfigFromCUE decodes the server configuration (static) from CUE config.
