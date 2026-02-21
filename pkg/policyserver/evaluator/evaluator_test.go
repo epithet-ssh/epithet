@@ -2,6 +2,9 @@ package evaluator_test
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,18 +14,37 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
-// Note: These tests use mock configs, not real OIDC token validation
-// Real OIDC validation is tested in pkg/policyserver/oidc
+// mockOIDCServer returns a test server that serves the two endpoints
+// coreos/go-oidc needs for provider discovery: openid-configuration
+// and an empty JWKS.
+func mockOIDCServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var url string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":%q,"authorization_endpoint":%q,"token_endpoint":%q,"response_types_supported":["code"]}`,
+				url, url+"/jwks", url+"/auth", url+"/token")
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"keys":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	url = srv.URL
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test that requires OIDC provider")
-	}
+	mock := mockOIDCServer(t)
 
 	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
+			Issuer:   mock.URL,
 			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
@@ -43,20 +65,16 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
 
-	// Note: This would fail with a real token - we're just testing the structure
-	// Real token validation is tested in integration tests
 	_ = eval
 }
 
 func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test that requires OIDC provider")
-	}
+	mock := mockOIDCServer(t)
 
 	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
+			Issuer:   mock.URL,
 			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
@@ -81,14 +99,12 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 }
 
 func TestEvaluateHostPolicy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test that requires OIDC provider")
-	}
+	mock := mockOIDCServer(t)
 
 	cfg := &policyserver.PolicyRulesConfig{
 		CAPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE...",
 		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
+			Issuer:   mock.URL,
 			ClientID: "test-client-id",
 		},
 		Users: map[string][]string{
