@@ -805,8 +805,6 @@ A complete OpenAPI 3.0 specification is available at [`docs/policy-server-api.ya
    npx @stoplight/prism-cli mock docs/policy-server-api.yaml
    ```
 
-## See Also
+## See also
 
-- [Policy Configuration Design](./policy-config-design.md) - Detailed design document
 - [Google Workspace Setup](../examples/google-workspace/README.md) - OIDC setup for Google
-- [Development Tools](./development-tools.md) - Testing with `epithet dev policy`

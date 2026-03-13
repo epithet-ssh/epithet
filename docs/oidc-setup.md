@@ -52,7 +52,6 @@ You'll see a dialog with:
 
 ```bash
 epithet agent \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc \
     --issuer https://accounts.google.com \
@@ -63,7 +62,6 @@ epithet agent \
 
 ```bash
 epithet agent \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc \
     --issuer https://accounts.google.com \
@@ -71,20 +69,20 @@ epithet agent \
     --client-secret YOUR_CLIENT_SECRET"
 ```
 
-**Or in a config file (`~/.epithet/config`):**
+**Or in a config file (`~/.epithet/config.yaml`):**
 
 UWP apps:
-```
-match *.example.com
-ca-url https://ca.example.com
-auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com
+```yaml
+agent:
+  ca_url: https://ca.example.com
+  auth: "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com"
 ```
 
 Desktop apps:
-```
-match *.example.com
-ca-url https://ca.example.com
-auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET
+```yaml
+agent:
+  ca_url: https://ca.example.com
+  auth: "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET"
 ```
 
 ### Step 5: First Authentication
@@ -169,7 +167,6 @@ To verify:
 
 ```bash
 epithet agent \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc \
     --issuer https://your-domain.okta.com/oauth2/default \
@@ -218,7 +215,6 @@ Custom scopes can be defined in your authorization server configuration.
 
 ```bash
 epithet agent \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc \
     --issuer https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0 \
@@ -270,7 +266,6 @@ The issuer URL is usually the base URL (without `/.well-known/...`).
 
 ```bash
 epithet agent \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc \
     --issuer https://your-provider.com \
@@ -304,7 +299,6 @@ echo "" | epithet auth oidc \
 1. Start the broker:
    ```bash
    epithet agent \
-     --match '*.example.com' \
      --ca-url https://ca.example.com \
      --auth "epithet auth oidc --issuer ... --client-id ..."
    ```
@@ -326,7 +320,6 @@ Enable verbose logging:
 
 ```bash
 epithet agent -vv \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc --issuer ... --client-id ..."
 ```
@@ -421,27 +414,28 @@ Here's a complete end-to-end example:
 
 ### 2. Configure Epithet
 
-Create `~/.epithet/config`:
+Create `~/.epithet/config.yaml`:
 
-```
-match *.corp.example.com
-ca-url https://ca.corp.example.com
-auth epithet auth oidc --issuer https://accounts.google.com --client-id 123456-abc.apps.googleusercontent.com
+```yaml
+agent:
+  ca_url: https://ca.corp.example.com
+  auth: "epithet auth oidc --issuer https://accounts.google.com --client-id 123456-abc.apps.googleusercontent.com"
 ```
 
 ### 3. Configure SSH
 
 Add to `~/.ssh/config`:
 
-```
-Match exec "epithet match --host %h --port %p --user %r --hash %C" host *.corp.example.com
-    IdentityAgent ~/.epithet/agent/%C
+```ssh_config
+Include ~/.epithet/run/*/ssh-config.conf
 ```
 
 ### 4. Start Broker
 
 ```bash
-epithet agent
+epithet agent \
+  --ca-url https://ca.corp.example.com \
+  --auth "epithet auth oidc --issuer https://accounts.google.com --client-id 123456-abc.apps.googleusercontent.com"
 ```
 
 ### 5. Connect via SSH

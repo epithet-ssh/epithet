@@ -28,7 +28,6 @@ Generic OIDC/OAuth2 authentication that works with Google Workspace, Okta, Azure
 
 ```bash
 epithet agent \
-  --match '*.example.com' \
   --ca-url https://ca.example.com \
   --auth "epithet auth oidc \
     --issuer https://accounts.google.com \
