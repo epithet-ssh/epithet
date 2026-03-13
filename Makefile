@@ -3,16 +3,17 @@ VERSION ?= next
 
 GITHUB_TOKEN ?= $(shell gh auth token)
 export GITHUB_TOKEN
+strip-v = $(patsubst v%,%,$(1))
 ifeq ($(VERSION),next)
-  V := $(shell svu next)
+  V := $(call strip-v,$(shell svu next))
 else ifeq ($(VERSION),patch)
-  V := $(shell svu next --force-patch-increment)
+  V := $(call strip-v,$(shell svu next --force-patch-increment))
 else ifeq ($(VERSION),minor)
-  V := $(shell svu minor)
+  V := $(call strip-v,$(shell svu minor))
 else ifeq ($(VERSION),major)
-  V := $(shell svu major)
+  V := $(call strip-v,$(shell svu major))
 else
-  V := $(VERSION)
+  V := $(call strip-v,$(VERSION))
 endif
 
 .PHONY: all
@@ -64,7 +65,7 @@ next-version:		## show current and next version
 
 .PHONY: release
 release: test	## tag and release (VERSION=next|patch|minor|major|x.y.z)
-	git tag -a $(V) -m "$(V)"
-	git push origin $(V)
+	git tag -a v$(V) -m "v$(V)"
+	git push origin v$(V)
 	goreleaser release --clean
 
