@@ -64,7 +64,7 @@ next-version:		## show current and next version
 
 .PHONY: release
 release: test	## tag and release (VERSION=next|patch|minor|major|x.y.z)
-	git tag -a v$(V) -m "v$(V)"
-	git push origin v$(V)
+	git tag -a $(V) -m "$(V)"
+	git push origin $(V)
 	goreleaser release --clean
 
