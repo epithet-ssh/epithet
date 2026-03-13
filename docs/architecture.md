@@ -10,6 +10,91 @@ Epithet is an SSH certificate management tool that creates on-demand SSH agents 
 - **Per-connection agents**: Individual in-process SSH agent instances (from `pkg/agent`), one per unique SSH connection (identified by %C hash). Each serves a single certificate via an agent socket at `~/.epithet/run/<instance-hash>/agent/%C`. Uses `golang.org/x/crypto/ssh/agent` for efficient in-process agent implementation (much lower overhead than spawning OpenSSH ssh-agent processes).
 - **Auth command**: External command configured by the user (via `--auth` flag) that handles authentication with identity providers (SAML, OIDC, etc). The broker invokes this command to obtain authentication tokens. Can be a custom script or use the built-in `epithet auth oidc` command for OAuth2/OIDC providers.
 
+## Sequence diagrams
+
+### Broker startup
+
+What happens when you run `epithet agent` — all local, no network calls:
+
+```mermaid
+sequenceDiagram
+    participant user as epithet agent
+    participant fs as filesystem
+    participant sock as broker socket
+
+    user ->> user: Validate CA URLs
+    user ->> fs: Clean stale broker processes from ~/.epithet/run/
+    user ->> fs: Create instance directory ~/.epithet/run/<hash>/
+    user ->> user: Initialize CA client (circuit breaker pool, no connections yet)
+    user ->> fs: Generate ssh-config.conf
+    user ->> sock: Start broker socket listener
+    Note over user,sock: Ready — waiting for SSH connections
+```
+
+### First-connection discovery
+
+On the **first** SSH connection, the broker performs lazy initialization to learn about the CA's capabilities:
+
+```mermaid
+sequenceDiagram
+    participant match as epithet match
+    participant broker as broker
+    participant ca as CA server
+    participant discovery as discovery endpoint
+
+    match ->> broker: {matchdata}
+    broker ->> ca: Hello() (unauthenticated)
+    ca -->> broker: Link header with discovery URL
+    broker ->> discovery: Fetch discovery config
+    discovery -->> broker: Auth config + host patterns
+    broker ->> broker: Resolve auth command (discovery or --auth flag)
+    broker ->> broker: Check host patterns against target host
+
+    Note over broker: Discovery is cached — subsequent connections skip this
+
+    broker ->> broker: Proceed to certificate flow
+```
+
+### Per-connection certificate flow
+
+The full flow for each SSH connection after discovery:
+
+```mermaid
+sequenceDiagram
+    box ssh invocation on a client
+        participant ssh
+        participant match
+        participant broker
+    end
+
+    box out on the internet
+        participant ca
+        participant policy
+    end
+
+    ssh ->> match: Match exec ...
+    match ->> broker: {matchdata}
+
+    create participant auth
+    broker ->> auth: {state}
+
+    destroy auth
+    auth ->> broker: {token, state, error}
+
+    broker ->> ca: {token, pubkey}
+    ca ->> policy: {token, pubkey}
+    policy ->> ca: {cert-params}
+    ca ->> broker: {cert}
+
+    create participant agent
+    broker ->> agent: create agent
+    broker ->> match: {true/false, error}
+    match ->> ssh: {true/false}
+    ssh ->> agent: list keys
+    agent ->> ssh: {cert, pubkey}
+    ssh ->> agent: sign-with-cert
+```
+
 ## v2 architecture
 
 The `epithet match` workflow implements 5 key steps (fully functional in `pkg/broker/broker.go:Match()`):
@@ -285,8 +370,7 @@ Config files use YAML, CUE, or JSON in `~/.epithet/`. Multi-file unification via
 
 ## Project structure
 
-- Currently on branch `v2.go` with v2 implementation complete
-- Main branch for PRs is `master`
+- Main branch is `main`
 - The Makefile defines all standard development workflows
 - Uses Go 1.25.0 with modules
 - Key dependencies:

@@ -34,41 +34,7 @@ First connection opens your browser for authentication (~2-5 seconds). Subsequen
 
 ## How it works
 
-```mermaid
-sequenceDiagram
-    box ssh invocation on a client
-        participant ssh
-        participant match
-        participant broker
-    end
-
-    box out on the internet
-        participant ca
-        participant policy
-    end
-
-    ssh ->> match: Match exec ...
-    match ->> broker: {matchdata}
-
-    create participant auth
-    broker ->> auth: {state}
-
-    destroy auth
-    auth ->> broker: {token, state, error}
-
-    broker ->> ca: {token, pubkey}
-    ca ->> policy: {token, pubkey}
-    policy ->> ca: {cert-params}
-    ca ->> broker: {cert}
-
-    create participant agent
-    broker ->> agent: create agent
-    broker ->> match: {true/false, error}
-    match ->> ssh: {true/false}
-    ssh ->> agent: list keys
-    agent ->> ssh: {cert, pubkey}
-    ssh ->> agent: sign-with-cert
-```
+When you run `ssh server.example.com`, OpenSSH's Match exec triggers `epithet match`, which asks the broker for a certificate. The broker handles authentication (via browser-based OIDC or a custom auth plugin), requests a signed certificate from the CA (which checks policy in real-time), and spins up a per-connection SSH agent with the short-lived certificate. See [architecture](docs/architecture.md#sequence-diagrams) for detailed sequence diagrams.
 
 **Components:**
 
