@@ -33,7 +33,7 @@ func TestURLStuff(t *testing.T) {
 func TestLinkHeaderPassthrough_RelativeURL(t *testing.T) {
 	// Create a mock policy server that returns a relative Link header
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `</d/abc123def456>; rel="discovery"`)
+		w.Header().Set("Link", `</discovery>; rel="discovery"`)
 		resp := ca.PolicyResponse{
 			CertParams: ca.CertParams{
 				Identity:   "test-user",
@@ -90,15 +90,15 @@ func TestLinkHeaderPassthrough_RelativeURL(t *testing.T) {
 	// Verify the Link header is set with the resolved absolute URL
 	link := resp.Header.Get("Link")
 	// The policy server URL might be like http://127.0.0.1:12345
-	// So the resolved URL should be http://127.0.0.1:12345/d/abc123def456
-	require.Contains(t, link, "/d/abc123def456")
+	// So the resolved URL should be http://127.0.0.1:12345/discovery
+	require.Contains(t, link, "/discovery")
 	require.Contains(t, link, `rel="discovery"`)
 }
 
 func TestLinkHeaderPassthrough_AbsoluteURL(t *testing.T) {
 	// Create a mock policy server that returns an absolute Link header
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<https://discovery.example.com/d/xyz789>; rel="discovery"`)
+		w.Header().Set("Link", `<https://discovery.example.com/discovery>; rel="discovery"`)
 		resp := ca.PolicyResponse{
 			CertParams: ca.CertParams{
 				Identity:   "test-user",
@@ -154,7 +154,7 @@ func TestLinkHeaderPassthrough_AbsoluteURL(t *testing.T) {
 
 	// Verify the Link header is set with the absolute URL unchanged
 	link := resp.Header.Get("Link")
-	require.Equal(t, `<https://discovery.example.com/d/xyz789>; rel="discovery"`, link)
+	require.Equal(t, `<https://discovery.example.com/discovery>; rel="discovery"`, link)
 }
 
 func TestLinkHeaderPassthrough_NoLinkHeader(t *testing.T) {
@@ -221,7 +221,7 @@ func TestLinkHeaderPassthrough_NoLinkHeader(t *testing.T) {
 func TestLinkHeaderPassthrough_OnPolicyError(t *testing.T) {
 	// Create a mock policy server that returns 403 with a Link header
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `</d/forbidden123>; rel="discovery"`)
+		w.Header().Set("Link", `</discovery>; rel="discovery"`)
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("access denied by policy"))
 	}))
@@ -267,14 +267,14 @@ func TestLinkHeaderPassthrough_OnPolicyError(t *testing.T) {
 
 	// Verify the Link header is set even on error responses
 	link := resp.Header.Get("Link")
-	require.Contains(t, link, "/d/forbidden123")
+	require.Contains(t, link, "/discovery")
 	require.Contains(t, link, `rel="discovery"`)
 }
 
 func TestLinkHeaderPassthrough_HelloRequest(t *testing.T) {
 	// Create a mock policy server that returns 200 with a Link header for hello requests
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `</d/hello789>; rel="discovery"`)
+		w.Header().Set("Link", `</discovery>; rel="discovery"`)
 		resp := ca.PolicyResponse{
 			CertParams: ca.CertParams{
 				Identity:   "test-user",
@@ -316,6 +316,6 @@ func TestLinkHeaderPassthrough_HelloRequest(t *testing.T) {
 
 	// Verify the Link header is set on hello response
 	link := resp.Header.Get("Link")
-	require.Contains(t, link, "/d/hello789")
+	require.Contains(t, link, "/discovery")
 	require.Contains(t, link, `rel="discovery"`)
 }

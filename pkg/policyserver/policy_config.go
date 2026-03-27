@@ -1,11 +1,7 @@
 package policyserver
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -61,36 +57,6 @@ func (c *ServerConfig) BootstrapAuth() BootstrapAuth {
 		ClientSecret: c.OIDC.ClientSecret,
 		Scopes:       scopes,
 	}
-}
-
-// ComputeUnauthDiscoveryHash computes a content-addressable hash of the auth configuration.
-// This is the hash used for unauthenticated discovery (the bootstrap replacement).
-// Returns a 12-character hex string.
-func ComputeUnauthDiscoveryHash(auth BootstrapAuth) string {
-	h := sha256.New()
-	enc := json.NewEncoder(h)
-	enc.Encode(auth)
-
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum)[:12]
-}
-
-// ComputeAuthDiscoveryHash computes a content-addressable hash of auth config + match patterns.
-// This is the hash used for authenticated discovery (returns auth + match patterns).
-// Returns a 12-character hex string.
-func ComputeAuthDiscoveryHash(auth BootstrapAuth, matchPatterns []string) string {
-	h := sha256.New()
-	enc := json.NewEncoder(h)
-	enc.Encode(auth)
-
-	// Sort patterns for determinism.
-	sorted := make([]string, len(matchPatterns))
-	copy(sorted, matchPatterns)
-	sort.Strings(sorted)
-	enc.Encode(sorted)
-
-	sum := h.Sum(nil)
-	return hex.EncodeToString(sum)[:12]
 }
 
 // ExtractPolicyConfig extracts the dynamic policy portion from PolicyRulesConfig.

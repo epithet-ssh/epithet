@@ -143,37 +143,37 @@ func TestExtractLinkURLs_MultipleLinks(t *testing.T) {
 	}{
 		{
 			name:       "discovery and alternate",
-			linkHeader: `</d/current>; rel="discovery", </d/other>; rel="alternate"`,
+			linkHeader: `</discovery>; rel="discovery", </d/other>; rel="alternate"`,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
-				"discovery": "https://policy.example.com/d/current",
+				"discovery": "https://policy.example.com/discovery",
 				"alternate": "https://policy.example.com/d/other",
 			},
 		},
 		{
 			name:       "absolute URLs",
-			linkHeader: `<https://cdn.example.com/d/current>; rel="discovery", <https://cdn.example.com/d/other>; rel="alternate"`,
+			linkHeader: `<https://cdn.example.com/discovery>; rel="discovery", <https://cdn.example.com/d/other>; rel="alternate"`,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
-				"discovery": "https://cdn.example.com/d/current",
+				"discovery": "https://cdn.example.com/discovery",
 				"alternate": "https://cdn.example.com/d/other",
 			},
 		},
 		{
 			name:       "mixed relative and absolute",
-			linkHeader: `</d/current>; rel="discovery", <https://cdn.example.com/d/other>; rel="alternate"`,
+			linkHeader: `</discovery>; rel="discovery", <https://cdn.example.com/d/other>; rel="alternate"`,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
-				"discovery": "https://policy.example.com/d/current",
+				"discovery": "https://policy.example.com/discovery",
 				"alternate": "https://cdn.example.com/d/other",
 			},
 		},
 		{
 			name:       "extra whitespace",
-			linkHeader: `  </d/current>; rel="discovery"  ,   </d/other>; rel="alternate"  `,
+			linkHeader: `  </discovery>; rel="discovery"  ,   </d/other>; rel="alternate"  `,
 			baseURL:    "https://policy.example.com/policy",
 			wantURLs: map[string]string{
-				"discovery": "https://policy.example.com/d/current",
+				"discovery": "https://policy.example.com/discovery",
 				"alternate": "https://policy.example.com/d/other",
 			},
 		},

@@ -278,7 +278,7 @@ func TestHandler_DiscoveryLinkHeader_Success(t *testing.T) {
 	handler := policyserver.NewHandler(policyserver.Config{
 		Validator:     &mockValidator{},
 		Evaluator:     evaluator,
-		DiscoveryHash: "abc123def456",
+		DiscoveryEnabled: true,
 	})
 
 	req := policyserver.Request{
@@ -301,8 +301,8 @@ func TestHandler_DiscoveryLinkHeader_Success(t *testing.T) {
 	}
 
 	link := w.Header().Get("Link")
-	// Link header always points to /d/current which redirects to content-addressed URL
-	expected := "</d/current>; rel=\"discovery\""
+	// Link header points to /discovery discovery endpoint.
+	expected := "</discovery>; rel=\"discovery\""
 	if link != expected {
 		t.Errorf("expected Link header %q, got %q", expected, link)
 	}
@@ -327,7 +327,7 @@ func TestHandler_DiscoveryLinkHeader_ErrorResponses(t *testing.T) {
 			handler := policyserver.NewHandler(policyserver.Config{
 				Validator:     &mockValidator{},
 				Evaluator:     evaluator,
-				DiscoveryHash: "abc123def456",
+				DiscoveryEnabled: true,
 			})
 
 			req := policyserver.Request{
@@ -350,8 +350,8 @@ func TestHandler_DiscoveryLinkHeader_ErrorResponses(t *testing.T) {
 			}
 
 			link := w.Header().Get("Link")
-			// Link header always points to /d/current which redirects to content-addressed URL
-			expected := "</d/current>; rel=\"discovery\""
+			// Link header points to /discovery discovery endpoint.
+			expected := "</discovery>; rel=\"discovery\""
 			if link != expected {
 				t.Errorf("expected Link header %q, got %q", expected, link)
 			}
@@ -370,7 +370,7 @@ func TestHandler_DiscoveryLinkHeader_NotSetWhenEmpty(t *testing.T) {
 		},
 	}
 
-	// No DiscoveryHash set
+	// DiscoveryEnabled not set (defaults to false).
 	handler := policyserver.NewHandler(policyserver.Config{
 		Validator: &mockValidator{},
 		Evaluator: evaluator,
@@ -420,7 +420,7 @@ func TestHandler_DiscoveryLinkHeader_WithBaseURL(t *testing.T) {
 	handler := policyserver.NewHandler(policyserver.Config{
 		Validator:        &mockValidator{},
 		Evaluator:        evaluator,
-		DiscoveryHash:    "abc123def456",
+		DiscoveryEnabled: true,
 		DiscoveryBaseURL: "https://cdn.example.com",
 	})
 
@@ -445,7 +445,7 @@ func TestHandler_DiscoveryLinkHeader_WithBaseURL(t *testing.T) {
 
 	link := w.Header().Get("Link")
 	// Link header uses absolute URL when DiscoveryBaseURL is set
-	expected := "<https://cdn.example.com/d/current>; rel=\"discovery\""
+	expected := "<https://cdn.example.com/discovery>; rel=\"discovery\""
 	if link != expected {
 		t.Errorf("expected Link header %q, got %q", expected, link)
 	}
@@ -465,7 +465,7 @@ func TestHandler_DiscoveryLinkHeader_WithBaseURLTrailingSlash(t *testing.T) {
 	handler := policyserver.NewHandler(policyserver.Config{
 		Validator:        &mockValidator{},
 		Evaluator:        evaluator,
-		DiscoveryHash:    "abc123def456",
+		DiscoveryEnabled: true,
 		DiscoveryBaseURL: "https://cdn.example.com/", // trailing slash
 	})
 
@@ -490,7 +490,7 @@ func TestHandler_DiscoveryLinkHeader_WithBaseURLTrailingSlash(t *testing.T) {
 
 	link := w.Header().Get("Link")
 	// Trailing slash should be stripped to avoid double slashes
-	expected := "<https://cdn.example.com/d/current>; rel=\"discovery\""
+	expected := "<https://cdn.example.com/discovery>; rel=\"discovery\""
 	if link != expected {
 		t.Errorf("expected Link header %q, got %q", expected, link)
 	}

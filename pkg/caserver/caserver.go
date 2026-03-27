@@ -205,7 +205,7 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	discoveryURL := s.c.DiscoveryURL()
 	if discoveryURL == "" {
 		// Fallback: derive from policy URL until we've made a request to policy server.
-		discoveryURL = strings.TrimSuffix(s.c.PolicyURL(), "/") + "/d/current"
+		discoveryURL = strings.TrimSuffix(s.c.PolicyURL(), "/") + "/discovery"
 	}
 
 	// Add discovery Link header for client discovery.

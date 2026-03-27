@@ -312,52 +312,6 @@ func TestPolicyLoader_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestPolicyConfig_AuthDiscoveryHash(t *testing.T) {
-	auth := policyserver.BootstrapAuth{Type: "oidc", Issuer: "https://example.com", ClientID: "test"}
-
-	policy1 := &policyserver.PolicyConfig{
-		Users: map[string][]string{
-			"alice@example.com": {"admin"},
-		},
-		Hosts: map[string]*policyserver.HostPolicy{
-			"server1": {},
-			"server2": {},
-		},
-	}
-
-	policy2 := &policyserver.PolicyConfig{
-		Users: map[string][]string{
-			"alice@example.com": {"admin"},
-		},
-		Hosts: map[string]*policyserver.HostPolicy{
-			"server2": {},
-			"server1": {},
-		},
-	}
-
-	// Same hosts, different order - should have same hash.
-	hash1 := policyserver.ComputeAuthDiscoveryHash(auth, policy1.HostPatterns())
-	hash2 := policyserver.ComputeAuthDiscoveryHash(auth, policy2.HostPatterns())
-	if hash1 != hash2 {
-		t.Error("expected same hash for same hosts in different order")
-	}
-
-	// Different hosts - should have different hash.
-	policy3 := &policyserver.PolicyConfig{
-		Users: map[string][]string{
-			"alice@example.com": {"admin"},
-		},
-		Hosts: map[string]*policyserver.HostPolicy{
-			"server1": {},
-		},
-	}
-
-	hash3 := policyserver.ComputeAuthDiscoveryHash(auth, policy3.HostPatterns())
-	if hash1 == hash3 {
-		t.Error("expected different hash for different hosts")
-	}
-}
-
 func TestPolicyConfig_HostPatterns(t *testing.T) {
 	policy := &policyserver.PolicyConfig{
 		Users: map[string][]string{

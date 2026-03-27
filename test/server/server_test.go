@@ -110,13 +110,6 @@ policy:
 	baseURL := fmt.Sprintf("http://localhost:%d", port)
 	waitForTCP(t, fmt.Sprintf("localhost:%d", port), 15*time.Second)
 
-	// Use a client that doesn't follow redirects so we can inspect 302 responses.
-	noRedirectClient := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
 	// GET / → 200, body = CA public key (routed to CA subprocess).
 	t.Run("ca_pubkey", func(t *testing.T) {
 		resp, err := http.Get(baseURL + "/")
@@ -138,53 +131,20 @@ policy:
 		}
 	})
 
-	// GET /d/current (no auth) → 302 with Location containing /d/.
-	t.Run("discovery_redirect_unauth", func(t *testing.T) {
-		resp, err := noRedirectClient.Get(baseURL + "/d/current")
+	// GET /discovery (no auth) → 200 with auth config.
+	t.Run("discovery_unauth", func(t *testing.T) {
+		resp, err := http.Get(baseURL + "/discovery")
 		if err != nil {
-			t.Fatalf("GET /d/current failed: %v", err)
+			t.Fatalf("GET /discovery failed: %v", err)
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != 302 {
-			t.Fatalf("GET /d/current status = %d, want 302", resp.StatusCode)
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET /discovery status = %d, want 200", resp.StatusCode)
 		}
 
-		location := resp.Header.Get("Location")
-		if !strings.Contains(location, "/d/") {
-			t.Errorf("Location = %q, want it to contain /d/", location)
-		}
-	})
-
-	// GET /d/current with Authorization header → 302 with a different Location hash.
-	t.Run("discovery_redirect_auth", func(t *testing.T) {
-		// First get the unauthenticated redirect location.
-		unauthResp, err := noRedirectClient.Get(baseURL + "/d/current")
-		if err != nil {
-			t.Fatalf("unauth GET /d/current failed: %v", err)
-		}
-		unauthResp.Body.Close()
-		unauthLocation := unauthResp.Header.Get("Location")
-
-		// Now with an Authorization header.
-		req, _ := http.NewRequest("GET", baseURL+"/d/current", nil)
-		req.Header.Set("Authorization", "Bearer x")
-		authResp, err := noRedirectClient.Do(req)
-		if err != nil {
-			t.Fatalf("auth GET /d/current failed: %v", err)
-		}
-		authResp.Body.Close()
-
-		if authResp.StatusCode != 302 {
-			t.Fatalf("auth GET /d/current status = %d, want 302", authResp.StatusCode)
-		}
-
-		authLocation := authResp.Header.Get("Location")
-		if !strings.Contains(authLocation, "/d/") {
-			t.Errorf("auth Location = %q, want it to contain /d/", authLocation)
-		}
-		if authLocation == unauthLocation {
-			t.Errorf("auth and unauth redirects are the same (%s); expected different hashes", authLocation)
+		if vary := resp.Header.Get("Vary"); vary != "Authorization" {
+			t.Errorf("Vary = %q, want 'Authorization'", vary)
 		}
 	})
 

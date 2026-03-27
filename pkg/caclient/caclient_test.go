@@ -418,35 +418,21 @@ func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
 	assert.Equal(t, 2, discoveryCallCount, "without Cache-Control, each request should hit the server")
 }
 
-func TestGetDiscovery_FollowsRedirect(t *testing.T) {
-	redirectCallCount := 0
-	contentCallCount := 0
+func TestGetDiscovery_AuthenticatedRequest(t *testing.T) {
 	var receivedAuthHeader string
 
-	// Server that handles both /d/current (redirect) and /d/{hash} (content)
+	// Discovery server serves content directly with Vary: Authorization.
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/d/current" {
-			redirectCallCount++
-			w.Header().Set("Cache-Control", "max-age=300")
-			w.Header().Set("Location", "/d/abc123hash")
-			w.WriteHeader(http.StatusFound) // 302 temporary redirect
-			return
-		}
-		if r.URL.Path == "/d/abc123hash" {
-			contentCallCount++
-			// Capture the Authorization header to verify it's forwarded
-			receivedAuthHeader = r.Header.Get("Authorization")
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
+		receivedAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Vary", "Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "max-age=300")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"auth":{"type":"oidc"},"matchPatterns": ["*.example.com"]}`))
 	}))
 	defer discoveryServer.Close()
 
-	// CA server (needed for client creation)
+	// CA server (needed for client creation).
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -456,21 +442,15 @@ func TestGetDiscovery_FollowsRedirect(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	// Set the discovery URL to the redirect endpoint
-	client.SetDiscoveryURL(discoveryServer.URL + "/d/current")
+	client.SetDiscoveryURL(discoveryServer.URL + "/discovery")
 
-	// Request should follow redirect and get content
 	discovery, err := client.GetDiscovery(context.Background(), "test-token")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 	assert.Equal(t, []string{"*.example.com"}, discovery.MatchPatterns)
 
-	// Verify both endpoints were hit
-	assert.Equal(t, 1, redirectCallCount, "redirect endpoint should be hit")
-	assert.Equal(t, 1, contentCallCount, "content endpoint should be hit after redirect")
-
-	// Verify Authorization header was forwarded on redirect
-	assert.Equal(t, "Bearer test-token", receivedAuthHeader, "Authorization header should be forwarded on redirect")
+	// Verify Authorization header was sent.
+	assert.Equal(t, "Bearer test-token", receivedAuthHeader)
 }
 
 func TestGetCert_CachesDiscoveryURL(t *testing.T) {
@@ -515,7 +495,7 @@ func TestGetPublicKey_ReturnsKeyAndDiscoveryURL(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Link", `</d/current>; rel="discovery"`)
+		w.Header().Set("Link", `</discovery>; rel="discovery"`)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... CA public key"))
@@ -536,7 +516,7 @@ func TestGetPublicKey_CachesDiscoveryURL(t *testing.T) {
 	callCount := 0
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		w.Header().Set("Link", `</d/current>; rel="discovery"`)
+		w.Header().Set("Link", `</discovery>; rel="discovery"`)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
@@ -660,32 +640,21 @@ func TestGetDiscovery_Unauth_NoDiscoveryURL(t *testing.T) {
 	assert.Nil(t, discovery)
 }
 
-func TestGetDiscovery_Unauth_FollowsRedirect(t *testing.T) {
-	redirectCallCount := 0
-	contentCallCount := 0
+func TestGetDiscovery_Unauth_DirectServing(t *testing.T) {
+	callCount := 0
 
-	// Server that handles both /d/current (redirect) and /d/{hash} (content)
+	// Discovery server serves content directly.
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/d/current" {
-			redirectCallCount++
-			w.Header().Set("Cache-Control", "max-age=300")
-			w.Header().Set("Location", "/d/disc123hash")
-			w.WriteHeader(http.StatusFound)
-			return
-		}
-		if r.URL.Path == "/d/disc123hash" {
-			contentCallCount++
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://example.com","client_id":"test"}}`))
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
+		callCount++
+		w.Header().Set("Vary", "Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "max-age=300")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://example.com","client_id":"test"}}`))
 	}))
 	defer discoveryServer.Close()
 
-	// CA server (needed for client creation)
+	// CA server (needed for client creation).
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -695,16 +664,14 @@ func TestGetDiscovery_Unauth_FollowsRedirect(t *testing.T) {
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
-	client.SetDiscoveryURL(discoveryServer.URL + "/d/current")
+	client.SetDiscoveryURL(discoveryServer.URL + "/discovery")
 
-	// Get discovery config without auth token
 	discovery, err := client.GetDiscovery(context.Background(), "")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
 	assert.Equal(t, "oidc", discovery.Auth.Type)
-	assert.Equal(t, 1, redirectCallCount, "redirect endpoint should be hit")
-	assert.Equal(t, 1, contentCallCount, "content endpoint should be hit after redirect")
+	assert.Equal(t, 1, callCount, "discovery endpoint should be hit directly")
 }
 
 func TestGetDiscovery_Unauth_HTTPCaching(t *testing.T) {
@@ -746,75 +713,49 @@ func TestGetDiscovery_Unauth_HTTPCaching(t *testing.T) {
 func TestIntegration_UnifiedDiscovery(t *testing.T) {
 	// This test simulates the full unified discovery flow:
 	// 1. Client calls GET / on CA → gets public key + Link rel="discovery"
-	// 2. Client calls GetDiscovery(ctx, "") → follows /d/current → gets auth config (no auth)
+	// 2. Client calls GetDiscovery(ctx, "") → gets auth config (no auth)
 	// 3. Client uses auth config to authenticate (simulated)
 	// 4. Client calls Hello() with token → learns discovery URL
-	// 5. Client calls GetDiscovery(ctx, token) → follows /d/current → gets auth config + match patterns
+	// 5. Client calls GetDiscovery(ctx, token) → gets auth config + match patterns
 
-	// Track which endpoints are called
 	caRootCalls := 0
 	helloCalls := 0
-	unauthDiscoveryCalls := 0
-	authDiscoveryCalls := 0
+	discoveryCalls := 0
 
-	// Policy server handles discovery. /d/current is auth-aware:
-	// without Authorization header, redirect to unauth hash;
-	// with Authorization header, redirect to auth hash.
+	// Policy server handles discovery with Vary: Authorization.
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/d/current":
-			// Vary by Authorization so HTTP cache distinguishes auth vs unauth.
-			w.Header().Set("Vary", "Authorization")
-			auth := r.Header.Get("Authorization")
-			if auth == "" {
-				// Unauthenticated: redirect to unauth content hash
-				w.Header().Set("Location", "/d/unauth123")
-				w.Header().Set("Cache-Control", "max-age=300")
-				w.WriteHeader(http.StatusFound)
-			} else {
-				// Authenticated: redirect to auth content hash
-				w.Header().Set("Location", "/d/auth456")
-				w.Header().Set("Cache-Control", "max-age=300")
-				w.WriteHeader(http.StatusFound)
-			}
+		if r.URL.Path != "/discovery" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		discoveryCalls++
+		w.Header().Set("Vary", "Authorization")
+		w.Header().Set("Cache-Control", "max-age=300")
+		w.Header().Set("Content-Type", "application/json")
 
-		case "/d/unauth123":
-			unauthDiscoveryCalls++
-			// Serve auth config only - no match patterns without auth
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			// Unauthenticated: auth config only.
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client","scopes":["openid","profile"]}}`))
-
-		case "/d/auth456":
-			authDiscoveryCalls++
-			// Authenticated: require valid token
-			auth := r.Header.Get("Authorization")
-			if auth != "Bearer test-token" {
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte("unauthorized"))
-				return
-			}
-			// Serve auth config + match patterns
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
+		} else if auth == "Bearer test-token" {
+			// Authenticated: auth config + match patterns.
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client","scopes":["openid","profile"]},"matchPatterns":["*.example.com","prod-*"]}`))
-
-		default:
-			w.WriteHeader(http.StatusNotFound)
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("unauthorized"))
 		}
 	}))
 	defer policyServer.Close()
 
-	// CA server
+	// CA server.
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			if r.URL.Path == "/" {
 				caRootCalls++
-				// Return public key with discovery Link header
-				w.Header().Set("Link", `<`+policyServer.URL+`/d/current>; rel="discovery"`)
+				w.Header().Set("Link", `<`+policyServer.URL+`/discovery>; rel="discovery"`)
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... test-ca-key"))
@@ -823,14 +764,13 @@ func TestIntegration_UnifiedDiscovery(t *testing.T) {
 		case http.MethodPost:
 			if r.URL.Path == "/" {
 				helloCalls++
-				// Hello request - return discovery Link header
 				auth := r.Header.Get("Authorization")
 				if auth != "Bearer test-token" {
 					w.WriteHeader(http.StatusUnauthorized)
 					w.Write([]byte("unauthorized"))
 					return
 				}
-				w.Header().Set("Link", `<`+policyServer.URL+`/d/current>; rel="discovery"`)
+				w.Header().Set("Link", `<`+policyServer.URL+`/discovery>; rel="discovery"`)
 				w.WriteHeader(http.StatusOK)
 				return
 			}
@@ -839,20 +779,19 @@ func TestIntegration_UnifiedDiscovery(t *testing.T) {
 	}))
 	defer caServer.Close()
 
-	// Create client
 	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
 	client, err := caclient.New(endpoints)
 	require.NoError(t, err)
 
 	ctx := context.Background()
 
-	// Step 1: Get public key (also caches discovery URL from Link header)
+	// Step 1: Get public key (also caches discovery URL from Link header).
 	pubKey, err := client.GetPublicKey(ctx)
 	require.NoError(t, err)
 	assert.Contains(t, pubKey, "ssh-ed25519")
-	assert.Equal(t, 1, caRootCalls, "should call CA root exactly once")
+	assert.Equal(t, 1, caRootCalls)
 
-	// Step 2: Get discovery without auth → follows /d/current → unauth hash → auth config only
+	// Step 2: Get discovery without auth → auth config only.
 	discovery, err := client.GetDiscovery(ctx, "")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
@@ -860,21 +799,19 @@ func TestIntegration_UnifiedDiscovery(t *testing.T) {
 	assert.Equal(t, "https://accounts.google.com", discovery.Auth.Issuer)
 	assert.Equal(t, "test-client", discovery.Auth.ClientID)
 	assert.Equal(t, []string{"openid", "profile"}, discovery.Auth.Scopes)
-	assert.Equal(t, 1, unauthDiscoveryCalls, "should hit unauth content endpoint")
 
-	// Step 3: Client uses auth config to authenticate (simulated)
+	// Step 3: Client uses auth config to authenticate (simulated).
 	token := "test-token"
 
-	// Step 4: Hello() to validate token and learn discovery URL
+	// Step 4: Hello() to validate token and learn discovery URL.
 	err = client.Hello(ctx, token)
 	require.NoError(t, err)
-	assert.Equal(t, 1, helloCalls, "should call hello exactly once")
+	assert.Equal(t, 1, helloCalls)
 
-	// Step 5: Get discovery with auth → follows /d/current → auth hash → auth config + match patterns
+	// Step 5: Get discovery with auth → auth config + match patterns.
 	discovery, err = client.GetDiscovery(ctx, token)
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 	assert.Equal(t, "oidc", discovery.Auth.Type)
 	assert.Equal(t, []string{"*.example.com", "prod-*"}, discovery.MatchPatterns)
-	assert.Equal(t, 1, authDiscoveryCalls, "should hit auth content endpoint")
 }

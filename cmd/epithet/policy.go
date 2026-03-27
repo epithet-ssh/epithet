@@ -140,23 +140,19 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	}
 
 	// Create policy server handler.
-	// Note: Discovery hashes are computed from current policy and may change with dynamic loading.
-	// For now, we compute initial hashes; a future enhancement could make these dynamic.
 	initialPolicy, err := policyProvider.GetPolicy(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get initial policy for hashes: %w", err)
+		return fmt.Errorf("failed to get initial policy: %w", err)
 	}
 
 	authConfig := serverCfg.BootstrapAuth()
 	matchPatterns := initialPolicy.HostPatterns()
-	unauthHash := policyserver.ComputeUnauthDiscoveryHash(authConfig)
-	authHash := policyserver.ComputeAuthDiscoveryHash(authConfig, matchPatterns)
 
 	handler := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey:      sshcert.RawPublicKey(caPubkey),
 		Validator:        validator,
 		Evaluator:        eval,
-		DiscoveryHash:    unauthHash,
+		DiscoveryEnabled: true,
 		DiscoveryBaseURL: c.DiscoveryBaseURL,
 	})
 
@@ -164,8 +160,6 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	discoveryHandler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
 		Validator:     validator,
 		MatchPatterns: matchPatterns,
-		UnauthHash:    unauthHash,
-		AuthHash:      authHash,
 		AuthConfig:    authConfig,
 	})
 
@@ -178,17 +172,11 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config, unif
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	r.Post("/", handler)
-	// Auth-aware discovery redirect: /d/current -> /d/{unauthHash} or /d/{authHash}
-	// depending on whether Authorization header is present.
-	r.Get("/d/current", policyserver.NewDiscoveryRedirectHandler(unauthHash, authHash, c.DiscoveryBaseURL))
-	// Content-addressed endpoint: /d/{hash} (immutable, serves unauth or auth discovery based on hash).
-	r.Get("/d/*", discoveryHandler)
+	r.Get("/discovery", discoveryHandler)
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
 		"ca_pubkey_length", len(caPubkey),
-		"unauth_hash", unauthHash,
-		"auth_hash", authHash,
 		"match_patterns", matchPatterns,
 		"dynamic_policy", policySource != "")
 

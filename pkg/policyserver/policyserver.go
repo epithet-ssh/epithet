@@ -112,14 +112,13 @@ type Config struct {
 	// MaxRequestSize limits the request body size (default: 8192 bytes)
 	MaxRequestSize int64
 
-	// DiscoveryHash is the content-addressable hash for the Link header.
-	// If empty, no Link header is set.
-	// The path is hardcoded to "/d/" + hash.
-	DiscoveryHash string
+	// DiscoveryEnabled enables the Link header pointing to /discovery.
+	// If false, no Link header is set.
+	DiscoveryEnabled bool
 
 	// DiscoveryBaseURL is the base URL for discovery endpoints.
 	// If set, discovery URLs will be absolute URLs on this base (e.g., "https://cdn.example.com").
-	// If empty, discovery URLs will be relative (e.g., "/d/current").
+	// If empty, discovery URLs will be relative (e.g., "/discovery").
 	DiscoveryBaseURL string
 }
 
@@ -223,16 +222,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // setLinkHeaders sets the Link header for discovery if configured.
-// Points to /d/current which is the auth-aware redirect endpoint.
+// Points to /discovery which is the auth-aware redirect endpoint.
 // If DiscoveryBaseURL is set, uses absolute URLs; otherwise uses relative URLs.
 func (h *handler) setLinkHeaders(w http.ResponseWriter) {
-	if h.config.DiscoveryHash == "" {
+	if !h.config.DiscoveryEnabled {
 		return
 	}
 
-	url := "/d/current"
+	url := "/discovery"
 	if h.config.DiscoveryBaseURL != "" {
-		url = strings.TrimSuffix(h.config.DiscoveryBaseURL, "/") + "/d/current"
+		url = strings.TrimSuffix(h.config.DiscoveryBaseURL, "/") + "/discovery"
 	}
 	w.Header().Set("Link", "<"+url+">; rel=\"discovery\"")
 }

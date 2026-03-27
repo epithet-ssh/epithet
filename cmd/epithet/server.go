@@ -107,9 +107,9 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config, unifiedConfig c
 	}
 	logger.Info("ca subprocess ready")
 
-	// Build reverse proxy mux. /d/* routes to policy, everything else to CA.
+	// Build reverse proxy mux. /discovery routes to policy, everything else to CA.
 	mux := http.NewServeMux()
-	mux.Handle("/d/", unixReverseProxy(policySock, logger))
+	mux.Handle("/discovery", unixReverseProxy(policySock, logger))
 	mux.Handle("/", unixReverseProxy(caSock, logger))
 
 	logger.Info("listening", "address", c.Listen)
