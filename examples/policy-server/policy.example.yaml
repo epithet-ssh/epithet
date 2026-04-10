@@ -1,7 +1,7 @@
 # Epithet Policy Server - Inline Configuration Example
 #
 # Use this format for INLINE configuration in ~/.epithet/*.yaml files.
-# The "policy:" wrapper is required because kongcue looks up this section.
+# The "policy:" wrapper is required because Kong resolves config by subcommand name.
 #
 # For DYNAMIC policy sources (--policy-source flag), use a flat format
 # WITHOUT the "policy:" wrapper. See policy-source.example.yaml.
@@ -13,7 +13,7 @@ policy:
   # CA public key for signature verification
   # Get this from your CA server: curl http://localhost:8080/
   # Or from the file: cat ca_key.pub
-  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
 
   # OIDC configuration for token validation
   # Examples:

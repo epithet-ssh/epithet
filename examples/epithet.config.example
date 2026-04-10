@@ -1,25 +1,21 @@
 # Example epithet configuration file
 #
-# Location: ~/.epithet/*.yaml (or .yml, .cue, .json)
+# Location: ~/.epithet/*.yaml (or .yml, .json)
 #
-# Format: YAML (also supports CUE and JSON)
-# Config sections mirror the CLI command structure
-#
-# Multi-file support:
-#   All config files in ~/.epithet/ are loaded and merged using CUE unification.
-#   This allows splitting config across multiple files (e.g., base.yaml, work.yaml).
-#   Conflicting values (same field, different values) will cause an error at startup.
+# Format: YAML (also supports JSON)
+# Config sections mirror the CLI command structure.
+# Use kebab-case for keys to match CLI flag names.
 
 # Global flags (apply to all commands)
 # insecure: true           # Disable TLS verification (NOT RECOMMENDED)
 # verbose: 1               # Log level (1=info, 2=debug)
-# log_file: /var/log/epithet.log
-# tls_ca_cert: /path/to/ca.crt
+# log-file: /var/log/epithet.log
+# tls-ca-cert: /path/to/ca.crt
 
 # Agent configuration (epithet agent)
 # Host patterns are obtained dynamically from CA discovery - no static match config needed
 agent:
-  ca_url: https://ca.example.com
+  ca-url: https://ca.example.com
   auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
 
 # CA server configuration (epithet ca)
@@ -32,8 +28,8 @@ agent:
 # All policy config is now unified here - no separate policy.yaml needed
 # policy:
 #   listen: "0.0.0.0:9999"
-#   ca_pubkey: ssh-ed25519 AAAAC3...  # or URL like https://ca.example.com/pubkey
-#   default_expiration: "5m"
+#   ca-pubkey: ssh-ed25519 AAAAC3...  # or URL like https://ca.example.com/pubkey
+#   default-expiration: "5m"
 #
 #   # OIDC configuration for token validation
 #   oidc:
@@ -65,8 +61,8 @@ agent:
 # auth:
 #   oidc:
 #     issuer: https://accounts.google.com
-#     client_id: YOUR_CLIENT_ID
-#     client_secret: YOUR_CLIENT_SECRET  # Optional if using PKCE
+#     client-id: YOUR_CLIENT_ID
+#     client-secret: YOUR_CLIENT_SECRET  # Optional if using PKCE
 #     scopes:
 #       - openid
 #       - email

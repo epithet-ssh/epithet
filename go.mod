@@ -3,7 +3,6 @@ module github.com/epithet-ssh/epithet
 go 1.25.5
 
 require (
-	cuelang.org/go v0.16.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/cbroglie/mustache v1.4.0
 	github.com/coreos/go-oidc/v3 v3.17.0
@@ -20,26 +19,20 @@ require (
 )
 
 require (
-	cuelabs.dev/go/oci/ociregistry v0.0.0-20251212221603-3adeb8663819 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/cockroachdb/apd/v3 v3.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/emicklei/proto v1.14.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.21.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/int128/listener v1.3.0 // indirect
-	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/protocolbuffers/txtpbfmt v0.0.0-20260217160748-a481f6a22f94 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.10.0 // indirect
 	github.com/sigstore/protobuf-specs v0.5.1 // indirect
 	github.com/sigstore/sigstore v1.10.5 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
@@ -47,14 +40,14 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260406210006-6f92a3bedf2d // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
+	github.com/alecthomas/kong-yaml v0.2.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
-	github.com/brianm/kongcue v0.1.5
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79
 	github.com/sony/gobreaker/v2 v2.4.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 )

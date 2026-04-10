@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"cuelang.org/go/cue"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
 )
@@ -25,16 +24,11 @@ import (
 // single reverse proxy, simplifying deployment to a single process.
 type ServerCLI struct {
 	Listen string `help:"Public address to listen on" short:"l" default:":8080"`
+	CAKey  string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
 }
 
-func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config, unifiedConfig cue.Value) error {
-	// Read CA key path from ca.key in config, falling back to default.
-	caKeyPath := "/etc/epithet/ca.key"
-	if v := unifiedConfig.LookupPath(cue.ParsePath("ca.key")); v.Exists() {
-		if err := v.Decode(&caKeyPath); err != nil {
-			return fmt.Errorf("failed to decode ca.key from config: %w", err)
-		}
-	}
+func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
+	caKeyPath := c.CAKey
 
 	// Read CA private key and derive the public key so the policy
 	// server doesn't need separate configuration for it.
@@ -153,8 +147,8 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config, unifiedConfig c
 // buildGlobalArgs constructs the global CLI flags to pass through to subprocesses.
 func buildGlobalArgs() []string {
 	var args []string
-	if configFlag := strings.Join([]string(cli.Config), ";"); configFlag != "" {
-		args = append(args, "--config", configFlag)
+	if cli.Config != "" {
+		args = append(args, "--config", string(cli.Config))
 	}
 	for i := 0; i < cli.Verbose; i++ {
 		args = append(args, "-v")

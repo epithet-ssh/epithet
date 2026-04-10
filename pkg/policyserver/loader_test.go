@@ -64,58 +64,6 @@ hosts:
 	}
 }
 
-func TestPolicyLoader_LoadFromFile_CUE(t *testing.T) {
-	// Create a temporary CUE policy file.
-	dir := t.TempDir()
-	policyFile := filepath.Join(dir, "policy.cue")
-
-	content := `
-users: {
-	"alice@example.com": ["admin"]
-	"bob@example.com": ["user"]
-}
-defaults: {
-	allow: {
-		root: ["admin"]
-	}
-	expiration: "10m"
-}
-hosts: {
-	"*.example.com": {}
-}
-`
-	if err := os.WriteFile(policyFile, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write policy file: %v", err)
-	}
-
-	loader := policyserver.NewPolicyLoader(policyFile)
-	policy, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("failed to load policy: %v", err)
-	}
-
-	// Verify users.
-	if len(policy.Users) != 2 {
-		t.Errorf("expected 2 users, got %d", len(policy.Users))
-	}
-	if tags, ok := policy.Users["alice@example.com"]; !ok || len(tags) != 1 || tags[0] != "admin" {
-		t.Errorf("unexpected alice tags: %v", tags)
-	}
-
-	// Verify defaults.
-	if policy.Defaults == nil {
-		t.Fatal("expected defaults to be set")
-	}
-	if policy.Defaults.Expiration != "10m" {
-		t.Errorf("expected expiration 10m, got %s", policy.Defaults.Expiration)
-	}
-
-	// Verify hosts.
-	if len(policy.Hosts) != 1 {
-		t.Errorf("expected 1 host pattern, got %d", len(policy.Hosts))
-	}
-}
-
 func TestPolicyLoader_LoadFromFile_JSON(t *testing.T) {
 	// Create a temporary JSON policy file.
 	dir := t.TempDir()

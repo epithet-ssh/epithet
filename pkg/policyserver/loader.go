@@ -2,6 +2,7 @@ package policyserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,10 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"cuelang.org/go/cue"
-	"cuelang.org/go/cue/cuecontext"
-	"cuelang.org/go/encoding/yaml"
 	"github.com/gregjones/httpcache"
+	"gopkg.in/yaml.v3"
 )
 
 // PolicyConfig contains the dynamic policy data that can be loaded from a URL.
@@ -182,54 +181,29 @@ func (l *PolicyLoader) loadFromFile(path string) (*PolicyConfig, error) {
 	return policy, nil
 }
 
-// parsePolicy parses policy data using CUE as the unified parser.
-// CUE natively handles JSON and CUE syntax; YAML is converted via cue/encoding/yaml.
+// parsePolicy parses policy data from YAML or JSON.
 func (l *PolicyLoader) parsePolicy(data []byte, contentType, source string) (*PolicyConfig, error) {
-	ctx := cuecontext.New()
-
-	// Normalize content type (remove charset etc).
 	contentType = normalizeContentType(contentType)
 
-	var value cue.Value
+	var policy PolicyConfig
+	var err error
 
 	switch contentType {
-	case "application/x-yaml", "text/yaml", "text/x-yaml":
-		// Use CUE's YAML parser.
-		file, err := yaml.Extract(source, data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse YAML policy from %s: %w", source, err)
-		}
-		value = ctx.BuildFile(file)
-	case "application/json", "application/cue", "":
-		// CUE can parse both JSON and CUE natively.
-		// Default to CUE/JSON parsing for unknown content types.
-		value = ctx.CompileBytes(data, cue.Filename(source))
+	case "application/json":
+		err = json.Unmarshal(data, &policy)
 	default:
-		// Try CUE/JSON parsing as fallback.
-		value = ctx.CompileBytes(data, cue.Filename(source))
+		// YAML handles both YAML and JSON (YAML is a superset of JSON).
+		err = yaml.Unmarshal(data, &policy)
 	}
 
-	if err := value.Err(); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse policy from %s: %w", source, err)
 	}
 
-	// Validate the CUE value is concrete.
-	if err := value.Validate(cue.Concrete(true)); err != nil {
-		return nil, fmt.Errorf("policy validation failed for %s: %w", source, err)
-	}
-
-	// Decode into PolicyConfig.
-	var policy PolicyConfig
-	if err := value.Decode(&policy); err != nil {
-		return nil, fmt.Errorf("failed to decode policy from %s: %w", source, err)
-	}
-
-	// Initialize Users map if nil.
 	if policy.Users == nil {
 		policy.Users = make(map[string][]string)
 	}
 
-	// Validate the loaded policy.
 	if err := policy.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid policy from %s: %w", source, err)
 	}
@@ -244,10 +218,8 @@ func extensionToContentType(ext string) string {
 		return "application/json"
 	case ".yaml", ".yml":
 		return "application/x-yaml"
-	case ".cue":
-		return "application/cue"
 	default:
-		return "" // Will default to YAML.
+		return "" // Default to YAML.
 	}
 }
 

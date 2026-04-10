@@ -10,7 +10,7 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 - OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
 - Tag-based authorization for flexible access control
 - Per-host policy overrides
-- Simple YAML or CUE configuration
+- Simple YAML or JSON configuration
 - Built-in to the epithet binary (no separate deployment needed)
 
 **Security Note:** SSH certificates issued by epithet can be used on any host that trusts the CA, regardless of host-specific policies in the configuration. Host restrictions are enforced at **certificate issuance time**, not validation time. For tighter security, consider using SSH's `AuthorizedPrincipalsCommand` on target hosts to enforce additional checks.
@@ -40,7 +40,7 @@ policy:
   listen: "0.0.0.0:9999"
 
   # CA public key for signature verification
-  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
 
   # OIDC configuration for token validation
   oidc:
@@ -112,7 +112,7 @@ epithet ca \
 
 ### File Formats
 
-The policy server supports both YAML and CUE formats:
+The policy server supports YAML and JSON formats:
 
 **YAML** (`.yaml` or `.yml`):
 ```yaml
@@ -120,14 +120,16 @@ users:
   alice@example.com: [admin]
 ```
 
-**CUE** (`.cue`):
-```cue
-users: {
-  "alice@example.com": ["admin"]
+**JSON** (`.json`):
+```json
+{
+  "users": {
+    "alice@example.com": ["admin"]
+  }
 }
 ```
 
-The format is auto-detected based on file extension.
+The format is auto-detected based on file extension or content type.
 
 ### Configuration modes
 
@@ -139,7 +141,7 @@ Policy is defined inside your main config file under a `policy:` section:
 
 ```yaml
 policy:
-  ca_pubkey: "ssh-ed25519 ..."
+  ca-pubkey: "ssh-ed25519 ..."
   oidc:
     issuer: "https://accounts.google.com"
   users:
@@ -177,7 +179,7 @@ Dynamic sources are reloaded on each request, enabling policy updates without re
 All fields go under the `policy:` section in `~/.epithet/*.yaml`:
 
 - **`listen`** (optional): Address to listen on (default: `0.0.0.0:9999`)
-- **`ca_pubkey`** (required): SSH public key of the CA for signature verification
+- **`ca-pubkey`** (required): SSH public key of the CA for signature verification
 - **`oidc`** (required): OIDC configuration object with `issuer` and `audience` fields
 - **`users`** (required): Map of user identities to tags
 - **`defaults`** (optional): Global policy defaults
@@ -568,7 +570,7 @@ The target host does NOT know about host-specific policies in the policy configu
 
 **"Invalid CA signature" (400)**
 - The signature from the CA doesn't verify with the configured public key
-- Check that `ca_pubkey` in the config matches the CA's actual public key
+- Check that `ca-pubkey` in the config matches the CA's actual public key
 - Ensure the CA and policy server are using compatible key formats
 
 ### Debugging
@@ -592,7 +594,7 @@ Check policy server logs for:
 ```yaml
 # Inline format: requires "policy:" wrapper
 policy:
-  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
   oidc:
     issuer: "https://accounts.google.com"
     audience: "your-client-id"
@@ -614,7 +616,7 @@ policy:
 ```yaml
 # Inline format: requires "policy:" wrapper
 policy:
-  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
   oidc:
     issuer: "https://login.example.com"
     audience: "your-client-id"
@@ -646,7 +648,7 @@ policy:
 ```yaml
 # Inline format: requires "policy:" wrapper
 policy:
-  ca_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+  ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
   oidc:
     issuer: "https://sso.company.com"
     audience: "your-client-id"

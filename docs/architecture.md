@@ -109,7 +109,7 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
 
 ## Command structure
 
-The `epithet` binary uses `alecthomas/kong` for command-line parsing, with CUE-based config file loading supporting YAML, CUE, and JSON formats with multi-file unification. All commands are fully implemented and production-ready.
+The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML config file support via `kong-yaml`. Config files use YAML or JSON format. All commands are fully implemented and production-ready.
 
 ### epithet match
 
@@ -366,7 +366,7 @@ When epithet cannot obtain a certificate (auth failures, CA errors, agent creati
 
 When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<instance-hash>/ssh-config.conf`. Include it via `Include ~/.epithet/run/*/ssh-config.conf` in your `~/.ssh/config`.
 
-Config files use YAML, CUE, or JSON in `~/.epithet/`. Multi-file unification via CUE merges all config files; conflicting values cause startup errors. Use `snake_case` in configs (maps to `--kebab-case` flags). See `examples/epithet.config.example` for a complete example.
+Config files use YAML or JSON in `~/.epithet/`. Use `kebab-case` in config keys to match CLI flag names (e.g., `ca-pubkey` maps to `--ca-pubkey`). See `examples/` for complete examples.
 
 ## Project structure
 
@@ -377,7 +377,7 @@ Config files use YAML, CUE, or JSON in `~/.epithet/`. Multi-file unification via
   - `golang.org/x/crypto/ssh` - SSH agent and certificate implementation
   - `github.com/sigstore/sigstore/pkg/signature` - SSH signature verification for policy server protocol
   - `alecthomas/kong` - Command-line parsing
-  - `cuelang.org/go/cue` - Configuration loading with multi-file unification
+  - `alecthomas/kong-yaml` - YAML configuration file support for Kong
   - `cbroglie/mustache` - Template rendering in auth commands
   - `coreos/go-oidc/v3` - OIDC authentication
   - `golang.org/x/oauth2` - OAuth2 flows

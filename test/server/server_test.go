@@ -68,14 +68,13 @@ func TestServerEndToEnd(t *testing.T) {
 
 	// Write config YAML.
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	configContent := fmt.Sprintf(`ca:
-  key: %s
-  policy: "placeholder"
+	configContent := fmt.Sprintf(`server:
+  ca-key: %s
 policy:
-  ca_pubkey: "%s"
+  ca-pubkey: "%s"
   oidc:
     issuer: "%s"
-    client_id: "test-client"
+    client-id: "test-client"
   users:
     test@example.com: [admin]
   defaults:

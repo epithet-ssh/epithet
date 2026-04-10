@@ -8,7 +8,8 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
-	"github.com/brianm/kongcue"
+	kongyaml "github.com/alecthomas/kong-yaml"
+	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/lmittmann/tint"
 )
@@ -19,39 +20,50 @@ var (
 	date    = "unknown"
 )
 
+// defaultConfigPatterns defines where to look for config files.
+var defaultConfigPatterns = []string{
+	"/etc/epithet/*.yaml",
+	"/etc/epithet/*.yml",
+	"/etc/epithet/*.json",
+	"~/.epithet/*.yaml",
+	"~/.epithet/*.yml",
+	"~/.epithet/*.json",
+}
+
 var cli struct {
 	Version kong.VersionFlag `short:"V" help:"Print version information"`
 	Verbose int              `short:"v" type:"counter" help:"Increase verbosity (-v for debug, -vv for trace)"`
 	LogFile string           `name:"log-file" help:"Path to log file (supports ~ expansion)" env:"EPITHET_LOG_FILE"`
-	Config  kongcue.Config   `help:"Path to config file" sep:";" default:"/etc/epithet/*.{cue,yaml,yml,json};~/.epithet/*.{cue,yaml,yml,json}"`
+	Config  kong.ConfigFlag  `help:"Path to config file" name:"config"`
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
 	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
-	Agent     AgentCLI          `cmd:"agent" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
-	Match     MatchCLI          `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
-	CA        CACLI             `cmd:"ca" help:"Run the epithet CA server"`
-	Policy    PolicyServerCLI   `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
-	Server    ServerCLI         `cmd:"server" help:"Run CA and policy as supervised subprocesses behind a single port"`
-	Auth      AuthCLI           `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
-	ConfigDoc kongcue.ConfigDoc `cmd:"" help:"Print the configuration file schema and docs"`
+	Agent  AgentCLI        `cmd:"agent" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
+	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match exec ...'"`
+	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
+	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
+	Server ServerCLI       `cmd:"server" help:"Run CA and policy as supervised subprocesses behind a single port"`
+	Auth   AuthCLI         `cmd:"auth" help:"Authentication commands (OIDC, SAML, etc.)"`
 }
 
 func main() {
-	// we also allow command to be named epithet-agent and such, to imply a command
+	// Allow binary to be named epithet-agent etc. to imply a command.
 	if baseName := filepath.Base(os.Args[0]); strings.Contains(baseName, "-") {
 		parts := strings.SplitN(baseName, "-", 2)
 		if len(parts) == 2 {
-			// Transform [epithet-policy, --woof, --meow] -> [epithet, policy, --woof, --meow]
 			os.Args = append([]string{parts[0], parts[1]}, os.Args[1:]...)
 		}
 	}
 
+	// Expand config globs to find existing config files.
+	configPaths, _ := config.ExpandGlobs(defaultConfigPatterns)
+
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
 		kong.ShortUsageOnError(),
-		kongcue.AllowUnknownFields("policy.users", "policy.defaults", "policy.hosts", "policy.oidc"),
+		kong.Configuration(kongyaml.Loader, configPaths...),
 	)
 	logger := setupLogger()
 
@@ -65,6 +77,17 @@ func main() {
 	ktx.Bind(tlsCfg)
 	err := ktx.Run()
 	ktx.FatalIfErrorf(err)
+}
+
+// configFilePaths returns the config file paths to search.
+// If --config was specified, returns just that path.
+// Otherwise expands the default glob patterns.
+func configFilePaths() []string {
+	if cli.Config != "" {
+		return []string{string(cli.Config)}
+	}
+	paths, _ := config.ExpandGlobs(defaultConfigPatterns)
+	return paths
 }
 
 // expandPath expands ~ to the user's home directory.
