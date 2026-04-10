@@ -12,7 +12,7 @@ The broker invokes authentication plugins when certificates need to be requested
 - **stderr**: Human-readable messages and errors
 - **Exit code**: 0 = success, non-zero = failure
 
-## Built-in Auth Plugins
+## Built-in auth plugins
 
 ### OIDC/OAuth2 (`epithet auth oidc`)
 
@@ -46,11 +46,11 @@ epithet agent \
 
 See [OIDC Setup Guide](./oidc-setup.md) for detailed instructions.
 
-## Custom Auth Plugins
+## Custom auth plugins
 
 You can write custom authentication plugins in any language. They just need to follow the protocol:
 
-### Example: Simple Token Plugin (Bash)
+### Example: simple token plugin (Bash)
 
 ```bash
 #!/bin/bash
@@ -67,7 +67,7 @@ echo -n "$token"
 echo -n "" >&3
 ```
 
-### Example: Token with Refresh (Python)
+### Example: token with refresh (Python)
 
 ```python
 #!/usr/bin/env python3
@@ -107,7 +107,7 @@ state_fd.write(json.dumps({
 state_fd.close()
 ```
 
-## Token Lifecycle
+## Token lifecycle
 
 1. **First SSH connection:**
    - Broker has no token
@@ -128,7 +128,7 @@ state_fd.close()
    - Plugin returns fresh token
    - Broker retries certificate request
 
-## Security Considerations
+## Security considerations
 
 - **State never touches disk**: Broker stores state in memory only
 - **10 MiB state limit**: Prevents memory exhaustion from buggy plugins
@@ -137,13 +137,6 @@ state_fd.close()
 - **Refresh tokens**: Long-lived sessions without repeated browser auth
 
 ## Troubleshooting
-
-### Browser doesn't open
-
-The auth plugin launches your system's default browser. If nothing happens:
-- Check your `BROWSER` environment variable
-- Check that you have a browser installed
-- Look for error messages in stderr
 
 ### "Authentication failed" errors
 
@@ -160,28 +153,4 @@ The refresh token may have expired or been revoked. This triggers a new full aut
 - Verify the OAuth app is still active in your identity provider
 - Check the CA server logs for token validation errors
 
-## Provider-Specific Notes
-
-### Google Workspace
-
-- Issuer: `https://accounts.google.com`
-- Supports OIDC discovery
-- Refresh tokens valid until revoked or 6 months inactive
-- See [OIDC Setup Guide](./oidc-setup.md) for OAuth app creation
-
-### Okta
-
-- Issuer: `https://your-domain.okta.com/oauth2/default`
-- Supports OIDC discovery
-- May require specific scopes for your CA
-
-### Azure AD
-
-- Issuer: `https://login.microsoftonline.com/{tenant-id}/v2.0`
-- Supports OIDC discovery
-- Refresh tokens have configurable lifetime
-
-## Next Steps
-
-- [OIDC Setup Guide](./oidc-setup.md) - Set up OAuth apps with Google, Okta, Azure AD
-- [Example Configurations](../examples/) - Complete working examples
+For provider-specific details, see the [OIDC setup guide](./oidc-setup.md).

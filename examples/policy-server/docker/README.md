@@ -1,10 +1,10 @@
-# Docker Deployment
+# Docker deployment
 
 This directory contains Docker and Docker Compose configurations for running epithet CA and policy server.
 
-## Quick Start
+## Quick start
 
-### 1. Build the Image
+### 1. Build the image
 
 From the repository root:
 
@@ -12,7 +12,7 @@ From the repository root:
 docker build -t epithet:latest -f examples/policy-server/docker/Dockerfile .
 ```
 
-### 2. Prepare Configuration
+### 2. Prepare configuration
 
 ```bash
 cd examples/policy-server/docker
@@ -33,13 +33,13 @@ Update `config/policy.yaml`:
 - Configure your OIDC provider
 - Add your users
 
-### 3. Start Services
+### 3. Start services
 
 ```bash
 docker-compose up -d
 ```
 
-### 4. Verify Services
+### 4. Verify services
 
 ```bash
 # Check status
@@ -55,7 +55,7 @@ curl http://localhost:8080/
 curl -X POST http://localhost:9999/
 ```
 
-## Configuration Files
+## Configuration files
 
 Place these in the `config/` directory:
 
@@ -63,7 +63,7 @@ Place these in the `config/` directory:
 - `ca_key.pub` - CA public key (auto-generated)
 - `policy.yaml` - Policy configuration
 
-## Production Considerations
+## Production considerations
 
 ### Security
 
@@ -103,7 +103,7 @@ services:
       - ./certs:/etc/nginx/certs:ro
 ```
 
-### Resource Limits
+### Resource limits
 
 Add resource constraints:
 
@@ -120,7 +120,7 @@ services:
           memory: 128M
 ```
 
-### High Availability
+### High availability
 
 Run multiple policy server instances:
 
@@ -145,7 +145,7 @@ services:
 
 ## Monitoring
 
-### Health Checks
+### Health checks
 
 The compose file includes health checks. Monitor with:
 
@@ -216,7 +216,7 @@ docker-compose up -d --no-deps policy
 
 ## Updating
 
-### Update Configuration
+### Update configuration
 
 ```bash
 # Edit config
@@ -226,7 +226,7 @@ editor config/policy.yaml
 docker-compose restart policy
 ```
 
-### Update Image
+### Update image
 
 ```bash
 # Rebuild image

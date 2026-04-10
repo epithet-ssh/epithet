@@ -1,4 +1,4 @@
-# OIDC Authentication Setup Guide
+# OIDC authentication setup guide
 
 This guide walks through setting up OAuth2/OIDC authentication with popular identity providers.
 
@@ -10,7 +10,7 @@ To use `epithet auth oidc`, you need to create an OAuth2 application in your ide
 
 ## Google Workspace / Google Cloud
 
-### Step 1: Create OAuth2 Credentials
+### Step 1: create OAuth2 credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Select or create a project
@@ -34,11 +34,11 @@ To use `epithet auth oidc`, you need to create an OAuth2 application in your ide
 - **Disadvantage**: Google requires client secret even with PKCE
 - You'll need to include `--client-secret` in your epithet configuration
 
-### Step 2: Configure Redirect URI
+### Step 2: configure redirect URI
 
 Both app types automatically accept `http://localhost` with any port. No manual configuration needed!
 
-### Step 3: Note Your Credentials
+### Step 3: note your credentials
 
 You'll see a dialog with:
 - **Client ID**: Something like `123456-abc.apps.googleusercontent.com`
@@ -46,7 +46,7 @@ You'll see a dialog with:
   - **UWP apps**: Not needed (can ignore)
   - **Desktop apps**: Required - note this value
 
-### Step 4: Configure Epithet
+### Step 4: configure epithet
 
 **For UWP apps (no client secret needed):**
 
@@ -74,18 +74,18 @@ epithet agent \
 UWP apps:
 ```yaml
 agent:
-  ca_url: https://ca.example.com
+  ca-url: https://ca.example.com
   auth: "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com"
 ```
 
 Desktop apps:
 ```yaml
 agent:
-  ca_url: https://ca.example.com
+  ca-url: https://ca.example.com
   auth: "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET"
 ```
 
-### Step 5: First Authentication
+### Step 5: first authentication
 
 When you first connect via SSH:
 1. Your browser will open automatically
@@ -97,7 +97,7 @@ When you first connect via SSH:
 
 Subsequent connections use the refresh token automatically (no browser needed).
 
-### Google Workspace Admin Allowlist (Optional)
+### Google Workspace admin allowlist (optional)
 
 If you're using a shared OAuth app or want to skip the "unverified" warning:
 
@@ -123,7 +123,7 @@ If your CA needs additional Google APIs, add them to `--scopes`:
 
 ## Okta
 
-### Step 1: Create OAuth2 Application
+### Step 1: create OAuth2 application
 
 1. Log in to your [Okta Admin Console](https://your-domain.okta.com/admin)
 2. Navigate to **Applications** → **Applications**
@@ -132,7 +132,7 @@ If your CA needs additional Google APIs, add them to `--scopes`:
 5. Choose **Application type**: **Native Application**
 6. Click **Next**
 
-### Step 2: Configure Application
+### Step 2: configure application
 
 - **App integration name**: Enter "Epithet SSH CA"
 - **Grant type**: Check **Authorization Code** and **Refresh Token**
@@ -145,13 +145,13 @@ If your CA needs additional Google APIs, add them to `--scopes`:
 - **Controlled access**: Choose appropriate assignment (e.g., "Allow everyone in your organization to access")
 - Click **Save**
 
-### Step 3: Note Your Credentials
+### Step 3: note your credentials
 
 After creating the app:
 - **Client ID**: Copy this value
 - **Client secret**: Not needed (PKCE handles authentication)
 
-### Step 4: Find Your Issuer URL
+### Step 4: find your issuer URL
 
 Your Okta issuer URL depends on your authorization server:
 
@@ -163,7 +163,7 @@ To verify:
 2. Find your authorization server
 3. Copy the **Issuer URI**
 
-### Step 5: Configure Epithet
+### Step 5: configure epithet
 
 ```bash
 epithet agent \
@@ -185,9 +185,9 @@ Custom scopes can be defined in your authorization server configuration.
 
 ---
 
-## Azure AD / Microsoft Identity Platform
+## Azure AD / Microsoft identity platform
 
-### Step 1: Register Application
+### Step 1: register application
 
 1. Go to [Azure Portal](https://portal.azure.com)
 2. Navigate to **Azure Active Directory** → **App registrations**
@@ -199,19 +199,19 @@ Custom scopes can be defined in your authorization server configuration.
 6. **Redirect URI**: Select **Public client/native (mobile & desktop)**, enter `http://localhost`
 7. Click **Register**
 
-### Step 2: Configure Authentication
+### Step 2: configure authentication
 
 1. In your app, go to **Authentication**
 2. Under **Advanced settings** → **Allow public client flows**: Select **Yes**
 3. Click **Save**
 
-### Step 3: Note Your Credentials
+### Step 3: note your credentials
 
 - **Application (client) ID**: Copy this from the Overview page
 - **Directory (tenant) ID**: Also from the Overview page
 - **Client secret**: Not needed for public clients
 
-### Step 4: Configure Epithet
+### Step 4: configure epithet
 
 ```bash
 epithet agent \
@@ -225,7 +225,7 @@ Replace:
 - `YOUR_TENANT_ID` with your Directory (tenant) ID
 - `YOUR_CLIENT_ID` with your Application (client) ID
 
-### Common Tenant IDs
+### Common tenant IDs
 
 - **Specific tenant**: Use your tenant ID (e.g., `12345678-1234-1234-1234-123456789012`)
 - **Organizations**: Use `organizations` (any Azure AD tenant)
@@ -241,11 +241,11 @@ Default scopes work for most cases. Azure AD supports:
 
 ---
 
-## Generic OIDC Provider
+## Generic OIDC provider
 
 If your provider supports OIDC discovery (most modern providers do), you can use the generic configuration:
 
-### Step 1: Create OAuth2 Application
+### Step 1: create OAuth2 application
 
 Follow your provider's documentation to create an OAuth2 application with:
 - **Application type**: Native, Desktop, or Public Client
@@ -253,7 +253,7 @@ Follow your provider's documentation to create an OAuth2 application with:
 - **PKCE**: Enabled (required)
 - **Redirect URI**: `http://localhost:8080/callback` (or wildcard if supported)
 
-### Step 2: Find OIDC Discovery Endpoint
+### Step 2: find OIDC discovery endpoint
 
 Most providers expose OIDC discovery at:
 ```
@@ -262,7 +262,7 @@ https://your-provider.com/.well-known/openid-configuration
 
 The issuer URL is usually the base URL (without `/.well-known/...`).
 
-### Step 3: Configure Epithet
+### Step 3: configure epithet
 
 ```bash
 epithet agent \
@@ -275,9 +275,9 @@ epithet agent \
 
 ---
 
-## Testing Your Configuration
+## Testing your configuration
 
-### Test the Auth Plugin Directly
+### Test the auth plugin directly
 
 You can test authentication without running the full broker:
 
@@ -293,42 +293,6 @@ echo "" | epithet auth oidc \
 # 2. Prompt for authentication
 # 3. Output state to fd 3 (which we redirect to stdout)
 ```
-
-### Test with Broker
-
-1. Start the broker:
-   ```bash
-   epithet agent \
-     --ca-url https://ca.example.com \
-     --auth "epithet auth oidc --issuer ... --client-id ..."
-   ```
-
-2. Try an SSH connection:
-   ```bash
-   ssh user@host.example.com
-   ```
-
-3. Watch for:
-   - Browser opening automatically
-   - Authentication prompt in browser
-   - "Authentication successful" message
-   - SSH connection proceeding
-
-### Debugging
-
-Enable verbose logging:
-
-```bash
-epithet agent -vv \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc --issuer ... --client-id ..."
-```
-
-Check broker logs in stderr for:
-- Auth plugin invocation
-- Token refresh attempts
-- Certificate requests
-- Any error messages
 
 ---
 
@@ -366,91 +330,7 @@ This is normal for personal OAuth apps. Options:
 2. Have your Google Workspace admin allowlist the app
 3. Submit your app for Google verification (if you have many users)
 
----
+## Next steps
 
-## Security Best Practices
-
-### Client Secrets
-
-- **Not required**: Epithet uses PKCE, so client secrets are optional
-- **If using**: Treat as sensitive credentials
-- **Rotation**: Rotate client secrets periodically if your provider requires them
-
-### Scopes
-
-- **Principle of least privilege**: Only request scopes your CA actually needs
-- **Default is usually enough**: `openid,profile,email` covers most authentication use cases
-- **Custom scopes**: Only add if your CA validates specific claims or accesses additional APIs
-
-### Refresh Tokens
-
-- **Stored in memory only**: Never persisted to disk by broker
-- **Automatic refresh**: Epithet handles token refresh transparently
-- **Expiry**: Tokens expire after provider-defined inactivity period
-- **Revocation**: Users can revoke access in their provider's security settings
-
-### Organizational Control
-
-- **User-provided OAuth apps**: Organizations control the OAuth app and can revoke access
-- **Scopes and policies**: Configure provider policies to restrict what epithet can access
-- **Audit logs**: Most providers log OAuth grants and token usage
-
----
-
-## Example: Complete Google Workspace Setup
-
-Here's a complete end-to-end example:
-
-### 1. Create OAuth App in Google Cloud Console
-
-```
-1. Go to console.cloud.google.com
-2. Create project "Epithet SSH"
-3. APIs & Services → Credentials → Create OAuth Client ID
-4. Type: Desktop app
-5. Name: "Epithet SSH CA"
-6. Note client ID: 123456-abc.apps.googleusercontent.com
-```
-
-### 2. Configure Epithet
-
-Create `~/.epithet/config.yaml`:
-
-```yaml
-agent:
-  ca_url: https://ca.corp.example.com
-  auth: "epithet auth oidc --issuer https://accounts.google.com --client-id 123456-abc.apps.googleusercontent.com"
-```
-
-### 3. Configure SSH
-
-Add to `~/.ssh/config`:
-
-```ssh_config
-Include ~/.epithet/run/*/ssh-config.conf
-```
-
-### 4. Start Broker
-
-```bash
-epithet agent \
-  --ca-url https://ca.corp.example.com \
-  --auth "epithet auth oidc --issuer https://accounts.google.com --client-id 123456-abc.apps.googleusercontent.com"
-```
-
-### 5. Connect via SSH
-
-```bash
-ssh user@server.corp.example.com
-```
-
-First connection: browser opens, you authenticate, SSH proceeds.
-Subsequent connections: instant (refresh token used).
-
----
-
-## Next Steps
-
-- [Authentication Overview](./authentication.md) - Learn how auth plugins work
-- [Example Configurations](../examples/) - See complete working examples
-- [Broker Configuration](./broker.md) - Advanced broker configuration options
+- [Authentication overview](./authentication.md) - How auth plugins work
+- [Example configurations](../examples/) - Complete working examples

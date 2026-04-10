@@ -1,10 +1,10 @@
-# Policy Server Example Deployment
+# Policy server example deployment
 
 This example shows how to deploy epithet with the built-in OIDC-based policy server for a small team.
 
-## Quick Start
+## Quick start
 
-### 1. Generate CA Key
+### 1. Generate CA key
 
 ```bash
 ssh-keygen -t ed25519 -f ca_key -N "" -C "epithet-ca"
@@ -14,7 +14,7 @@ This creates:
 - `ca_key` - Private key (keep secret!)
 - `ca_key.pub` - Public key (distribute to target hosts)
 
-### 2. Create Policy Configuration
+### 2. Create policy configuration
 
 Copy `policy.example.yaml` to `policy.yaml` and edit:
 
@@ -28,30 +28,30 @@ Update:
 - `oidc`: Your OIDC provider URL
 - `users`: Add your team members
 
-### 3. Start the Services
+### 3. Start the services
 
 ```bash
 # Terminal 1: Start CA server
 ./epithet ca \
   --key ./ca_key \
   --policy http://localhost:9999 \
-  --address :8080
+  --listen :8080
 
 # Terminal 2: Start policy server
 ./epithet policy \
-  --config-file policy.yaml \
+  --config policy.yaml \
   --ca-pubkey "$(cat ca_key.pub)" \
-  --port 9999
+  --listen 0.0.0.0:9999
 ```
 
-### 4. Configure Epithet Agent
+### 4. Configure epithet agent
 
 Create `~/.epithet/config.yaml`:
 
 ```yaml
 # Host patterns are obtained from CA discovery - no static match config needed
 agent:
-  ca_url: http://localhost:8080
+  ca-url: http://localhost:8080
   auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
 ```
 
@@ -61,7 +61,7 @@ Start the agent:
 epithet agent
 ```
 
-### 5. Add SSH Configuration
+### 5. Add SSH configuration
 
 Add to `~/.ssh/config`:
 
@@ -69,7 +69,7 @@ Add to `~/.ssh/config`:
 Include ~/.epithet/run/*/ssh-config.conf
 ```
 
-### 6. Test SSH Connection
+### 6. Test SSH connection
 
 ```bash
 ssh alice@server.example.com
@@ -83,44 +83,18 @@ The first time:
 
 Subsequent connections within the refresh token lifetime (~hours) will be fast (~100-200ms).
 
-## Files in This Example
+## Files in this example
 
 - **`policy.example.yaml`**: Template policy configuration
 - **`systemd/`**: systemd service units for production deployment
 - **`docker/`**: Docker Compose setup for containerized deployment
 - **`README.md`**: This file
 
-## Policy Configuration
+See the [policy server guide](../../docs/policy-server.md) for detailed configuration and authorization documentation.
 
-The `policy.example.yaml` shows a typical small team setup:
+## Production deployment
 
-- **Users**: 3 team members with different roles
-- **Global defaults**: Standard SSH access for developers
-- **Host-specific policies**: Restricted access to production databases
-
-### Authorization Model
-
-Users are assigned **tags** (like roles), and principals (SSH usernames) specify which tags are allowed:
-
-```yaml
-users:
-  alice@example.com: [admin, dev]   # Alice has both admin and dev tags
-  bob@example.com: [dev]             # Bob only has dev tag
-
-defaults:
-  allow:
-    root: [admin]      # Only users with 'admin' tag can log in as root
-    ubuntu: [dev]      # Users with 'dev' tag can log in as ubuntu
-```
-
-**Authorization logic:**
-- User needs **at least one** matching tag to be authorized
-- Alice can log in as both `root` (has `admin`) and `ubuntu` (has `dev`)
-- Bob can only log in as `ubuntu` (has `dev`, not `admin`)
-
-## Production Deployment
-
-### Option 1: systemd Services
+### Option 1: systemd services
 
 See `systemd/` directory for service unit files.
 
@@ -157,11 +131,11 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-## Configuring Target Hosts
+## Configuring target hosts
 
 On each target SSH server:
 
-### 1. Install CA Public Key
+### 1. Install CA public key
 
 ```bash
 sudo mkdir -p /etc/ssh/ca
@@ -187,7 +161,7 @@ Restart sshd:
 sudo systemctl restart sshd
 ```
 
-### 3. (Optional) Add AuthorizedPrincipalsCommand
+### 3. (Optional) add AuthorizedPrincipalsCommand
 
 For additional host-side validation:
 
@@ -211,125 +185,8 @@ AuthorizedPrincipalsCommand /usr/local/bin/check-principals.sh %u
 AuthorizedPrincipalsCommandUser nobody
 ```
 
-## Monitoring and Logs
+## See also
 
-### CA Server Logs
-
-```bash
-# systemd
-sudo journalctl -u epithet-ca -f
-
-# Docker
-docker-compose logs -f ca
-```
-
-### Policy Server Logs
-
-```bash
-# systemd
-sudo journalctl -u epithet-policy -f
-
-# Docker
-docker-compose logs -f policy
-```
-
-### What to Monitor
-
-- **Token validation failures**: May indicate OIDC provider issues
-- **Authorization denials**: Users trying to access resources they don't have permissions for
-- **CA signature verification failures**: May indicate configuration mismatch
-- **High request rates**: May need to scale policy server
-
-## Troubleshooting
-
-### Users Can't Authenticate
-
-1. **Check OIDC token validation:**
-   ```bash
-   # Look for "Invalid token" in policy server logs
-   sudo journalctl -u epithet-policy | grep "Invalid token"
-   ```
-
-2. **Check user is in configuration:**
-   ```bash
-   # Verify user email matches exactly
-   grep "alice@example.com" /etc/epithet/policy.yaml
-   ```
-
-3. **Check CA/policy communication:**
-   ```bash
-   # Verify CA can reach policy server
-   curl -X POST http://localhost:9999/ \
-     -H "Content-Type: application/json" \
-     -d '{"token":"test","signature":"test","connection":{}}'
-   ```
-
-### SSH Connection Fails
-
-1. **Check certificate was issued:**
-   ```bash
-   # Look for successful cert requests in CA logs
-   sudo journalctl -u epithet-ca | grep "Signed certificate"
-   ```
-
-2. **Check target host trusts CA:**
-   ```bash
-   # On target host
-   cat /etc/ssh/ca/epithet.pub
-   grep TrustedUserCAKeys /etc/ssh/sshd_config
-   ```
-
-3. **Verify agent has certificate:**
-   ```bash
-   # Check agent socket
-   ls -la ~/.epithet/run/*/agent/*
-   ssh-add -L  # Should show certificate
-   ```
-
-## Security Best Practices
-
-1. **Protect the CA private key**
-   - Store with restrictive permissions (600)
-   - Consider using a hardware security module (HSM) for production
-   - Rotate periodically
-
-2. **Keep certificates short-lived**
-   - Default 5 minutes is recommended
-   - Shorter for production systems (2 minutes)
-   - Longer for development (10-30 minutes)
-
-3. **Use TLS for production**
-   - Put CA and policy server behind reverse proxy with TLS
-   - Use Let's Encrypt or organizational certificates
-   - Example with nginx in `nginx/` directory
-
-4. **Monitor access**
-   - Log all certificate issuance
-   - Alert on suspicious patterns
-   - Regular access review
-
-5. **Implement least privilege**
-   - Give users only the tags they need
-   - Use host-specific policies for sensitive systems
-   - Separate production and development policies
-
-## Scaling
-
-### For Larger Teams (10-50 users)
-
-- Run multiple policy server instances behind a load balancer
-- Consider separating CA and policy server to different hosts
-- Use configuration management (Ansible, Puppet) to deploy CA public key to target hosts
-
-### For Large Organizations (50+ users)
-
-- Build a custom policy server that integrates with your directory service (LDAP, Active Directory)
-- Use dynamic authorization (check group membership in real-time)
-- Consider running CA as AWS Lambda (see `examples/aws-lambda/`)
-- Implement certificate revocation checking
-
-## Next Steps
-
-- Read the [Policy Server Guide](../../docs/policy-server.md) for detailed configuration options
-- See [Google Workspace Setup](../google-workspace/README.md) for OIDC provider setup
-- Explore [AWS Lambda deployment](../aws-lambda/README.md) for serverless CA
+- [Policy server guide](../../docs/policy-server.md) - Configuration and authorization details
+- [OIDC setup](../../docs/oidc-setup.md) - Provider configuration
+- [epithet-aws](https://github.com/epithet-ssh/epithet-aws) - AWS Lambda deployment

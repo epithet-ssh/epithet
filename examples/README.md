@@ -1,17 +1,17 @@
-# Epithet Deployment Examples
+# Epithet deployment examples
 
 This directory contains example deployments and reference implementations for epithet.
 
-## Available Examples
+## Available examples
 
 - **`bash_auth_example.bash`**: Reference bash auth plugin demonstrating the stdin/stdout/fd3 protocol
-- **`epithet.config.example`**: Sample config file in YAML format (also supports CUE and JSON)
+- **`epithet.config.example`**: Sample config file in YAML format (also supports JSON)
 - **`google-workspace/`**: OIDC setup guide for Google Workspace integration
 - **`policy-server/`**: Policy server configuration examples
 - **`client/`**: Client configuration examples
 - **`example-target-host/`**: SSH server configuration for trusting epithet certificates
 
-## AWS Lambda Deployment
+## AWS Lambda deployment
 
 For deploying epithet CA and policy server on AWS Lambda, see the dedicated repository:
 
@@ -25,18 +25,3 @@ Features:
 - OpenTofu/Terraform infrastructure
 - Cost-effective (~$1/month)
 
-## Future Examples
-
-Additional deployment examples planned:
-- **GCP Cloud Functions**: Similar serverless approach on Google Cloud Platform
-- **Kubernetes**: Container-based deployment with secrets management
-- **Docker Compose**: Simple local or VM-based deployment
-- **Systemd**: Traditional Linux service deployment
-
-## Contributing Examples
-
-If you create a deployment configuration for another platform, please contribute it back! Examples should:
-- Be self-contained in their own directory
-- Include clear README with prerequisites and instructions
-- Use infrastructure-as-code tools where possible
-- Document cost estimates and operational considerations

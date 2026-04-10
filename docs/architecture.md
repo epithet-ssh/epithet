@@ -2,8 +2,6 @@
 
 Epithet is an SSH certificate management tool that creates on-demand SSH agents for outbound connections. The core concept is to replace traditional SSH key-based authentication with certificate-based authentication using per-connection agents.
 
-**Implementation status**: The v2 architecture is **complete and production-ready**. All protocols, communication paths, and policy logic are fully implemented.
-
 ## Terminology
 
 - **Broker**: The daemon process started by `epithet agent`. It manages user authentication state, certificate lifecycle, and creates per-connection agent instances. The broker is the central coordinator for all epithet functionality on an endpoint. Each broker instance creates a unique directory under `~/.epithet/run/<instance-hash>/` containing its socket, agent sockets, and auto-generated SSH config.
@@ -95,9 +93,9 @@ sequenceDiagram
     ssh ->> agent: sign-with-cert
 ```
 
-## v2 architecture
+## Match workflow
 
-The `epithet match` workflow implements 5 key steps (fully functional in `pkg/broker/broker.go:Match()`):
+The `epithet match` workflow implements 5 key steps (`pkg/broker/broker.go:Match()`):
 
 1. **Host pattern matching**: Check if the host should be handled by epithet at all (abort early if not)
 2. **Certificate lookup**: Check for existing, unexpired certificate for the target user/host (with 5-second expiry buffer)
@@ -109,7 +107,7 @@ The `epithet match` workflow implements 5 key steps (fully functional in `pkg/br
 
 ## Command structure
 
-The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML config file support via `kong-yaml`. Config files use YAML or JSON format. All commands are fully implemented and production-ready.
+The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML config file support via `kong-yaml`. Config files use YAML or JSON format.
 
 ### epithet match
 
@@ -117,7 +115,6 @@ The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML c
 epithet match --host %h --port %p --user %r --hash %C [--jump %j] [--broker <path>]
 ```
 
-- **Status**: ✅ Fully implemented (`cmd/epithet/match.go`)
 - Invoked by OpenSSH Match exec during connection establishment
 - Implements 5-step certificate/agent workflow via RPC to broker
 - Communicates with the broker (started by `epithet agent`) to request certificates
@@ -130,7 +127,6 @@ epithet match --host %h --port %p --user %r --hash %C [--jump %j] [--broker <pat
 epithet agent --ca-url <url> --auth <command> [--config <file>]
 ```
 
-- **Status**: ✅ Fully implemented (`cmd/epithet/agent.go`, `pkg/broker/`)
 - Starts the broker daemon with RPC server on Unix domain socket
 - Required flags (can be set in config file with mustache template support):
   - `--ca-url`: CA URL(s) - repeatable for multi-CA failover. Optionally prefix with `priority=N:` (e.g., `priority=50:https://backup.example.com`); plain URLs default to priority 100. Higher priority CAs are tried first; circuit breakers skip failed CAs.
@@ -148,10 +144,9 @@ epithet agent --ca-url <url> --auth <command> [--config <file>]
 ### epithet ca
 
 ```
-epithet ca --policy <url> --key <path> --address <addr>
+epithet ca --policy <url> --key <path> --listen <addr>
 ```
 
-- **Status**: ✅ Fully implemented (`cmd/epithet/ca.go`, `pkg/ca/`, `pkg/caserver/`)
 - Runs the CA server as a standalone HTTP service
 - Listens on specified address (default 0.0.0.0:8080)
 - Reads CA private key from file
@@ -163,7 +158,6 @@ epithet ca --policy <url> --key <path> --address <addr>
 epithet auth oidc --issuer <url> --client-id <id> [--client-secret <secret>]
 ```
 
-- **Status**: ✅ Fully implemented (`cmd/epithet/auth_oidc.go`)
 - Built-in OIDC/OAuth2 authentication plugin
 - Implements the auth command protocol (stdin/stdout/fd3)
 - Supports PKCE for public clients (no client secret needed)
@@ -174,7 +168,7 @@ epithet auth oidc --issuer <url> --client-id <id> [--client-secret <secret>]
 
 ## Core components
 
-The system consists of four main components (all fully implemented):
+The system consists of four main components:
 
 1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet-ca`): The certificate authority that signs SSH certificates. Accepts tokens via `Authorization: Bearer` header. Uses shape-based routing: empty body for hello requests (token validation only), or full body with publicKey+connection for certificate requests. Validates tokens against a policy server using cryptographic verification (SSH signature via Rekor/Sigstore over the request body), then signs public keys to create certificates. Returns certificates with policy metadata (hostPattern) for intelligent reuse.
 
@@ -187,8 +181,6 @@ The system consists of four main components (all fully implemented):
 ## Authentication mechanism
 
 The broker uses an external **auth command** to obtain authentication tokens. This design allows epithet to work with any identity provider (SAML, OIDC, Kerberos, custom) without the broker needing to understand authentication protocols.
-
-**Implementation status**: ✅ Fully implemented in `pkg/broker/auth.go` with comprehensive test coverage (18 tests). The built-in `epithet auth oidc` command (`cmd/epithet/auth_oidc.go`) provides production-ready OAuth2/OIDC support.
 
 ### Auth command protocol
 
@@ -204,12 +196,6 @@ See [authentication.md](authentication.md) for full protocol details, examples i
 - **Auth sessions**: Long-lived (hours/days) via refresh tokens stored in state blob
 - **SSH certificates**: Short-lived (2-10 minutes) for just-in-time authorization
 - **Auth command calls**: Only when certificate expires (not proactively)
-
-**Rationale for short certificate lifetime:**
-- Minimal blast radius if certificate is stolen/compromised
-- CA policy server evaluates "can this user access this host RIGHT NOW" for small values of now
-- Time-bound access reduces risk in dynamic environments
-- Stolen credentials have very limited window of usefulness
 
 **User experience:**
 - First connection of the day: 2-5 seconds (browser auth flow)
@@ -233,12 +219,6 @@ See [authentication.md](authentication.md) for full protocol details, examples i
    - Broker stores certificate and updated auth state
    - Broker updates/creates agent socket with new certificate
    - SSH proceeds with fresh certificate
-
-**Why no proactive refresh in v1:**
-- Keeps protocol simple (tokens and state remain opaque)
-- Proactive refresh would require auth command to communicate token expiry
-- On-demand refresh latency (~100-200ms) is acceptable
-- Can add `REFRESH_BEFORE <timestamp>` to protocol in future if needed
 
 ## Key data flow
 
@@ -273,7 +253,7 @@ The broker requests certificates from the CA over HTTP with tokens in `Authoriza
 
 **Error codes**: 401 (re-auth needed), 403 (policy denied), 422 (connection not handled), 5xx (CA unavailable, triggers failover).
 
-### CA → Policy server protocol
+### CA → policy server protocol
 
 The CA validates tokens by calling the policy server over HTTP. The CA signs the request body using its SSH private key (Sigstore SSH signing); the policy server verifies this signature to ensure requests come from the legitimate CA.
 
@@ -367,30 +347,3 @@ When epithet cannot obtain a certificate (auth failures, CA errors, agent creati
 When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<instance-hash>/ssh-config.conf`. Include it via `Include ~/.epithet/run/*/ssh-config.conf` in your `~/.ssh/config`.
 
 Config files use YAML or JSON in `~/.epithet/`. Use `kebab-case` in config keys to match CLI flag names (e.g., `ca-pubkey` maps to `--ca-pubkey`). See `examples/` for complete examples.
-
-## Project structure
-
-- Main branch is `main`
-- The Makefile defines all standard development workflows
-- Uses Go 1.25.0 with modules
-- Key dependencies:
-  - `golang.org/x/crypto/ssh` - SSH agent and certificate implementation
-  - `github.com/sigstore/sigstore/pkg/signature` - SSH signature verification for policy server protocol
-  - `alecthomas/kong` - Command-line parsing
-  - `alecthomas/kong-yaml` - YAML configuration file support for Kong
-  - `cbroglie/mustache` - Template rendering in auth commands
-  - `coreos/go-oidc/v3` - OIDC authentication
-  - `golang.org/x/oauth2` - OAuth2 flows
-
-## Testing infrastructure
-
-**Status**: ✅ Comprehensive test coverage across all components
-
-The project includes:
-- **Unit tests**: 12 test files covering all major packages (agent, broker, auth, CA, certs, caclient, caserver, sshcert, oidc)
-- **Integration tests**: `test/sshd/broker_test.go` provides full end-to-end testing with real sshd server, validating the complete flow: broker → auth → CA → policy → certificate → agent → SSH connection
-- **Test infrastructure**: `test/sshd/` package provides utilities for running real SSH servers in tests
-- **Mock auth scripts**: Example bash scripts for testing broker flows without real identity providers
-- **Mock policy server**: Test implementations for validating CA flows
-
-Run all tests with `make test` or `go test ./...`.

@@ -4,11 +4,11 @@ This directory contains a launchd plist for running `epithet agent` as a backgro
 
 ## Prerequisites
 
-1. Create your epithet config file at `~/.epithet/config`:
-   ```
-   match *.example.com
-   ca-url https://ca.example.com
-   auth epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
+1. Create your epithet config file at `~/.epithet/config.yaml`:
+   ```yaml
+   agent:
+     ca-url: https://ca.example.com
+     auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
    ```
 
 2. Create the log directory:
