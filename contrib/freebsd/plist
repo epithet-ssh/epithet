@@ -1,0 +1,4 @@
+bin/epithet
+etc/rc.d/epithet_server
+etc/epithet/server.yaml.sample
+@dir etc/epithet

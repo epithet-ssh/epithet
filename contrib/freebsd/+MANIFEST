@@ -1,0 +1,16 @@
+name: "epithet"
+version: "%%VERSION%%"
+origin: "security/epithet"
+comment: "SSH certificate authority with short-lived certificates"
+maintainer: "brianm@apache.org"
+www: "https://github.com/epithet-ssh/epithet"
+prefix: "/usr/local"
+licenselogic: "single"
+licenses: ["Apache-2.0"]
+categories: ["security"]
+desc: <<EOD
+Epithet is an SSH certificate authority that replaces traditional SSH
+key-based authentication with short-lived certificates (2-10 minutes).
+It provides CA, policy, and combined server modes in a single binary,
+with OIDC-based authentication and per-connection SSH agents.
+EOD

@@ -1,0 +1,34 @@
+# epithet server configuration (combined CA + policy)
+#
+# Copy to /usr/local/etc/epithet/server.yaml and edit.
+#
+# The 'epithet server' command runs both CA and policy as supervised
+# subprocesses behind a single port.
+
+# Policy server configuration
+policy:
+  oidc:
+    issuer: "https://accounts.google.com"
+    audience: "YOUR_CLIENT_ID"
+  default-expiration: "5m"
+
+  # Map users (by email) to tags
+  users:
+    admin@example.com: [admin, deploy]
+    dev@example.com: [deploy]
+
+  # Default principals granted by tag
+  defaults:
+    allow:
+      wheel: [admin]
+      deploy: [deploy]
+    extensions:
+      permit-pty: ""
+      permit-agent-forwarding: ""
+
+  # Per-host overrides
+  # hosts:
+  #   "*.prod.example.com":
+  #     expiration: "2m"
+  #     allow:
+  #       root: [admin]

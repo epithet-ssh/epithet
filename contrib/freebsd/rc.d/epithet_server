@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# PROVIDE: epithet_server
+# REQUIRE: DAEMON NETWORKING
+# KEYWORD: shutdown
+#
+# Add these lines to /etc/rc.conf to enable this service:
+#
+# epithet_server_enable (bool):   Set to NO by default.
+#                                 Set it to YES to enable epithet server.
+# epithet_server_config (path):   Path to config file.
+#                                 Default: /usr/local/etc/epithet/server.yaml
+# epithet_server_user (str):      User to run as.
+#                                 Default: epithet
+# epithet_server_cakey (path):    Path to CA private key.
+#                                 Default: /usr/local/etc/epithet/ca.key
+# epithet_server_listen (str):    Listen address.
+#                                 Default: :8080
+# epithet_server_logfile (path):  Path to log file.
+#                                 Default: /var/log/epithet_server.log
+
+. /etc/rc.subr
+
+name="epithet_server"
+rcvar="epithet_server_enable"
+
+load_rc_config $name
+
+: ${epithet_server_enable:="NO"}
+: ${epithet_server_config:="/usr/local/etc/epithet/server.yaml"}
+: ${epithet_server_user:="epithet"}
+: ${epithet_server_cakey:="/usr/local/etc/epithet/ca.key"}
+: ${epithet_server_listen:=":8080"}
+: ${epithet_server_logfile:="/var/log/epithet_server.log"}
+
+pidfile="/var/run/${name}.pid"
+procname="/usr/local/bin/epithet"
+command="/usr/sbin/daemon"
+command_args="-f -p ${pidfile} -u ${epithet_server_user} ${procname} --config ${epithet_server_config} --log-file ${epithet_server_logfile} server --ca-key ${epithet_server_cakey} --listen ${epithet_server_listen}"
+
+run_rc_command "$1"
