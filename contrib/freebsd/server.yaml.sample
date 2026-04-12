@@ -5,6 +5,11 @@
 # The 'epithet server' command runs both CA and policy as supervised
 # subprocesses behind a single port.
 
+# Server settings
+server:
+  listen: "127.0.0.1:8080"
+  ca-key: "/usr/local/etc/epithet/ca.key"
+
 # Policy server configuration
 policy:
   oidc:
