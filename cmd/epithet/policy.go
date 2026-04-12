@@ -38,8 +38,6 @@ type PolicyServerCLI struct {
 
 	DefaultExpiration string `help:"Default certificate expiration (e.g., 5m)" name:"default-expiration"`
 
-	DiscoveryBaseURL string `help:"Base URL for discovery endpoints (e.g., https://cdn.example.com)" name:"discovery-base-url"`
-
 	PolicySource string `help:"URL/path to load policy from (http://, file://, or path)" name:"policy-source"`
 }
 
@@ -128,18 +126,20 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	authConfig := serverCfg.BootstrapAuth()
 	matchPatterns := initialPolicy.HostPatterns()
 
-	handler := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey:      sshcert.RawPublicKey(caPubkey),
-		Validator:        validator,
-		Evaluator:        eval,
-		DiscoveryEnabled: true,
-		DiscoveryBaseURL: c.DiscoveryBaseURL,
-	})
-
-	discoveryHandler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     validator,
+	// Build discovery response that the CA will fetch via GET /.
+	discovery := &policyserver.DiscoveryResponse{
+		Auth:          &authConfig,
 		MatchPatterns: matchPatterns,
-		AuthConfig:    authConfig,
+	}
+	if c.DefaultExpiration != "" {
+		discovery.DefaultExpiration = c.DefaultExpiration
+	}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		CAPublicKey: sshcert.RawPublicKey(caPubkey),
+		Validator:   validator,
+		Evaluator:   eval,
+		Discovery:   discovery,
 	})
 
 	r := chi.NewRouter()
@@ -149,8 +149,8 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	r.Post("/", handler)
-	r.Get("/discovery", discoveryHandler)
+	// Single handler for both GET (discovery) and POST (cert evaluation).
+	r.Handle("/", handler)
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,

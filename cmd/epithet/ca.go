@@ -23,12 +23,12 @@ type CACLI struct {
 func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Debug("ca command called", "ca", c)
 
-	// Validate policy URL requires TLS (unless --insecure)
+	// Validate policy URL requires TLS (unless --insecure).
 	if err := tlsCfg.ValidateURL(c.Policy); err != nil {
 		return err
 	}
 
-	// Read CA private key
+	// Read CA private key.
 	privKey, err := os.ReadFile(c.Key)
 	if err != nil {
 		return fmt.Errorf("unable to load ca key: %w", err)
@@ -36,26 +36,28 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Info("ca_key", "path", c.Key)
 	logger.Info("policy_url", "url", c.Policy)
 
-	// Create CA
+	// Create CA.
 	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg), ca.WithLogger(logger))
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
 
-	// Set up HTTP router
+	// Set up HTTP router.
 	r := chi.NewRouter()
 
-	// Middleware stack
+	// Middleware stack.
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Create certificate logger for audit trail
+	// Create certificate logger for audit trail.
 	certLogger := caserver.NewSlogCertLogger(logger)
 
-	r.Handle("/", caserver.New(caInstance, logger, nil, certLogger))
+	server := caserver.New(caInstance, logger, nil, certLogger)
+	r.Handle("/", server.Handler())
+	r.Handle("/discovery", server.DiscoveryHandler())
 
 	logger.Info("listening", "address", c.Listen)
 	return listenAndServe(c.Listen, r)

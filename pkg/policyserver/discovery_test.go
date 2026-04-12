@@ -1,8 +1,7 @@
 package policyserver_test
 
 import (
-	"encoding/base64"
-	"errors"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,171 +9,88 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 )
 
-func TestDiscoveryHandler_Unauthenticated(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{},
-		MatchPatterns: []string{"*.example.com", "prod-*"},
-		AuthConfig: policyserver.BootstrapAuth{
+func TestHandler_GETDiscovery(t *testing.T) {
+	discovery := &policyserver.DiscoveryResponse{
+		Auth: &policyserver.BootstrapAuth{
 			Type:     "oidc",
 			Issuer:   "https://accounts.google.com",
 			ClientID: "test-client-id",
 			Scopes:   []string{"openid", "profile", "email"},
 		},
+		MatchPatterns:     []string{"*.example.com", "prod-*"},
+		DefaultExpiration: "5m",
+	}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
+		Evaluator: &mockEvaluator{},
+		Discovery: discovery,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/discovery", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	handler(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Unauthenticated: returns auth config only, no matchPatterns.
-	body := w.Body.String()
-	expected := `{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client-id","scopes":["openid","profile","email"]}}`
-	if body != expected {
-		t.Errorf("unexpected response body:\ngot:      %s\nexpected: %s", body, expected)
+	var got policyserver.DiscoveryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if got.Auth.Type != "oidc" {
+		t.Errorf("expected auth type 'oidc', got %q", got.Auth.Type)
+	}
+	if got.Auth.Issuer != "https://accounts.google.com" {
+		t.Errorf("expected issuer 'https://accounts.google.com', got %q", got.Auth.Issuer)
+	}
+	if len(got.MatchPatterns) != 2 {
+		t.Errorf("expected 2 match patterns, got %d", len(got.MatchPatterns))
+	}
+	if got.DefaultExpiration != "5m" {
+		t.Errorf("expected default expiration '5m', got %q", got.DefaultExpiration)
 	}
 
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("expected Content-Type 'application/json', got %q", ct)
 	}
-	if vary := w.Header().Get("Vary"); vary != "Authorization" {
-		t.Errorf("expected Vary 'Authorization', got %q", vary)
-	}
 	if cc := w.Header().Get("Cache-Control"); cc != "max-age=300" {
 		t.Errorf("expected Cache-Control 'max-age=300', got %q", cc)
 	}
 }
 
-func TestDiscoveryHandler_Authenticated(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{},
-		MatchPatterns: []string{"*.example.com", "prod-*"},
-		AuthConfig:    policyserver.BootstrapAuth{Type: "oidc", Issuer: "https://example.com", ClientID: "test"},
+func TestHandler_GETDiscovery_NotConfigured(t *testing.T) {
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
+		Evaluator: &mockEvaluator{},
+		// No Discovery configured.
 	})
 
-	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("test-token"))
-	req := httptest.NewRequest(http.MethodGet, "/discovery", nil)
-	req.Header.Set("Authorization", "Bearer "+encodedToken)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	handler(w, req)
+	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Authenticated: returns auth config + matchPatterns.
-	body := w.Body.String()
-	expected := `{"auth":{"type":"oidc","issuer":"https://example.com","client_id":"test"},"matchPatterns":["*.example.com","prod-*"]}`
-	if body != expected {
-		t.Errorf("unexpected response body:\ngot:      %s\nexpected: %s", body, expected)
-	}
-
-	if vary := w.Header().Get("Vary"); vary != "Authorization" {
-		t.Errorf("expected Vary 'Authorization', got %q", vary)
-	}
-	if cc := w.Header().Get("Cache-Control"); cc != "max-age=300" {
-		t.Errorf("expected Cache-Control 'max-age=300', got %q", cc)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", w.Code)
 	}
 }
 
-func TestDiscoveryHandler_InvalidToken(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{err: errors.New("invalid token")},
-		MatchPatterns: []string{"*.example.com"},
-		AuthConfig:    policyserver.BootstrapAuth{Type: "oidc"},
+func TestHandler_MethodNotAllowed(t *testing.T) {
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{},
+		Evaluator: &mockEvaluator{},
 	})
 
-	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("invalid-token"))
-	req := httptest.NewRequest(http.MethodGet, "/discovery", nil)
-	req.Header.Set("Authorization", "Bearer "+encodedToken)
+	req := httptest.NewRequest(http.MethodPut, "/", nil)
 	w := httptest.NewRecorder()
 
-	handler(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401, got %d", w.Code)
-	}
-}
-
-func TestDiscoveryHandler_EmptyBearerToken(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{},
-		MatchPatterns: []string{"*.example.com"},
-		AuthConfig:    policyserver.BootstrapAuth{Type: "oidc"},
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/discovery", nil)
-	req.Header.Set("Authorization", "Bearer ")
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401, got %d", w.Code)
-	}
-}
-
-func TestDiscoveryHandler_NonBearerAuth(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{},
-		MatchPatterns: []string{"*.example.com"},
-		AuthConfig:    policyserver.BootstrapAuth{Type: "oidc"},
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/discovery", nil)
-	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401, got %d", w.Code)
-	}
-}
-
-func TestDiscoveryHandler_MethodNotAllowed(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{},
-		MatchPatterns: []string{"*.example.com"},
-		AuthConfig:    policyserver.BootstrapAuth{Type: "oidc"},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/discovery", nil)
-	w := httptest.NewRecorder()
-
-	handler(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status 405, got %d", w.Code)
-	}
-}
-
-func TestDiscoveryHandler_EmptyPatterns(t *testing.T) {
-	handler := policyserver.NewDiscoveryHandler(policyserver.DiscoveryConfig{
-		Validator:     &mockValidator{},
-		MatchPatterns: []string{},
-		AuthConfig:    policyserver.BootstrapAuth{Type: "oidc"},
-	})
-
-	encodedToken := base64.RawURLEncoding.EncodeToString([]byte("test-token"))
-	req := httptest.NewRequest(http.MethodGet, "/discovery", nil)
-	req.Header.Set("Authorization", "Bearer "+encodedToken)
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
-
-	// With empty matchPatterns and omitempty, only auth is included.
-	body := w.Body.String()
-	if body != `{"auth":{"type":"oidc"}}` {
-		t.Errorf("unexpected response body: %s", body)
 	}
 }

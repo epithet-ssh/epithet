@@ -26,8 +26,8 @@ type caServer struct {
 
 // New creates a new CA Server which needs to then
 // be attached to some http server, a la
-// `http.ListenAndServeTLS(...)`
-func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLogger) http.Handler {
+// `http.ListenAndServeTLS(...)`.
+func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLogger) *caServer {
 	cas := &caServer{
 		c:          c,
 		log:        log,
@@ -48,13 +48,120 @@ func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLog
 	return cas
 }
 
-func (s *caServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		s.getPubKey(w, r)
-	case "POST":
-		s.createCert(w, r)
-	}
+// Handler returns an http.Handler that serves the CA's root endpoint.
+// GET / returns the CA public key.
+// POST / creates a certificate.
+// All responses include a Link header pointing to /discovery.
+func (s *caServer) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			s.getPubKey(w, r)
+		case "POST":
+			s.createCert(w, r)
+		default:
+			setDiscoveryLink(w)
+			w.Header().Add("Content-type", "text/plain")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			w.Write([]byte("Method not allowed"))
+		}
+	})
+}
+
+// DiscoveryHandler returns an http.Handler that serves the /discovery endpoint.
+// The response varies by authentication:
+//   - Without Bearer token: returns auth config only (so clients know how to authenticate)
+//   - With valid Bearer token: returns auth config + match patterns
+//
+// Sets Vary: Authorization so caches discriminate between the two responses.
+func (s *caServer) DiscoveryHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			setDiscoveryLink(w)
+			w.Header().Add("Content-type", "text/plain")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			w.Write([]byte("Method not allowed"))
+			return
+		}
+
+		discovery, err := s.c.FetchDiscovery(r.Context())
+		if err != nil {
+			setDiscoveryLink(w)
+			w.Header().Add("Content-type", "text/plain")
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte(fmt.Sprintf("failed to fetch discovery: %v", err)))
+			s.log.Warn("failed to fetch discovery from policy server", "error", err)
+			return
+		}
+
+		// Determine what to return based on authentication.
+		// Match patterns require a valid token; auth config is always public.
+		token, _ := parseAuthHeader(r)
+		authenticated := false
+		if token != "" {
+			// Validate the token by forwarding to the policy server via hello.
+			_, err := s.c.RequestPolicy(r.Context(), token, policy.Connection{})
+			if err == nil {
+				authenticated = true
+			} else {
+				// Check if it's an auth error vs infrastructure error.
+				var policyErr *ca.PolicyError
+				if errors.As(err, &policyErr) && policyErr.StatusCode == http.StatusUnauthorized {
+					// Invalid token — return 401.
+					setDiscoveryLink(w)
+					w.Header().Set("Vary", "Authorization")
+					w.Header().Add("Content-type", "text/plain")
+					w.WriteHeader(http.StatusUnauthorized)
+					w.Write([]byte(policyErr.Message))
+					return
+				}
+				// Other errors (403, 5xx) — treat as authenticated but log.
+				// A 403 means the token is valid but the user lacks access,
+				// which is fine for discovery purposes.
+				if errors.As(err, &policyErr) && policyErr.StatusCode == http.StatusForbidden {
+					authenticated = true
+				} else {
+					s.log.Warn("error validating token for discovery", "error", err)
+				}
+			}
+		}
+
+		// Build response: always include auth, only include match patterns if authenticated.
+		resp := &ca.DiscoveryResponse{
+			Auth:              discovery.Auth,
+			DefaultExpiration: discovery.DefaultExpiration,
+		}
+		if authenticated {
+			resp.MatchPatterns = discovery.MatchPatterns
+		}
+
+		out, err := json.Marshal(resp)
+		if err != nil {
+			setDiscoveryLink(w)
+			w.WriteHeader(http.StatusInternalServerError)
+			s.log.Warn("unable to jsonify discovery response", "error", err)
+			return
+		}
+
+		setDiscoveryLink(w)
+		w.Header().Set("Vary", "Authorization")
+		w.Header().Add("Content-type", "application/json")
+		// Pass through the policy server's Cache-Control header so clients
+		// respect the upstream's caching intent. Fall back to 5 minutes.
+		cc := discovery.CacheControl
+		if cc == "" {
+			cc = "max-age=300"
+		}
+		w.Header().Set("Cache-Control", cc)
+		w.WriteHeader(http.StatusOK)
+		w.Write(out)
+	})
+}
+
+// setDiscoveryLink sets the Link header pointing clients to /discovery.
+// This is hardcoded because the CA owns the /discovery endpoint.
+func setDiscoveryLink(w http.ResponseWriter) {
+	w.Header().Set("Link", `</discovery>; rel="discovery"`)
 }
 
 // CreateCertRequest asks for a signed cert.
@@ -64,17 +171,16 @@ type CreateCertRequest struct {
 	Connection *policy.Connection    `json:"connection,omitempty"`
 }
 
-// CreateCertResponse is response from a CreateCert request
+// CreateCertResponse is response from a CreateCert request.
 type CreateCertResponse struct {
 	Certificate sshcert.RawCertificate `json:"certificate"`
 	Policy      policy.Policy          `json:"policy"`
 }
 
-// RequestBodySizeLimit is the maximum request body size
+// RequestBodySizeLimit is the maximum request body size.
 const RequestBodySizeLimit = 8192
 
 // parseAuthHeader extracts the Bearer token from the Authorization header.
-// Returns the token or an error if the header is missing/malformed.
 func parseAuthHeader(r *http.Request) (string, error) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
@@ -94,17 +200,11 @@ func parseAuthHeader(r *http.Request) (string, error) {
 	return token, nil
 }
 
-// setDiscoveryHeader sets the Link header with the discovery URL if present
-func setDiscoveryHeader(w http.ResponseWriter, discoveryURL string) {
-	if discoveryURL != "" {
-		w.Header().Set("Link", "<"+discoveryURL+">; rel=\"discovery\"")
-	}
-}
-
 func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
-	// Extract token from Authorization header
+	// Extract token from Authorization header.
 	token, err := parseAuthHeader(r)
 	if err != nil {
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(err.Error()))
@@ -116,6 +216,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(lr)
 	if err != nil {
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
 		w.Write(fmt.Appendf(nil, "unable to read body: %s", err))
@@ -124,23 +225,21 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	err = json.Unmarshal(body, &ccr)
 	if err != nil {
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
-		_, err := w.Write(fmt.Appendf(nil, "unable to parse body: %s", err))
-		if err != nil {
-
-		}
+		w.Write(fmt.Appendf(nil, "unable to parse body: %s", err))
 		return
 	}
 
-	// Route based on request body shape
+	// Route based on request body shape.
 	if ccr.PublicKey == nil && ccr.Connection == nil {
-		// Hello request - validate token only
+		// Hello request - validate token only.
 		s.handleHello(w, r, token)
 		return
 	}
 	if ccr.PublicKey == nil || ccr.Connection == nil {
-		// Invalid - one field present but not the other
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("both publicKey and connection must be present, or neither"))
@@ -149,17 +248,15 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	policyResp, err := s.c.RequestPolicy(r.Context(), token, *ccr.Connection)
 	if err != nil {
-		// Check if it's a PolicyError with a specific status code
 		var policyErr *ca.PolicyError
 		if errors.As(err, &policyErr) {
-			// Return the same status code the policy server returned
-			setDiscoveryHeader(w, policyErr.DiscoveryURL)
+			setDiscoveryLink(w)
 			w.Header().Add("Content-type", "text/plain")
 			w.WriteHeader(policyErr.StatusCode)
 			w.Write([]byte(policyErr.Message))
 			return
 		}
-		// Other error - return 500
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(500)
 		w.Write(fmt.Appendf(nil, "%s\nerror retrieving policy: %s", s.c.PolicyURL(), err))
@@ -168,13 +265,14 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	cert, err := s.c.SignPublicKey(*ccr.PublicKey, &policyResp.CertParams)
 	if err != nil {
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(400)
 		w.Write(fmt.Appendf(nil, "error generating crt: %s", err))
 		return
 	}
 
-	// Log certificate issuance (best-effort)
+	// Log certificate issuance (best-effort).
 	if err := s.logCertIssuance(r.Context(), cert, *ccr.PublicKey, policyResp, *ccr.Connection); err != nil {
 		s.log.Warn("failed to log certificate issuance", "error", err)
 	}
@@ -185,12 +283,13 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := json.Marshal(&resp)
 	if err != nil {
+		setDiscoveryLink(w)
 		w.WriteHeader(500)
 		s.log.Warn("unable to jsonify response", "error", err)
 		return
 	}
 
-	setDiscoveryHeader(w, policyResp.DiscoveryURL)
+	setDiscoveryLink(w)
 	w.Header().Add("Content-type", "application/json")
 	w.WriteHeader(200)
 	_, err = w.Write(out)
@@ -201,14 +300,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
-	// Use discovery URL learned from policy server, or fall back to relative URL.
-	discoveryURL := s.c.DiscoveryURL()
-	if discoveryURL == "" {
-		discoveryURL = "/discovery"
-	}
-
-	// Add discovery Link header for client discovery.
-	w.Header().Set("Link", "<"+discoveryURL+">; rel=\"discovery\"")
+	setDiscoveryLink(w)
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))
@@ -217,27 +309,25 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 // handleHello handles hello requests (empty body) by validating the token
 // with the policy server and returning 200 on success.
 func (s *caServer) handleHello(w http.ResponseWriter, r *http.Request, token string) {
-	// Call policy server with empty connection to validate token
 	policyResp, err := s.c.RequestPolicy(r.Context(), token, policy.Connection{})
 	if err != nil {
-		// Check if it's a PolicyError with a specific status code
 		var policyErr *ca.PolicyError
 		if errors.As(err, &policyErr) {
-			setDiscoveryHeader(w, policyErr.DiscoveryURL)
+			setDiscoveryLink(w)
 			w.Header().Add("Content-type", "text/plain")
 			w.WriteHeader(policyErr.StatusCode)
 			w.Write([]byte(policyErr.Message))
 			return
 		}
-		// Other error - return 500
+		setDiscoveryLink(w)
 		w.Header().Add("Content-type", "text/plain")
 		w.WriteHeader(500)
 		w.Write(fmt.Appendf(nil, "error validating token: %s", err))
 		return
 	}
+	_ = policyResp // Success — token is valid.
 
-	// Success - return 200 (no body)
-	setDiscoveryHeader(w, policyResp.DiscoveryURL)
+	setDiscoveryLink(w)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -249,19 +339,16 @@ func (s *caServer) logCertIssuance(
 	policyResp *ca.PolicyResponse,
 	conn policy.Connection,
 ) error {
-	// Parse certificate to extract metadata
 	parsedCert, err := parseCert(cert)
 	if err != nil {
 		return fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	// Generate public key fingerprint
 	fingerprint, err := generateFingerprint(pubKey)
 	if err != nil {
 		return fmt.Errorf("failed to generate fingerprint: %w", err)
 	}
 
-	// Create cert event
 	event := &CertEvent{
 		Timestamp:            time.Now(),
 		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
@@ -275,7 +362,6 @@ func (s *caServer) logCertIssuance(
 		Policy:               policyResp.Policy,
 	}
 
-	// Log the event (best-effort, non-blocking)
 	return s.certLogger.LogCert(ctx, event)
 }
 

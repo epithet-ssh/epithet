@@ -484,15 +484,18 @@ Return any non-200 status code to deny the certificate request.
 
 ### Signature verification
 
-**IMPORTANT:** Your policy server must verify the signature before processing the request. This proves the request came from your CA server and not a malicious actor.
+**IMPORTANT:** Your policy server must verify the CA's request signature before processing the request. This proves the request came from your CA server and not a malicious actor.
+
+The CA signs all requests using [RFC 9421 HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421). The `pkg/httpsig` package provides helpers for verification:
 
 ```go
-import "github.com/epithet-ssh/epithet/pkg/ca"
+import "github.com/epithet-ssh/epithet/pkg/httpsig"
 
-// Verify signature (CA_PUBKEY is your CA's public key in authorized_keys format)
-err := ca.Verify(CA_PUBKEY, token, signature)
+// Create verifier from CA public key (authorized_keys format)
+verifier, err := httpsig.NewVerifier(caPubKey)
+// Then in your handler:
+err = verifier.VerifyRequest(r)
 if err != nil {
-    // Invalid signature - reject the request
     http.Error(w, "invalid signature", http.StatusUnauthorized)
     return
 }

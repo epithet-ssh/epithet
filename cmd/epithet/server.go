@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	"net/http/httputil"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,8 +18,10 @@ import (
 )
 
 // ServerCLI defines the CLI flags for the combined server command.
-// It runs both the CA and policy server as subprocesses behind a
-// single reverse proxy, simplifying deployment to a single process.
+// It runs both the CA and policy server as subprocesses, with the CA
+// listening on the public port. The CA handles all client traffic
+// (including /discovery) and communicates with the policy server
+// internally via a Unix domain socket.
 type ServerCLI struct {
 	Listen string `help:"Public address to listen on" short:"l" default:":8080"`
 	CAKey  string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
@@ -43,7 +43,7 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	caPubkey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 	logger.Info("derived ca public key", "path", caKeyPath)
 
-	// Create temp directory for domain sockets.
+	// Create temp directory for the policy domain socket.
 	tmpDir, err := os.MkdirTemp("", "epithet-server-")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
@@ -51,7 +51,6 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	defer os.RemoveAll(tmpDir)
 
 	policySock := filepath.Join(tmpDir, "policy.sock")
-	caSock := filepath.Join(tmpDir, "ca.sock")
 
 	// Set up signal-aware context for subprocess lifecycle.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -79,9 +78,10 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 	logger.Info("policy subprocess ready")
 
-	// Start CA subprocess.
+	// Start CA subprocess — listens directly on the public port.
+	// The CA handles all client traffic including /discovery.
 	caArgs := append(globalArgs, "ca",
-		"--listen", "unix://"+caSock,
+		"--listen", c.Listen,
 		"--policy", "unix://"+policySock,
 		"--key", caKeyPath,
 	)
@@ -92,56 +92,34 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 		_ = policyCmd.Process.Kill()
 		return fmt.Errorf("failed to start ca subprocess: %w", err)
 	}
-	logger.Info("started ca subprocess", "pid", caCmd.Process.Pid, "socket", caSock)
+	logger.Info("started ca subprocess", "pid", caCmd.Process.Pid, "listen", c.Listen)
 
-	if err := waitForSocket(ctx, caSock, 10*time.Second); err != nil {
-		_ = caCmd.Process.Kill()
-		_ = policyCmd.Process.Kill()
-		return fmt.Errorf("ca subprocess failed to become ready: %w", err)
-	}
-	logger.Info("ca subprocess ready")
+	// Wait for either subprocess to exit or signal.
+	// The goroutines call Wait() which reaps the process, so we must not
+	// call Wait() again in the shutdown path.
+	errCh := make(chan error, 2)
+	go func() { errCh <- caCmd.Wait() }()
+	go func() { errCh <- policyCmd.Wait() }()
 
-	// Build reverse proxy mux. /discovery routes to policy, everything else to CA.
-	mux := http.NewServeMux()
-	mux.Handle("/discovery", unixReverseProxy(policySock, logger))
-	mux.Handle("/", unixReverseProxy(caSock, logger))
-
-	logger.Info("listening", "address", c.Listen)
-	server := &http.Server{
-		Addr:    c.Listen,
-		Handler: mux,
-	}
-
-	// Run HTTP server in a goroutine so we can handle shutdown.
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ListenAndServe()
-	}()
-
-	// Wait for either context cancellation (signal) or server error.
+	var subprocessErr error
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
-	case err := <-errCh:
+	case subprocessErr = <-errCh:
 		cancel()
-		if err != nil && err != http.ErrServerClosed {
-			return fmt.Errorf("http server error: %w", err)
+		if subprocessErr != nil {
+			logger.Error("subprocess exited with error", "error", subprocessErr)
 		}
 	}
 
-	// Graceful shutdown: stop accepting connections, then stop subprocesses.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	_ = server.Shutdown(shutdownCtx)
-
-	// Stop CA first (stop accepting cert requests), then policy.
+	// Graceful shutdown: signal both subprocesses. The goroutines above
+	// will reap them via Wait(). Drain the channel to avoid leaking goroutines.
 	_ = caCmd.Process.Signal(syscall.SIGTERM)
-	_ = caCmd.Wait()
 	_ = policyCmd.Process.Signal(syscall.SIGTERM)
-	_ = policyCmd.Wait()
+	<-errCh // Wait for the second subprocess goroutine to finish.
 
 	logger.Info("shutdown complete")
-	return nil
+	return subprocessErr
 }
 
 // buildGlobalArgs constructs the global CLI flags to pass through to subprocesses.
@@ -163,27 +141,6 @@ func buildGlobalArgs() []string {
 		args = append(args, "--log-file", cli.LogFile)
 	}
 	return args
-}
-
-// unixReverseProxy creates an httputil.ReverseProxy that routes to a Unix domain socket.
-func unixReverseProxy(socketPath string, logger *slog.Logger) http.Handler {
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-		},
-	}
-	proxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = "http"
-			req.URL.Host = "localhost"
-		},
-		Transport: transport,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			logger.Error("proxy error", "path", r.URL.Path, "error", err)
-			http.Error(w, "bad gateway", http.StatusBadGateway)
-		},
-	}
-	return proxy
 }
 
 // waitForSocket polls until a Unix domain socket accepts connections or the context is cancelled.

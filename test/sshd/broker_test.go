@@ -41,22 +41,23 @@ func TestBrokerEndToEnd(t *testing.T) {
 	caPublicKey, caPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	// Create a discovery endpoint that returns match patterns
-	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(caclient.Discovery{MatchPatterns: []string{"*"}})
-	}))
-	defer discoveryServer.Close()
-
-	// Create a mock policy server that approves everything
+	// Create a mock policy server that handles both discovery (GET) and cert eval (POST).
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simple policy that approves all requests
-		// The principals must match what's in the sshd auth_principals file
-		// which is generated in sshd.go:generateConfigs() as "a\nb"
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			// Discovery response — CA fetches this for /discovery.
+			json.NewEncoder(w).Encode(map[string]any{
+				"auth":          map[string]string{"type": "command"},
+				"matchPatterns": []string{"*"},
+			})
+			return
+		}
+		// POST: cert evaluation — approves all requests.
+		// Principals must match the sshd auth_principals file ("a\nb").
 		resp := ca.PolicyResponse{
 			CertParams: ca.CertParams{
 				Identity:   "test-user",
-				Names:      []string{"a", "b"}, // Match the auth_principals file
+				Names:      []string{"a", "b"},
 				Expiration: 5 * time.Minute,
 				Extensions: map[string]string{
 					"permit-pty": "",
@@ -64,13 +65,10 @@ func TestBrokerEndToEnd(t *testing.T) {
 			},
 			Policy: policy.Policy{
 				HostUsers: map[string][]string{
-					"*": {"a", "b"}, // Accept all hosts for these users
+					"*": {"a", "b"},
 				},
 			},
 		}
-		// Set discovery URL in Link header (CA extracts from headers, not body)
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer policyServer.Close()
@@ -79,8 +77,12 @@ func TestBrokerEndToEnd(t *testing.T) {
 	caInstance, err := ca.New(caPrivateKey, policyServer.URL)
 	require.NoError(t, err)
 
-	// Start CA server
-	caHTTPServer := httptest.NewServer(caserver.New(caInstance, logger, nil, nil))
+	// Start CA server.
+	casrv := caserver.New(caInstance, logger, nil, nil)
+	mux := http.NewServeMux()
+	mux.Handle("/", casrv.Handler())
+	mux.Handle("/discovery", casrv.DiscoveryHandler())
+	caHTTPServer := httptest.NewServer(mux)
 	defer caHTTPServer.Close()
 
 	// Create auth command that returns a fake token

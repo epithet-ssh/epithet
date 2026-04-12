@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -13,31 +12,29 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/httpsig"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
-	rekor "github.com/sigstore/rekor/pkg/pki/ssh"
+	"github.com/gregjones/httpcache"
 	"golang.org/x/crypto/ssh"
 )
 
 // PolicyError represents an error from the policy server.
 // The CA server should return the same status code to the client.
 type PolicyError struct {
-	StatusCode   int
-	Message      string
-	DiscoveryURL string // Resolved discovery URL from Link header
+	StatusCode int
+	Message    string
 }
 
 func (e *PolicyError) Error() string {
 	return fmt.Sprintf("policy server returned %d: %s", e.StatusCode, e.Message)
 }
 
-// CA performs CA operations
+// CA performs CA operations.
 type CA struct {
 	signer     ssh.Signer
 	privateKey sshcert.RawPrivateKey
@@ -45,35 +42,36 @@ type CA struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 
-	// Cached discovery URL learned from policy server Link header.
-	// Protected by discoveryMu.
-	discoveryMu  sync.RWMutex
-	discoveryURL string
+	// RFC 9421 HTTP message signature signer.
+	httpSigner *httpsig.Signer
+
+	// HTTP client with caching for discovery requests.
+	// Uses httpcache to respect Cache-Control headers from the policy server.
+	discoveryClient *http.Client
 }
 
-// get the URL of the Policy Server
+// PolicyURL returns the URL of the policy server.
 func (c *CA) PolicyURL() string {
 	return c.policyURL
 }
 
-// DiscoveryURL returns the cached discovery URL learned from the policy server.
-// Returns empty string if not yet learned.
-func (c *CA) DiscoveryURL() string {
-	c.discoveryMu.RLock()
-	defer c.discoveryMu.RUnlock()
-	return c.discoveryURL
-}
-
-// New creates a new CA
+// New creates a new CA.
 func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) (*CA, error) {
-	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
+	sshSigner, err := ssh.ParsePrivateKey([]byte(privateKey))
 	if err != nil {
 		return nil, err
 	}
+
+	httpSigner, err := httpsig.NewSigner(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP signer: %w", err)
+	}
+
 	ca := &CA{
-		signer:     signer,
+		signer:     sshSigner,
 		privateKey: privateKey,
 		policyURL:  policyURL,
+		httpSigner: httpSigner,
 	}
 
 	for _, o := range options {
@@ -88,22 +86,38 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 		}
 	}
 
-	// When the policy URL is a unix socket, configure the HTTP transport
+	// Create a caching HTTP client for discovery requests.
+	// Wraps the httpClient's transport (which may have custom TLS config)
+	// so discovery requests use the same TLS settings as policy requests.
+	cachedTransport := httpcache.NewMemoryCacheTransport()
+	if ca.httpClient.Transport != nil {
+		cachedTransport.Transport = ca.httpClient.Transport
+	}
+	ca.discoveryClient = &http.Client{
+		Transport: cachedTransport,
+		Timeout:   time.Second * 30,
+	}
+
+	// When the policy URL is a unix socket, configure both HTTP transports
 	// to dial the socket and rewrite the URL to http://localhost.
 	if socketPath, ok := strings.CutPrefix(ca.policyURL, "unix://"); ok {
-		transport := &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-			},
+		dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 		}
-		ca.httpClient.Transport = transport
-		ca.policyURL = "http://localhost"
+		ca.httpClient.Transport = &http.Transport{DialContext: dialFunc}
+
+		// Wrap the caching transport to dial via unix socket.
+		sockCachedTransport := httpcache.NewMemoryCacheTransport()
+		sockCachedTransport.Transport = &http.Transport{DialContext: dialFunc}
+		ca.discoveryClient.Transport = sockCachedTransport
+
+		ca.policyURL = "http://localhost/"
 	}
 
 	return ca, nil
 }
 
-// Option configures the CA
+// Option configures the CA.
 type Option interface {
 	apply(*CA) error
 }
@@ -114,7 +128,7 @@ func (f optionFunc) apply(a *CA) error {
 	return f(a)
 }
 
-// WithHTTPClient configures the CA to use the specified HTTP Client
+// WithHTTPClient configures the CA to use the specified HTTP Client.
 func WithHTTPClient(httpClient *http.Client) Option {
 	return optionFunc(func(c *CA) error {
 		c.httpClient = httpClient
@@ -122,7 +136,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	})
 }
 
-// WithTLSConfig creates an HTTP client with the specified TLS configuration
+// WithTLSConfig creates an HTTP client with the specified TLS configuration.
 func WithTLSConfig(cfg tlsconfig.Config) Option {
 	return optionFunc(func(c *CA) error {
 		httpClient, err := tlsconfig.NewHTTPClientWithTimeout(cfg, time.Second*30)
@@ -134,7 +148,7 @@ func WithTLSConfig(cfg tlsconfig.Config) Option {
 	})
 }
 
-// WithLogger configures the CA to use the specified logger
+// WithLogger configures the CA to use the specified logger.
 func WithLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *CA) error {
 		c.logger = logger
@@ -142,13 +156,13 @@ func WithLogger(logger *slog.Logger) Option {
 	})
 }
 
-// PublicKey returns the ssh on-disk format public key for the CA
+// PublicKey returns the ssh on-disk format public key for the CA.
 func (c *CA) PublicKey() sshcert.RawPublicKey {
 	pk := c.signer.PublicKey()
 	return sshcert.RawPublicKey(string(ssh.MarshalAuthorizedKey(pk)))
 }
 
-// CertParams are options which can be set on a certificate
+// CertParams are options which can be set on a certificate.
 type CertParams struct {
 	Identity   string            `json:"identity"`
 	Names      []string          `json:"principals"`
@@ -157,102 +171,99 @@ type CertParams struct {
 }
 
 // PolicyResponse is the response from the policy server, containing both
-// the certificate parameters and the policy
+// the certificate parameters and the policy.
 type PolicyResponse struct {
-	CertParams   CertParams    `json:"certParams"`
-	Policy       policy.Policy `json:"policy"`
-	DiscoveryURL string        `json:"-"` // Resolved URL from Link header
+	CertParams CertParams    `json:"certParams"`
+	Policy     policy.Policy `json:"policy"`
 }
 
-func Verify(pubkey sshcert.RawPublicKey, token, signature string) error {
-	s, err := base64.StdEncoding.DecodeString(signature)
+// DiscoveryResponse is the discovery data fetched from the policy server.
+type DiscoveryResponse struct {
+	Auth              *BootstrapAuth `json:"auth"`
+	MatchPatterns     []string       `json:"matchPatterns,omitempty"`
+	DefaultExpiration string         `json:"defaultExpiration,omitempty"`
+
+	// CacheControl is the Cache-Control header from the policy server response.
+	// Not serialized to JSON — used by the CA server to pass through to clients.
+	CacheControl string `json:"-"`
+}
+
+// BootstrapAuth represents the auth configuration from the policy server.
+type BootstrapAuth struct {
+	Type         string   `json:"type"`
+	Issuer       string   `json:"issuer,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	Command      string   `json:"command,omitempty"`
+}
+
+// FetchDiscovery fetches discovery data from the policy server.
+// Uses HTTP caching (Cache-Control headers) to avoid unnecessary requests.
+// The request is signed with RFC 9421 HTTP Message Signatures.
+//
+// The signature has a 30s expiry while the cache TTL is 300s. This is safe
+// because httpcache serves directly from cache during max-age and creates a
+// fresh (newly signed) request after the cache expires.
+func (c *CA) FetchDiscovery(ctx context.Context) (*DiscoveryResponse, error) {
+	req, err := http.NewRequest("GET", c.policyURL, nil)
 	if err != nil {
-		return fmt.Errorf("error decoding signature: %w", err)
+		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-	return rekor.Verify(bytes.NewReader([]byte(token)), s, []byte(pubkey))
-}
+	// Sign the request with RFC 9421.
+	if err := c.httpSigner.SignRequest(req); err != nil {
+		return nil, fmt.Errorf("error signing request: %w", err)
+	}
 
-func (c *CA) Sign(value string) (signature string, err error) {
-	sig, err := rekor.Sign(string(c.privateKey), bytes.NewReader([]byte(value)))
+	if c.logger != nil {
+		c.logger.Debug("http request", "method", "GET", "url", c.policyURL, "purpose", "discovery")
+	}
+
+	start := time.Now()
+	res, err := c.discoveryClient.Do(req.WithContext(ctx))
+	duration := time.Since(start)
 	if err != nil {
-		return "", fmt.Errorf("error signing value: %w", err)
+		if c.logger != nil {
+			c.logger.Debug("http request failed", "method", "GET", "url", c.policyURL, "duration_ms", duration.Milliseconds(), "error", err)
+		}
+		return nil, fmt.Errorf("error fetching discovery: %w", err)
+	}
+	defer res.Body.Close()
+
+	if c.logger != nil {
+		c.logger.Debug("http response", "method", "GET", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
-	return base64.StdEncoding.EncodeToString(sig), nil
-}
-
-// extractLinkURLs extracts and resolves URLs from a Link header by rel type.
-// Link header format: <url1>; rel="discovery", <url2>; rel="alternate"
-// Uses url.URL.ResolveReference for proper RFC 3986 resolution.
-// Returns a map of rel type to resolved URL.
-func extractLinkURLs(linkHeader, baseURL string) map[string]string {
-	result := make(map[string]string)
-	if linkHeader == "" {
-		return result
-	}
-
-	// Parse base URL
-	base, err := url.Parse(baseURL)
+	buf, err := io.ReadAll(io.LimitReader(res.Body, 8192))
 	if err != nil {
-		return result // Can't parse base
+		return nil, fmt.Errorf("error reading discovery response: %w", err)
 	}
 
-	// Split on comma to handle multiple links
-	// Link: <url1>; rel="discovery", <url2>; rel="alternate"
-	for _, part := range strings.Split(linkHeader, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		// Extract URL from <...>
-		start := strings.Index(part, "<")
-		end := strings.Index(part, ">")
-		if start == -1 || end == -1 || end <= start {
-			continue
-		}
-		linkURL := part[start+1 : end]
-
-		// Extract rel type from rel="..."
-		relStart := strings.Index(part, `rel="`)
-		if relStart == -1 {
-			continue
-		}
-		relStart += 5 // len(`rel="`)
-		relEnd := strings.Index(part[relStart:], `"`)
-		if relEnd == -1 {
-			continue
-		}
-		relType := part[relStart : relStart+relEnd]
-
-		// Parse and resolve link URL
-		ref, err := url.Parse(linkURL)
-		if err != nil {
-			continue
-		}
-		resolved := base.ResolveReference(ref)
-		result[relType] = resolved.String()
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("policy server returned %d for discovery: %s", res.StatusCode, string(buf))
 	}
 
-	return result
+	var discovery DiscoveryResponse
+	if err := json.Unmarshal(buf, &discovery); err != nil {
+		return nil, fmt.Errorf("error parsing discovery response: %w", err)
+	}
+
+	// Preserve Cache-Control from the policy server for passthrough to clients.
+	discovery.CacheControl = res.Header.Get("Cache-Control")
+
+	return &discovery, nil
 }
 
-// RequestPolicy requests policy from the policy url
+// RequestPolicy requests policy from the policy server for a cert request.
+// The request is signed with RFC 9421 HTTP Message Signatures.
 func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*PolicyResponse, error) {
-	// Build body with token and connection (no signature in body)
 	body, err := json.Marshal(&map[string]any{
 		"token":      token,
 		"connection": conn,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling request body: %w", err)
-	}
-
-	// Sign the entire body bytes (not just the token)
-	sig, err := c.Sign(string(body))
-	if err != nil {
-		return nil, fmt.Errorf("error signing request body: %w", err)
 	}
 
 	if c.logger != nil {
@@ -263,9 +274,12 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
-
 	req.Header.Add("Content-type", "application/json")
-	req.Header.Add("Authorization", "Bearer "+sig)
+
+	// Sign the request with RFC 9421 (replaces old Bearer signature).
+	if err := c.httpSigner.SignRequest(req); err != nil {
+		return nil, fmt.Errorf("error signing request: %w", err)
+	}
 
 	start := time.Now()
 	res, err := c.httpClient.Do(req.WithContext(ctx))
@@ -282,31 +296,16 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		c.logger.Debug("http response", "method", "POST", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
-	// Extract and resolve discovery URL from Link header.
-	linkURLs := extractLinkURLs(res.Header.Get("Link"), c.policyURL)
-	discoveryURL := linkURLs["discovery"]
-
-	// Cache discovery URL if present (for use by CA server).
-	if discoveryURL != "" {
-		c.discoveryMu.Lock()
-		c.discoveryURL = discoveryURL
-		c.discoveryMu.Unlock()
-	}
-
-	lim := io.LimitReader(res.Body, 8196)
+	lim := io.LimitReader(res.Body, 8192)
 	buf, err := io.ReadAll(lim)
 	if err != nil {
 		return nil, fmt.Errorf("error reading response: %w", err)
 	}
 
-	// Check HTTP status code.
 	if res.StatusCode != 200 {
-		// Policy server returned an error - wrap it to signal to CA server.
-		// CA server should return the same status code to the client.
 		return nil, &PolicyError{
-			StatusCode:   res.StatusCode,
-			Message:      string(buf),
-			DiscoveryURL: discoveryURL,
+			StatusCode: res.StatusCode,
+			Message:    string(buf),
 		}
 	}
 
@@ -315,13 +314,11 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err != nil {
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
-	policyResp.DiscoveryURL = discoveryURL
 	return policyResp, nil
 }
 
-// SignPublicKey signs a key to generate a certificate
+// SignPublicKey signs a key to generate a certificate.
 func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (sshcert.RawCertificate, error) {
-	// `ssh-keygen -s test/ca/ca -z 2 -V +15m -I brianm -n brianm,waffle ./id_ed25519.pub`
 	buf := make([]byte, 8)
 	_, err := rand.Read(buf)
 	if err != nil {
@@ -359,8 +356,8 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (
 }
 
 // AuthToken is the token passed from the plugin through to
-// the CA (and to the ca verifier plugin matching Provider)
-// Token is opaque and can hold whatever the plugins need it to
+// the CA (and to the ca verifier plugin matching Provider).
+// Token is opaque and can hold whatever the plugins need it to.
 type AuthToken struct {
 	Provider string
 	Token    string
