@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -380,7 +381,7 @@ func (c *Client) doHello(ctx context.Context, caURL string, token string, body [
 	}
 
 	// Extract and cache discovery URL from Link header
-	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery", caURL)
 	if discoveryURL != "" {
 		c.discoveryMu.Lock()
 		c.discoveryURL = discoveryURL
@@ -463,7 +464,7 @@ func (c *Client) doGetPublicKey(ctx context.Context, caURL string) (string, erro
 	}
 
 	// Extract and cache discovery URL from Link header.
-	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery", caURL)
 	if discoveryURL != "" {
 		c.discoveryMu.Lock()
 		c.discoveryURL = discoveryURL
@@ -591,7 +592,7 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 	}
 
 	// Extract and cache discovery URL from Link header
-	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery")
+	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery", caURL)
 	if discoveryURL != "" {
 		c.discoveryMu.Lock()
 		c.discoveryURL = discoveryURL
@@ -650,8 +651,9 @@ func isSuccessfulForCircuitBreaker(err error) bool {
 
 // parseLinkHeader extracts the URL for a given rel from a Link header.
 // Link header format: <url>; rel="name"
+// Relative URLs are resolved against baseURL.
 // Returns empty string if not found or malformed.
-func parseLinkHeader(header, rel string) string {
+func parseLinkHeader(header, rel string, baseURL string) string {
 	if header == "" {
 		return ""
 	}
@@ -663,7 +665,7 @@ func parseLinkHeader(header, rel string) string {
 		return ""
 	}
 
-	url := header[start+1 : end]
+	linkURL := header[start+1 : end]
 
 	// Check for the rel parameter
 	relParam := `rel="` + rel + `"`
@@ -671,5 +673,17 @@ func parseLinkHeader(header, rel string) string {
 		return ""
 	}
 
-	return url
+	// Resolve relative URLs against the base URL.
+	parsed, err := url.Parse(linkURL)
+	if err != nil {
+		return linkURL
+	}
+	if !parsed.IsAbs() && baseURL != "" {
+		base, err := url.Parse(baseURL)
+		if err == nil {
+			return base.ResolveReference(parsed).String()
+		}
+	}
+
+	return linkURL
 }

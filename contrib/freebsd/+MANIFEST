@@ -18,5 +18,7 @@ EOD
 scripts: {
   pre-install: <<EOD
 pw usershow epithet >/dev/null 2>&1 || pw useradd epithet -d /nonexistent -s /usr/sbin/nologin -c "epithet CA"
+touch /var/log/epithet_server.log
+chown epithet /var/log/epithet_server.log
 EOD
 }

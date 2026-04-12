@@ -14,26 +14,5 @@ server:
 policy:
   oidc:
     issuer: "https://accounts.google.com"
-    audience: "YOUR_CLIENT_ID"
+    client-id: "YOUR_CLIENT_ID"
   default-expiration: "5m"
-
-  # Map users (by email) to tags
-  users:
-    admin@example.com: [admin, deploy]
-    dev@example.com: [deploy]
-
-  # Default principals granted by tag
-  defaults:
-    allow:
-      wheel: [admin]
-      deploy: [deploy]
-    extensions:
-      permit-pty: ""
-      permit-agent-forwarding: ""
-
-  # Per-host overrides
-  # hosts:
-  #   "*.prod.example.com":
-  #     expiration: "2m"
-  #     allow:
-  #       root: [admin]
