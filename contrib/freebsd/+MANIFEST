@@ -4,6 +4,7 @@ origin: "security/epithet"
 comment: "SSH certificate authority with short-lived certificates"
 maintainer: "brianm@apache.org"
 www: "https://github.com/epithet-ssh/epithet"
+abi: "%%ABI%%"
 prefix: "/usr/local"
 licenselogic: "single"
 licenses: ["Apache-2.0"]

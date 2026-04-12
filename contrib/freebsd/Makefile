@@ -1,5 +1,6 @@
 REPO_ROOT ?= ../..
 ARCH      ?= amd64
+ABI       ?= FreeBSD:15:amd64
 PREFIX    ?= /usr/local
 
 .if !defined(VERSION)
@@ -25,6 +26,7 @@ help:
 	@echo "Variables:"
 	@echo "  VERSION=$(VERSION)"
 	@echo "  ARCH=$(ARCH)"
+	@echo "  ABI=$(ABI)"
 	@echo ""
 	@echo "Requires: go (pkg install go)"
 
@@ -39,7 +41,7 @@ $(BINARY):
 
 $(MANIFEST): +MANIFEST
 	@mkdir -p $(BUILDDIR)
-	sed 's/%%VERSION%%/$(VERSION)/g' +MANIFEST > $(MANIFEST)
+	sed -e 's/%%VERSION%%/$(VERSION)/g' -e 's/%%ABI%%/$(ABI)/g' +MANIFEST > $(MANIFEST)
 
 $(STAGEDIR): $(BINARY)
 	@echo "==> Staging files"
