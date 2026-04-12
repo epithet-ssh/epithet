@@ -30,7 +30,7 @@ load_rc_config $name
 : ${epithet_server_config:="/usr/local/etc/epithet/server.yaml"}
 : ${epithet_server_user:="epithet"}
 : ${epithet_server_cakey:="/usr/local/etc/epithet/ca.key"}
-: ${epithet_server_listen:=":8080"}
+: ${epithet_server_listen:="127.0.0.1:8080"}
 : ${epithet_server_logfile:="/var/log/epithet_server.log"}
 
 pidfile="/var/run/${name}.pid"
