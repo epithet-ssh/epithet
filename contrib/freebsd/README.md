@@ -55,7 +55,7 @@ pkg add ./epithet-*.pkg
 |---|---|---|
 | `epithet_server_enable` | `NO` | Enable the server service |
 | `epithet_server_config` | `/usr/local/etc/epithet/server.yaml` | Config file path |
-| `epithet_server_user` | `epithet` | User to run as |
+| `epithet_server_runas` | `epithet` | User to run as |
 | `epithet_server_logfile` | `/var/log/epithet_server.log` | Log file path |
 
 Server settings like `listen` and `ca-key` are configured in the YAML config file, not in `rc.conf`.
