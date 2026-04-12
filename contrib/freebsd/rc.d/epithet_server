@@ -36,6 +36,6 @@ load_rc_config $name
 pidfile="/var/run/${name}.pid"
 procname="/usr/local/bin/epithet"
 command="/usr/sbin/daemon"
-command_args="-f -p ${pidfile} -u ${epithet_server_user} ${procname} --config ${epithet_server_config} --log-file ${epithet_server_logfile} server --ca-key ${epithet_server_cakey} --listen ${epithet_server_listen}"
+command_args="-f -P ${pidfile} -u ${epithet_server_user} ${procname} --config ${epithet_server_config} --log-file ${epithet_server_logfile} server --ca-key ${epithet_server_cakey} --listen ${epithet_server_listen}"
 
 run_rc_command "$1"
