@@ -38,9 +38,8 @@ pkg add ./epithet-*.pkg
    vi /usr/local/etc/epithet/server.yaml
    ```
 
-3. Create a service user:
+3. Set CA key ownership (the `epithet` user is created automatically during install):
    ```sh
-   pw useradd epithet -d /nonexistent -s /usr/sbin/nologin -c "epithet CA"
    chown epithet /usr/local/etc/epithet/ca.key
    ```
 

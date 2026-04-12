@@ -15,3 +15,8 @@ key-based authentication with short-lived certificates (2-10 minutes).
 It provides CA, policy, and combined server modes in a single binary,
 with OIDC-based authentication and per-connection SSH agents.
 EOD
+scripts: {
+  pre-install: <<EOD
+pw usershow epithet >/dev/null 2>&1 || pw useradd epithet -d /nonexistent -s /usr/sbin/nologin -c "epithet CA"
+EOD
+}
