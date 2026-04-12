@@ -64,8 +64,9 @@ next-version:		## show current and next version
 	@echo "next:    $$(svu next)"
 
 .PHONY: release
-release: test	## tag and release (VERSION=next|patch|minor|major|x.y.z)
+release: test	## create release tag (VERSION=next|patch|minor|major|x.y.z)
 	git tag -a v$(V) -m "v$(V)"
-	git push origin v$(V)
-	goreleaser release --clean
+	@echo ""
+	@echo "Tag v$(V) created. Push to trigger CI release:"
+	@echo "  git push origin v$(V)"
 
