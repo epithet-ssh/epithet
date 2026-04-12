@@ -201,11 +201,10 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
-	// Use discovery URL learned from policy server, or derive from policy URL.
+	// Use discovery URL learned from policy server, or fall back to relative URL.
 	discoveryURL := s.c.DiscoveryURL()
 	if discoveryURL == "" {
-		// Fallback: derive from policy URL until we've made a request to policy server.
-		discoveryURL = strings.TrimSuffix(s.c.PolicyURL(), "/") + "/discovery"
+		discoveryURL = "/discovery"
 	}
 
 	// Add discovery Link header for client discovery.
