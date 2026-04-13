@@ -29,9 +29,8 @@ type Response struct {
 // DiscoveryResponse is returned by GET / on the policy server.
 // The CA fetches this and serves it to clients on /discovery.
 type DiscoveryResponse struct {
-	Auth              *BootstrapAuth `json:"auth"`
-	MatchPatterns     []string       `json:"matchPatterns,omitempty"`
-	DefaultExpiration string         `json:"defaultExpiration,omitempty"`
+	Auth          *BootstrapAuth `json:"auth"`
+	MatchPatterns []string       `json:"matchPatterns,omitempty"`
 }
 
 // PolicyEvaluator makes authorization decisions based on identity and connection details.

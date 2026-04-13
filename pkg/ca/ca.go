@@ -179,9 +179,8 @@ type PolicyResponse struct {
 
 // DiscoveryResponse is the discovery data fetched from the policy server.
 type DiscoveryResponse struct {
-	Auth              *BootstrapAuth `json:"auth"`
-	MatchPatterns     []string       `json:"matchPatterns,omitempty"`
-	DefaultExpiration string         `json:"defaultExpiration,omitempty"`
+	Auth          *BootstrapAuth `json:"auth"`
+	MatchPatterns []string       `json:"matchPatterns,omitempty"`
 
 	// CacheControl is the Cache-Control header from the policy server response.
 	// Not serialized to JSON — used by the CA server to pass through to clients.

@@ -130,8 +130,7 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 
 		// Build response: always include auth, only include match patterns if authenticated.
 		resp := &ca.DiscoveryResponse{
-			Auth:              discovery.Auth,
-			DefaultExpiration: discovery.DefaultExpiration,
+			Auth: discovery.Auth,
 		}
 		if authenticated {
 			resp.MatchPatterns = discovery.MatchPatterns

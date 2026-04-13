@@ -17,8 +17,7 @@ func TestHandler_GETDiscovery(t *testing.T) {
 			ClientID: "test-client-id",
 			Scopes:   []string{"openid", "profile", "email"},
 		},
-		MatchPatterns:     []string{"*.example.com", "prod-*"},
-		DefaultExpiration: "5m",
+		MatchPatterns: []string{"*.example.com", "prod-*"},
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
@@ -50,10 +49,6 @@ func TestHandler_GETDiscovery(t *testing.T) {
 	if len(got.MatchPatterns) != 2 {
 		t.Errorf("expected 2 match patterns, got %d", len(got.MatchPatterns))
 	}
-	if got.DefaultExpiration != "5m" {
-		t.Errorf("expected default expiration '5m', got %q", got.DefaultExpiration)
-	}
-
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("expected Content-Type 'application/json', got %q", ct)
 	}

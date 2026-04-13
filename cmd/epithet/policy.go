@@ -131,9 +131,6 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		Auth:          &authConfig,
 		MatchPatterns: matchPatterns,
 	}
-	if c.DefaultExpiration != "" {
-		discovery.DefaultExpiration = c.DefaultExpiration
-	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: sshcert.RawPublicKey(caPubkey),

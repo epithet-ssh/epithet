@@ -88,11 +88,13 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		fmt.Printf("  (none)\n")
 	} else {
 		for _, ep := range resp.CaEndpoints {
-			label := "healthy"
+			status := "healthy"
 			if ep.State == "open" || ep.State == "half-open" {
-				label = "broken"
+				status = "broken"
 			}
-			fmt.Printf("  %s (priority %d) — %s\n", ep.Url, ep.Priority, label)
+			fmt.Printf("  %s\n", ep.Url)
+			fmt.Printf("    Priority: %d\n", ep.Priority)
+			fmt.Printf("    Status: %s\n", status)
 		}
 	}
 	fmt.Println()
