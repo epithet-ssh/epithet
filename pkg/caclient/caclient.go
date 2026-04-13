@@ -127,7 +127,7 @@ type Client struct {
 	httpClient      *http.Client
 	discoveryClient *http.Client // Uses HTTP caching for discovery responses
 	endpoints       []CAEndpoint
-	pool            *breakerpool.Pool[*CertResponse, string]
+	pool            *breakerpool.Pool[any, string]
 	timeout         time.Duration
 	cooldown        time.Duration
 	logger          *slog.Logger
@@ -186,7 +186,7 @@ func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
 		IsSuccessful: isSuccessfulForCircuitBreaker,
 	}
 
-	client.pool = breakerpool.New[*CertResponse](entries, defaults)
+	client.pool = breakerpool.New[any](entries, defaults)
 
 	return client, nil
 }
@@ -258,7 +258,7 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 		return nil, err
 	}
 
-	result, err := c.pool.Execute(func(caURL string) (*CertResponse, error) {
+	result, err := c.pool.Execute(func(caURL string) (any, error) {
 		if c.logger != nil {
 			c.logger.Debug("trying CA", "url", caURL)
 		}
@@ -276,7 +276,7 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 		return nil, err
 	}
 
-	return result, nil
+	return result.(*CertResponse), nil
 }
 
 // GetDiscovery fetches discovery data using the cached discovery URL.
@@ -305,32 +305,24 @@ func (c *Client) GetDiscovery(ctx context.Context, token string) (*Discovery, er
 // with the policy server and returns the discovery URL in the Link header.
 // Returns nil on success. The discovery URL is cached for subsequent GetDiscovery calls.
 func (c *Client) Hello(ctx context.Context, token string) error {
-	// Hello sends an empty JSON object - the CA routes based on body shape
+	// Hello sends an empty JSON object - the CA routes based on body shape.
 	body := []byte("{}")
 
-	// Try each endpoint in order (Hello is infrequent, doesn't need full pool machinery)
-	var lastErr error
-	for _, ep := range c.endpoints {
+	_, err := c.pool.Execute(func(caURL string) (any, error) {
 		if c.logger != nil {
-			c.logger.Debug("Hello request", "url", ep.URL)
+			c.logger.Debug("Hello request", "url", caURL)
 		}
-		err := c.doHello(ctx, ep.URL, token, body)
-		if err == nil {
-			return nil
+		return nil, c.doHello(ctx, caURL, token, body)
+	})
+
+	if err != nil {
+		var allUnavail *breakerpool.AllUnavailableError
+		if errors.As(err, &allUnavail) {
+			return &AllCAsUnavailableError{Message: allUnavail.Error()}
 		}
-		lastErr = err
-		// Don't failover on auth errors - they'll fail on all CAs
-		var invalidToken *InvalidTokenError
-		var policyDenied *PolicyDeniedError
-		if errors.As(err, &invalidToken) || errors.As(err, &policyDenied) {
-			return err
-		}
-		// Try next endpoint for infrastructure errors
-		if c.logger != nil {
-			c.logger.Debug("Hello failed, trying next endpoint", "url", ep.URL, "error", err)
-		}
+		return err
 	}
-	return lastErr
+	return nil
 }
 
 // doHello makes a single hello request to a CA.
@@ -406,23 +398,21 @@ func (c *Client) SetDiscoveryURL(url string) {
 // This is the first step in the discovery flow - no authentication required.
 // Returns the public key as a string.
 func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
-	// Try each endpoint in order
-	var lastErr error
-	for _, ep := range c.endpoints {
+	result, err := c.pool.Execute(func(caURL string) (any, error) {
 		if c.logger != nil {
-			c.logger.Debug("GetPublicKey request", "url", ep.URL)
+			c.logger.Debug("GetPublicKey request", "url", caURL)
 		}
-		pubKey, err := c.doGetPublicKey(ctx, ep.URL)
-		if err == nil {
-			return pubKey, nil
+		return c.doGetPublicKey(ctx, caURL)
+	})
+
+	if err != nil {
+		var allUnavail *breakerpool.AllUnavailableError
+		if errors.As(err, &allUnavail) {
+			return "", &AllCAsUnavailableError{Message: allUnavail.Error()}
 		}
-		lastErr = err
-		// Try next endpoint for infrastructure errors
-		if c.logger != nil {
-			c.logger.Debug("GetPublicKey failed, trying next endpoint", "url", ep.URL, "error", err)
-		}
+		return "", err
 	}
-	return "", lastErr
+	return result.(string), nil
 }
 
 // doGetPublicKey makes a GET request to a CA to fetch the public key.
