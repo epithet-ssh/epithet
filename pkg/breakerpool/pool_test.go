@@ -305,6 +305,130 @@ func TestPool_PerEntrySettings(t *testing.T) {
 	require.Len(t, calls, 2)
 }
 
+func TestPool_Execute_AllOpenFallbackRecovers(t *testing.T) {
+	entries := []Entry[testState]{
+		{State: testState{url: "https://ca1.example.com"}, Priority: 100},
+		{State: testState{url: "https://ca2.example.com"}, Priority: 50},
+	}
+	pool := New[string](entries, testDefaults(time.Minute))
+
+	// Trip both breakers.
+	_, _ = pool.Execute(func(s testState) (string, error) {
+		return "", &infraError{msg: "down"}
+	})
+	require.True(t, pool.AllUnavailable())
+
+	// Network recovers — fallback should try directly and succeed.
+	result, err := pool.Execute(func(s testState) (string, error) {
+		return "recovered", nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "recovered", result)
+}
+
+func TestPool_Execute_AllOpenFallbackStillFails(t *testing.T) {
+	entries := []Entry[testState]{
+		{State: testState{url: "https://ca1.example.com"}, Priority: 100},
+		{State: testState{url: "https://ca2.example.com"}, Priority: 50},
+	}
+	pool := New[string](entries, testDefaults(time.Minute))
+
+	// Trip both breakers.
+	_, _ = pool.Execute(func(s testState) (string, error) {
+		return "", &infraError{msg: "down"}
+	})
+
+	// Still failing — should return AllUnavailableError.
+	_, err := pool.Execute(func(s testState) (string, error) {
+		return "", &infraError{msg: "still down"}
+	})
+	require.Error(t, err)
+	var allUnavail *AllUnavailableError
+	require.ErrorAs(t, err, &allUnavail)
+	require.Contains(t, allUnavail.Error(), "still down")
+}
+
+func TestPool_Execute_AllOpenFallbackPriorityOrder(t *testing.T) {
+	entries := []Entry[testState]{
+		{State: testState{url: "https://ca-low.example.com"}, Priority: 50},
+		{State: testState{url: "https://ca-high.example.com"}, Priority: 100},
+	}
+	pool := New[string](entries, testDefaults(time.Minute))
+
+	// Trip both breakers.
+	_, _ = pool.Execute(func(s testState) (string, error) {
+		return "", &infraError{msg: "down"}
+	})
+
+	// Track call order in fallback.
+	var calls []string
+	_, _ = pool.Execute(func(s testState) (string, error) {
+		calls = append(calls, s.url)
+		return "", &infraError{msg: "down"}
+	})
+
+	// Should try high priority first, then low.
+	require.Equal(t, []string{"https://ca-high.example.com", "https://ca-low.example.com"}, calls)
+}
+
+func TestPool_Execute_AllOpenFallbackFirstSuccessWins(t *testing.T) {
+	entries := []Entry[testState]{
+		{State: testState{url: "https://ca1.example.com"}, Priority: 100},
+		{State: testState{url: "https://ca2.example.com"}, Priority: 100},
+		{State: testState{url: "https://ca3.example.com"}, Priority: 50},
+	}
+	pool := New[string](entries, testDefaults(time.Minute))
+
+	// Trip all breakers.
+	for i := 0; i < 3; i++ {
+		_, _ = pool.Execute(func(s testState) (string, error) {
+			return "", &infraError{msg: "down"}
+		})
+	}
+	require.True(t, pool.AllUnavailable())
+
+	// Second entry succeeds — third should not be tried.
+	var calls []string
+	result, err := pool.Execute(func(s testState) (string, error) {
+		calls = append(calls, s.url)
+		if s.url == "https://ca2.example.com" {
+			return "from-ca2", nil
+		}
+		return "", &infraError{msg: "down"}
+	})
+	require.NoError(t, err)
+	require.Equal(t, "from-ca2", result)
+	require.Equal(t, []string{"https://ca1.example.com", "https://ca2.example.com"}, calls)
+}
+
+func TestPool_Status(t *testing.T) {
+	entries := []Entry[testState]{
+		{State: testState{url: "https://ca1.example.com"}, Priority: 100},
+		{State: testState{url: "https://ca2.example.com"}, Priority: 50},
+	}
+	pool := New[string](entries, testDefaults(time.Minute))
+
+	// Both should start closed.
+	statuses := pool.Status()
+	require.Len(t, statuses, 2)
+	require.Equal(t, "closed", statuses[0].BreakerState)
+	require.Equal(t, "closed", statuses[1].BreakerState)
+	require.Equal(t, 100, statuses[0].Priority)
+	require.Equal(t, 50, statuses[1].Priority)
+
+	// Trip the high-priority breaker.
+	_, _ = pool.Execute(func(s testState) (string, error) {
+		if s.url == "https://ca1.example.com" {
+			return "", &infraError{msg: "down"}
+		}
+		return "ok", nil
+	})
+
+	statuses = pool.Status()
+	require.Equal(t, "open", statuses[0].BreakerState)
+	require.Equal(t, "closed", statuses[1].BreakerState)
+}
+
 func TestPool_Execute_StringState(t *testing.T) {
 	// Test with simple string state (common case)
 	entries := []Entry[string]{

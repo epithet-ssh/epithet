@@ -82,6 +82,21 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	fmt.Printf("Agent Dir: %s\n", resp.AgentSocketDir)
 	fmt.Printf("Discovery Patterns: %v\n\n", resp.DiscoveryPatterns)
 
+	fmt.Printf("CA Endpoints (%d)\n", len(resp.CaEndpoints))
+	fmt.Printf("-----------------\n")
+	if len(resp.CaEndpoints) == 0 {
+		fmt.Printf("  (none)\n")
+	} else {
+		for _, ep := range resp.CaEndpoints {
+			label := "healthy"
+			if ep.State == "open" || ep.State == "half-open" {
+				label = "broken"
+			}
+			fmt.Printf("  %s (priority %d) — %s\n", ep.Url, ep.Priority, label)
+		}
+	}
+	fmt.Println()
+
 	fmt.Printf("Agents (%d)\n", len(resp.Agents))
 	fmt.Printf("-----------\n")
 	if len(resp.Agents) == 0 {
@@ -124,11 +139,18 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 
 // inspectResponseJSON is a simplified structure for JSON output.
 type inspectResponseJSON struct {
-	SocketPath        string          `json:"socketPath"`
-	AgentSocketDir    string          `json:"agentSocketDir"`
-	DiscoveryPatterns []string        `json:"discoveryPatterns,omitempty"`
-	Agents            []agentInfoJSON `json:"agents"`
-	Certificates      []certInfoJSON  `json:"certificates"`
+	SocketPath        string               `json:"socketPath"`
+	AgentSocketDir    string               `json:"agentSocketDir"`
+	DiscoveryPatterns []string             `json:"discoveryPatterns,omitempty"`
+	Agents            []agentInfoJSON      `json:"agents"`
+	Certificates      []certInfoJSON       `json:"certificates"`
+	CAEndpoints       []caEndpointInfoJSON `json:"caEndpoints"`
+}
+
+type caEndpointInfoJSON struct {
+	URL      string `json:"url"`
+	Priority int32  `json:"priority"`
+	State    string `json:"state"`
 }
 
 type agentInfoJSON struct {
@@ -168,12 +190,22 @@ func inspectResponseToJSON(resp *pb.InspectResponse) inspectResponseJSON {
 		}
 	}
 
+	caEndpoints := make([]caEndpointInfoJSON, len(resp.CaEndpoints))
+	for i, ep := range resp.CaEndpoints {
+		caEndpoints[i] = caEndpointInfoJSON{
+			URL:      ep.Url,
+			Priority: ep.Priority,
+			State:    ep.State,
+		}
+	}
+
 	return inspectResponseJSON{
 		SocketPath:        resp.SocketPath,
 		AgentSocketDir:    resp.AgentSocketDir,
 		DiscoveryPatterns: resp.DiscoveryPatterns,
 		Agents:            agents,
 		Certificates:      certs,
+		CAEndpoints:       caEndpoints,
 	}
 }
 

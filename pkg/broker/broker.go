@@ -190,13 +190,21 @@ type CertInfo struct {
 	ExpiresAt   time.Time              `json:"expiresAt"`
 }
 
+// CAEndpointInfo contains the current state of a CA endpoint.
+type CAEndpointInfo struct {
+	URL      string `json:"url"`
+	Priority int    `json:"priority"`
+	State    string `json:"state"` // "closed", "open", "half-open"
+}
+
 // InspectResponse contains the current broker state
 type InspectResponse struct {
-	SocketPath        string      `json:"socketPath"`
-	AgentSocketDir    string      `json:"agentSocketDir"`
-	DiscoveryPatterns []string    `json:"discoveryPatterns,omitempty"` // Fetched live from CA (HTTP cached)
-	Agents            []AgentInfo `json:"agents"`
-	Certificates      []CertInfo  `json:"certificates"`
+	SocketPath        string           `json:"socketPath"`
+	AgentSocketDir    string           `json:"agentSocketDir"`
+	DiscoveryPatterns []string         `json:"discoveryPatterns,omitempty"` // Fetched live from CA (HTTP cached)
+	Agents            []AgentInfo      `json:"agents"`
+	Certificates      []CertInfo       `json:"certificates"`
+	CAEndpoints       []CAEndpointInfo `json:"caEndpoints"`
 }
 
 // Match is invoked via rpc from `epithet match` invocations.
@@ -700,6 +708,15 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 
 	// Get certificate info
 	output.Certificates = b.certStore.List()
+
+	// Get CA endpoint status
+	for _, ep := range b.caClient.EndpointStatus() {
+		output.CAEndpoints = append(output.CAEndpoints, CAEndpointInfo{
+			URL:      ep.URL,
+			Priority: ep.Priority,
+			State:    ep.BreakerState,
+		})
+	}
 
 	return nil
 }

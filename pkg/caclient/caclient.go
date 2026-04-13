@@ -248,6 +248,27 @@ func WithCooldown(d time.Duration) Option {
 	})
 }
 
+// CAEndpointStatus represents the current state of a CA endpoint.
+type CAEndpointStatus struct {
+	URL          string `json:"url"`
+	Priority     int    `json:"priority"`
+	BreakerState string `json:"breakerState"` // "closed", "open", "half-open"
+}
+
+// EndpointStatus returns the current state of each CA endpoint.
+func (c *Client) EndpointStatus() []CAEndpointStatus {
+	poolStatus := c.pool.Status()
+	result := make([]CAEndpointStatus, len(poolStatus))
+	for i, s := range poolStatus {
+		result[i] = CAEndpointStatus{
+			URL:          s.State,
+			Priority:     s.Priority,
+			BreakerState: s.BreakerState,
+		}
+	}
+	return result
+}
+
 // GetCert requests a certificate from the CA, with automatic failover to backup CAs.
 // It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
 // The token is sent in the Authorization header, not in the request body.

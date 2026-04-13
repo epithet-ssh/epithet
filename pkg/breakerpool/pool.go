@@ -175,6 +175,19 @@ func (p *Pool[T, S]) Execute(fn func(S) (T, error)) (T, error) {
 		// Get next available entry index
 		idx := p.next()
 		if idx < 0 {
+			// All breakers open — try all entries directly, bypassing circuit breakers.
+			// When every endpoint is marked down, breaker protection has no value
+			// (nothing to fail over to). This allows recovery from transient outages
+			// without waiting for the full cooldown.
+			for _, tier := range p.tiers {
+				for _, tidx := range tier {
+					result, err := fn(p.entries[tidx].State)
+					if err == nil {
+						return result, nil
+					}
+					lastErr = err
+				}
+			}
 			return zero, &AllUnavailableError{LastError: lastErr}
 		}
 
@@ -262,6 +275,38 @@ func (p *Pool[T, S]) AllUnavailable() bool {
 		}
 	}
 	return true
+}
+
+// EndpointStatus represents the current state of a pool entry.
+type EndpointStatus[S any] struct {
+	State        S
+	Priority     int
+	BreakerState string // "closed", "open", "half-open"
+}
+
+// Status returns the current state of each entry in priority order.
+func (p *Pool[T, S]) Status() []EndpointStatus[S] {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	statuses := make([]EndpointStatus[S], len(p.entries))
+	for i, entry := range p.entries {
+		var state string
+		switch p.breakers[i].State() {
+		case gobreaker.StateClosed:
+			state = "closed"
+		case gobreaker.StateOpen:
+			state = "open"
+		case gobreaker.StateHalfOpen:
+			state = "half-open"
+		}
+		statuses[i] = EndpointStatus[S]{
+			State:        entry.State,
+			Priority:     entry.Priority,
+			BreakerState: state,
+		}
+	}
+	return statuses
 }
 
 // Len returns the number of entries in the pool.

@@ -39,6 +39,13 @@ message InspectResponse {
   repeated string discovery_patterns = 3;
   repeated AgentInfo agents = 4;
   repeated CertInfo certificates = 5;
+  repeated CAEndpointInfo ca_endpoints = 6;
+}
+
+message CAEndpointInfo {
+  string url = 1;
+  int32 priority = 2;
+  string state = 3; // "closed" (healthy), "open" (broken), "half-open" (probing)
 }
 
 message AgentInfo {

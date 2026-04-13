@@ -104,12 +104,22 @@ func inspectResponseToProto(resp *InspectResponse) *pb.InspectResponse {
 		}
 	}
 
+	caEndpoints := make([]*pb.CAEndpointInfo, len(resp.CAEndpoints))
+	for i, ep := range resp.CAEndpoints {
+		caEndpoints[i] = &pb.CAEndpointInfo{
+			Url:      ep.URL,
+			Priority: int32(ep.Priority),
+			State:    ep.State,
+		}
+	}
+
 	return &pb.InspectResponse{
 		SocketPath:        resp.SocketPath,
 		AgentSocketDir:    resp.AgentSocketDir,
 		DiscoveryPatterns: resp.DiscoveryPatterns,
 		Agents:            agents,
 		Certificates:      certs,
+		CaEndpoints:       caEndpoints,
 	}
 }
 

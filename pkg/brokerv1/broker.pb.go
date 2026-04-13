@@ -329,6 +329,7 @@ type InspectResponse struct {
 	DiscoveryPatterns []string               `protobuf:"bytes,3,rep,name=discovery_patterns,json=discoveryPatterns,proto3" json:"discovery_patterns,omitempty"`
 	Agents            []*AgentInfo           `protobuf:"bytes,4,rep,name=agents,proto3" json:"agents,omitempty"`
 	Certificates      []*CertInfo            `protobuf:"bytes,5,rep,name=certificates,proto3" json:"certificates,omitempty"`
+	CaEndpoints       []*CAEndpointInfo      `protobuf:"bytes,6,rep,name=ca_endpoints,json=caEndpoints,proto3" json:"ca_endpoints,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -398,6 +399,73 @@ func (x *InspectResponse) GetCertificates() []*CertInfo {
 	return nil
 }
 
+func (x *InspectResponse) GetCaEndpoints() []*CAEndpointInfo {
+	if x != nil {
+		return x.CaEndpoints
+	}
+	return nil
+}
+
+type CAEndpointInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	Priority      int32                  `protobuf:"varint,2,opt,name=priority,proto3" json:"priority,omitempty"`
+	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"` // "closed" (healthy), "open" (broken), "half-open" (probing)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CAEndpointInfo) Reset() {
+	*x = CAEndpointInfo{}
+	mi := &file_brokerv1_broker_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CAEndpointInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CAEndpointInfo) ProtoMessage() {}
+
+func (x *CAEndpointInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_brokerv1_broker_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CAEndpointInfo.ProtoReflect.Descriptor instead.
+func (*CAEndpointInfo) Descriptor() ([]byte, []int) {
+	return file_brokerv1_broker_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CAEndpointInfo) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *CAEndpointInfo) GetPriority() int32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+func (x *CAEndpointInfo) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
 type AgentInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Hash          string                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
@@ -410,7 +478,7 @@ type AgentInfo struct {
 
 func (x *AgentInfo) Reset() {
 	*x = AgentInfo{}
-	mi := &file_brokerv1_broker_proto_msgTypes[6]
+	mi := &file_brokerv1_broker_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -422,7 +490,7 @@ func (x *AgentInfo) String() string {
 func (*AgentInfo) ProtoMessage() {}
 
 func (x *AgentInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_brokerv1_broker_proto_msgTypes[6]
+	mi := &file_brokerv1_broker_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -435,7 +503,7 @@ func (x *AgentInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentInfo.ProtoReflect.Descriptor instead.
 func (*AgentInfo) Descriptor() ([]byte, []int) {
-	return file_brokerv1_broker_proto_rawDescGZIP(), []int{6}
+	return file_brokerv1_broker_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AgentInfo) GetHash() string {
@@ -477,7 +545,7 @@ type CertInfo struct {
 
 func (x *CertInfo) Reset() {
 	*x = CertInfo{}
-	mi := &file_brokerv1_broker_proto_msgTypes[7]
+	mi := &file_brokerv1_broker_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -489,7 +557,7 @@ func (x *CertInfo) String() string {
 func (*CertInfo) ProtoMessage() {}
 
 func (x *CertInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_brokerv1_broker_proto_msgTypes[7]
+	mi := &file_brokerv1_broker_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -502,7 +570,7 @@ func (x *CertInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertInfo.ProtoReflect.Descriptor instead.
 func (*CertInfo) Descriptor() ([]byte, []int) {
-	return file_brokerv1_broker_proto_rawDescGZIP(), []int{7}
+	return file_brokerv1_broker_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CertInfo) GetCertificate() string {
@@ -536,7 +604,7 @@ type StringList struct {
 
 func (x *StringList) Reset() {
 	*x = StringList{}
-	mi := &file_brokerv1_broker_proto_msgTypes[8]
+	mi := &file_brokerv1_broker_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -548,7 +616,7 @@ func (x *StringList) String() string {
 func (*StringList) ProtoMessage() {}
 
 func (x *StringList) ProtoReflect() protoreflect.Message {
-	mi := &file_brokerv1_broker_proto_msgTypes[8]
+	mi := &file_brokerv1_broker_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -561,7 +629,7 @@ func (x *StringList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StringList.ProtoReflect.Descriptor instead.
 func (*StringList) Descriptor() ([]byte, []int) {
-	return file_brokerv1_broker_proto_rawDescGZIP(), []int{8}
+	return file_brokerv1_broker_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StringList) GetValues() []string {
@@ -601,14 +669,19 @@ const file_brokerv1_broker_proto_rawDesc = "" +
 	"\vMatchResult\x12\x14\n" +
 	"\x05allow\x18\x01 \x01(\bR\x05allow\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x10\n" +
-	"\x0eInspectRequest\"\x82\x02\n" +
+	"\x0eInspectRequest\"\xc8\x02\n" +
 	"\x0fInspectResponse\x12\x1f\n" +
 	"\vsocket_path\x18\x01 \x01(\tR\n" +
 	"socketPath\x12(\n" +
 	"\x10agent_socket_dir\x18\x02 \x01(\tR\x0eagentSocketDir\x12-\n" +
 	"\x12discovery_patterns\x18\x03 \x03(\tR\x11discoveryPatterns\x124\n" +
 	"\x06agents\x18\x04 \x03(\v2\x1c.epithet.broker.v1.AgentInfoR\x06agents\x12?\n" +
-	"\fcertificates\x18\x05 \x03(\v2\x1b.epithet.broker.v1.CertInfoR\fcertificates\"\x9d\x01\n" +
+	"\fcertificates\x18\x05 \x03(\v2\x1b.epithet.broker.v1.CertInfoR\fcertificates\x12D\n" +
+	"\fca_endpoints\x18\x06 \x03(\v2!.epithet.broker.v1.CAEndpointInfoR\vcaEndpoints\"T\n" +
+	"\x0eCAEndpointInfo\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1a\n" +
+	"\bpriority\x18\x02 \x01(\x05R\bpriority\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\"\x9d\x01\n" +
 	"\tAgentInfo\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x1f\n" +
 	"\vsocket_path\x18\x02 \x01(\tR\n" +
@@ -644,7 +717,7 @@ func file_brokerv1_broker_proto_rawDescGZIP() []byte {
 	return file_brokerv1_broker_proto_rawDescData
 }
 
-var file_brokerv1_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_brokerv1_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_brokerv1_broker_proto_goTypes = []any{
 	(*Connection)(nil),            // 0: epithet.broker.v1.Connection
 	(*MatchRequest)(nil),          // 1: epithet.broker.v1.MatchRequest
@@ -652,30 +725,32 @@ var file_brokerv1_broker_proto_goTypes = []any{
 	(*MatchResult)(nil),           // 3: epithet.broker.v1.MatchResult
 	(*InspectRequest)(nil),        // 4: epithet.broker.v1.InspectRequest
 	(*InspectResponse)(nil),       // 5: epithet.broker.v1.InspectResponse
-	(*AgentInfo)(nil),             // 6: epithet.broker.v1.AgentInfo
-	(*CertInfo)(nil),              // 7: epithet.broker.v1.CertInfo
-	(*StringList)(nil),            // 8: epithet.broker.v1.StringList
-	nil,                           // 9: epithet.broker.v1.CertInfo.HostUsersEntry
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*CAEndpointInfo)(nil),        // 6: epithet.broker.v1.CAEndpointInfo
+	(*AgentInfo)(nil),             // 7: epithet.broker.v1.AgentInfo
+	(*CertInfo)(nil),              // 8: epithet.broker.v1.CertInfo
+	(*StringList)(nil),            // 9: epithet.broker.v1.StringList
+	nil,                           // 10: epithet.broker.v1.CertInfo.HostUsersEntry
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_brokerv1_broker_proto_depIdxs = []int32{
 	0,  // 0: epithet.broker.v1.MatchRequest.connection:type_name -> epithet.broker.v1.Connection
 	3,  // 1: epithet.broker.v1.MatchEvent.result:type_name -> epithet.broker.v1.MatchResult
-	6,  // 2: epithet.broker.v1.InspectResponse.agents:type_name -> epithet.broker.v1.AgentInfo
-	7,  // 3: epithet.broker.v1.InspectResponse.certificates:type_name -> epithet.broker.v1.CertInfo
-	10, // 4: epithet.broker.v1.AgentInfo.expires_at:type_name -> google.protobuf.Timestamp
-	9,  // 5: epithet.broker.v1.CertInfo.host_users:type_name -> epithet.broker.v1.CertInfo.HostUsersEntry
-	10, // 6: epithet.broker.v1.CertInfo.expires_at:type_name -> google.protobuf.Timestamp
-	8,  // 7: epithet.broker.v1.CertInfo.HostUsersEntry.value:type_name -> epithet.broker.v1.StringList
-	1,  // 8: epithet.broker.v1.BrokerService.Match:input_type -> epithet.broker.v1.MatchRequest
-	4,  // 9: epithet.broker.v1.BrokerService.Inspect:input_type -> epithet.broker.v1.InspectRequest
-	2,  // 10: epithet.broker.v1.BrokerService.Match:output_type -> epithet.broker.v1.MatchEvent
-	5,  // 11: epithet.broker.v1.BrokerService.Inspect:output_type -> epithet.broker.v1.InspectResponse
-	10, // [10:12] is the sub-list for method output_type
-	8,  // [8:10] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	7,  // 2: epithet.broker.v1.InspectResponse.agents:type_name -> epithet.broker.v1.AgentInfo
+	8,  // 3: epithet.broker.v1.InspectResponse.certificates:type_name -> epithet.broker.v1.CertInfo
+	6,  // 4: epithet.broker.v1.InspectResponse.ca_endpoints:type_name -> epithet.broker.v1.CAEndpointInfo
+	11, // 5: epithet.broker.v1.AgentInfo.expires_at:type_name -> google.protobuf.Timestamp
+	10, // 6: epithet.broker.v1.CertInfo.host_users:type_name -> epithet.broker.v1.CertInfo.HostUsersEntry
+	11, // 7: epithet.broker.v1.CertInfo.expires_at:type_name -> google.protobuf.Timestamp
+	9,  // 8: epithet.broker.v1.CertInfo.HostUsersEntry.value:type_name -> epithet.broker.v1.StringList
+	1,  // 9: epithet.broker.v1.BrokerService.Match:input_type -> epithet.broker.v1.MatchRequest
+	4,  // 10: epithet.broker.v1.BrokerService.Inspect:input_type -> epithet.broker.v1.InspectRequest
+	2,  // 11: epithet.broker.v1.BrokerService.Match:output_type -> epithet.broker.v1.MatchEvent
+	5,  // 12: epithet.broker.v1.BrokerService.Inspect:output_type -> epithet.broker.v1.InspectResponse
+	11, // [11:13] is the sub-list for method output_type
+	9,  // [9:11] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_brokerv1_broker_proto_init() }
@@ -693,7 +768,7 @@ func file_brokerv1_broker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_brokerv1_broker_proto_rawDesc), len(file_brokerv1_broker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
