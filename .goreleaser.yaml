@@ -41,3 +41,18 @@ release:
   github:
     owner: epithet-ssh
     name: epithet
+
+homebrew_casks:
+  - name: epithet
+    binaries:
+      - epithet
+    repository:
+      owner: epithet-ssh
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://epithet.dev/
+    description: SSH certificate management
+    caveats: |
+      To start the agent:
+        brew services start epithet
