@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -539,6 +541,82 @@ printf '%s' "test-token"
 	// Allow will be false because the mock CA can't issue real certs — that's fine,
 	// we're testing that user output streams through, not cert issuance.
 	require.False(t, result.Allow)
+}
+
+// Test_DiscoveryReauthOnExpiredToken verifies that when a cached auth token has
+// expired at the server, getDiscoveryPatterns re-authenticates and retries Hello
+// instead of failing the match.
+func Test_DiscoveryReauthOnExpiredToken(t *testing.T) {
+	t.Parallel()
+
+	// Track whether the CA should reject the current token.
+	var rejectToken sync.Mutex
+	tokenExpired := false
+
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// No caching so each call hits the server.
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(caclient.Discovery{MatchPatterns: []string{"*.example.com"}})
+	}))
+	defer discoveryServer.Close()
+
+	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rejectToken.Lock()
+		expired := tokenExpired
+		rejectToken.Unlock()
+
+		if expired && r.Header.Get("Authorization") == "Bearer dG9rZW4tMQ" {
+			// First token ("token-1" base64url) is expired — return 401.
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("token expired"))
+			return
+		}
+		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer caServer.Close()
+
+	// Auth script that returns different tokens on each invocation.
+	// Uses a counter file to produce token-1, token-2, etc.
+	countFile := t.TempDir() + "/auth_count"
+	authCommand := writeTestScript(t, fmt.Sprintf(`#!/bin/sh
+cat > /dev/null
+count_file="%s"
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+else
+    count=0
+fi
+count=$((count + 1))
+echo "$count" > "$count_file"
+printf "token-%%d" "$count"
+`, countFile))
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
+
+	client := testCAClient(t, caServer.URL)
+	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir)
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	// First call: should succeed — fresh token, Hello accepts it.
+	result := b.shouldHandle("server.example.com", nil)
+	require.True(t, result, "first call should succeed with fresh token")
+
+	// Simulate token expiry at the server.
+	rejectToken.Lock()
+	tokenExpired = true
+	rejectToken.Unlock()
+
+	// Clear the cached discovery URL so getDiscoveryPatterns must go through Hello again.
+	client.SetDiscoveryURL("")
+
+	// Second call: token-1 is now rejected. Broker should re-auth (get token-2) and succeed.
+	result = b.shouldHandle("server.example.com", nil)
+	require.True(t, result, "should succeed after re-authenticating with new token")
 }
 
 // Test_UserOutputStreaming tests that user output from fd 4 is streamed to the writer.

@@ -503,14 +503,29 @@ func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery
 		}
 	}
 
-	// Call Hello to learn discovery URL from Link header
+	// Call Hello to learn discovery URL from Link header.
 	b.log.Debug("calling Hello to learn discovery URL")
 	err := b.caClient.Hello(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("hello failed: %w", err)
+		// If token expired, clear it, re-authenticate, and retry Hello.
+		var invalidToken *caclient.InvalidTokenError
+		if errors.As(err, &invalidToken) {
+			b.log.Debug("token expired during Hello, re-authenticating")
+			b.auth.ClearToken()
+			token, err = b.auth.Run(nil, userOutput)
+			if err != nil {
+				return nil, fmt.Errorf("authentication failed: %w", err)
+			}
+			err = b.caClient.Hello(ctx, token)
+			if err != nil {
+				return nil, fmt.Errorf("hello failed after re-auth: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("hello failed: %w", err)
+		}
 	}
 
-	// Now GetDiscovery should work (URL was cached by Hello)
+	// Now GetDiscovery should work (URL was cached by Hello).
 	return b.caClient.GetDiscovery(ctx, token)
 }
 
