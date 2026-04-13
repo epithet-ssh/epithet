@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,7 +54,8 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	// Create certificate logger for audit trail.
-	certLogger := caserver.NewSlogCertLogger(logger)
+	// Audit logs always emit at Info regardless of global verbosity.
+	certLogger := caserver.NewSlogCertLogger(certAuditLogger(logger))
 
 	server := caserver.New(caInstance, logger, nil, certLogger)
 	r.Handle("/", server.Handler())
@@ -61,4 +63,37 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 
 	logger.Info("listening", "address", c.Listen)
 	return listenAndServe(c.Listen, r)
+}
+
+// certAuditLogger returns a logger that emits at Info or below, regardless of
+// the parent logger's level. Audit events like certificate issuance must
+// always be logged.
+func certAuditLogger(parent *slog.Logger) *slog.Logger {
+	return slog.New(&minLevelHandler{
+		inner:    parent.Handler(),
+		minLevel: slog.LevelInfo,
+	})
+}
+
+// minLevelHandler wraps an slog.Handler, overriding Enabled to accept
+// records at or above minLevel even if the inner handler would suppress them.
+type minLevelHandler struct {
+	inner    slog.Handler
+	minLevel slog.Level
+}
+
+func (h *minLevelHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.minLevel
+}
+
+func (h *minLevelHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.inner.Handle(ctx, r)
+}
+
+func (h *minLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &minLevelHandler{inner: h.inner.WithAttrs(attrs), minLevel: h.minLevel}
+}
+
+func (h *minLevelHandler) WithGroup(name string) slog.Handler {
+	return &minLevelHandler{inner: h.inner.WithGroup(name), minLevel: h.minLevel}
 }
