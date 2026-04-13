@@ -211,6 +211,9 @@ func printCertInfoProto(idx int, certInfo *pb.CertInfo, now time.Time) {
 	fingerprint := "SHA256:" + base64.RawStdEncoding.EncodeToString(hash[:])
 	fmt.Printf("    Fingerprint: %s\n", fingerprint)
 
+	// Serial number (correlates with CA issuance log).
+	fmt.Printf("    Serial: %d\n", cert.Serial)
+
 	// Identity (KeyId).
 	fmt.Printf("    Identity: %s\n", cert.KeyId)
 
