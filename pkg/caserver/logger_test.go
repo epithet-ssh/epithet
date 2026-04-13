@@ -219,9 +219,6 @@ func TestCertEvent_toJSON(t *testing.T) {
 	if parsed.Port != 22 {
 		t.Errorf("Expected port=22, got %d", parsed.Port)
 	}
-	if parsed.Hash != "abc123" {
-		t.Errorf("Expected hash=abc123, got %s", parsed.Hash)
-	}
 	if parsed.ProxyJump != "bastion.example.com" {
 		t.Errorf("Expected proxy_jump=bastion.example.com, got %s", parsed.ProxyJump)
 	}

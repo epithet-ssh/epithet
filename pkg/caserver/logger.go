@@ -25,6 +25,7 @@ type CertEvent struct {
 	ValidAfter           time.Time
 	ValidBefore          time.Time
 	Extensions           map[string]string
+	CertFingerprint      string
 	PublicKeyFingerprint string
 	Policy               policy.Policy
 }
@@ -49,11 +50,11 @@ func (l *SlogCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
 		slog.String("remote_host", event.Connection.RemoteHost),
 		slog.String("remote_user", event.Connection.RemoteUser),
 		slog.Int("port", int(event.Connection.Port)),
-		slog.String("hash", string(event.Connection.Hash)),
 		slog.String("proxy_jump", event.Connection.ProxyJump),
 		slog.Time("valid_after", event.ValidAfter),
 		slog.Time("valid_before", event.ValidBefore),
 		slog.Any("extensions", event.Extensions),
+		slog.String("cert_fingerprint", event.CertFingerprint),
 		slog.String("public_key_fingerprint", event.PublicKeyFingerprint),
 		slog.Any("host_users", event.Policy.HostUsers),
 	)
@@ -109,11 +110,11 @@ type certEventForJSON struct {
 	RemoteHost           string              `json:"remote_host"`
 	RemoteUser           string              `json:"remote_user"`
 	Port                 int                 `json:"port"`
-	Hash                 string              `json:"hash"`
 	ProxyJump            string              `json:"proxy_jump,omitempty"`
 	ValidAfter           time.Time           `json:"valid_after"`
 	ValidBefore          time.Time           `json:"valid_before"`
 	Extensions           map[string]string   `json:"extensions,omitempty"`
+	CertFingerprint      string              `json:"cert_fingerprint"`
 	PublicKeyFingerprint string              `json:"public_key_fingerprint"`
 	HostUsers            map[string][]string `json:"host_users"`
 }
@@ -128,11 +129,11 @@ func (e *CertEvent) toJSON() ([]byte, error) {
 		RemoteHost:           e.Connection.RemoteHost,
 		RemoteUser:           e.Connection.RemoteUser,
 		Port:                 int(e.Connection.Port),
-		Hash:                 string(e.Connection.Hash),
 		ProxyJump:            e.Connection.ProxyJump,
 		ValidAfter:           e.ValidAfter,
 		ValidBefore:          e.ValidBefore,
 		Extensions:           e.Extensions,
+		CertFingerprint:      e.CertFingerprint,
 		PublicKeyFingerprint: e.PublicKeyFingerprint,
 		HostUsers:            e.Policy.HostUsers,
 	}

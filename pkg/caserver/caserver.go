@@ -2,6 +2,8 @@ package caserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -349,6 +351,9 @@ func (s *caServer) logCertIssuance(
 		return fmt.Errorf("failed to generate fingerprint: %w", err)
 	}
 
+	// Cert fingerprint matches what `epithet agent inspect` displays.
+	certFP := "SHA256:" + base64.RawStdEncoding.EncodeToString(sha256Sum(parsedCert.Marshal()))
+
 	event := &CertEvent{
 		Timestamp:            time.Now(),
 		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
@@ -358,6 +363,7 @@ func (s *caServer) logCertIssuance(
 		ValidAfter:           time.Unix(int64(parsedCert.ValidAfter), 0),
 		ValidBefore:          time.Unix(int64(parsedCert.ValidBefore), 0),
 		Extensions:           policyResp.CertParams.Extensions,
+		CertFingerprint:      certFP,
 		PublicKeyFingerprint: fingerprint,
 		Policy:               policyResp.Policy,
 	}
@@ -388,4 +394,9 @@ func generateFingerprint(pubKey sshcert.RawPublicKey) (string, error) {
 	}
 
 	return ssh.FingerprintSHA256(key), nil
+}
+
+func sha256Sum(data []byte) []byte {
+	h := sha256.Sum256(data)
+	return h[:]
 }
