@@ -89,25 +89,26 @@ func (p *ProxyListener) acceptLoop() {
 func (p *ProxyListener) serveConn(conn net.Conn) {
 	defer conn.Close()
 
-	// Dial a fresh connection to the upstream agent for this client.
-	upstreamConn, err := net.Dial("unix", p.upstreamSocketPath)
-	if err != nil {
-		p.log.Warn("failed to connect to upstream agent", "error", err)
-		return
-	}
-	defer upstreamConn.Close()
+	var upstream agent.ExtendedAgent
+	if p.upstreamSocketPath == "" {
+		// Preserve standard ssh-agent behavior even without an upstream socket.
+		upstream = agent.NewKeyring().(agent.ExtendedAgent)
+	} else {
+		// Dial a fresh connection to the upstream agent for this client.
+		upstreamConn, err := net.Dial("unix", p.upstreamSocketPath)
+		if err != nil {
+			p.log.Warn("failed to connect to upstream agent", "error", err)
+			return
+		}
+		defer upstreamConn.Close()
 
-	upstream := agent.NewClient(upstreamConn)
-	extUpstream, ok := upstream.(agent.ExtendedAgent)
-	if !ok {
-		p.log.Warn("upstream agent does not support extensions")
-		return
+		upstream = agent.NewClient(upstreamConn)
 	}
 
-	proxy := NewProxyAgent(extUpstream)
+	proxy := NewProxyAgent(upstream)
 	p.setup(proxy)
 
-	err = agent.ServeAgent(proxy, conn)
+	err := agent.ServeAgent(proxy, conn)
 	if err != nil && err != io.EOF {
 		p.log.Debug("proxy agent connection ended", "error", err)
 	}
