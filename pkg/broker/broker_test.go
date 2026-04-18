@@ -399,6 +399,70 @@ printf '%s' "local-only-token"
 	require.NotEmpty(t, token)
 }
 
+func TestAuthenticate_UpstreamAuthFailure_NoFallback(t *testing.T) {
+	t.Parallel()
+
+	// Start an upstream agent whose auth handler returns an error.
+	upstreamSock := startUpstreamFailingAuthAgent(t)
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentDir := tmpDir + "/a"
+
+	// Local auth should NOT be called — upstream failure should propagate.
+	localAuthScript := writeTestScript(t, `#!/bin/sh
+echo "ERROR: local auth should not have been called" >&2
+exit 1
+`)
+	b, err := New(*testLogger(t), socketPath, localAuthScript, testCAClient(t, "http://localhost:9999"), agentDir, WithUpstream(upstreamSock))
+	require.NoError(t, err)
+
+	_, err = b.Authenticate(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "upstream auth failed")
+}
+
+// startUpstreamFailingAuthAgent starts a proxy agent whose auth handler always fails.
+func startUpstreamFailingAuthAgent(t *testing.T) string {
+	t.Helper()
+
+	tmpDir := shortTempDir(t)
+	upstreamSock := tmpDir + "/upstream.sock"
+	vanillaSock := tmpDir + "/vanilla.sock"
+
+	vanillaListener, err := net.Listen("unix", vanillaSock)
+	require.NoError(t, err)
+	t.Cleanup(func() { vanillaListener.Close() })
+
+	keyring := sshagent.NewKeyring()
+	go func() {
+		for {
+			conn, err := vanillaListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				sshagent.ServeAgent(keyring, c)
+			}(conn)
+		}
+	}()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	setup := func(p *agent.ProxyAgent) {
+		p.RegisterExtension(agent.ExtensionAuth, agent.AuthHandler(func() (string, error) {
+			return "", fmt.Errorf("user cancelled authentication")
+		}))
+	}
+	proxy := agent.NewProxyListener(logger, upstreamSock, vanillaSock, setup)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go proxy.Serve(ctx)
+	<-proxy.Ready()
+
+	return upstreamSock
+}
+
 // startUpstreamAuthAgent starts a proxy agent that handles epithet-auth and returns the given token.
 func startUpstreamAuthAgent(t *testing.T, token string) string {
 	t.Helper()
@@ -437,17 +501,7 @@ func startUpstreamAuthAgent(t *testing.T, token string) string {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go proxy.Serve(ctx)
-
-	// Wait for socket.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.Dial("unix", upstreamSock)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	<-proxy.Ready()
 
 	return upstreamSock
 }

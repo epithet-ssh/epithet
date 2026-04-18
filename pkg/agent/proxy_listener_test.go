@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -58,11 +58,11 @@ func TestProxyListenerEndToEnd(t *testing.T) {
 	proxySock := tempSocketPath(t)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	authCalled := false
+	var authCalled atomic.Bool
 	setup := func(p *ProxyAgent) {
 		p.RegisterExtension(ExtensionHello, HelloHandler(0))
 		p.RegisterExtension(ExtensionAuth, AuthHandler(func() (string, error) {
-			authCalled = true
+			authCalled.Store(true)
 			return "proxy-listener-token", nil
 		}))
 	}
@@ -72,7 +72,7 @@ func TestProxyListenerEndToEnd(t *testing.T) {
 	defer cancel()
 
 	go proxy.Serve(ctx)
-	waitForSocket(t, proxySock)
+	<-proxy.Ready()
 
 	// Connect to the proxy and test extensions.
 	conn, err := net.Dial("unix", proxySock)
@@ -108,7 +108,7 @@ func TestProxyListenerEndToEnd(t *testing.T) {
 	if authResp.Token != "proxy-listener-token" {
 		t.Errorf("expected 'proxy-listener-token', got %q", authResp.Token)
 	}
-	if !authCalled {
+	if !authCalled.Load() {
 		t.Error("auth handler was not called")
 	}
 
@@ -130,11 +130,11 @@ func TestProxyListenerMultipleConnections(t *testing.T) {
 	proxySock := tempSocketPath(t)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	callCount := 0
+	var callCount atomic.Int32
 	setup := func(p *ProxyAgent) {
 		p.RegisterExtension(ExtensionHello, HelloHandler(0))
 		p.RegisterExtension(ExtensionAuth, AuthHandler(func() (string, error) {
-			callCount++
+			callCount.Add(1)
 			return "token", nil
 		}))
 	}
@@ -144,7 +144,7 @@ func TestProxyListenerMultipleConnections(t *testing.T) {
 	defer cancel()
 
 	go proxy.Serve(ctx)
-	waitForSocket(t, proxySock)
+	<-proxy.Ready()
 
 	// Make two independent connections.
 	for i := range 3 {
@@ -160,8 +160,8 @@ func TestProxyListenerMultipleConnections(t *testing.T) {
 		conn.Close()
 	}
 
-	if callCount != 3 {
-		t.Errorf("expected 3 auth calls, got %d", callCount)
+	if callCount.Load() != 3 {
+		t.Errorf("expected 3 auth calls, got %d", callCount.Load())
 	}
 }
 
@@ -177,11 +177,11 @@ func TestMultiHopChain(t *testing.T) {
 	laptopProxy := tempSocketPath(t)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	laptopAuthCalled := false
+	var laptopAuthCalled atomic.Bool
 	laptopSetup := func(p *ProxyAgent) {
 		p.RegisterExtension(ExtensionHello, HelloHandler(0))
 		p.RegisterExtension(ExtensionAuth, AuthHandler(func() (string, error) {
-			laptopAuthCalled = true
+			laptopAuthCalled.Store(true)
 			return "laptop-origin-token", nil
 		}))
 	}
@@ -191,7 +191,7 @@ func TestMultiHopChain(t *testing.T) {
 	defer cancel()
 
 	go laptopListener.Serve(ctx)
-	waitForSocket(t, laptopProxy)
+	<-laptopListener.Ready()
 
 	// Verify laptop probe shows depth 0.
 	hello, err := ProbeUpstream(laptopProxy)
@@ -218,7 +218,7 @@ func TestMultiHopChain(t *testing.T) {
 	shell1Listener := NewProxyListener(logger, shell1Proxy, laptopProxy, shell1Setup)
 
 	go shell1Listener.Serve(ctx)
-	waitForSocket(t, shell1Proxy)
+	<-shell1Listener.Ready()
 
 	// Verify shell1 probe shows depth 1.
 	hello, err = ProbeUpstream(shell1Proxy)
@@ -241,7 +241,7 @@ func TestMultiHopChain(t *testing.T) {
 	shell2Listener := NewProxyListener(logger, shell2Proxy, shell1Proxy, shell2Setup)
 
 	go shell2Listener.Serve(ctx)
-	waitForSocket(t, shell2Proxy)
+	<-shell2Listener.Ready()
 
 	// Verify shell2 probe shows depth 2.
 	hello, err = ProbeUpstream(shell2Proxy)
@@ -260,7 +260,7 @@ func TestMultiHopChain(t *testing.T) {
 	if token != "laptop-origin-token" {
 		t.Errorf("expected 'laptop-origin-token', got %q", token)
 	}
-	if !laptopAuthCalled {
+	if !laptopAuthCalled.Load() {
 		t.Error("laptop auth handler was never called — chain is broken")
 	}
 }
@@ -280,17 +280,3 @@ func tempSocketPath(t *testing.T) string {
 	return path
 }
 
-// waitForSocket polls until the Unix socket is accepting connections.
-func waitForSocket(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.Dial("unix", path)
-		if err == nil {
-			conn.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("socket %s never became available", path)
-}

@@ -467,6 +467,11 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 // Authenticate obtains an auth token, trying upstream first if configured.
 // This is also used by the agent proxy's extension handler to run the local
 // auth flow when responding to downstream epithet-auth requests.
+//
+// When an upstream is configured, only falls back to local auth if the upstream
+// is unreachable or doesn't support extensions (UpstreamUnavailableError).
+// Genuine upstream auth failures (user cancelled, plugin error) are not retried
+// locally — the remote host typically cannot complete browser/FIDO flows.
 func (b *Broker) Authenticate(userOutput io.Writer) (string, error) {
 	if b.upstreamSocket != "" {
 		token, err := agent.RequestAuth(b.upstreamSocket)
@@ -474,7 +479,15 @@ func (b *Broker) Authenticate(userOutput io.Writer) (string, error) {
 			b.auth.SetToken(token)
 			return token, nil
 		}
-		b.log.Warn("upstream auth failed, falling back to local", "error", err)
+
+		var unavailable *agent.UpstreamUnavailableError
+		if errors.As(err, &unavailable) {
+			b.log.Warn("upstream unavailable, falling back to local auth", "error", err)
+		} else {
+			// Upstream was reached and auth was attempted but failed.
+			// Don't fall back — the failure is authoritative.
+			return "", err
+		}
 	}
 	return b.auth.Run(nil, userOutput)
 }

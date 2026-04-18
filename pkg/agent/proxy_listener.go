@@ -25,6 +25,7 @@ type ProxyListener struct {
 	log                *slog.Logger
 
 	listener  net.Listener
+	ready     chan struct{} // Closed when listener is accepting connections.
 	done      chan struct{}
 	closeOnce sync.Once
 }
@@ -36,22 +37,28 @@ func NewProxyListener(log *slog.Logger, socketPath, upstreamSocketPath string, s
 		upstreamSocketPath: upstreamSocketPath,
 		setup:              setup,
 		log:                log,
+		ready:              make(chan struct{}),
 		done:               make(chan struct{}),
 	}
 }
 
 // Serve starts the listener and blocks until the context is cancelled.
+// The ready channel is always closed before Serve returns, whether
+// successfully or on error, so callers blocking on Ready() won't hang.
 func (p *ProxyListener) Serve(ctx context.Context) error {
 	os.Remove(p.socketPath)
 	listener, err := net.Listen("unix", p.socketPath)
 	if err != nil {
+		close(p.ready)
 		return err
 	}
 	if err := os.Chmod(p.socketPath, 0600); err != nil {
 		listener.Close()
+		close(p.ready)
 		return err
 	}
 	p.listener = listener
+	close(p.ready)
 
 	go p.acceptLoop()
 
@@ -104,6 +111,11 @@ func (p *ProxyListener) serveConn(conn net.Conn) {
 	if err != nil && err != io.EOF {
 		p.log.Debug("proxy agent connection ended", "error", err)
 	}
+}
+
+// Ready returns a channel that is closed when the listener is accepting connections.
+func (p *ProxyListener) Ready() <-chan struct{} {
+	return p.ready
 }
 
 // SocketPath returns the path to the proxy listener's Unix socket.

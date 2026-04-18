@@ -50,7 +50,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 
 // runDaemon runs the broker as a long-lived daemon (original behavior).
 func (s *AgentStartCLI) runDaemon(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	b, tempDir, brokerSock, agentDir, homeDir, err := setupBroker(parent, logger, tlsCfg)
+	b, tempDir, brokerSock, agentDir, homeDir, err := setupBrokerWithOptions(parent, logger, tlsCfg, false)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 		logger.Debug("no SSH_AUTH_SOCK set")
 	}
 
-	b, tempDir, brokerSock, agentDir, homeDir, err := setupBrokerWithOptions(parent, logger, tlsCfg, brokerOpts...)
+	b, tempDir, brokerSock, agentDir, homeDir, err := setupBrokerWithOptions(parent, logger, tlsCfg, true, brokerOpts...)
 	if err != nil {
 		return err
 	}
@@ -173,8 +173,7 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 				logger.Error("proxy listener error", "error", err)
 			}
 		}()
-		// Wait briefly for the listener to start.
-		// TODO: add Ready() to ProxyListener like Broker has.
+		<-proxyListener.Ready()
 		upstreamSocket = proxySock
 		logger.Info("proxy agent listening", "socket", proxySock)
 	}
@@ -204,30 +203,32 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 	}()
 
 	logger.Info("starting shell", "shell", s.Shell)
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			cancel()
-			signal.Stop(sigChan)
-			os.Exit(exitErr.ExitCode())
-		}
-		cancel()
-		return fmt.Errorf("shell failed: %w", err)
-	}
+	shellErr := cmd.Run()
 
+	// Shell exited — shut down broker and drain its error.
 	cancel()
 	signal.Stop(sigChan)
+	if err := <-brokerErr; err != nil && err != context.Canceled {
+		logger.Error("broker error", "error", err)
+	}
+
+	if shellErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(shellErr, &exitErr) {
+			os.Exit(exitErr.ExitCode())
+		}
+		return fmt.Errorf("shell failed: %w", shellErr)
+	}
+
 	return nil
 }
 
-// setupBroker creates the broker and supporting directories with no extra options.
-func setupBroker(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) (*broker.Broker, string, string, string, string, error) {
-	return setupBrokerWithOptions(parent, logger, tlsCfg)
-}
-
 // setupBrokerWithOptions creates the broker, temp directories, and resolves auth.
+// When wrapperMode is true, uses a per-process temp directory to avoid collisions
+// between multiple wrapped shells. When false (daemon mode), uses a deterministic
+// path derived from the CA URLs so SSH config includes can find it.
 // Returns (broker, tempDir, brokerSock, agentDir, homeDir, error).
-func setupBrokerWithOptions(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config, opts ...broker.Option) (*broker.Broker, string, string, string, string, error) {
+func setupBrokerWithOptions(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config, wrapperMode bool, opts ...broker.Option) (*broker.Broker, string, string, string, string, error) {
 	if len(parent.CaURL) == 0 {
 		return nil, "", "", "", "", fmt.Errorf("--ca-url is required (at least one)")
 	}
@@ -250,14 +251,31 @@ func setupBrokerWithOptions(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return nil, "", "", "", "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
 	runDir := filepath.Join(homeDir, ".epithet", "run")
-	tempDir := filepath.Join(runDir, instanceID)
-
 	cleanupStaleRunDirs(runDir, logger)
 
-	if err := os.MkdirAll(tempDir, 0700); err != nil {
-		return nil, "", "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+	var tempDir string
+	if wrapperMode {
+		// Wrapper mode: each invocation gets its own directory to avoid
+		// collisions between multiple wrapped shells against the same CA.
+		tempDir, err = os.MkdirTemp(runDir, "wrap-")
+		if err != nil {
+			// Ensure runDir exists and retry.
+			if mkErr := os.MkdirAll(runDir, 0700); mkErr != nil {
+				return nil, "", "", "", "", fmt.Errorf("failed to create run directory: %w", mkErr)
+			}
+			tempDir, err = os.MkdirTemp(runDir, "wrap-")
+			if err != nil {
+				return nil, "", "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+			}
+		}
+	} else {
+		// Daemon mode: deterministic path so SSH config includes can find it.
+		instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
+		tempDir = filepath.Join(runDir, instanceID)
+		if err := os.MkdirAll(tempDir, 0700); err != nil {
+			return nil, "", "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+		}
 	}
 
 	pidFile := filepath.Join(tempDir, "broker.pid")

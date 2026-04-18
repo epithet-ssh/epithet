@@ -35,6 +35,13 @@ func HelloHandler(depth int) ExtensionHandler {
 // AuthHandler returns an ExtensionHandler for epithet-auth@epithet.dev.
 // The authenticate function is called to obtain a token — typically wired
 // to the broker's auth flow.
+//
+// Security: the returned token is a bearer credential that transits the SSH
+// agent forwarding channel. Any host in the forwarding chain (i.e., the
+// remote sshd process) can observe the token. This is the same trust model
+// as standard SSH agent forwarding — the remote host can use the forwarded
+// agent to sign challenges on the user's behalf. Users should only forward
+// agents to hosts they trust, same as with ssh-agent -A.
 func AuthHandler(authenticate func() (string, error)) ExtensionHandler {
 	return func(_ []byte) ([]byte, error) {
 		token, err := authenticate()

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 
@@ -27,7 +28,7 @@ func ProbeUpstream(socketPath string) (*HelloResponse, error) {
 	resp, err := extClient.Extension(ExtensionHello, nil)
 	if err != nil {
 		// ErrExtensionUnsupported means it's a vanilla ssh-agent.
-		if err == agent.ErrExtensionUnsupported {
+		if errors.Is(err, agent.ErrExtensionUnsupported) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("hello extension failed: %w", err)
@@ -46,25 +47,49 @@ func ProbeUpstream(socketPath string) (*HelloResponse, error) {
 	return &hello, nil
 }
 
+// UpstreamUnavailableError indicates that the upstream agent could not be
+// reached or does not support epithet extensions. This is the only class
+// of error where falling back to local auth is appropriate.
+type UpstreamUnavailableError struct {
+	Err error
+}
+
+func (e *UpstreamUnavailableError) Error() string {
+	return fmt.Sprintf("upstream unavailable: %v", e.Err)
+}
+
+func (e *UpstreamUnavailableError) Unwrap() error {
+	return e.Err
+}
+
 // RequestAuth sends an epithet-auth extension request to the upstream agent.
 // The upstream runs its own auth plugin with its own state — only the token
 // is returned.
+//
+// Returns UpstreamUnavailableError if the upstream can't be reached or doesn't
+// support the extension (safe to fall back to local auth). Other errors indicate
+// the upstream attempted auth and failed (should not fall back).
 func RequestAuth(socketPath string) (string, error) {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to upstream agent: %w", err)
+		return "", &UpstreamUnavailableError{Err: err}
 	}
 	defer conn.Close()
 
 	client := agent.NewClient(conn)
 	extClient, ok := client.(agent.ExtendedAgent)
 	if !ok {
-		return "", fmt.Errorf("upstream agent does not support extensions")
+		return "", &UpstreamUnavailableError{Err: fmt.Errorf("agent does not support extensions")}
 	}
 
 	resp, err := extClient.Extension(ExtensionAuth, nil)
 	if err != nil {
-		return "", fmt.Errorf("auth extension failed: %w", err)
+		if errors.Is(err, agent.ErrExtensionUnsupported) {
+			return "", &UpstreamUnavailableError{Err: err}
+		}
+		// Extension was dispatched but handler returned an error — this is a
+		// genuine auth failure (user cancelled, plugin error, etc.).
+		return "", fmt.Errorf("upstream auth failed: %w", err)
 	}
 
 	// Strip the SSH_AGENT_SUCCESS byte.
