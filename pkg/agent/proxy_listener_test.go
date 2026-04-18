@@ -165,6 +165,70 @@ func TestProxyListenerMultipleConnections(t *testing.T) {
 	}
 }
 
+func TestProxyListenerWithoutUpstream(t *testing.T) {
+	proxySock := tempSocketPath(t)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	var authCalled atomic.Bool
+	setup := func(p *ProxyAgent) {
+		p.RegisterExtension(ExtensionHello, HelloHandler(0))
+		p.RegisterExtension(ExtensionAuth, AuthHandler(func() (string, error) {
+			authCalled.Store(true)
+			return "local-token", nil
+		}))
+	}
+	proxy := NewProxyListener(logger, proxySock, "", setup)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go proxy.Serve(ctx)
+	<-proxy.Ready()
+
+	conn, err := net.Dial("unix", proxySock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	client := agent.NewClient(conn).(agent.ExtendedAgent)
+
+	resp, err := client.Extension(ExtensionHello, nil)
+	if err != nil {
+		t.Fatalf("hello failed: %v", err)
+	}
+	var hello HelloResponse
+	if err := json.Unmarshal(stripSuccessByte(t, resp), &hello); err != nil {
+		t.Fatalf("unmarshal hello: %v", err)
+	}
+	if hello.ChainDepth != 0 {
+		t.Errorf("expected chain depth 0, got %d", hello.ChainDepth)
+	}
+
+	resp, err = client.Extension(ExtensionAuth, nil)
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+	var authResp AuthResponse
+	if err := json.Unmarshal(stripSuccessByte(t, resp), &authResp); err != nil {
+		t.Fatalf("unmarshal auth: %v", err)
+	}
+	if authResp.Token != "local-token" {
+		t.Errorf("expected local token, got %q", authResp.Token)
+	}
+	if !authCalled.Load() {
+		t.Fatal("expected auth handler to be called")
+	}
+
+	keys, err := client.List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected empty local keyring, got %d keys", len(keys))
+	}
+}
+
 func TestMultiHopChain(t *testing.T) {
 	// Simulate: laptop → shell1 → shell2
 	// Each hop has its own proxy listener wrapping the previous.
@@ -279,4 +343,3 @@ func tempSocketPath(t *testing.T) string {
 	t.Cleanup(func() { os.Remove(path) })
 	return path
 }
-

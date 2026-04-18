@@ -113,6 +113,7 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 		hello, err := agent.ProbeUpstream(upstreamSocket)
 		if err != nil {
 			logger.Warn("failed to probe upstream agent", "error", err)
+			upstreamSocket = ""
 		} else if hello != nil {
 			depth = hello.ChainDepth + 1
 			brokerOpts = append(brokerOpts, broker.WithUpstream(upstreamSocket))
@@ -145,7 +146,9 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 	go func() {
 		brokerErr <- b.Serve(ctx)
 	}()
-	<-b.Ready()
+	if err := waitForBrokerStartup(b, brokerErr); err != nil {
+		return err
+	}
 
 	// Generate SSH config.
 	sshConfigPath := filepath.Join(tempDir, "ssh-config.conf")
@@ -158,25 +161,22 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 		}
 	}
 
-	// Create proxy listener if we have an upstream socket to proxy.
-	if upstreamSocket != "" {
-		proxySock := filepath.Join(tempDir, "proxy.sock")
-		setup := func(p *agent.ProxyAgent) {
-			p.RegisterExtension(agent.ExtensionHello, agent.HelloHandler(depth))
-			p.RegisterExtension(agent.ExtensionAuth, agent.AuthHandler(func() (string, error) {
-				return b.Authenticate(nil)
-			}))
-		}
-		proxyListener := agent.NewProxyListener(logger, proxySock, upstreamSocket, setup)
-		go func() {
-			if err := proxyListener.Serve(ctx); err != nil && err != context.Canceled {
-				logger.Error("proxy listener error", "error", err)
-			}
-		}()
-		<-proxyListener.Ready()
-		upstreamSocket = proxySock
-		logger.Info("proxy agent listening", "socket", proxySock)
+	proxySock := filepath.Join(tempDir, "proxy.sock")
+	setup := func(p *agent.ProxyAgent) {
+		p.RegisterExtension(agent.ExtensionHello, agent.HelloHandler(depth))
+		p.RegisterExtension(agent.ExtensionAuth, agent.AuthHandler(func() (string, error) {
+			return b.Authenticate(nil)
+		}))
 	}
+	proxyListener := agent.NewProxyListener(logger, proxySock, upstreamSocket, setup)
+	go func() {
+		if err := proxyListener.Serve(ctx); err != nil && err != context.Canceled {
+			logger.Error("proxy listener error", "error", err)
+		}
+	}()
+	<-proxyListener.Ready()
+	upstreamSocket = proxySock
+	logger.Info("proxy agent listening", "socket", proxySock)
 
 	// Build child environment with updated SSH_AUTH_SOCK.
 	childEnv := os.Environ()
@@ -221,6 +221,18 @@ func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg
 	}
 
 	return nil
+}
+
+func waitForBrokerStartup(b *broker.Broker, brokerErr <-chan error) error {
+	select {
+	case <-b.Ready():
+		return nil
+	case err := <-brokerErr:
+		if err == nil || err == context.Canceled {
+			return fmt.Errorf("broker exited before becoming ready")
+		}
+		return fmt.Errorf("broker failed to start: %w", err)
+	}
 }
 
 // setupBrokerWithOptions creates the broker, temp directories, and resolves auth.
