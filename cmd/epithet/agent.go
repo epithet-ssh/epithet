@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -32,45 +35,27 @@ type AgentCLI struct {
 }
 
 // AgentStartCLI is the default subcommand that starts the agent/broker.
-type AgentStartCLI struct{}
+// When Shell is provided, it runs in wrapper mode: wrapping a shell with an
+// epithet-aware agent proxy (mirroring ssh-agent's "ssh-agent bash" pattern).
+type AgentStartCLI struct {
+	Shell string `arg:"" optional:"" help:"Shell to wrap with epithet agent (enables wrapper mode)"`
+}
 
 func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	// Validate required fields for start
-	if len(parent.CaURL) == 0 {
-		return fmt.Errorf("--ca-url is required (at least one)")
+	if s.Shell != "" {
+		return s.runWrapper(parent, logger, tlsCfg)
 	}
+	return s.runDaemon(parent, logger, tlsCfg)
+}
 
-	// Parse CA URLs into endpoints
-	caEndpoints, err := caclient.ParseCAURLs(parent.CaURL)
+// runDaemon runs the broker as a long-lived daemon (original behavior).
+func (s *AgentStartCLI) runDaemon(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	b, tempDir, brokerSock, agentDir, homeDir, err := setupBrokerWithOptions(parent, logger, tlsCfg, false)
 	if err != nil {
-		return fmt.Errorf("invalid CA URL: %w", err)
+		return err
 	}
 
-	logger.Debug("agent start command received", "ca_urls", parent.CaURL, "ca_timeout", parent.CaTimeout, "ca_cooldown", parent.CaCooldown)
-
-	// Validate all CA URLs require TLS (unless --insecure)
-	for _, ep := range caEndpoints {
-		if err := tlsCfg.ValidateURL(ep.URL); err != nil {
-			return fmt.Errorf("CA URL %q: %w", ep.URL, err)
-		}
-	}
-
-	// Get home directory
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	// Create a unique temporary directory for this broker instance
-	// Use a hash of the CA URLs to make it deterministic
-	instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
-	runDir := filepath.Join(homeDir, ".epithet", "run")
-	tempDir := filepath.Join(runDir, instanceID)
-
-	// Clean up stale run directories from dead processes
-	cleanupStaleRunDirs(runDir, logger)
-
-	// Clean up temp directory on exit
+	// Clean up temp directory on exit.
 	defer func() {
 		if err := os.RemoveAll(tempDir); err != nil {
 			logger.Warn("failed to remove temp directory", "error", err, "path", tempDir)
@@ -79,74 +64,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		}
 	}()
 
-	// Create temp directory
-	if err := os.MkdirAll(tempDir, 0700); err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-
-	// Write PID file for stale detection
-	pidFile := filepath.Join(tempDir, "broker.pid")
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
-
-	// Define paths within temp directory
-	brokerSock := filepath.Join(tempDir, "broker.sock")
-	agentDir := filepath.Join(tempDir, "agent")
-
-	// Create agent directory
-	if err := os.MkdirAll(agentDir, 0700); err != nil {
-		return fmt.Errorf("failed to create agent directory: %w", err)
-	}
-
-	// Create CA client
-	caClientOpts := []caclient.Option{
-		caclient.WithLogger(logger),
-		caclient.WithTimeout(parent.CaTimeout),
-		caclient.WithCooldown(parent.CaCooldown),
-		caclient.WithTLSConfig(tlsCfg),
-	}
-	caClient, err := caclient.New(caEndpoints, caClientOpts...)
-	if err != nil {
-		return fmt.Errorf("failed to create CA client: %w", err)
-	}
-
-	// Resolve auth command: use --auth if provided, otherwise discover from CA.
-	authCommand := parent.Auth
-	if authCommand == "" {
-		logger.Debug("no --auth provided, discovering from CA")
-
-		// Fetch public key (also caches discovery URL).
-		_, err := caClient.GetPublicKey(context.Background())
-		if err != nil {
-			return fmt.Errorf("failed to get CA public key: %w", err)
-		}
-
-		// Fetch unauthenticated discovery (auth config only, no token needed).
-		discovery, err := caClient.GetDiscovery(context.Background(), "")
-		if err != nil {
-			return fmt.Errorf("failed to get discovery config (try --auth to specify manually): %w", err)
-		}
-		if discovery == nil || discovery.Auth == nil {
-			return fmt.Errorf("CA did not return auth config in discovery (try --auth to specify manually)")
-		}
-
-		// Convert auth config to command.
-		authCommand, err = broker.AuthConfigToCommand(*discovery.Auth)
-		if err != nil {
-			return fmt.Errorf("failed to convert discovery auth config: %w", err)
-		}
-
-		logger.Info("discovered auth config from CA", "type", discovery.Auth.Type, "issuer", discovery.Auth.Issuer)
-	}
-
-	// Create broker
-	b, err := broker.New(*logger, brokerSock, authCommand, caClient, agentDir)
-	if err != nil {
-		return fmt.Errorf("failed to create broker: %w", err)
-	}
-
-	// Set up context with cancellation on signals
+	// Set up context with cancellation on signals.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -158,23 +76,19 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		cancel()
 	}()
 
-	// Generate SSH config file in the temp directory
+	// Generate SSH config.
 	sshConfigPath := filepath.Join(tempDir, "ssh-config.conf")
-
 	if err := parent.generateSSHConfig(sshConfigPath, agentDir, brokerSock, homeDir); err != nil {
 		logger.Warn("failed to generate SSH config", "error", err, "path", sshConfigPath)
-		// Don't fail startup, just warn
 	} else {
-		// Check if ~/.ssh/config has the Include directive
 		includePattern := filepath.Join(homeDir, ".epithet", "run", "*", "ssh-config.conf")
 		if err := checkSSHConfigInclude(homeDir, includePattern, logger); err != nil {
-
 			logger.Warn(fmt.Sprintf("Add 'Include %s' to ~/.ssh/config", includePattern))
 		}
 		logger.Debug("generated SSH config", "path", sshConfigPath)
 	}
 
-	// Start broker
+	// Start broker.
 	logger.Info("starting broker", "socket", brokerSock)
 	err = b.Serve(ctx)
 	if err != nil && err != context.Canceled {
@@ -183,6 +97,273 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 
 	logger.Info("broker shutdown complete")
 	return nil
+}
+
+// runWrapper wraps a shell with an epithet-aware agent proxy. It probes the
+// current SSH_AUTH_SOCK for an upstream epithet agent, starts the broker, and
+// creates a proxy listener that handles epithet protocol extensions while
+// delegating standard SSH agent operations to the upstream agent.
+func (s *AgentStartCLI) runWrapper(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	upstreamSocket := os.Getenv("SSH_AUTH_SOCK")
+
+	// Probe for upstream epithet agent.
+	var depth int
+	var brokerOpts []broker.Option
+	if upstreamSocket != "" {
+		hello, err := agent.ProbeUpstream(upstreamSocket)
+		if err != nil {
+			logger.Warn("failed to probe upstream agent", "error", err)
+			upstreamSocket = ""
+		} else if hello != nil {
+			depth = hello.ChainDepth + 1
+			brokerOpts = append(brokerOpts, broker.WithUpstream(upstreamSocket))
+			logger.Info("detected upstream epithet agent", "chain_depth", depth)
+		} else {
+			logger.Debug("upstream is vanilla ssh-agent")
+		}
+	} else {
+		logger.Debug("no SSH_AUTH_SOCK set")
+	}
+
+	b, tempDir, brokerSock, agentDir, homeDir, err := setupBrokerWithOptions(parent, logger, tlsCfg, true, brokerOpts...)
+	if err != nil {
+		return err
+	}
+
+	// Clean up temp directory on exit.
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			logger.Warn("failed to remove temp directory", "error", err, "path", tempDir)
+		}
+	}()
+
+	// Set up context with cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start broker in background.
+	brokerErr := make(chan error, 1)
+	go func() {
+		brokerErr <- b.Serve(ctx)
+	}()
+	if err := waitForBrokerStartup(b, brokerErr); err != nil {
+		return err
+	}
+
+	// Generate SSH config.
+	sshConfigPath := filepath.Join(tempDir, "ssh-config.conf")
+	if err := parent.generateSSHConfig(sshConfigPath, agentDir, brokerSock, homeDir); err != nil {
+		logger.Warn("failed to generate SSH config", "error", err, "path", sshConfigPath)
+	} else {
+		includePattern := filepath.Join(homeDir, ".epithet", "run", "*", "ssh-config.conf")
+		if err := checkSSHConfigInclude(homeDir, includePattern, logger); err != nil {
+			logger.Warn(fmt.Sprintf("Add 'Include %s' to ~/.ssh/config", includePattern))
+		}
+	}
+
+	proxySock := filepath.Join(tempDir, "proxy.sock")
+	setup := func(p *agent.ProxyAgent) {
+		p.RegisterExtension(agent.ExtensionHello, agent.HelloHandler(depth))
+		p.RegisterExtension(agent.ExtensionAuth, agent.AuthHandler(func() (string, error) {
+			return b.Authenticate(nil)
+		}))
+	}
+	proxyListener := agent.NewProxyListener(logger, proxySock, upstreamSocket, setup)
+	go func() {
+		if err := proxyListener.Serve(ctx); err != nil && err != context.Canceled {
+			logger.Error("proxy listener error", "error", err)
+		}
+	}()
+	<-proxyListener.Ready()
+	upstreamSocket = proxySock
+	logger.Info("proxy agent listening", "socket", proxySock)
+
+	// Build child environment with updated SSH_AUTH_SOCK.
+	childEnv := os.Environ()
+	if upstreamSocket != "" {
+		childEnv = replaceEnv(childEnv, "SSH_AUTH_SOCK", upstreamSocket)
+	}
+
+	// Run the shell as a child process.
+	cmd := exec.Command(s.Shell)
+	cmd.Env = childEnv
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Forward signals to child.
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for sig := range sigChan {
+			if cmd.Process != nil {
+				cmd.Process.Signal(sig)
+			}
+		}
+	}()
+
+	logger.Info("starting shell", "shell", s.Shell)
+	shellErr := cmd.Run()
+
+	// Shell exited — shut down broker and drain its error.
+	cancel()
+	signal.Stop(sigChan)
+	if err := <-brokerErr; err != nil && err != context.Canceled {
+		logger.Error("broker error", "error", err)
+	}
+
+	if shellErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(shellErr, &exitErr) {
+			os.Exit(exitErr.ExitCode())
+		}
+		return fmt.Errorf("shell failed: %w", shellErr)
+	}
+
+	return nil
+}
+
+func waitForBrokerStartup(b *broker.Broker, brokerErr <-chan error) error {
+	select {
+	case <-b.Ready():
+		return nil
+	case err := <-brokerErr:
+		if err == nil || err == context.Canceled {
+			return fmt.Errorf("broker exited before becoming ready")
+		}
+		return fmt.Errorf("broker failed to start: %w", err)
+	}
+}
+
+// setupBrokerWithOptions creates the broker, temp directories, and resolves auth.
+// When wrapperMode is true, uses a per-process temp directory to avoid collisions
+// between multiple wrapped shells. When false (daemon mode), uses a deterministic
+// path derived from the CA URLs so SSH config includes can find it.
+// Returns (broker, tempDir, brokerSock, agentDir, homeDir, error).
+func setupBrokerWithOptions(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config, wrapperMode bool, opts ...broker.Option) (*broker.Broker, string, string, string, string, error) {
+	if len(parent.CaURL) == 0 {
+		return nil, "", "", "", "", fmt.Errorf("--ca-url is required (at least one)")
+	}
+
+	caEndpoints, err := caclient.ParseCAURLs(parent.CaURL)
+	if err != nil {
+		return nil, "", "", "", "", fmt.Errorf("invalid CA URL: %w", err)
+	}
+
+	logger.Debug("agent command received", "ca_urls", parent.CaURL, "ca_timeout", parent.CaTimeout, "ca_cooldown", parent.CaCooldown)
+
+	for _, ep := range caEndpoints {
+		if err := tlsCfg.ValidateURL(ep.URL); err != nil {
+			return nil, "", "", "", "", fmt.Errorf("CA URL %q: %w", ep.URL, err)
+		}
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, "", "", "", "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	runDir := filepath.Join(homeDir, ".epithet", "run")
+	cleanupStaleRunDirs(runDir, logger)
+
+	var tempDir string
+	if wrapperMode {
+		// Wrapper mode: each invocation gets its own directory to avoid
+		// collisions between multiple wrapped shells against the same CA.
+		tempDir, err = os.MkdirTemp(runDir, "wrap-")
+		if err != nil {
+			// Ensure runDir exists and retry.
+			if mkErr := os.MkdirAll(runDir, 0700); mkErr != nil {
+				return nil, "", "", "", "", fmt.Errorf("failed to create run directory: %w", mkErr)
+			}
+			tempDir, err = os.MkdirTemp(runDir, "wrap-")
+			if err != nil {
+				return nil, "", "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+			}
+		}
+	} else {
+		// Daemon mode: deterministic path so SSH config includes can find it.
+		instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
+		tempDir = filepath.Join(runDir, instanceID)
+		if err := os.MkdirAll(tempDir, 0700); err != nil {
+			return nil, "", "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+		}
+	}
+
+	pidFile := filepath.Join(tempDir, "broker.pid")
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		return nil, "", "", "", "", fmt.Errorf("failed to write PID file: %w", err)
+	}
+
+	brokerSock := filepath.Join(tempDir, "broker.sock")
+	agentDir := filepath.Join(tempDir, "agent")
+
+	if err := os.MkdirAll(agentDir, 0700); err != nil {
+		return nil, "", "", "", "", fmt.Errorf("failed to create agent directory: %w", err)
+	}
+
+	caClientOpts := []caclient.Option{
+		caclient.WithLogger(logger),
+		caclient.WithTimeout(parent.CaTimeout),
+		caclient.WithCooldown(parent.CaCooldown),
+		caclient.WithTLSConfig(tlsCfg),
+	}
+	caClient, err := caclient.New(caEndpoints, caClientOpts...)
+	if err != nil {
+		return nil, "", "", "", "", fmt.Errorf("failed to create CA client: %w", err)
+	}
+
+	authCommand := parent.Auth
+	if authCommand == "" {
+		logger.Debug("no --auth provided, discovering from CA")
+
+		_, err := caClient.GetPublicKey(context.Background())
+		if err != nil {
+			return nil, "", "", "", "", fmt.Errorf("failed to get CA public key: %w", err)
+		}
+
+		discovery, err := caClient.GetDiscovery(context.Background(), "")
+		if err != nil {
+			return nil, "", "", "", "", fmt.Errorf("failed to get discovery config (try --auth to specify manually): %w", err)
+		}
+		if discovery == nil || discovery.Auth == nil {
+			return nil, "", "", "", "", fmt.Errorf("CA did not return auth config in discovery (try --auth to specify manually)")
+		}
+
+		authCommand, err = broker.AuthConfigToCommand(*discovery.Auth)
+		if err != nil {
+			return nil, "", "", "", "", fmt.Errorf("failed to convert discovery auth config: %w", err)
+		}
+
+		logger.Info("discovered auth config from CA", "type", discovery.Auth.Type, "issuer", discovery.Auth.Issuer)
+	}
+
+	b, err := broker.New(*logger, brokerSock, authCommand, caClient, agentDir, opts...)
+	if err != nil {
+		return nil, "", "", "", "", fmt.Errorf("failed to create broker: %w", err)
+	}
+
+	return b, tempDir, brokerSock, agentDir, homeDir, nil
+}
+
+// replaceEnv returns a copy of environ with key set to value.
+// If key already exists, it is replaced; otherwise it is appended.
+func replaceEnv(environ []string, key, value string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(environ)+1)
+	found := false
+	for _, e := range environ {
+		if strings.HasPrefix(e, prefix) {
+			result = append(result, prefix+value)
+			found = true
+		} else {
+			result = append(result, e)
+		}
+	}
+	if !found {
+		result = append(result, prefix+value)
+	}
+	return result
 }
 
 // generateSSHConfig writes an SSH config file for epithet

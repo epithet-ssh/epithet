@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,11 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/agent"
 	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
+	sshagent "golang.org/x/crypto/ssh/agent"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -324,6 +327,211 @@ printf '%s' "test-token"
 	// Should be rejected at pattern check - Allow=false, no error (not an error condition).
 	require.False(t, result2.Allow)
 	require.Empty(t, result2.Error)
+}
+
+func TestAuthenticate_WithUpstream(t *testing.T) {
+	t.Parallel()
+
+	// Start an upstream agent that serves epithet-auth.
+	upstreamSock := startUpstreamAuthAgent(t, "upstream-token-from-test")
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentDir := tmpDir + "/a"
+
+	// Local auth should NOT be called — upstream provides the token.
+	localAuthScript := writeTestScript(t, `#!/bin/sh
+echo "ERROR: local auth should not have been called" >&2
+exit 1
+`)
+	b, err := New(*testLogger(t), socketPath, localAuthScript, testCAClient(t, "http://localhost:9999"), agentDir, WithUpstream(upstreamSock))
+	require.NoError(t, err)
+
+	token, err := b.Authenticate(nil)
+	require.NoError(t, err)
+	require.Equal(t, "upstream-token-from-test", token)
+
+	// Token should be cached in auth.
+	require.Equal(t, "upstream-token-from-test", b.auth.Token())
+}
+
+func TestAuthenticate_FallsBackToLocal(t *testing.T) {
+	t.Parallel()
+
+	// Start an upstream agent that does NOT serve epithet-auth (no extensions).
+	upstreamSock := startPlainAgent(t)
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentDir := tmpDir + "/a"
+
+	// Local auth will be called as fallback.
+	localAuthScript := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "local-fallback-token"
+`)
+	b, err := New(*testLogger(t), socketPath, localAuthScript, testCAClient(t, "http://localhost:9999"), agentDir, WithUpstream(upstreamSock))
+	require.NoError(t, err)
+
+	token, err := b.Authenticate(nil)
+	require.NoError(t, err)
+	// Local auth base64url-encodes the token.
+	require.NotEmpty(t, token)
+}
+
+func TestAuthenticate_NoUpstream(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentDir := tmpDir + "/a"
+
+	localAuthScript := writeTestScript(t, `#!/bin/sh
+cat > /dev/null
+printf '%s' "local-only-token"
+`)
+	// No WithUpstream — should go straight to local auth.
+	b, err := New(*testLogger(t), socketPath, localAuthScript, testCAClient(t, "http://localhost:9999"), agentDir)
+	require.NoError(t, err)
+
+	token, err := b.Authenticate(nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+}
+
+func TestAuthenticate_UpstreamAuthFailure_NoFallback(t *testing.T) {
+	t.Parallel()
+
+	// Start an upstream agent whose auth handler returns an error.
+	upstreamSock := startUpstreamFailingAuthAgent(t)
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentDir := tmpDir + "/a"
+
+	// Local auth should NOT be called — upstream failure should propagate.
+	localAuthScript := writeTestScript(t, `#!/bin/sh
+echo "ERROR: local auth should not have been called" >&2
+exit 1
+`)
+	b, err := New(*testLogger(t), socketPath, localAuthScript, testCAClient(t, "http://localhost:9999"), agentDir, WithUpstream(upstreamSock))
+	require.NoError(t, err)
+
+	_, err = b.Authenticate(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "upstream auth failed")
+}
+
+// startUpstreamFailingAuthAgent starts a proxy agent whose auth handler always fails.
+func startUpstreamFailingAuthAgent(t *testing.T) string {
+	t.Helper()
+
+	tmpDir := shortTempDir(t)
+	upstreamSock := tmpDir + "/upstream.sock"
+	vanillaSock := tmpDir + "/vanilla.sock"
+
+	vanillaListener, err := net.Listen("unix", vanillaSock)
+	require.NoError(t, err)
+	t.Cleanup(func() { vanillaListener.Close() })
+
+	keyring := sshagent.NewKeyring()
+	go func() {
+		for {
+			conn, err := vanillaListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				sshagent.ServeAgent(keyring, c)
+			}(conn)
+		}
+	}()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	setup := func(p *agent.ProxyAgent) {
+		p.RegisterExtension(agent.ExtensionAuth, agent.AuthHandler(func() (string, error) {
+			return "", fmt.Errorf("user cancelled authentication")
+		}))
+	}
+	proxy := agent.NewProxyListener(logger, upstreamSock, vanillaSock, setup)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go proxy.Serve(ctx)
+	<-proxy.Ready()
+
+	return upstreamSock
+}
+
+// startUpstreamAuthAgent starts a proxy agent that handles epithet-auth and returns the given token.
+func startUpstreamAuthAgent(t *testing.T, token string) string {
+	t.Helper()
+
+	tmpDir := shortTempDir(t)
+	upstreamSock := tmpDir + "/upstream.sock"
+	vanillaSock := tmpDir + "/vanilla.sock"
+
+	// Start a vanilla agent as the upstream's upstream.
+	vanillaListener, err := net.Listen("unix", vanillaSock)
+	require.NoError(t, err)
+	t.Cleanup(func() { vanillaListener.Close() })
+
+	keyring := sshagent.NewKeyring()
+	go func() {
+		for {
+			conn, err := vanillaListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				sshagent.ServeAgent(keyring, c)
+			}(conn)
+		}
+	}()
+
+	// Start the proxy listener with auth handler.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	setup := func(p *agent.ProxyAgent) {
+		p.RegisterExtension(agent.ExtensionAuth, agent.AuthHandler(func() (string, error) {
+			return token, nil
+		}))
+	}
+	proxy := agent.NewProxyListener(logger, upstreamSock, vanillaSock, setup)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go proxy.Serve(ctx)
+	<-proxy.Ready()
+
+	return upstreamSock
+}
+
+// startPlainAgent starts a vanilla ssh-agent (no epithet extensions).
+func startPlainAgent(t *testing.T) string {
+	t.Helper()
+
+	tmpDir := shortTempDir(t)
+	sockPath := tmpDir + "/plain.sock"
+
+	listener, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
+
+	keyring := sshagent.NewKeyring()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				sshagent.ServeAgent(keyring, c)
+			}(conn)
+		}
+	}()
+
+	return sockPath
 }
 
 func testLogger(t *testing.T) *slog.Logger {
