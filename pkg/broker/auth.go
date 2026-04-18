@@ -50,6 +50,15 @@ func (h *Auth) Token() string {
 	return h.token
 }
 
+// SetToken injects a token obtained from an upstream agent.
+// Used when the broker receives a token via the agent extension protocol
+// instead of running a local auth command.
+func (h *Auth) SetToken(token string) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	h.token = token
+}
+
 // ClearToken clears the stored authentication token.
 // Keeps the state intact (refresh token may still be valid).
 // Used when receiving HTTP 401 from CA to force re-authentication.

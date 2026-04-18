@@ -69,6 +69,7 @@ type Broker struct {
 
 	caClient       *caclient.Client // Immutable after New()
 	agentSocketDir string           // Immutable after New()
+	upstreamSocket string           // Immutable after New(); empty if no upstream
 
 	// For graceful shutdown: track in-flight RPC connections
 	activeRPC       sync.WaitGroup
@@ -84,6 +85,15 @@ type optionFunc func(*Broker) error
 
 func (f optionFunc) apply(b *Broker) error {
 	return f(b)
+}
+
+// WithUpstream configures the broker to proxy auth requests to an upstream
+// epithet agent at the given socket path before falling back to local auth.
+func WithUpstream(socketPath string) Option {
+	return optionFunc(func(b *Broker) error {
+		b.upstreamSocket = socketPath
+		return nil
+	})
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
@@ -276,7 +286,7 @@ func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Write
 		token := b.auth.Token()
 		if token == "" {
 			b.log.Debug("no auth token, authenticating")
-			token, err = b.auth.Run(nil, userOutput)
+			token, err = b.Authenticate(userOutput)
 			if err != nil {
 				// Auth command failed - don't retry automatically.
 				// User should fix the issue and retry the SSH connection.
@@ -454,6 +464,21 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	return nil
 }
 
+// Authenticate obtains an auth token, trying upstream first if configured.
+// This is also used by the agent proxy's extension handler to run the local
+// auth flow when responding to downstream epithet-auth requests.
+func (b *Broker) Authenticate(userOutput io.Writer) (string, error) {
+	if b.upstreamSocket != "" {
+		token, err := agent.RequestAuth(b.upstreamSocket)
+		if err == nil {
+			b.auth.SetToken(token)
+			return token, nil
+		}
+		b.log.Warn("upstream auth failed, falling back to local", "error", err)
+	}
+	return b.auth.Run(nil, userOutput)
+}
+
 // shouldHandle checks if the given hostname matches discovery patterns.
 // Always fetches discovery patterns, authenticating if needed.
 // Returns true if epithet should handle this connection, false otherwise.
@@ -505,7 +530,7 @@ func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery
 	if token == "" {
 		b.log.Debug("no auth token, authenticating to get discovery")
 		var err error
-		token, err = b.auth.Run(nil, userOutput)
+		token, err = b.Authenticate(userOutput)
 		if err != nil {
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
@@ -520,7 +545,7 @@ func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery
 		if errors.As(err, &invalidToken) {
 			b.log.Debug("token expired during Hello, re-authenticating")
 			b.auth.ClearToken()
-			token, err = b.auth.Run(nil, userOutput)
+			token, err = b.Authenticate(userOutput)
 			if err != nil {
 				return nil, fmt.Errorf("authentication failed: %w", err)
 			}
