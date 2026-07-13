@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -8,6 +9,23 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+// TestNotifyUser tests that user-visible progress goes to the fd 4 writer
+// and that a missing fd 4 does not panic.
+func TestNotifyUser(t *testing.T) {
+	orig := userOutput
+	defer func() { userOutput = orig }()
+
+	var buf bytes.Buffer
+	userOutput = &buf
+	notifyUser("To authenticate, visit: %s\n", "https://example.com/auth")
+	if got := buf.String(); got != "To authenticate, visit: https://example.com/auth\n" {
+		t.Errorf("unexpected user output: %q", got)
+	}
+
+	userOutput = nil
+	notifyUser("should not panic")
+}
 
 // TestTokenStateMarshaling tests that oauth2.Token can be marshaled/unmarshaled as expected.
 func TestTokenStateMarshaling(t *testing.T) {

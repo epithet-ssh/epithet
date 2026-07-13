@@ -14,6 +14,19 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// userOutput is fd 4 per the epithet auth plugin protocol: user-visible
+// progress. The broker streams it to the requesting ssh session and replays
+// it to any session that joins an in-flight authentication attempt.
+var userOutput io.Writer = os.NewFile(4, "user-output")
+
+// notifyUser writes a user-visible progress message to fd 4. Best effort:
+// when running outside the broker (no fd 4), the write fails silently.
+func notifyUser(format string, args ...any) {
+	if userOutput != nil {
+		_, _ = fmt.Fprintf(userOutput, format, args...)
+	}
+}
+
 // Config holds OIDC authentication configuration.
 type Config struct {
 	IssuerURL    string
@@ -170,9 +183,14 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config) (*oauth2.T
 	// Wait for the local server to be ready, then open browser
 	select {
 	case url := <-readyChan:
+		// Always surface the URL as user-visible progress, so a session
+		// waiting on this flow (including one that joined it after the
+		// browser was closed) can complete authentication manually.
+		notifyUser("To authenticate, visit: %s\n", url)
 		// Attempt to open the browser
 		if err := browser.OpenURL(url); err != nil {
 			// Browser failed to open - user needs the URL to authenticate manually
+			notifyUser("Could not open browser automatically: %v\n", err)
 			fmt.Fprintf(os.Stderr, "Could not open browser automatically: %v\n", err)
 			fmt.Fprintf(os.Stderr, "Please visit: %s\n", url)
 		}

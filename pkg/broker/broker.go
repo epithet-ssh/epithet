@@ -46,8 +46,11 @@ type agentEntry struct {
 //   - b.lock protects: agents map (both reads and writes)
 //   - Auth has its own internal lock (auth.lock) - safe to call without b.lock
 //   - CertificateStore has its own internal lock (certStore.lock) - safe to call without b.lock
-//   - Match() holds b.lock for the entire operation to ensure atomic cert lookup + agent creation
-//   - ensureAgent() MUST be called with b.lock held (caller responsibility)
+//   - Match() only holds b.lock around agents-map access, never across auth or
+//     CA calls, so concurrent matches can share an in-flight auth attempt.
+//     Concurrent matches for the same connection may each request a
+//     certificate from the CA; ensureAgent() reconciles them (last one wins).
+//   - ensureAgent() acquires b.lock itself; do not call it with b.lock held
 //
 // Immutable after New(): brokerSocketPath, agentSocketDir, caClient, log
 // Protected by b.lock: agents map
@@ -209,31 +212,33 @@ type InspectResponse struct {
 
 // Match is invoked via rpc from `epithet match` invocations.
 func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
-	result := b.MatchWithUserOutput(input.Connection, nil)
+	result := b.MatchWithUserOutput(context.Background(), input.Connection, nil)
 	output.Allow = result.Allow
 	output.Error = result.Error
 	return nil
 }
 
-// MatchWithStderr performs the match operation, streaming auth stderr via the callback.
-// This is the core match implementation that supports stderr streaming for gRPC.
-func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Writer) MatchResponse {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+// MatchWithUserOutput performs the match operation, streaming auth user output
+// to userOutput. This is the core match implementation used by the gRPC server.
+// Canceling ctx (e.g. the requesting `epithet match` process went away)
+// abandons this match's auth and CA work.
+func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection, userOutput io.Writer) MatchResponse {
 	b.log.Debug("match request received", "connection", conn)
 
 	// Step 1: Check if this host should be handled by epithet at all.
-	if !b.shouldHandle(conn.RemoteHost, userOutput) {
+	if !b.shouldHandle(ctx, conn.RemoteHost, userOutput) {
 		b.log.Debug("host does not match discovery patterns", "host", conn.RemoteHost)
 		// No error - this is normal, just means epithet doesn't handle this host.
 		return MatchResponse{Allow: false}
 	}
 
 	// Step 2: Check if agent already exists for this connection hash.
+	b.lock.Lock()
 	if entry, exists := b.agents[conn.Hash]; exists {
 		// Check if agent's certificate is still valid (with buffer).
 		if time.Now().Add(expiryBuffer).Before(entry.expiresAt) {
 			b.log.Debug("found existing valid agent", "hash", conn.Hash, "expires", entry.expiresAt)
+			b.lock.Unlock()
 			return MatchResponse{Allow: true}
 		}
 		// Agent expired - clean it up.
@@ -241,6 +246,7 @@ func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Write
 		entry.agent.Close()
 		delete(b.agents, conn.Hash)
 	}
+	b.lock.Unlock()
 
 	// Step 3: Check for existing, valid certificate in cert store.
 	cred, found := b.certStore.Lookup(conn)
@@ -276,7 +282,7 @@ func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Write
 		token := b.auth.Token()
 		if token == "" {
 			b.log.Debug("no auth token, authenticating")
-			token, err = b.auth.Run(nil, userOutput)
+			token, err = b.auth.Run(ctx, nil, userOutput)
 			if err != nil {
 				// Auth command failed - don't retry automatically.
 				// User should fix the issue and retry the SSH connection.
@@ -287,7 +293,7 @@ func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Write
 		}
 
 		// Request certificate from CA.
-		certResp, err = b.caClient.GetCert(context.Background(), token, &caserver.CreateCertRequest{
+		certResp, err = b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
 			PublicKey:  &publicKey,
 			Connection: &conn,
 		})
@@ -383,8 +389,11 @@ func (b *Broker) MatchWithUserOutput(conn policy.Connection, userOutput io.Write
 // ensureAgent ensures an agent exists for the given connection hash with the given credential.
 // If an agent already exists, it updates the credential. If not, it creates a new agent.
 //
-// REQUIRES: b.lock must be held by caller. This method modifies b.agents map.
+// Acquires b.lock for the duration; do not call with b.lock held.
 func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential agent.Credential) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	// Check if agent already exists
 	if entry, exists := b.agents[connectionHash]; exists {
 		// Update the existing agent's credential
@@ -457,9 +466,9 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 // shouldHandle checks if the given hostname matches discovery patterns.
 // Always fetches discovery patterns, authenticating if needed.
 // Returns true if epithet should handle this connection, false otherwise.
-func (b *Broker) shouldHandle(hostname string, userOutput io.Writer) bool {
+func (b *Broker) shouldHandle(ctx context.Context, hostname string, userOutput io.Writer) bool {
 	// Always fetch discovery patterns (auth + Hello if needed).
-	discovery, err := b.getDiscoveryPatterns(userOutput)
+	discovery, err := b.getDiscoveryPatterns(ctx, userOutput)
 	if err != nil {
 		b.log.Error("failed to get discovery patterns", "error", err)
 		return false // Can't determine - don't handle
@@ -488,9 +497,7 @@ func (b *Broker) shouldHandle(hostname string, userOutput io.Writer) bool {
 }
 
 // getDiscoveryPatterns fetches discovery patterns, authenticating and calling Hello if needed.
-func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery, error) {
-	ctx := context.Background()
-
+func (b *Broker) getDiscoveryPatterns(ctx context.Context, userOutput io.Writer) (*caclient.Discovery, error) {
 	// Fast path: try cached discovery first.
 	token := b.auth.Token()
 	if token != "" {
@@ -505,7 +512,7 @@ func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery
 	if token == "" {
 		b.log.Debug("no auth token, authenticating to get discovery")
 		var err error
-		token, err = b.auth.Run(nil, userOutput)
+		token, err = b.auth.Run(ctx, nil, userOutput)
 		if err != nil {
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
@@ -520,7 +527,7 @@ func (b *Broker) getDiscoveryPatterns(userOutput io.Writer) (*caclient.Discovery
 		if errors.As(err, &invalidToken) {
 			b.log.Debug("token expired during Hello, re-authenticating")
 			b.auth.ClearToken()
-			token, err = b.auth.Run(nil, userOutput)
+			token, err = b.auth.Run(ctx, nil, userOutput)
 			if err != nil {
 				return nil, fmt.Errorf("authentication failed: %w", err)
 			}

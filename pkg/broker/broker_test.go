@@ -259,7 +259,7 @@ printf '%s' "test-token"
 			require.NoError(t, err)
 			b.SetShutdownTimeout(0) // Skip waiting in tests.
 
-			result := b.shouldHandle(tt.hostname, nil)
+			result := b.shouldHandle(context.Background(), tt.hostname, nil)
 			require.Equal(t, tt.expected, result, "hostname: %s, patterns: %v", tt.hostname, tt.patterns)
 		})
 	}
@@ -382,8 +382,8 @@ printf '%s' "test-token"
 
 	// shouldHandle triggers auth + Hello + discovery fetch.
 	// Discovery patterns should be used for matching.
-	require.True(t, b.shouldHandle("server.example.com", nil), "discovery pattern should match *.example.com")
-	require.False(t, b.shouldHandle("other.com", nil), "discovery pattern should not match other.com")
+	require.True(t, b.shouldHandle(context.Background(), "server.example.com", nil), "discovery pattern should match *.example.com")
+	require.False(t, b.shouldHandle(context.Background(), "other.com", nil), "discovery pattern should not match other.com")
 }
 
 func Test_ShouldHandle_NoDiscovery_ReturnsFalse(t *testing.T) {
@@ -409,8 +409,8 @@ printf '%s' "test-token"
 	b.SetShutdownTimeout(0)
 
 	// With no discovery available, shouldHandle returns false for all hosts.
-	require.False(t, b.shouldHandle("server.example.com", nil), "no discovery should return false")
-	require.False(t, b.shouldHandle("anything.com", nil), "no discovery should return false")
+	require.False(t, b.shouldHandle(context.Background(), "server.example.com", nil), "no discovery should return false")
+	require.False(t, b.shouldHandle(context.Background(), "anything.com", nil), "no discovery should return false")
 }
 
 func TestCleanupExpiredAgents(t *testing.T) {
@@ -603,7 +603,7 @@ printf "token-%%d" "$count"
 	b.SetShutdownTimeout(0)
 
 	// First call: should succeed — fresh token, Hello accepts it.
-	result := b.shouldHandle("server.example.com", nil)
+	result := b.shouldHandle(context.Background(), "server.example.com", nil)
 	require.True(t, result, "first call should succeed with fresh token")
 
 	// Simulate token expiry at the server.
@@ -615,7 +615,7 @@ printf "token-%%d" "$count"
 	client.SetDiscoveryURL("")
 
 	// Second call: token-1 is now rejected. Broker should re-auth (get token-2) and succeed.
-	result = b.shouldHandle("server.example.com", nil)
+	result = b.shouldHandle(context.Background(), "server.example.com", nil)
 	require.True(t, result, "should succeed after re-authenticating with new token")
 }
 
@@ -634,7 +634,7 @@ printf '%s' "test-token"
 	auth := NewAuth(script)
 
 	var userOutput bytes.Buffer
-	token, err := auth.Run(nil, &userOutput)
+	token, err := auth.Run(context.Background(), nil, &userOutput)
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 	require.Contains(t, userOutput.String(), "Visit https://example.com")

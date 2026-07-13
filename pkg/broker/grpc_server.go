@@ -41,8 +41,10 @@ func (w *userOutputStreamWriter) Write(p []byte) (int, error) {
 func (s *BrokerServer) Match(req *pb.MatchRequest, stream grpc.ServerStreamingServer[pb.MatchEvent]) error {
 	conn := protoToConnection(req.Connection)
 
-	// Run the match logic with user output streaming.
-	result := s.broker.MatchWithUserOutput(conn, &userOutputStreamWriter{stream: stream})
+	// Run the match logic with user output streaming. The stream context is
+	// canceled when the `epithet match` client goes away (e.g. ssh gave up),
+	// which abandons any auth/CA work this match started.
+	result := s.broker.MatchWithUserOutput(stream.Context(), conn, &userOutputStreamWriter{stream: stream})
 
 	// Send the final result.
 	return stream.Send(&pb.MatchEvent{
