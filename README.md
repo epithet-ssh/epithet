@@ -61,7 +61,7 @@ When you run `ssh server.example.com`, OpenSSH's Match exec triggers `epithet ma
 - [Policy Server Guide](docs/policy-server.md) - Setup and configuration for the policy server
 - [Authentication](docs/authentication.md) - Auth plugin protocol and custom plugins
 - [OIDC Setup](docs/oidc-setup.md) - Provider-specific OIDC configuration (Google, Okta, Azure AD)
-- [Releasing](docs/RELEASING.md) - How to cut a release
+- [Releasing](docs/RELEASING.md) - Notes on cutting releases
 
 ## Development
 
