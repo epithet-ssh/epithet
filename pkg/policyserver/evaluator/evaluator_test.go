@@ -598,9 +598,9 @@ func TestHostRuleSelectionIsDeterministic(t *testing.T) {
 
 // TestCertCarriesOnlyRequestedPrincipal verifies that the certificate names
 // only the principal actually requested for this connection - not the union
-// of every principal the user's tags could reach anywhere in the policy (see
-// Task 11b: authorization maps leave the wire entirely, and certs become
-// strictly per-connection).
+// of every principal the user's tags could reach anywhere in the policy;
+// authorization maps never leave the wire, and certs are strictly
+// per-connection.
 func TestCertCarriesOnlyRequestedPrincipal(t *testing.T) {
 	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{"alice@example.com": {"admin"}},

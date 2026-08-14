@@ -19,7 +19,7 @@ import (
 // The token has already been validated and identity extracted by the handler.
 // Implementations must:
 // - Make authorization decision (allow/deny) based on identity
-// - Return certificate parameters (principals, expiration, extensions) and policy (hostPattern)
+// - Return certificate parameters (principals, expiration, extensions) for the matching host pattern
 // - Return appropriate errors for different failure modes
 type PolicyEvaluator interface {
 	// Evaluate makes an authorization decision for the given identity and connection.
@@ -32,7 +32,7 @@ type PolicyEvaluator interface {
 	// - error: If authorization denied
 	//
 	// Error handling:
-	// - Return ErrForbidden (403) if access denied by policy
+	// - Return policyserver.Forbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
 	Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error)
 }
@@ -40,11 +40,6 @@ type PolicyEvaluator interface {
 // Forbidden returns a 403 error with the given message.
 func Forbidden(message string) error {
 	return &wire.PolicyError{StatusCode: http.StatusForbidden, Message: message}
-}
-
-// InternalError returns a 500 error with the given message.
-func InternalError(message string) error {
-	return &wire.PolicyError{StatusCode: http.StatusInternalServerError, Message: message}
 }
 
 // Config configures the policy server HTTP handler.
@@ -73,7 +68,7 @@ type handler struct {
 // NewHandler creates an HTTP handler for the policy server.
 // The handler supports:
 //
-//	GET /  — returns discovery data (auth, match patterns, default expiration)
+//	GET /  — returns discovery data (auth config for the OIDC bootstrap)
 //	POST / — evaluates a cert request (token + connection)
 //
 // Every request must carry a valid CA-minted request token (pkg/serviceauth);

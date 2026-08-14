@@ -42,7 +42,7 @@ type agentEntry struct {
 
 // Broker manages authentication and per-connection SSH agents. Certificates
 // are minted fresh from the CA for every match past the agents-map fast path
-// - there is no cross-connection certificate cache (see Task 11b).
+// - there is no cross-connection certificate cache.
 //
 // Concurrency: Broker is safe for concurrent access from multiple RPC clients.
 // The primary lock (b.lock) protects the agents map and coordinates with Auth.
@@ -173,7 +173,7 @@ type MatchResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// InspectRequest is the input for Broker.Inspect RPC
+// InspectRequest is the input for Broker.Inspect over the JSON line protocol
 type InspectRequest struct{}
 
 // AgentInfo contains information about a running agent
@@ -230,8 +230,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 
 	// Step 2: No agent exists (or it just expired). Mint a fresh,
 	// per-connection certificate - certs are never cached or reused across
-	// connections (see Task 11b), so every match past the fast path talks to
-	// the CA.
+	// connections, so every match past the fast path talks to the CA.
 	b.log.Debug("no existing agent, requesting certificate from CA", "host", conn.RemoteHost)
 
 	// Generate ephemeral keypair for this connection.
@@ -466,7 +465,7 @@ func (b *Broker) Running() bool {
 	}
 }
 
-// Inspect is invoked via RPC from `epithet inspect` to get broker state
+// Inspect is invoked by `epithet inspect` (over the broker's JSON line protocol) to get broker state.
 func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()

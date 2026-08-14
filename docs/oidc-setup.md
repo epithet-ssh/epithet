@@ -114,11 +114,14 @@ If you're using a shared OAuth app or want to skip the "unverified" warning:
 
 - **App integration name**: Enter "Epithet SSH CA"
 - **Grant type**: Check **Authorization Code** and **Refresh Token**
-- **Sign-in redirect URIs**: Add `http://localhost:8080/callback`
-  - Okta doesn't support wildcard ports, so also add:
-  - `http://localhost:8081/callback`
-  - `http://localhost:8082/callback`
-  - (epithet will try these ports in order)
+- **Sign-in redirect URIs**: Add `http://localhost` (no port, no path)
+  - Epithet lets its OAuth2 client library (`oauth2cli`) pick a free loopback
+    port at random for each authentication and redirects to
+    `http://localhost:<port>`. Per
+    [RFC 8252 §7.3](https://www.rfc-editor.org/rfc/rfc8252#section-7.3), Okta
+    treats a registered `http://localhost` redirect URI as a wildcard-port
+    loopback redirect, so a single entry with no port covers every port
+    epithet might choose - no need to register a fixed list of ports
 - **Sign-out redirect URIs**: Leave empty
 - **Controlled access**: Choose appropriate assignment (e.g., "Allow everyone in your organization to access")
 - Click **Save**
@@ -211,7 +214,12 @@ Follow your provider's documentation to create an OAuth2 application with:
 - **Application type**: Native, Desktop, or Public Client
 - **Grant type**: Authorization Code
 - **PKCE**: Enabled (required)
-- **Redirect URI**: `http://localhost:8080/callback` (or wildcard if supported)
+- **Redirect URI**: `http://localhost` with no fixed port - epithet's OAuth2
+  client library (`oauth2cli`) picks a free loopback port at random for each
+  authentication. Register a loopback redirect that allows any port
+  (`http://127.0.0.1` or `http://localhost`, per
+  [RFC 8252 §7.3](https://www.rfc-editor.org/rfc/rfc8252#section-7.3)); most
+  modern providers, including Okta and Google, support this
 
 ### Step 2: find OIDC discovery endpoint
 
@@ -263,11 +271,11 @@ Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
 
 - Verify the policy server's `--oidc-client-id` is correct
 - Check that the OAuth app is enabled in your provider
-- Ensure redirect URI is configured correctly (`http://localhost` or `http://localhost:8080/callback`)
+- Ensure the redirect URI is registered as a loopback wildcard-port URI (`http://localhost` or `http://127.0.0.1`, with no fixed port)
 
 ### Browser opens but shows error
 
-- **"redirect_uri_mismatch"**: Add `http://localhost:8080/callback` (or your configured port) to your OAuth app's redirect URIs
+- **"redirect_uri_mismatch"**: Your OAuth app's redirect URI must allow `http://localhost` (or `http://127.0.0.1`) with **any** port - epithet picks a free port at random each time, so a single fixed-port entry will eventually stop matching
 - **"invalid_client"**: Double-check the client ID configured on the policy server
 - **"unauthorized_client"**: Your OAuth app may not be configured for authorization code flow or PKCE
 

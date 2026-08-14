@@ -3,8 +3,11 @@
 # Use this format for configuration in ~/.epithet/*.yaml files.
 # The "policy:" wrapper is required because Kong resolves config by subcommand name.
 #
-# This configuration uses group names as principals, designed to work with
-# SSH's AuthorizedPrincipalsFile feature for fine-grained access control.
+# Each issued certificate carries exactly one principal: the SSH username the
+# client actually requested (ssh <user>@<host>). There is no union of
+# principals and no group-name indirection - the keys under "allow" below
+# must be real login usernames on the target hosts (root, deploy, alice),
+# not role or group labels.
 
 policy:
   # CA public key for signature verification
@@ -34,19 +37,13 @@ policy:
 
   # Global defaults for all hosts (unless overridden per-host)
   defaults:
-    # Map principals (group names) to allowed tags
-    #
-    # IMPORTANT: Principals are group names, not usernames!
-    # Use AuthorizedPrincipalsFile on target hosts to map group principals
-    # to local user accounts.
-    #
-    # The certificate will contain ALL principals the user is authorized for
-    # (union of global defaults + all host-specific policies).
+    # Map SSH login usernames to the tags allowed to log in as that user.
+    # A user needs at least one matching tag to be authorized for the
+    # requested username; the issued cert then names only that one username.
     allow:
-      wheel: [admin] # Admins get 'wheel' group
-      developers: [eng] # Engineers get 'developers' group
-      operators: [ops] # Ops team gets 'operators' group
-      dbadmins: [admin] # Admins also get 'dbadmins' group
+      root: [admin] # Only admins may log in as root
+      ubuntu: [admin, eng] # Admins and engineers may log in as ubuntu
+      deploy: [admin, ops] # Admins and ops may log in as deploy
 
     # Default certificate expiration (2-10 minutes recommended)
     expiration: "5m"
@@ -58,91 +55,82 @@ policy:
       permit-user-rc: ""
 
   # Per-host policy overrides (optional)
-  # Use this to grant additional principals for specific hosts
+  # Use this to authorize additional usernames on specific hosts, or to
+  # override expiration/extensions for them.
   hosts:
-    # Production database - only admins get postgres group
+    # Production database - only admins may log in as postgres
     prod-db-01:
       allow:
         postgres: [admin]
       expiration: "2m" # Shorter expiration for production database
 
-    # Development server - engineers get additional access
+    # Development server - engineers get an additional login
     dev-server:
       allow:
-        docker: [eng] # Engineers can access docker group
+        builder: [eng] # Engineers may log in as "builder"
       expiration: "10m" # Longer expiration for development
 
     # Staging environment
     staging-api:
       allow:
-        deployers: [ops, eng] # Both ops and eng can deploy to staging
+        deployer: [ops, eng] # Both ops and eng may log in as deployer
       expiration: "5m"
-# Certificate Principal Assignment Examples:
-#
-# 1. alice@example.com (tags: [admin, eng])
-#    Certificate principals: [dbadmins, deployers, developers, docker, operators, postgres, wheel]
-#    - From global: wheel (admin tag), developers (eng tag), operators (admin tag via ops-lead role), dbadmins (admin tag)
-#    - From prod-db-01: postgres (admin tag)
-#    - From dev-server: docker (eng tag)
-#    - From staging-api: deployers (admin OR eng tag)
-#
-# 2. bob@example.com (tags: [eng])
-#    Certificate principals: [deployers, developers, docker]
-#    - From global: developers (eng tag)
-#    - From dev-server: docker (eng tag)
-#    - From staging-api: deployers (eng tag)
-#
-# 3. charlie@example.com (tags: [ops])
-#    Certificate principals: [deployers, operators]
-#    - From global: operators (ops tag)
-#    - From staging-api: deployers (ops tag)
 
-# Target Host Setup with AuthorizedPrincipalsFile
+# Certificate principal examples:
 #
-# On each SSH server, configure /etc/ssh/sshd_config:
+# alice@example.com (tags: [admin, eng]) can request certificates for:
+#   root       (global default: admin)
+#   ubuntu     (global default: admin or eng)
+#   deploy     (global default: admin or ops)
+#   postgres   (prod-db-01 override: admin)
+#   builder    (dev-server override: eng)
+#   deployer   (staging-api override: ops or eng)
+# Each `ssh <user>@<host>` request gets its own certificate naming only that
+# one username - never a bundle of everything alice could reach.
+#
+# bob@example.com (tags: [eng]) can request:
+#   ubuntu, builder, deployer - but not root, deploy, or postgres.
+#
+# charlie@example.com (tags: [ops]) can request:
+#   deploy, deployer - but not root, ubuntu, postgres, or builder.
+
+# Target host setup
+#
+# Since the certificate's principal is exactly the requested login username,
+# sshd's default principal matching is enough - no AuthorizedPrincipalsFile
+# is required. On each SSH server, configure /etc/ssh/sshd_config:
 #
 #   TrustedUserCAKeys /etc/ssh/ca/epithet.pub
-#   AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 #
-# Then create /etc/ssh/auth_principals/[username] files mapping principals to users:
+# With only TrustedUserCAKeys set, sshd accepts a certificate for user X
+# logging in as X if the certificate names X as a principal - which is
+# exactly what this policy server issues. AuthorizedPrincipalsFile is only
+# needed if you want a *different* mapping (e.g. one certificate principal
+# authorizing several local accounts); most deployments don't need it.
 #
-# /etc/ssh/auth_principals/root:
-#   wheel
+# Now when alice (tags [admin, eng]) runs:
+#   ssh root@server        → Allowed (alice has 'admin', root's allow list)
+#   ssh ubuntu@server      → Allowed (alice has 'admin' or 'eng')
+#   ssh postgres@prod-db-01 → Allowed (alice has 'admin')
 #
-# /etc/ssh/auth_principals/ubuntu:
-#   developers
-#   operators
-#
-# /etc/ssh/auth_principals/deploy:
-#   operators
-#
-# /etc/ssh/auth_principals/postgres:
-#   postgres
-#   dbadmins
-#
-# Now when alice (who has principals [wheel, developers, postgres, ...]) runs:
-#   ssh root@server     → Allowed (cert has 'wheel', authorized for root)
-#   ssh ubuntu@server   → Allowed (cert has 'developers', authorized for ubuntu)
-#   ssh postgres@prod-db → Allowed (cert has 'postgres', authorized for postgres)
-#
-# And when bob (who has principals [developers, docker]) runs:
-#   ssh root@server     → Denied (cert lacks 'wheel')
-#   ssh ubuntu@server   → Allowed (cert has 'developers', authorized for ubuntu)
-#   ssh postgres@prod-db → Denied (cert lacks 'postgres' or 'dbadmins')
+# And when bob (tags [eng]) runs:
+#   ssh root@server        → Denied (root requires 'admin', bob only has 'eng')
+#   ssh ubuntu@server      → Allowed (bob has 'eng')
+#   ssh postgres@prod-db-01 → Denied (postgres requires 'admin')
 
-# Security Notes:
+# Security notes:
 #
 # 1. Certificates can be used on ANY host that trusts the CA, regardless of
 #    host-specific policies in this config. Host restrictions are enforced
 #    at certificate ISSUANCE time, not validation time.
 #
-# 2. Use AuthorizedPrincipalsFile on target hosts for additional control over
-#    which principals can access which local user accounts.
+# 2. Use sshd's AuthorizedPrincipalsCommand on target hosts for additional
+#    enforcement beyond principal matching, if needed.
 #
 # 3. Keep certificate expiration short (2-10 minutes). This minimizes the
 #    blast radius if a certificate is compromised. Users remain authenticated
 #    via OIDC refresh tokens, so re-authentication is fast (~100-200ms).
 #
-# 4. The certificate contains ALL principals the user is authorized for,
-#    making it convenient (one cert works for all authorized access) while
-#    still allowing fine-grained control via AuthorizedPrincipalsFile.
+# 4. Each certificate names exactly the one username actually requested for
+#    that connection - never a union of everything the user is authorized
+#    for elsewhere in this config.

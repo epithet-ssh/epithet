@@ -70,19 +70,6 @@ func (e *AllCAsUnavailableError) Error() string {
 	return fmt.Sprintf("all CAs unavailable: %s", e.Message)
 }
 
-// ConnectionNotHandledError indicates the CA/policy server does not handle this connection.
-// The broker should fail the match and let SSH fall through to other auth methods.
-type ConnectionNotHandledError struct {
-	Message string
-}
-
-func (e *ConnectionNotHandledError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("connection not handled: %s", e.Message)
-	}
-	return "connection not handled by CA"
-}
-
 // CertResponse contains the certificate issued for this connection.
 type CertResponse struct {
 	Certificate sshcert.RawCertificate
@@ -97,7 +84,6 @@ const DefaultCooldown = 10 * time.Minute
 // Client is a CA Client with support for multiple CA endpoints and failover.
 type Client struct {
 	httpClient *http.Client
-	endpoints  []CAEndpoint
 	pool       *breakerpool.Pool[any, string]
 	timeout    time.Duration
 	cooldown   time.Duration
@@ -112,9 +98,8 @@ func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
 	}
 
 	client := &Client{
-		endpoints: endpoints,
-		timeout:   DefaultTimeout,
-		cooldown:  DefaultCooldown,
+		timeout:  DefaultTimeout,
+		cooldown: DefaultCooldown,
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
@@ -297,9 +282,14 @@ func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*wire.Discov
 	}
 	defer res.Body.Close()
 
-	respBody, err := io.ReadAll(res.Body)
+	respBody, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if the CA's response exceeds the limit before trusting its contents.
+	if len(respBody) > wire.MaxBodySize {
+		return nil, fmt.Errorf("response exceeds %d bytes", wire.MaxBodySize)
 	}
 
 	if c.logger != nil {
@@ -320,68 +310,6 @@ func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*wire.Discov
 	}
 
 	return &discovery, nil
-}
-
-// GetPublicKey fetches the CA's public key.
-// This is the first step in the discovery flow - no authentication required.
-// Returns the public key as a string.
-func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
-	result, err := c.pool.Execute(func(caURL string) (any, error) {
-		if c.logger != nil {
-			c.logger.Debug("GetPublicKey request", "url", caURL)
-		}
-		return c.doGetPublicKey(ctx, caURL)
-	})
-
-	if err != nil {
-		var allUnavail *breakerpool.AllUnavailableError
-		if errors.As(err, &allUnavail) {
-			return "", &AllCAsUnavailableError{Message: allUnavail.Error()}
-		}
-		return "", err
-	}
-	return result.(string), nil
-}
-
-// doGetPublicKey makes a GET request to a CA to fetch the public key.
-func (c *Client) doGetPublicKey(ctx context.Context, caURL string) (string, error) {
-	if c.logger != nil {
-		c.logger.Debug("http request", "method", "GET", "url", caURL)
-	}
-
-	rq, err := http.NewRequest("GET", caURL, nil)
-	if err != nil {
-		return "", err
-	}
-
-	start := time.Now()
-	res, err := c.httpClient.Do(rq.WithContext(ctx))
-	duration := time.Since(start)
-	if err != nil {
-		if c.logger != nil {
-			c.logger.Debug("http request failed", "method", "GET", "url", caURL, "duration_ms", duration.Milliseconds(), "error", err)
-		}
-		return "", err
-	}
-	defer res.Body.Close()
-
-	respBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return "", err
-	}
-
-	if c.logger != nil {
-		c.logger.Debug("http response", "method", "GET", "url", caURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
-	}
-
-	if res.StatusCode != http.StatusOK {
-		if res.StatusCode >= 500 {
-			return "", &CAUnavailableError{Message: string(respBody)}
-		}
-		return "", &InvalidRequestError{Message: string(respBody)}
-	}
-
-	return strings.TrimSpace(string(respBody)), nil
 }
 
 // doRequest makes a single HTTP request to a CA and returns the response.
@@ -408,9 +336,14 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 	}
 	defer res.Body.Close()
 
-	respBody, err := io.ReadAll(res.Body)
+	respBody, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if the CA's response exceeds the limit before trusting its contents.
+	if len(respBody) > wire.MaxBodySize {
+		return nil, fmt.Errorf("response exceeds %d bytes", wire.MaxBodySize)
 	}
 
 	if c.logger != nil {
@@ -423,8 +356,6 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 			return nil, &InvalidTokenError{Message: string(respBody)}
 		case http.StatusForbidden:
 			return nil, &PolicyDeniedError{Message: string(respBody)}
-		case http.StatusUnprocessableEntity:
-			return nil, &ConnectionNotHandledError{Message: string(respBody)}
 		default:
 			if res.StatusCode >= 500 {
 				return nil, &CAUnavailableError{Message: string(respBody)}
@@ -473,12 +404,6 @@ func isSuccessfulForCircuitBreaker(err error) bool {
 	// InvalidRequestError (4xx) - client issue, not infrastructure
 	var invalidReq *InvalidRequestError
 	if errors.As(err, &invalidReq) {
-		return true // Don't trip breaker
-	}
-
-	// ConnectionNotHandledError (422) - routing issue, not infrastructure
-	var connNotHandled *ConnectionNotHandledError
-	if errors.As(err, &connNotHandled) {
 		return true // Don't trip breaker
 	}
 

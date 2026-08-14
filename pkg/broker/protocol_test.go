@@ -63,9 +63,9 @@ func dialBroker(t *testing.T, b *Broker) net.Conn {
 }
 
 // TestMatchStreamsOutputThenResult exercises the newline-JSON protocol's
-// core streaming contract: Output events (auth progress, e.g. a device-code
-// URL) must arrive before the terminal Result event. This is the JSON-wire
-// replacement for gRPC's server-streaming Match RPC.
+// core streaming contract: Output events (auth progress, e.g. the
+// auth-code+PKCE URL to visit) must arrive before the terminal Result event.
+// This is the JSON-wire replacement for gRPC's server-streaming Match RPC.
 func TestMatchStreamsOutputThenResult(t *testing.T) {
 	t.Parallel()
 	idp := oidctest.New(t)
@@ -145,9 +145,10 @@ func TestMatchResultWireShapeIsLowercase(t *testing.T) {
 }
 
 // TestClientCloseCancelsMatch ports Test_MatchStreamsUserOutput's
-// close-abandons-work semantics from the old grpc_server_test.go (Task 11):
-// closing the client connection before a Result arrives must cancel the
-// match's context, so auth/CA work in flight is abandoned instead of
+// close-abandons-work semantics from the old grpc_server_test.go, now that
+// the broker speaks a newline-JSON protocol instead of gRPC: closing the
+// client connection before a Result arrives must cancel the match's
+// context, so auth/CA work in flight is abandoned instead of
 // running to completion for a client that already gave up (e.g. ssh timed
 // out waiting on `epithet match`). Under gRPC this came for free from
 // stream.Context(); the JSON protocol has to detect the close itself.

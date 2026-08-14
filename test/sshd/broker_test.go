@@ -50,8 +50,8 @@ type fullStack struct {
 // everything), and a real broker, then starts an sshd fixture. The policy
 // authorizes the current OS user - the account ssh will actually connect as
 // - on any host; the real evaluator carries only that exact principal on the
-// issued certificate (see Task 11b), so the sshd fixture's
-// AuthorizedPrincipalsFile is written to match (test/sshd/sshd.go).
+// issued certificate, so the sshd fixture's AuthorizedPrincipalsFile is
+// written to match (test/sshd/sshd.go).
 func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	t.Helper()
 	logger := testLogger(t)
@@ -186,9 +186,9 @@ func TestBrokerEndToEnd(t *testing.T) {
 
 // TestBrokerEndToEnd_TagGatedSSHConfig drives the real end-to-end path from
 // ssh itself: an ssh_config "Match tagged epithet-test exec" block (the same
-// shape `epithet agent`'s generateSSHConfig produces, see Task 12) invokes
-// the built epithet binary, which dials the real broker over its Unix
-// socket, gets a real certificate, and hands it to ssh via IdentityAgent.
+// shape `epithet agent`'s generateSSHConfig produces) invokes the built
+// epithet binary, which dials the real broker over its Unix socket, gets a
+// real certificate, and hands it to ssh via IdentityAgent.
 //
 // It asserts two things:
 //  1. ssh to a host tagged "epithet-test" authenticates via the minted cert.

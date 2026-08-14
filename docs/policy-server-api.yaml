@@ -63,9 +63,17 @@ paths:
         '401':
           description: Invalid or missing service JWT
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/Error'
+                type: string
+              example: "request verification failed: token expired"
+        '405':
+          description: Method not allowed (only GET and POST are supported on this route)
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "Method not allowed"
 
     post:
       operationId: evaluatePolicy
@@ -121,29 +129,37 @@ paths:
                         permit-pty: ""
                         permit-agent-forwarding: ""
 
+        '400':
+          description: Malformed request body (not valid JSON, or the read itself failed)
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "Invalid JSON: unexpected end of JSON input"
+
         '401':
           description: Invalid service JWT, or invalid/expired user token
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/Error'
-              examples:
-                invalidToken:
-                  summary: User token verification failed
-                  value:
-                    error: "Invalid token: token is expired"
+                type: string
+              example: "Invalid token: token is expired"
 
         '403':
           description: User not authorized for this access
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/Error'
-              examples:
-                notAuthorized:
-                  summary: User not permitted
-                  value:
-                    error: "User alice not authorized for deploy@prod-web-01.example.com"
+                type: string
+              example: "User alice not authorized for deploy@prod-web-01.example.com"
+
+        '405':
+          description: Method not allowed (only GET and POST are supported on this route)
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "Method not allowed"
 
         '413':
           description: Request body exceeded the 64 KiB limit (`wire.MaxBodySize`)
@@ -156,9 +172,10 @@ paths:
         '500':
           description: Internal server error
           content:
-            application/json:
+            text/plain:
               schema:
-                $ref: '#/components/schemas/Error'
+                type: string
+              example: "failed to marshal response: ..."
 
 components:
   schemas:
@@ -319,16 +336,6 @@ components:
             permit-pty: ""
             permit-agent-forwarding: ""
           minProperties: 0
-
-    Error:
-      type: object
-      required:
-        - error
-      properties:
-        error:
-          type: string
-          description: Human-readable error message
-          example: "user not authorized"
 
   securitySchemes:
     ServiceJWT:

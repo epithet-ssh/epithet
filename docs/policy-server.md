@@ -77,12 +77,12 @@ policy:
   hosts:
     prod-db-01:
       allow:
-        dbadmins: [admin]     # Only admins get 'dbadmins' access on prod-db
+        postgres: [admin]     # Only admins may log in as postgres on prod-db
       expiration: "2m"        # Shorter expiration for production database
 
     dev-server:
       allow:
-        docker: [eng]         # Engineers get 'docker' access on dev server
+        builder: [dev]        # 'dev'-tagged users may log in as builder
       expiration: "10m"       # Longer expiration for dev environment
 ```
 
@@ -270,54 +270,36 @@ When a user requests access, the policy server (`pkg/policyserver/evaluator`):
    - `notAfter`: the token's expiry — an absolute ceiling the CA clamps against
    - `extensions`: from the matching host pattern or defaults
 
-## Using AuthorizedPrincipalsFile
+## Target host configuration
 
-Since certificates contain **group principals** (not usernames), you must configure target hosts to map principals to local user accounts.
+Since each certificate names exactly one principal - the SSH username the
+client actually requested - sshd's **default** principal matching is enough.
+No `AuthorizedPrincipalsFile` mapping is required.
 
-### Target host configuration
-
-**1. Configure sshd** (`/etc/ssh/sshd_config`):
+**Configure sshd** (`/etc/ssh/sshd_config`):
 
 ```ssh_config
 # Trust the epithet CA
 TrustedUserCAKeys /etc/ssh/ca/epithet.pub
-
-# Use AuthorizedPrincipalsFile to map principals to users
-AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 ```
 
-**2. Create principal mapping files:**
+That's it. With only `TrustedUserCAKeys` set, sshd's default behavior is to
+accept a certificate for login as user `X` when the certificate names `X` as
+a principal - which is exactly what the policy server issues, since the
+`allow` map's keys (see "Defaults section" and "Hosts section" above) are
+themselves the real login usernames.
 
-For each local user, create `/etc/ssh/auth_principals/[username]` listing which principals can access that account:
-
-```bash
-# /etc/ssh/auth_principals/root
-wheel
-
-# /etc/ssh/auth_principals/ubuntu
-developers
-operators
-
-# /etc/ssh/auth_principals/postgres
-dbadmins
-postgres
-
-# /etc/ssh/auth_principals/deploy
-operators
-```
-
-**3. Set permissions:**
-
-```bash
-sudo chmod 644 /etc/ssh/auth_principals/*
-```
+`AuthorizedPrincipalsFile`/`AuthorizedPrincipalsCommand` are optional beyond
+this: use them only if you need a *different* mapping, such as one
+certificate principal authorizing several distinct local accounts. Most
+deployments don't need them.
 
 ### How it works
 
 When a user with a certificate attempts SSH:
 
 1. **sshd validates certificate**: Is it signed by trusted CA? (checks `TrustedUserCAKeys`)
-2. **sshd checks principals**: Does the certificate's single principal appear in `/etc/ssh/auth_principals/%u`?
+2. **sshd checks principals**: Does the certificate's single principal match the requested login username?
 3. **Access granted** if the certificate's principal matches
 
 See [OIDC setup guide](./oidc-setup.md) for provider-specific configuration (Google, Okta, Azure AD).
@@ -487,13 +469,18 @@ parse error.
 - `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, derived from the user token's expiry. The CA signs with `min(now + expiration, notAfter)`. Omitted (zero value) means no ceiling beyond `expiration`.
 - `certParams.extensions` (map[string]string): SSH certificate extensions to grant
 
-**Denial (HTTP 403 or 401):**
+**Denial (HTTP 401, 403, or 500):**
 
-```json
-{"error": "User alice not authorized for deploy@prod-web-01.example.com"}
+Error responses are **plain text**, not JSON - the body is the message
+itself, with `Content-Type: text/plain` (see `writeError` in
+`pkg/policyserver/policyserver.go`):
+
+```
+User alice not authorized for deploy@prod-web-01.example.com
 ```
 
-Return any non-200 status code with this shape to deny the certificate request.
+Return any non-200 status code with a plain-text body to deny the
+certificate request.
 
 ### Service authentication (CA → policy server)
 

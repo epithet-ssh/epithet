@@ -36,31 +36,6 @@ type PolicyConfig struct {
 	Hosts    map[string]*Rules   `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host rules
 }
 
-// Validate checks that the PolicyConfig is valid.
-func (c *PolicyConfig) Validate() error {
-	if c.Users == nil {
-		return fmt.Errorf("users is required")
-	}
-
-	// Validate default expiration if provided.
-	if c.Defaults != nil && c.Defaults.Expiration != "" {
-		if err := ValidateDuration(c.Defaults.Expiration); err != nil {
-			return fmt.Errorf("invalid defaults.expiration: %w", err)
-		}
-	}
-
-	// Validate host rule expirations.
-	for hostname, hostRules := range c.Hosts {
-		if hostRules.Expiration != "" {
-			if err := ValidateDuration(hostRules.Expiration); err != nil {
-				return fmt.Errorf("invalid expiration for host %s: %w", hostname, err)
-			}
-		}
-	}
-
-	return nil
-}
-
 // Validate checks that the ServerConfig is valid.
 func (c *ServerConfig) Validate() error {
 	if c.CAPublicKey == "" {
@@ -126,7 +101,7 @@ type Rules struct {
 // Validate checks that the PolicyRulesConfig is valid
 func (c *PolicyRulesConfig) Validate() error {
 	if c.CAPublicKey == "" {
-		return fmt.Errorf("ca_public_key is required")
+		return fmt.Errorf("ca-pubkey is required")
 	}
 
 	if c.OIDC.Issuer == "" {

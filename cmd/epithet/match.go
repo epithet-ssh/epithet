@@ -54,7 +54,8 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 	}
 
 	// Read response events: zero or more Output lines (written live to
-	// stderr as auth progress, e.g. a device-code URL), then one Result.
+	// stderr as auth progress, e.g. the auth-code+PKCE URL to visit), then
+	// one Result.
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
 
@@ -79,13 +80,15 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 		return fmt.Errorf("no result received from broker")
 	}
 
-	// Handle response.
+	// Handle response. Allow alone drives the exit code; Error is a message
+	// to surface to the user, not necessarily a failure - the broker can set
+	// both when it denies the match with an explanation.
 	if result.Error != "" {
-		return fmt.Errorf("broker error: %s", result.Error)
+		fmt.Fprintln(os.Stderr, result.Error)
 	}
 
 	if !result.Allow {
-		// Not an error - just means epithet doesn't handle this host.
+		// Not an error - just means the broker denied the match.
 		// Exit silently with non-zero status so SSH knows the match failed.
 		os.Exit(1)
 	}

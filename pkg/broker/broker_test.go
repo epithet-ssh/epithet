@@ -292,10 +292,10 @@ func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, policyCfg *policyserver.Po
 
 // TestMatchFanOut_ThreeHostsThreeCAHits verifies the deletion-risk case from
 // spec §10: matching three distinct hosts under one shared policy mints
-// three separate certificates - one CA request per connection, never cached
-// or reused across connections (see Task 11b) - and each cert carries
-// exactly the principal requested for its own connection, never a union of
-// all three.
+// three separate certificates - one CA request per connection, since there
+// is no cross-connection certificate cache - and each cert carries exactly
+// the principal requested for its own connection, never a union of all
+// three.
 func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

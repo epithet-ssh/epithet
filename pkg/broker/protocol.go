@@ -19,8 +19,8 @@ type Request struct {
 }
 
 // Event is one line of JSON sent by the broker in response to a Request.
-// For a Match request: zero or more Output events (auth progress, e.g. a
-// device-code URL to visit) followed by exactly one Result event. For an
+// For a Match request: zero or more Output events (auth progress, e.g. the
+// auth-code+PKCE URL to visit) followed by exactly one Result event. For an
 // Inspect request: exactly one Inspect event.
 type Event struct {
 	Output  string           `json:"output,omitempty"`

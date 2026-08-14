@@ -17,7 +17,12 @@ services:
     networks:
       - epithet
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      # There is no /health route, and every other route on the policy
+      # server requires a CA-minted service JWT (every request 401s without
+      # one), so an HTTP check can't distinguish "up" from "down" here. A
+      # raw TCP connect is the honest check: it only confirms something is
+      # listening on the port.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9999"]
       interval: 30s
       timeout: 10s
       retries: 3

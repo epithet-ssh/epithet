@@ -72,8 +72,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 
 	// The cert carries only the principal actually requested for this
 	// connection - never the union of everything the user's tags could reach
-	// elsewhere in the policy (see Task 11b: authorization maps leave the
-	// wire entirely, and certs become strictly per-connection).
+	// elsewhere in the policy. Authorization maps never leave the wire, and
+	// certs are strictly per-connection.
 	return e.buildResponse(cfg, identity, tokenExpiry, conn.RemoteUser, expiration, extensions), nil
 }
 

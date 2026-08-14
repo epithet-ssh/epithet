@@ -86,12 +86,6 @@ func (a *Agent) Serve(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// Ready returns a channel that is closed once the agent's listener has
-// started (or failed to). Use WaitReady if you also want the startup error.
-func (a *Agent) Ready() <-chan struct{} {
-	return a.ready
-}
-
 // WaitReady blocks until Serve has started the agent's listener (or failed
 // to) and returns any startup error. Callers that run Serve in a goroutine -
 // and especially any that may later call Close from a different goroutine -

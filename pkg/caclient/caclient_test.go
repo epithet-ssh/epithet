@@ -40,77 +40,6 @@ func Test_StubExample(t *testing.T) {
 	assert.Equal("hello world", string(body))
 }
 
-func TestClient_422_ReturnsConnectionNotHandledError(t *testing.T) {
-	// Create a test server that returns 422
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		w.Write([]byte("connection not handled by this CA"))
-	}))
-	defer server.Close()
-
-	// Create a CA client pointing to our test server
-	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
-	client, err := caclient.New(endpoints)
-	require.NoError(t, err)
-
-	// Make a request
-	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
-	conn := policy.Connection{
-		RemoteHost: "unknown.example.com",
-		RemoteUser: "user",
-		Port:       22,
-	}
-	_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-		PublicKey:  pubKey,
-		Connection: conn,
-	})
-
-	// Should return ConnectionNotHandledError
-	require.Error(t, err)
-	var connNotHandled *caclient.ConnectionNotHandledError
-	require.True(t, errors.As(err, &connNotHandled), "expected ConnectionNotHandledError, got %T: %v", err, err)
-	assert.Contains(t, connNotHandled.Message, "connection not handled")
-}
-
-func TestClient_422_DoesNotTripCircuitBreaker(t *testing.T) {
-	callCount := 0
-
-	// Create a test server that returns 422
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		w.Write([]byte("connection not handled"))
-	}))
-	defer server.Close()
-
-	// Create a CA client
-	endpoints := []caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}}
-	client, err := caclient.New(endpoints)
-	require.NoError(t, err)
-
-	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
-	conn := policy.Connection{
-		RemoteHost: "unknown.example.com",
-		RemoteUser: "user",
-		Port:       22,
-	}
-
-	// Make multiple requests - circuit breaker should NOT trip
-	for i := 0; i < 5; i++ {
-		_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-			PublicKey:  pubKey,
-			Connection: conn,
-		})
-		require.Error(t, err)
-
-		var connNotHandled *caclient.ConnectionNotHandledError
-		require.True(t, errors.As(err, &connNotHandled), "request %d: expected ConnectionNotHandledError, got %T", i+1, err)
-	}
-
-	// All 5 requests should have reached the server (circuit breaker not tripped)
-	assert.Equal(t, 5, callCount, "expected 5 requests to reach server, but circuit breaker may have tripped")
-}
-
 func TestClient_StatusCodes(t *testing.T) {
 	// Test 4xx status codes that don't trip circuit breaker
 	// Note: 5xx responses trip the circuit breaker, which changes the error type,
@@ -134,14 +63,6 @@ func TestClient_StatusCodes(t *testing.T) {
 			func(t *testing.T, err error) {
 				var e *caclient.PolicyDeniedError
 				assert.True(t, errors.As(err, &e), "expected PolicyDeniedError, got %T", err)
-			},
-		},
-		{
-			"422 returns ConnectionNotHandledError",
-			http.StatusUnprocessableEntity,
-			func(t *testing.T, err error) {
-				var e *caclient.ConnectionNotHandledError
-				assert.True(t, errors.As(err, &e), "expected ConnectionNotHandledError, got %T", err)
 			},
 		},
 		{
@@ -267,53 +188,4 @@ func TestGetDiscovery_ClientError_ReturnsInvalidRequestError(t *testing.T) {
 	require.Error(t, err)
 	var invalidReq *caclient.InvalidRequestError
 	require.True(t, errors.As(err, &invalidReq), "expected InvalidRequestError, got %T: %v", err, err)
-}
-
-func TestGetPublicKey_ReturnsKey(t *testing.T) {
-	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if r.URL.Path != "/" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... CA public key"))
-	}))
-	defer caServer.Close()
-
-	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
-	client, err := caclient.New(endpoints)
-	require.NoError(t, err)
-
-	pubKey, err := client.GetPublicKey(context.Background())
-	require.NoError(t, err)
-	assert.Contains(t, pubKey, "ssh-ed25519")
-	assert.Contains(t, pubKey, "CA public key")
-}
-
-func TestGetPublicKey_HitsServerEachCall(t *testing.T) {
-	callCount := 0
-	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."))
-	}))
-	defer caServer.Close()
-
-	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
-	client, err := caclient.New(endpoints)
-	require.NoError(t, err)
-
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 1, callCount)
-
-	_, err = client.GetPublicKey(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 2, callCount)
 }
