@@ -2,15 +2,14 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
+	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -22,9 +21,51 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// profileNamePattern restricts profile names to characters that are safe to
+// embed unescaped in a filesystem path and in an ssh_config Tag/Match token.
+var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// validateProfileName rejects profile names that would be unsafe to embed in
+// a rundir path or an ssh_config "Tag epithet-<name>" token.
+func validateProfileName(name string) error {
+	if !profileNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid profile name %q: must match %s", name, profileNamePattern.String())
+	}
+	return nil
+}
+
+// acquireProfileLock takes an exclusive, non-blocking flock on
+// <runDir>/agent.lock so at most one agent process ever owns a given
+// profile's rundir: two agents sharing a rundir would race on
+// removing/recreating the live broker socket (startBrokerListener does an
+// os.Remove before listening), silently orphaning whichever one loses.
+// Returning early with a clear error is much better than that.
+//
+// The returned file's fd is intentionally never closed or unlocked here:
+// holding it open for the life of the process is exactly what pins the
+// lock, and the OS releases the flock automatically when the process exits
+// (normally or via signal), which is precisely when the lock should be
+// released. Callers must keep the returned *os.File reachable for as long
+// as the lock needs to be held (see runtime.KeepAlive at the call site) —
+// otherwise the os.File finalizer could close the fd, and the lock with it,
+// while the process is still running.
+func acquireProfileLock(runDir, name string) (*os.File, error) {
+	lockPath := filepath.Join(runDir, "agent.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open lock file %s: %w", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("profile %q is already running (use --name to run a second profile)", name)
+	}
+	return f, nil
+}
+
 // AgentCLI is the parent command for agent-related subcommands.
 // Shared flags are defined here and inherited by subcommands.
 type AgentCLI struct {
+	Name       string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>)" default:"default"`
 	CaURL      []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
 	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
@@ -40,6 +81,10 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	// Validate required fields for start
 	if len(parent.CaURL) == 0 {
 		return fmt.Errorf("--ca-url is required (at least one)")
+	}
+
+	if err := validateProfileName(parent.Name); err != nil {
+		return err
 	}
 
 	// Parse CA URLs into endpoints
@@ -63,38 +108,34 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Create a unique temporary directory for this broker instance
-	// Use a hash of the CA URLs to make it deterministic
-	instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
-	runDir := filepath.Join(homeDir, ".epithet", "run")
-	tempDir := filepath.Join(runDir, instanceID)
+	// The rundir is named after the profile, not derived from CA URLs: it is
+	// stable across restarts so a fixed ssh_config exec line and IdentityAgent
+	// path keep working without regenerating ~/.ssh/config. Ownership of a
+	// named dir is unambiguous (one profile, one agent process at a time), so
+	// there is nothing to garbage-collect: startup truncates and rewrites the
+	// config, and startBrokerListener removes and recreates the socket.
+	runDir := filepath.Join(homeDir, ".epithet", "run", parent.Name)
 
-	// Clean up stale run directories from dead processes
-	cleanupStaleRunDirs(runDir, logger)
-
-	// Clean up temp directory on exit
-	defer func() {
-		if err := os.RemoveAll(tempDir); err != nil {
-			logger.Warn("failed to remove temp directory", "error", err, "path", tempDir)
-		} else {
-			logger.Debug("removed temp directory", "path", tempDir)
-		}
-	}()
-
-	// Create temp directory
-	if err := os.MkdirAll(tempDir, 0700); err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+	// Create run directory
+	if err := os.MkdirAll(runDir, 0700); err != nil {
+		return fmt.Errorf("failed to create run directory: %w", err)
 	}
 
-	// Write PID file for stale detection
-	pidFile := filepath.Join(tempDir, "broker.pid")
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
+	// Guard against a second agent process silently stealing this profile's
+	// socket: without this, a concurrent `epithet agent` with the same
+	// --name (e.g. two shells both using the "default" profile) would
+	// os.Remove the live socket out from under the first process, orphaning
+	// it with no error. lockFile is deliberately kept alive for the rest of
+	// Run() via the runtime.KeepAlive below (see acquireProfileLock's docs).
+	lockFile, err := acquireProfileLock(runDir, parent.Name)
+	if err != nil {
+		return err
 	}
+	defer runtime.KeepAlive(lockFile)
 
-	// Define paths within temp directory
-	brokerSock := filepath.Join(tempDir, "broker.sock")
-	agentDir := filepath.Join(tempDir, "agent")
+	// Define paths within the run directory
+	brokerSock := filepath.Join(runDir, "broker.sock")
+	agentDir := filepath.Join(runDir, "agent")
 
 	// Create agent directory
 	if err := os.MkdirAll(agentDir, 0700); err != nil {
@@ -166,8 +207,8 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		cancel()
 	}()
 
-	// Generate SSH config file in the temp directory
-	sshConfigPath := filepath.Join(tempDir, "ssh-config.conf")
+	// Generate SSH config file in the run directory
+	sshConfigPath := filepath.Join(runDir, "ssh-config.conf")
 
 	if err := parent.generateSSHConfig(sshConfigPath, agentDir, brokerSock, homeDir); err != nil {
 		logger.Warn("failed to generate SSH config", "error", err, "path", sshConfigPath)
@@ -175,7 +216,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	} else {
 		// Check if ~/.ssh/config has the Include directive
 		includePattern := filepath.Join(homeDir, ".epithet", "run", "*", "ssh-config.conf")
-		if err := checkSSHConfigInclude(homeDir, includePattern, logger); err != nil {
+		if err := checkSSHConfigInclude(homeDir, includePattern, parent.Name, logger); err != nil {
 
 			logger.Warn(fmt.Sprintf("Add 'Include %s' to ~/.ssh/config", includePattern))
 		}
@@ -193,7 +234,11 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	return nil
 }
 
-// generateSSHConfig writes an SSH config file for epithet
+// generateSSHConfig writes an SSH config file for this profile. The block is
+// gated by "Match tagged epithet-<name>" rather than a bare Match exec so
+// that multiple profiles' generated configs can coexist: ssh only evaluates
+// a profile's exec line for hosts the user opted into via a Tag directive in
+// their own Host blocks, keyed by this profile's name.
 func (a *AgentCLI) generateSSHConfig(path, agentDir, brokerSock, homeDir string) error {
 	// Find epithet binary path
 	epithetPath, err := os.Executable()
@@ -201,27 +246,33 @@ func (a *AgentCLI) generateSSHConfig(path, agentDir, brokerSock, homeDir string)
 		epithetPath = "epithet" // fallback to PATH
 	}
 
-	// Generate include path with full home directory (SSH doesn't expand ~)
+	// Full home directory in the include pattern since ssh_config doesn't expand ~.
 	includePattern := filepath.Join(homeDir, ".epithet", "run", "*", "ssh-config.conf")
+	tag := "epithet-" + a.Name
 
-	// SSH config uses Match exec only - the broker checks discovery patterns dynamically.
 	// We only set IdentityAgent to point to the per-connection agent. This allows normal
 	// fallback to ~/.ssh/id_* keys and password auth if epithet certificates aren't available,
 	// which is important for production failure recovery.
 	config := fmt.Sprintf(`# Generated by epithet agent - do not edit manually
-# This file is automatically created when the broker starts and deleted when it stops
-# Broker socket: %s
-# Agent directory: %s
+# Profile: %s
 #
-# To use epithet, add the following to ~/.ssh/config:
+# In ~/.ssh/config, tag the hosts this profile should handle, then include
+# epithet's generated config AFTER the Tag lines (tags must be set before
+# Match tagged is evaluated):
+#
+#   Host *.example.com
+#       Tag %s
 #   Include %s
+#
+# Requires OpenSSH 9.4 or newer (Tag / Match tagged).
 
-Match exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
+Match tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
     IdentityAgent %s/%%C
 `,
-		brokerSock,
-		agentDir,
+		a.Name,
+		tag,
 		includePattern,
+		tag,
 		epithetPath,
 		brokerSock,
 		agentDir,
@@ -233,7 +284,9 @@ Match exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash 
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Write config file
+	// Truncate-and-rewrite: the rundir is named for the profile and persists
+	// across restarts, so each start must overwrite any config left by a
+	// prior run rather than assuming the file doesn't exist yet.
 	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
 		return fmt.Errorf("failed to write SSH config: %w", err)
 	}
@@ -242,7 +295,7 @@ Match exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash 
 }
 
 // checkSSHConfigInclude checks if ~/.ssh/config contains the Include directive for epithet
-func checkSSHConfigInclude(homeDir, includePattern string, logger *slog.Logger) error {
+func checkSSHConfigInclude(homeDir, includePattern, name string, logger *slog.Logger) error {
 	sshConfigPath := filepath.Join(homeDir, ".ssh", "config")
 
 	// Read SSH config file
@@ -255,16 +308,27 @@ func checkSSHConfigInclude(homeDir, includePattern string, logger *slog.Logger) 
 		return fmt.Errorf("failed to read SSH config: %w", err)
 	}
 
-	// Check for Include directive (case-insensitive, flexible whitespace)
+	// Walk line by line (case-insensitive, flexible whitespace), tracking the
+	// first Tag line so we can warn if the epithet Include precedes it: ssh
+	// evaluates "Match tagged" against whatever tags are already set, so an
+	// Include line above every Tag line would never see the tag activated.
+	firstTagLineNum := -1
+	includeLineNum := -1
+	lineNum := 0
 	lines := strings.SplitSeq(string(content), "\n")
 	for line := range lines {
+		lineNum++
 		trimmed := strings.TrimSpace(line)
 		// Skip comments
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
+		lower := strings.ToLower(trimmed)
+		if firstTagLineNum == -1 && strings.HasPrefix(lower, "tag ") {
+			firstTagLineNum = lineNum
+		}
 		// Check for Include directive (case-insensitive)
-		if strings.HasPrefix(strings.ToLower(trimmed), "include ") {
+		if strings.HasPrefix(lower, "include ") {
 			// Extract the path after "Include"
 			parts := strings.Fields(trimmed)
 			if len(parts) >= 2 {
@@ -274,79 +338,26 @@ func checkSSHConfigInclude(homeDir, includePattern string, logger *slog.Logger) 
 					includePath = filepath.Join(homeDir, includePath[2:])
 				}
 				// Check if it matches our pattern
-				if includePath == includePattern {
-					logger.Debug("found epithet Include directive in ~/.ssh/config")
-					return nil
+				if includePath == includePattern && includeLineNum == -1 {
+					includeLineNum = lineNum
 				}
 			}
 		}
 	}
 
-	return fmt.Errorf("Include directive not found")
-}
-
-// hashString creates a short hash of a string for use in filenames
-func hashString(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:8]) // Use first 8 bytes (16 hex chars)
-}
-
-// cleanupStaleRunDirs removes run directories from dead processes
-func cleanupStaleRunDirs(runDir string, logger *slog.Logger) {
-	entries, err := os.ReadDir(runDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return // No run directory yet, nothing to clean
-		}
-		logger.Warn("failed to read run directory", "error", err)
-		return
+	if includeLineNum == -1 {
+		return fmt.Errorf("Include directive not found")
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		instanceDir := filepath.Join(runDir, entry.Name())
-		pidFile := filepath.Join(instanceDir, "broker.pid")
-
-		pidBytes, err := os.ReadFile(pidFile)
-		if err != nil {
-			// No PID file - could be old format or corrupted, remove it
-			logger.Info("removing run directory without PID file", "path", instanceDir)
-			if err := os.RemoveAll(instanceDir); err != nil {
-				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
-			}
-			continue
-		}
-
-		pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-		if err != nil {
-			logger.Warn("invalid PID file", "path", pidFile, "error", err)
-			if err := os.RemoveAll(instanceDir); err != nil {
-				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
-			}
-			continue
-		}
-
-		// Check if process is alive
-		process, err := os.FindProcess(pid)
-		if err != nil {
-			// On Unix, FindProcess always succeeds, but let's be safe
-			if err := os.RemoveAll(instanceDir); err != nil {
-				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
-			}
-			continue
-		}
-
-		// Send signal 0 to check if process exists
-		err = process.Signal(syscall.Signal(0))
-		if err != nil {
-			// Process is dead
-			logger.Info("removing stale run directory", "path", instanceDir, "dead_pid", pid)
-			if err := os.RemoveAll(instanceDir); err != nil {
-				logger.Warn("failed to remove stale directory", "path", instanceDir, "error", err)
-			}
-		}
+	logger.Debug("found epithet Include directive in ~/.ssh/config")
+	switch {
+	case firstTagLineNum == -1:
+		// The Include is present but the user never wrote a Tag line at all —
+		// the single most likely real-world misconfiguration, and one that
+		// otherwise fails completely silently (epithet just never activates).
+		logger.Warn(fmt.Sprintf("no 'Tag epithet-%s' lines found in ~/.ssh/config — epithet will never activate; tag the Host blocks it should handle", name))
+	case includeLineNum < firstTagLineNum:
+		logger.Warn("Include must come after Tag lines or epithet will never activate")
 	}
+	return nil
 }

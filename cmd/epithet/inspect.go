@@ -18,7 +18,7 @@ import (
 )
 
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
-// It inherits CaURL from the parent AgentCLI.
+// It inherits CaURL and Name from the parent AgentCLI.
 type AgentInspectCLI struct {
 	Broker string `help:"Broker socket path (overrides config-based discovery)" short:"b"`
 	JSON   bool   `help:"Output in JSON format" short:"j"`
@@ -35,13 +35,16 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 			return fmt.Errorf("failed to expand broker socket path: %w", err)
 		}
 	} else if len(parent.CaURL) > 0 {
-		// Derive socket path from parent's config (same logic as AgentStartCLI).
+		// Derive socket path from the profile name (same rundir logic as
+		// AgentStartCLI): the rundir is named for the profile, not the CA URLs.
+		if err := validateProfileName(parent.Name); err != nil {
+			return err
+		}
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("failed to get home directory: %w", err)
 		}
-		instanceID := hashString(fmt.Sprintf("%v", parent.CaURL))
-		brokerSock = filepath.Join(homeDir, ".epithet", "run", instanceID, "broker.sock")
+		brokerSock = filepath.Join(homeDir, ".epithet", "run", parent.Name, "broker.sock")
 	} else {
 		return fmt.Errorf("must specify either --broker or --ca-url")
 	}

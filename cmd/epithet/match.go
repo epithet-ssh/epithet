@@ -18,7 +18,7 @@ type MatchCLI struct {
 	User   string `help:"Remote user (%r)" short:"r" required:"true"`
 	Hash   string `help:"Connection hash (%C)" short:"C" required:"true"`
 	Jump   string `help:"ProxyJump configuration (%j)" short:"j" optional:"true"`
-	Broker string `help:"Broker socket path" short:"b" default:"~/.epithet/broker.sock"`
+	Broker string `help:"Broker socket path" short:"b" required:"true"`
 }
 
 func (m *MatchCLI) Run(logger *slog.Logger) error {
