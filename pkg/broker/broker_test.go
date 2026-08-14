@@ -1,25 +1,23 @@
 package broker
 
 import (
-	"bytes"
+	"bufio"
 	"context"
-	"fmt"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
-	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // testCAClient creates a test CA client for use in tests.
@@ -56,37 +54,26 @@ func testTokenFunc(t *testing.T, idp *oidctest.IdP) TokenFunc {
 	}
 }
 
-// testGRPCClient creates a gRPC client connected to the given socket path.
-func testGRPCClient(t *testing.T, socketPath string) pb.BrokerServiceClient {
+// callMatch dials socketPath, sends a Match request for conn, and returns
+// the terminal Result event (discarding any Output events along the way).
+func callMatch(t *testing.T, socketPath string, conn policy.Connection) *MatchResponse {
 	t.Helper()
-	conn, err := grpc.NewClient(
-		"unix://"+socketPath,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	c, err := net.Dial("unix", socketPath)
 	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
-	return pb.NewBrokerServiceClient(conn)
-}
+	defer c.Close()
 
-// callMatch is a helper that calls Match and returns the result, handling streaming.
-func callMatch(t *testing.T, client pb.BrokerServiceClient, req *pb.MatchRequest) *pb.MatchResult {
-	t.Helper()
-	stream, err := client.Match(context.Background(), req)
-	require.NoError(t, err)
+	require.NoError(t, json.NewEncoder(c).Encode(Request{Match: &conn}))
 
-	var result *pb.MatchResult
-	for {
-		event, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		if r, ok := event.Event.(*pb.MatchEvent_Result); ok {
-			result = r.Result
+	sc := bufio.NewScanner(c)
+	for sc.Scan() {
+		var ev Event
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &ev))
+		if ev.Result != nil {
+			return ev.Result
 		}
 	}
-	require.NotNil(t, result, "no result received from broker")
-	return result
+	t.Fatal("no result received from broker")
+	return nil
 }
 
 func Test_RpcBasics(t *testing.T) {
@@ -114,8 +101,7 @@ func Test_RpcBasics(t *testing.T) {
 	// Wait for broker to be ready.
 	<-b.Ready()
 
-	client := testGRPCClient(t, socketPath)
-	result := callMatch(t, client, &pb.MatchRequest{})
+	result := callMatch(t, socketPath, policy.Connection{})
 
 	// With no agent available, should return false.
 	require.False(t, result.Allow)
@@ -147,21 +133,15 @@ func Test_MatchRequestFields(t *testing.T) {
 	// Wait for broker to be ready.
 	<-b.Ready()
 
-	client := testGRPCClient(t, socketPath)
-
 	// Test with all fields populated.
-	req := &pb.MatchRequest{
-		Connection: &pb.Connection{
-			LocalHost:  "mylaptop.local",
-			RemoteHost: "server.example.com",
-			RemoteUser: "root",
-			Port:       22,
-			ProxyJump:  "bastion.example.com",
-			Hash:       "abc123def456",
-		},
-	}
-
-	result := callMatch(t, client, req)
+	result := callMatch(t, socketPath, policy.Connection{
+		LocalHost:  "mylaptop.local",
+		RemoteHost: "server.example.com",
+		RemoteUser: "root",
+		Port:       22,
+		ProxyJump:  "bastion.example.com",
+		Hash:       "abc123def456",
+	})
 
 	// The mock CA server doesn't return a valid cert, so we expect an error.
 	require.False(t, result.Allow)
@@ -250,69 +230,7 @@ func TestCleanupExpiredAgents(t *testing.T) {
 	require.False(t, exists, "expiring-soon agent should be cleaned up")
 }
 
-// Test_MatchStreamsUserOutput verifies that fd 4 output from the auth script flows
-// through the full gRPC Match stream as UserOutput events.
-func Test_MatchStreamsUserOutput(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-
-	// TokenFunc writes user-visible progress and mints a token.
-	idp := oidctest.New(t)
-	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
-		fmt.Fprintln(out, "Visit https://example.com and enter code ABC-123")
-		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
-	}
-	tmpDir := shortTempDir(t)
-	socketPath := tmpDir + "/b.sock"
-	agentSocketDir := tmpDir + "/a"
-
-	caClient := testCAClientOK(t)
-	b, err := New(*testLogger(t), socketPath, tokenFn, caClient, agentSocketDir)
-	require.NoError(t, err)
-	b.SetShutdownTimeout(0)
-
-	go func() {
-		err := b.Serve(ctx)
-		if err != nil && err != ctx.Err() {
-			t.Errorf("broker.Serve error: %v", err)
-		}
-	}()
-	defer b.Close()
-	<-b.Ready()
-
-	client := testGRPCClient(t, socketPath)
-
-	// Call Match directly (not callMatch, which discards UserOutput events).
-	stream, err := client.Match(context.Background(), &pb.MatchRequest{
-		Connection: &pb.Connection{
-			RemoteHost: "server.example.com",
-			RemoteUser: "user",
-			Port:       22,
-			Hash:       "stream-test",
-		},
-	})
-	require.NoError(t, err)
-
-	var userOutput bytes.Buffer
-	var result *pb.MatchResult
-	for {
-		event, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		switch e := event.Event.(type) {
-		case *pb.MatchEvent_UserOutput:
-			userOutput.Write(e.UserOutput)
-		case *pb.MatchEvent_Result:
-			result = e.Result
-		}
-	}
-
-	require.Contains(t, userOutput.String(), "Visit https://example.com",
-		"fd 4 output should be streamed as UserOutput events")
-	require.NotNil(t, result, "should receive a MatchResult")
-	// Allow will be false because the mock CA can't issue real certs — that's fine,
-	// we're testing that user output streams through, not cert issuance.
-	require.False(t, result.Allow)
-}
+// Test_MatchStreamsUserOutput's coverage (fd 4 auth output streams through
+// to the client before the terminal result) moved to protocol_test.go's
+// TestMatchStreamsOutputThenResult when the broker IPC switched from gRPC
+// streaming to newline-framed JSON.

@@ -1,20 +1,19 @@
 package main
 
 import (
-	"context"
+	"bufio"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
 
-	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
+	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
@@ -49,31 +48,49 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		return fmt.Errorf("must specify either --broker or --ca-url")
 	}
 
-	// Connect to broker via gRPC over Unix socket.
-	conn, err := grpc.NewClient(
-		"unix://"+brokerSock,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	// Connect to the broker over its Unix socket and send one request line.
+	conn, err := net.Dial("unix", brokerSock)
 	if err != nil {
 		return fmt.Errorf("failed to connect to broker at %s: %w", brokerSock, err)
 	}
 	defer conn.Close()
 
-	client := pb.NewBrokerServiceClient(conn)
+	if err := json.NewEncoder(conn).Encode(broker.Request{Inspect: &struct{}{}}); err != nil {
+		return fmt.Errorf("failed to send inspect request: %w", err)
+	}
 
-	// Call broker.
-	resp, err := client.Inspect(context.Background(), &pb.InspectRequest{})
-	if err != nil {
-		return fmt.Errorf("broker RPC call failed: %w", err)
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
+
+	var resp *broker.InspectResponse
+	for scanner.Scan() {
+		var ev broker.Event
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			return fmt.Errorf("failed to parse broker event: %w", err)
+		}
+		if ev.Inspect != nil {
+			resp = ev.Inspect
+			break
+		}
+		if ev.Result != nil {
+			// A malformed-request denial is the only Result an Inspect
+			// request can get back (the broker never returns a Match result
+			// here); surface it as the RPC error it effectively is.
+			return fmt.Errorf("broker error: %s", ev.Result.Error)
+		}
+	}
+	if resp == nil {
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("broker connection error: %w", err)
+		}
+		return fmt.Errorf("no response received from broker")
 	}
 
 	// Output results.
 	if i.JSON {
-		// For JSON output, convert to a simpler structure.
-		output := inspectResponseToJSON(resp)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(output)
+		return enc.Encode(resp)
 	}
 
 	// Human-readable output.
@@ -82,17 +99,17 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	fmt.Printf("Socket: %s\n", resp.SocketPath)
 	fmt.Printf("Agent Dir: %s\n\n", resp.AgentSocketDir)
 
-	fmt.Printf("CA Endpoints (%d)\n", len(resp.CaEndpoints))
+	fmt.Printf("CA Endpoints (%d)\n", len(resp.CAEndpoints))
 	fmt.Printf("-----------------\n")
-	if len(resp.CaEndpoints) == 0 {
+	if len(resp.CAEndpoints) == 0 {
 		fmt.Printf("  (none)\n")
 	} else {
-		for _, ep := range resp.CaEndpoints {
+		for _, ep := range resp.CAEndpoints {
 			status := "healthy"
 			if ep.State == "open" || ep.State == "half-open" {
 				status = "broken"
 			}
-			fmt.Printf("  %s\n", ep.Url)
+			fmt.Printf("  %s\n", ep.URL)
 			fmt.Printf("    Priority: %d\n", ep.Priority)
 			fmt.Printf("    Status: %s\n", status)
 		}
@@ -106,8 +123,7 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	} else {
 		now := time.Now()
 		for _, ag := range resp.Agents {
-			expiresAt := ag.ExpiresAt.AsTime()
-			remaining := expiresAt.Sub(now).Round(time.Second)
+			remaining := ag.ExpiresAt.Sub(now).Round(time.Second)
 			status := "valid"
 			if remaining < 0 {
 				status = "expired"
@@ -115,66 +131,17 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 			}
 			fmt.Printf("  %s\n", ag.Hash)
 			fmt.Printf("    Socket: %s\n", ag.SocketPath)
-			fmt.Printf("    Expires: %s (%s, %s)\n", expiresAt.Format(time.RFC3339), status, remaining)
+			fmt.Printf("    Expires: %s (%s, %s)\n", ag.ExpiresAt.Format(time.RFC3339), status, remaining)
 
 			// Parse and display certificate info.
 			if ag.Certificate != "" {
-				fingerprint := certFingerprint(sshcert.RawCertificate(ag.Certificate))
+				fingerprint := certFingerprint(ag.Certificate)
 				fmt.Printf("    Certificate: %s\n", fingerprint)
 			}
 		}
 	}
 
 	return nil
-}
-
-// inspectResponseJSON is a simplified structure for JSON output.
-type inspectResponseJSON struct {
-	SocketPath     string               `json:"socketPath"`
-	AgentSocketDir string               `json:"agentSocketDir"`
-	Agents         []agentInfoJSON      `json:"agents"`
-	CAEndpoints    []caEndpointInfoJSON `json:"caEndpoints"`
-}
-
-type caEndpointInfoJSON struct {
-	URL      string `json:"url"`
-	Priority int32  `json:"priority"`
-	State    string `json:"state"`
-}
-
-type agentInfoJSON struct {
-	Hash        string    `json:"hash"`
-	SocketPath  string    `json:"socketPath"`
-	ExpiresAt   time.Time `json:"expiresAt"`
-	Certificate string    `json:"certificate"`
-}
-
-func inspectResponseToJSON(resp *pb.InspectResponse) inspectResponseJSON {
-	agents := make([]agentInfoJSON, len(resp.Agents))
-	for i, a := range resp.Agents {
-		agents[i] = agentInfoJSON{
-			Hash:        a.Hash,
-			SocketPath:  a.SocketPath,
-			ExpiresAt:   a.ExpiresAt.AsTime(),
-			Certificate: a.Certificate,
-		}
-	}
-
-	caEndpoints := make([]caEndpointInfoJSON, len(resp.CaEndpoints))
-	for i, ep := range resp.CaEndpoints {
-		caEndpoints[i] = caEndpointInfoJSON{
-			URL:      ep.Url,
-			Priority: ep.Priority,
-			State:    ep.State,
-		}
-	}
-
-	return inspectResponseJSON{
-		SocketPath:     resp.SocketPath,
-		AgentSocketDir: resp.AgentSocketDir,
-		Agents:         agents,
-		CAEndpoints:    caEndpoints,
-	}
 }
 
 // certFingerprint returns the SHA256 fingerprint of a certificate.

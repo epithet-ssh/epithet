@@ -6,11 +6,9 @@ import (
 	"io"
 	"testing"
 
-	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // testClient creates a test CA client for use in tests.
@@ -69,37 +67,11 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	// Wait for broker to be ready.
 	<-b.Ready()
 
-	// Connect via gRPC.
-	conn, err := grpc.NewClient(
-		"unix://"+socketPath,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	client := pb.NewBrokerServiceClient(conn)
-
 	// Make a Match request with no existing agent.
-	stream, err := client.Match(context.Background(), &pb.MatchRequest{
-		Connection: &pb.Connection{
-			RemoteHost: "server.example.com",
-			Hash:       "nonexistent-hash",
-		},
+	result := callMatch(t, socketPath, policy.Connection{
+		RemoteHost: "server.example.com",
+		Hash:       "nonexistent-hash",
 	})
-	require.NoError(t, err)
-
-	// Read the result from stream.
-	var result *pb.MatchResult
-	for {
-		event, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		if r, ok := event.Event.(*pb.MatchEvent_Result); ok {
-			result = r.Result
-		}
-	}
 
 	require.NotNil(t, result)
 	// Should return Allow=false (no agent available).

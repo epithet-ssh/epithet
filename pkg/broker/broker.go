@@ -13,12 +13,10 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
-	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"google.golang.org/grpc"
 )
 
 // cleanupInterval is how often the broker checks for expired agents to clean up
@@ -369,26 +367,7 @@ func (b *Broker) BrokerSocketPath() string {
 }
 
 func (b *Broker) serve(ctx context.Context) {
-	server := grpc.NewServer()
-	pb.RegisterBrokerServiceServer(server, NewBrokerServer(b))
-
-	// Monitor context cancellation to trigger graceful shutdown.
-	go func() {
-		<-ctx.Done()
-		server.GracefulStop()
-	}()
-
-	// Serve blocks until GracefulStop is called.
-	if err := server.Serve(b.brokerListener); err != nil {
-		// Check if error is from shutdown.
-		select {
-		case <-ctx.Done():
-			// Expected during shutdown.
-			return
-		default:
-			b.log.Error("gRPC server error", "error", err)
-		}
-	}
+	b.serveProtocol(ctx, b.brokerListener)
 }
 
 func (b *Broker) Done() <-chan struct{} {

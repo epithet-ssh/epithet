@@ -1,16 +1,21 @@
 package main
 
 import (
-	"context"
+	"bufio"
+	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
+	"net"
 	"os"
 
-	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 )
+
+// scannerBufferSize caps how large a single response line from the broker
+// may be. Shared with inspect.go's client, whose Inspect responses can carry
+// several agents' worth of certificate data and so need the same headroom.
+const scannerBufferSize = 1024 * 1024 // 1MiB.
 
 type MatchCLI struct {
 	Host   string `help:"Remote host (%h)" short:"H" required:"true"`
@@ -36,57 +41,48 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 		return fmt.Errorf("failed to get local hostname: %w", err)
 	}
 
-	// Connect to broker via gRPC over Unix socket.
-	conn, err := grpc.NewClient(
-		"unix://"+brokerSock,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	// Connect to the broker over its Unix socket and send one request line.
+	conn, err := net.Dial("unix", brokerSock)
 	if err != nil {
 		return fmt.Errorf("failed to connect to broker at %s: %w", brokerSock, err)
 	}
 	defer conn.Close()
 
-	client := pb.NewBrokerServiceClient(conn)
-
-	// Build request.
-	req := &pb.MatchRequest{
-		Connection: &pb.Connection{
-			LocalHost:  localHost,
-			RemoteHost: m.Host,
-			RemoteUser: m.User,
-			Port:       uint32(m.Port),
-			ProxyJump:  m.Jump,
-			Hash:       m.Hash,
-		},
+	req := broker.Request{Match: &policy.Connection{
+		LocalHost:  localHost,
+		RemoteHost: m.Host,
+		RemoteUser: m.User,
+		Port:       m.Port,
+		ProxyJump:  m.Jump,
+		Hash:       policy.ConnectionHash(m.Hash),
+	}}
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return fmt.Errorf("failed to send match request: %w", err)
 	}
 
-	// Call broker with streaming to receive user output and result.
-	stream, err := client.Match(context.Background(), req)
-	if err != nil {
-		return fmt.Errorf("broker RPC call failed: %w", err)
-	}
+	// Read response events: zero or more Output lines (written live to
+	// stderr as auth progress, e.g. a device-code URL), then one Result.
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
 
-	// Process stream events.
-	var result *pb.MatchResult
-	for {
-		event, err := stream.Recv()
-		if err == io.EOF {
+	var result *broker.MatchResponse
+	for scanner.Scan() {
+		var ev broker.Event
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			return fmt.Errorf("failed to parse broker event: %w", err)
+		}
+		if ev.Output != "" {
+			os.Stderr.WriteString(ev.Output)
+		}
+		if ev.Result != nil {
+			result = ev.Result
 			break
 		}
-		if err != nil {
-			return fmt.Errorf("stream error: %w", err)
-		}
-
-		switch e := event.Event.(type) {
-		case *pb.MatchEvent_UserOutput:
-			// Write auth command user output to our stderr for display.
-			os.Stderr.Write(e.UserOutput)
-		case *pb.MatchEvent_Result:
-			result = e.Result
-		}
 	}
-
 	if result == nil {
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("broker connection error: %w", err)
+		}
 		return fmt.Errorf("no result received from broker")
 	}
 
