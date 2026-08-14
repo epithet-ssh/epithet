@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"testing"
 
@@ -23,15 +24,20 @@ func testClient(t *testing.T, url string) *caclient.Client {
 	return client
 }
 
+// stubTokenFunc always fails. Used by tests that never reach the auth step,
+// or that only need the match path to fail past it (e.g. no CA reachable).
+func stubTokenFunc(ctx context.Context, out io.Writer, force bool) (string, error) {
+	return "", fmt.Errorf("auth not configured for this test")
+}
+
 func TestBroker_AgentMapInitialized(t *testing.T) {
 	t.Parallel()
-	authCommand := "echo '6:thello,'"
 	// Use short paths to avoid Unix socket path length limits.
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, stubTokenFunc, testClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 
 	// Verify agents map is initialized.
@@ -42,13 +48,12 @@ func TestBroker_AgentMapInitialized(t *testing.T) {
 func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	authCommand := "echo '6:thello,'"
 	// Use short paths to avoid Unix socket path length limits.
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testClient(t, "http://localhost:9999"), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, stubTokenFunc, testClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 

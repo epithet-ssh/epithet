@@ -21,13 +21,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-const (
-	// maxRetries is the maximum number of retry attempts for CA 401 errors and auth plugin failures
-	maxRetries = 3
-
-	// cleanupInterval is how often the broker checks for expired agents to clean up
-	cleanupInterval = 30 * time.Second
-)
+// cleanupInterval is how often the broker checks for expired agents to clean up
+const cleanupInterval = 30 * time.Second
 
 // agentEntry tracks a running agent and when its certificate expires
 type agentEntry struct {
@@ -43,7 +38,7 @@ type agentEntry struct {
 //
 // Locking invariants:
 //   - b.lock protects: agents map (both reads and writes)
-//   - Auth has its own internal lock (auth.lock) - safe to call without b.lock
+//   - Auth has its own internal lock (auth.mu) - safe to call without b.lock
 //   - CertificateStore has its own internal lock (certStore.lock) - safe to call without b.lock
 //   - Match() only holds b.lock around agents-map access, never across auth or
 //     CA calls, so concurrent matches can share an in-flight auth attempt.
@@ -89,13 +84,13 @@ func (f optionFunc) apply(b *Broker) error {
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, authCommand string, caClient *caclient.Client, agentSocketDir string, options ...Option) (*Broker, error) {
+func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient.Client, agentSocketDir string, options ...Option) (*Broker, error) {
 	if caClient == nil {
 		return nil, fmt.Errorf("caClient is required")
 	}
 
 	b := &Broker{
-		auth:             NewAuth(authCommand),
+		auth:             NewAuth(fetch),
 		certStore:        NewCertificateStore(),
 		agents:           make(map[policy.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
@@ -162,10 +157,6 @@ func (b *Broker) startBrokerListener() error {
 	return nil
 }
 
-type MatchRequest struct {
-	Connection policy.Connection
-}
-
 type MatchResponse struct {
 	// Should the `Match exec` actually match?
 	Allow bool
@@ -208,12 +199,10 @@ type InspectResponse struct {
 	CAEndpoints    []CAEndpointInfo `json:"caEndpoints"`
 }
 
-// Match is invoked via rpc from `epithet match` invocations.
-func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
-	result := b.MatchWithUserOutput(context.Background(), input.Connection, nil)
-	output.Allow = result.Allow
-	output.Error = result.Error
-	return nil
+// deny logs a match failure and builds the corresponding denial response.
+func (b *Broker) deny(err error) MatchResponse {
+	b.log.Error("match failed", "error", err)
+	return MatchResponse{Allow: false, Error: err.Error()}
 }
 
 // MatchWithUserOutput performs the match operation, streaming auth user output
@@ -258,102 +247,37 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 	// Generate ephemeral keypair for this connection.
 	publicKey, privateKey, err := sshcert.GenerateKeys()
 	if err != nil {
-		b.log.Error("failed to generate keypair", "error", err)
-		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to generate keypair: %v", err)}
+		return b.deny(fmt.Errorf("failed to generate keypair: %w", err))
 	}
 
-	// Request certificate with retry logic for 401 errors.
-	var certResp *caclient.CertResponse
-	for attempt := range maxRetries {
-		if attempt > 0 {
-			b.log.Debug("retrying certificate request", "attempt", attempt+1, "max", maxRetries)
-		}
-
-		// Ensure we have an auth token.
-		token := b.auth.Token()
-		if token == "" {
-			b.log.Debug("no auth token, authenticating")
-			token, err = b.auth.Run(ctx, nil, userOutput)
-			if err != nil {
-				// Auth command failed - don't retry automatically.
-				// User should fix the issue and retry the SSH connection.
-				b.log.Error("authentication failed", "error", err)
-				return MatchResponse{Allow: false, Error: fmt.Sprintf("authentication failed: %v", err)}
-			}
-			b.log.Debug("authentication successful")
-		}
-
-		// Request certificate from CA.
-		certResp, err = b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
-			PublicKey:  publicKey,
-			Connection: conn,
-		})
-
-		if err == nil {
-			// Success!
-			break
-		}
-
-		// Check error type for appropriate handling.
-		var invalidToken *caclient.InvalidTokenError
-		if errors.As(err, &invalidToken) {
-			// Token is invalid/expired - clear and retry.
-			b.log.Warn("token invalid or expired, clearing and retrying", "attempt", attempt+1)
-			b.auth.ClearToken()
-			continue
-		}
-
-		var policyDenied *caclient.PolicyDeniedError
-		if errors.As(err, &policyDenied) {
-			// Policy denied - don't retry, keep token.
-			b.log.Error("CA policy denied access", "error", policyDenied.Message)
-			return MatchResponse{Allow: false, Error: policyDenied.Error()}
-		}
-
-		var caUnavailable *caclient.CAUnavailableError
-		if errors.As(err, &caUnavailable) {
-			// CA unavailable - don't retry, keep token.
-			b.log.Error("CA service unavailable", "error", caUnavailable.Message)
-			return MatchResponse{Allow: false, Error: caUnavailable.Error()}
-		}
-
-		var allCAsUnavailable *caclient.AllCAsUnavailableError
-		if errors.As(err, &allCAsUnavailable) {
-			// All CAs are in circuit breaker - don't retry.
-			b.log.Error("all CA servers unavailable", "error", allCAsUnavailable.Message)
-			return MatchResponse{Allow: false, Error: allCAsUnavailable.Error()}
-		}
-
-		var invalidRequest *caclient.InvalidRequestError
-		if errors.As(err, &invalidRequest) {
-			// Invalid request - don't retry, keep token.
-			b.log.Error("invalid certificate request", "error", invalidRequest.Message)
-			return MatchResponse{Allow: false, Error: invalidRequest.Error()}
-		}
-
-		var connNotHandled *caclient.ConnectionNotHandledError
-		if errors.As(err, &connNotHandled) {
-			// CA/policy does not handle this connection - fail match, let SSH fall through.
-			b.log.Info("connection not handled by CA", "error", connNotHandled.Message)
-			return MatchResponse{Allow: false, Error: connNotHandled.Error()}
-		}
-
-		// Other errors (network, etc.) - fail without retry.
-		b.log.Error("failed to request certificate from CA", "error", err)
-		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to request certificate: %v", err)}
-	}
-
-	// Check if we exhausted retries.
+	token, err := b.auth.Token(ctx, userOutput)
 	if err != nil {
-		b.log.Error("exhausted retries requesting certificate", "attempts", maxRetries)
-		return MatchResponse{Allow: false, Error: "authentication failed after multiple attempts"}
+		return b.deny(fmt.Errorf("authentication failed: %w", err))
+	}
+
+	certResp, err := b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
+		PublicKey: publicKey, Connection: conn,
+	})
+	var invalidToken *caclient.InvalidTokenError
+	if errors.As(err, &invalidToken) {
+		// Safety net: server-side revocation or clock skew. One forced refresh.
+		b.log.Warn("CA rejected token despite local validity, refreshing once")
+		token, err = b.auth.ForceRefresh(ctx, userOutput)
+		if err != nil {
+			return b.deny(fmt.Errorf("re-authentication failed: %w", err))
+		}
+		certResp, err = b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
+			PublicKey: publicKey, Connection: conn,
+		})
+	}
+	if err != nil {
+		return b.deny(fmt.Errorf("certificate request failed: %w", err))
 	}
 
 	// Store the certificate with policy and expiration.
 	expiresAt, err := certResp.Certificate.Expiry()
 	if err != nil {
-		b.log.Error("failed to parse certificate expiry", "error", err)
-		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to parse certificate expiry: %v", err)}
+		return b.deny(fmt.Errorf("failed to parse certificate expiry: %w", err))
 	}
 	b.certStore.Store(PolicyCert{
 		Policy:     certResp.Policy,
@@ -368,10 +292,8 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
 	}
-	err = b.ensureAgent(conn.Hash, credential)
-	if err != nil {
-		b.log.Error("failed to create agent", "error", err)
-		return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to create agent: %v", err)}
+	if err := b.ensureAgent(conn.Hash, credential); err != nil {
+		return b.deny(fmt.Errorf("failed to create agent: %w", err))
 	}
 
 	return MatchResponse{Allow: true}

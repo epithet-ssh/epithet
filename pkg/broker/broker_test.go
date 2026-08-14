@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -43,6 +45,15 @@ func testCAClientOK(t *testing.T) *caclient.Client {
 	t.Cleanup(caServer.Close)
 
 	return testCAClient(t, caServer.URL)
+}
+
+// testTokenFunc returns a TokenFunc that mints a fresh, valid JWT from idp on
+// every call, with no user-visible output.
+func testTokenFunc(t *testing.T, idp *oidctest.IdP) TokenFunc {
+	t.Helper()
+	return func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
+	}
 }
 
 // testGRPCClient creates a gRPC client connected to the given socket path.
@@ -81,16 +92,13 @@ func callMatch(t *testing.T, client pb.BrokerServiceClient, req *pb.MatchRequest
 func Test_RpcBasics(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "6:thello,"
-`)
+	idp := oidctest.New(t)
 	// Use short paths to avoid Unix socket path length limits.
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -116,17 +124,14 @@ printf '%s' "6:thello,"
 func Test_MatchRequestFields(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "test-token"
-`)
+	idp := oidctest.New(t)
 	// Use short paths to avoid Unix socket path length limits.
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
 	caClient := testCAClientOK(t)
-	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -188,16 +193,13 @@ func shortTempDir(t *testing.T) string {
 
 func TestCleanupExpiredAgents(t *testing.T) {
 	t.Parallel()
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "6:thello,"
-`)
+	idp := oidctest.New(t)
 	// Use short paths to avoid Unix socket path length limits.
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, "http://localhost:9999"), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -254,18 +256,18 @@ func Test_MatchStreamsUserOutput(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	// Auth script writes to fd 4 (user output) and stdout (token).
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-echo "Visit https://example.com and enter code ABC-123" >&4
-printf '%s' "test-token"
-`)
+	// TokenFunc writes user-visible progress and mints a token.
+	idp := oidctest.New(t)
+	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		fmt.Fprintln(out, "Visit https://example.com and enter code ABC-123")
+		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
+	}
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
 	caClient := testCAClientOK(t)
-	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, tokenFn, caClient, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -313,25 +315,4 @@ printf '%s' "test-token"
 	// Allow will be false because the mock CA can't issue real certs — that's fine,
 	// we're testing that user output streams through, not cert issuance.
 	require.False(t, result.Allow)
-}
-
-// Test_UserOutputStreaming tests that user output from fd 4 is streamed to the writer.
-func Test_UserOutputStreaming(t *testing.T) {
-	t.Parallel()
-
-	// Test the underlying Run method with user output writer directly since the
-	// full Match flow requires complex CA setup. The gRPC streaming layer is
-	// tested in the other Match tests.
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-echo "Visit https://example.com and enter code ABC-123" >&4
-printf '%s' "test-token"
-`)
-	auth := NewAuth(script)
-
-	var userOutput bytes.Buffer
-	token, err := auth.Run(context.Background(), nil, &userOutput)
-	require.NoError(t, err)
-	require.NotEmpty(t, token)
-	require.Contains(t, userOutput.String(), "Visit https://example.com")
 }

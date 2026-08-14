@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -33,15 +35,13 @@ import (
 // 5. Broker creates per-connection agent
 // 6. SSH connects using broker's agent
 func TestBrokerEndToEnd(t *testing.T) {
-	// Task 8 deleted the CA's hello handling and Link header entirely, but
-	// the broker's shouldHandle path (pkg/broker/broker.go) still calls
-	// caClient.Hello to learn the discovery URL before it will handle any
-	// connection. Hello now always gets a 400 from the real caserver (empty
-	// publicKey/connection is just an incomplete cert request now, not a
-	// hello), so shouldHandle can never succeed against a real CA in this
-	// intermediate state. Rewired in Task 14 along with the gating removal.
-	t.Skip("broker discovery flow needs Hello/Link removal, rewired in Task 14")
-
+	// Previously skipped pending Task 14's Hello/Link removal (that gating
+	// path no longer exists in pkg/broker/broker.go as of Task 11's match
+	// path collapse). Re-enabled: this exercises the real caclient/caserver
+	// wire path with an in-process TokenFunc. Note the mock policy server
+	// approves every request unconditionally, so it never actually verifies
+	// the JWT against the discovery issuer — a real token-verification test
+	// belongs to the policy server package, not here.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -99,11 +99,11 @@ func TestBrokerEndToEnd(t *testing.T) {
 	caHTTPServer := httptest.NewServer(mux)
 	defer caHTTPServer.Close()
 
-	// Create auth command that returns a fake token
-	authScript := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "6:ttoken,"
-`)
+	// TokenFunc mints a real JWT via an in-process fake IdP.
+	idp := oidctest.New(t)
+	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
+	}
 
 	// Create broker with short paths to avoid Unix socket path length limits
 	tmpDir := t.TempDir()
@@ -115,7 +115,7 @@ printf '%s' "6:ttoken,"
 	caClient, err := caclient.New(caEndpoints)
 	require.NoError(t, err)
 
-	b, err := broker.New(*logger, brokerSocketPath, authScript, caClient, agentSocketDir)
+	b, err := broker.New(*logger, brokerSocketPath, tokenFn, caClient, agentSocketDir)
 	require.NoError(t, err)
 
 	// Start broker in background
@@ -137,22 +137,18 @@ printf '%s' "6:ttoken,"
 
 	t.Logf("SSHD started on port %d", sshdServer.Port)
 
-	// Now simulate what epithet match would do: call broker.Match
-	req := broker.MatchRequest{
-		Connection: policy.Connection{
-			LocalHost:  "localhost",
-			RemoteHost: "localhost",
-			RemoteUser: sshdServer.User,
-			Port:       uint(sshdServer.Port),
-			ProxyJump:  "",
-			Hash:       computeConnectionHash(t, sshdServer),
-		},
+	// Now simulate what epithet match would do: call broker.MatchWithUserOutput directly.
+	conn := policy.Connection{
+		LocalHost:  "localhost",
+		RemoteHost: "localhost",
+		RemoteUser: sshdServer.User,
+		Port:       uint(sshdServer.Port),
+		ProxyJump:  "",
+		Hash:       computeConnectionHash(t, sshdServer),
 	}
 
-	var resp broker.MatchResponse
-	// In a real scenario, this would be done via RPC, but we can call directly for testing
-	err = b.Match(req, &resp)
-	require.NoError(t, err)
+	// In a real scenario, this would be done via RPC, but we can call directly for testing.
+	resp := b.MatchWithUserOutput(ctx, conn, nil)
 	t.Logf("Match response: Allow=%v, Error=%s", resp.Allow, resp.Error)
 	require.True(t, resp.Allow, "broker should allow connection: %s", resp.Error)
 
@@ -160,7 +156,7 @@ printf '%s' "6:ttoken,"
 	time.Sleep(100 * time.Millisecond)
 
 	// Check if agent socket exists
-	agentSocket := b.AgentSocketPath(req.Connection.Hash)
+	agentSocket := b.AgentSocketPath(conn.Hash)
 	t.Logf("Agent socket path: %s", agentSocket)
 	_, err = os.Stat(agentSocket)
 	if err != nil {
@@ -178,24 +174,6 @@ printf '%s' "6:ttoken,"
 	require.NoError(t, err, "SSH connection should succeed")
 
 	t.Logf("SSH succeeded! Output:\n%s", out)
-}
-
-func writeTestScript(t *testing.T, script string) string {
-	t.Helper()
-	tmpfile, err := os.CreateTemp("", "auth-script-*.sh")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.Remove(tmpfile.Name()) })
-
-	_, err = tmpfile.Write([]byte(script))
-	require.NoError(t, err)
-
-	err = tmpfile.Close()
-	require.NoError(t, err)
-
-	err = os.Chmod(tmpfile.Name(), 0700)
-	require.NoError(t, err)
-
-	return tmpfile.Name()
 }
 
 func testLogger(t *testing.T) *slog.Logger {

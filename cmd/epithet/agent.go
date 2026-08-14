@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,16 +15,17 @@ import (
 	"syscall"
 	"time"
 
+	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"golang.org/x/oauth2"
 )
 
 // AgentCLI is the parent command for agent-related subcommands.
-// Shared flags (CaURL, Auth) are defined here and inherited by subcommands.
+// Shared flags are defined here and inherited by subcommands.
 type AgentCLI struct {
 	CaURL      []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
-	Auth       string        `help:"Authentication command (optional if CA provides bootstrap discovery)" short:"a"`
 	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 
@@ -111,33 +113,43 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return fmt.Errorf("failed to create CA client: %w", err)
 	}
 
-	// Resolve auth command: use --auth if provided, otherwise discover from CA.
-	//
-	// TEMPORARY until Task 11: build the oidc exec command inline. Discovery
-	// only ever advertises OIDC now, so there is no auth-type dispatch left;
-	// this whole path is rewritten properly once the client is redone.
-	authCommand := parent.Auth
-	if authCommand == "" {
-		logger.Debug("no --auth provided, discovering from CA")
+	// Discover the auth config from the CA's anonymous bootstrap endpoint.
+	logger.Debug("discovering auth config from CA")
+	discovery, err := caClient.GetDiscovery(context.Background())
+	if err != nil || discovery == nil || discovery.Auth == nil {
+		return fmt.Errorf("failed to get discovery config from CA: %w", err)
+	}
+	logger.Info("discovered auth config from CA", "issuer", discovery.Auth.Issuer)
 
-		discovery, err := caClient.GetDiscovery(context.Background())
-		if err != nil || discovery == nil || discovery.Auth == nil {
-			return fmt.Errorf("failed to get discovery config: %w", err)
+	oidcCfg := authoidc.Config{
+		IssuerURL:    discovery.Auth.Issuer,
+		ClientID:     discovery.Auth.ClientID,
+		ClientSecret: discovery.Auth.ClientSecret,
+		TLSConfig:    tlsCfg,
+	}
+	// Refresh state lives in this closure, in memory only. broker.Auth
+	// serializes invocations, so no locking is needed here.
+	var oauthState *oauth2.Token
+	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		if force && oauthState != nil {
+			// The broker calls us with force=true only after the CA rejected a
+			// token, i.e. after 401'ing on the id_token derived from this exact
+			// oauthState. Authenticate treats a time-valid access token as
+			// reusable and would hand back that same rejected id_token, so we
+			// backdate its expiry to force the refresh-token (or full re-auth)
+			// path, which mints a genuinely new id_token.
+			oauthState.Expiry = time.Now().Add(-time.Minute)
 		}
-		exe, err := os.Executable()
+		idToken, next, err := authoidc.Authenticate(ctx, oidcCfg, oauthState, out)
 		if err != nil {
-			return err
+			return "", err
 		}
-		authCommand = fmt.Sprintf("%s auth oidc --issuer %s --client-id %s", exe, discovery.Auth.Issuer, discovery.Auth.ClientID)
-		if discovery.Auth.ClientSecret != "" {
-			authCommand += " --client-secret " + discovery.Auth.ClientSecret
-		}
-
-		logger.Info("discovered auth config from CA", "issuer", discovery.Auth.Issuer)
+		oauthState = next
+		return idToken, nil
 	}
 
 	// Create broker
-	b, err := broker.New(*logger, brokerSock, authCommand, caClient, agentDir)
+	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, agentDir)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}

@@ -4,7 +4,6 @@ go 1.25.5
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/cbroglie/mustache v1.4.0
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/int128/oauth2cli v1.18.0

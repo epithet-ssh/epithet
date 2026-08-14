@@ -19,6 +19,11 @@ import (
 // Scopes is fixed: nothing in epithet consumes claims beyond email/sub.
 var Scopes = []string{"openid", "profile", "email"}
 
+// openBrowser is a seam over browser.OpenURL so tests can stub it out —
+// otherwise every test that exercises the full auth-code flow would pop a
+// real browser window.
+var openBrowser = browser.OpenURL
+
 // Config holds OIDC authentication configuration.
 type Config struct {
 	IssuerURL    string
@@ -148,7 +153,7 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config, out io.Wri
 		// browser was closed) can complete authentication manually.
 		fmt.Fprintf(out, "To authenticate, visit: %s\n", url)
 		// Attempt to open the browser.
-		if err := browser.OpenURL(url); err != nil {
+		if err := openBrowser(url); err != nil {
 			// Browser failed to open - user needs the URL to authenticate manually.
 			fmt.Fprintf(out, "Could not open browser automatically: %v\n", err)
 			fmt.Fprintf(out, "Please visit: %s\n", url)

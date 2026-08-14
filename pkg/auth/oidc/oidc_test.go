@@ -1,11 +1,11 @@
 package oidc
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,11 +14,39 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// syncBuffer is a mutex-guarded byte buffer. Authenticate's out writer is
+// written by performFullAuth's goroutine while this test's polling
+// goroutine concurrently reads it to find the auth URL; bytes.Buffer isn't
+// safe for that, so this stands in.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *syncBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.buf...)
+}
+
 func TestAuthenticateCompletesCodeFlowViaAutoApprovingIdP(t *testing.T) {
+	// performFullAuth would otherwise pop a real browser window on every
+	// test run; stub the seam instead. The fake IdP is driven manually below.
+	prevOpenBrowser := openBrowser
+	openBrowser = func(string) error { return nil }
+	t.Cleanup(func() { openBrowser = prevOpenBrowser })
+
 	idp := oidctest.New(t)
 	cfg := Config{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
 
-	var out bytes.Buffer
+	var out syncBuffer
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

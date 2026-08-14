@@ -2,348 +2,311 @@ package broker
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"fmt"
+	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/stretchr/testify/require"
 )
 
-func TestAuth_New(t *testing.T) {
-	t.Parallel()
-	auth := NewAuth("my-auth-command --flag")
-	require.NotNil(t, auth)
-	require.Equal(t, "my-auth-command --flag", auth.cmdLine)
-	require.Empty(t, auth.state)
+func mintValid(t *testing.T, idp *oidctest.IdP, d time.Duration) string {
+	return idp.MintIDToken("t@example.com", time.Now().Add(d))
 }
 
-func TestAuth_Run_Success_InitialAuth(t *testing.T) {
-	t.Parallel()
-	// Create a test auth script that returns a token
-	script := writeTestScript(t, `#!/bin/sh
-# Read and ignore stdin
-cat > /dev/null
+func TestTokenFetchesOnceWhileValid(t *testing.T) {
+	idp := oidctest.New(t)
+	var calls atomic.Int32
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		calls.Add(1)
+		return mintValid(t, idp, time.Hour), nil
+	})
+	for range 5 {
+		_, err := a.Token(context.Background(), nil)
+		require.NoError(t, err)
+	}
+	require.Equal(t, int32(1), calls.Load())
+}
 
-# Return token to stdout (using printf to avoid newline issues)
-printf '%s' "my-token-1"
-`)
-
-	auth := NewAuth(script)
-	token, err := auth.Run(context.Background(), nil, nil)
+func TestTokenRefreshesProactivelyNearExpiry(t *testing.T) {
+	idp := oidctest.New(t)
+	var calls atomic.Int32
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		calls.Add(1)
+		// Expires inside expiryBuffer: every call must refetch.
+		return mintValid(t, idp, expiryBuffer/2), nil
+	})
+	_, err := a.Token(context.Background(), nil)
 	require.NoError(t, err)
-	require.Equal(t, "my-token-1", token)
-	require.Empty(t, auth.state) // No state returned
-}
-
-func TestAuth_Run_Success_WithStateUpdate(t *testing.T) {
-	t.Parallel()
-	script := writeTestScript(t, `#!/bin/sh
-# Read and ignore stdin
-cat > /dev/null
-
-# Return token to stdout
-printf '%s' "my-token-2"
-
-# Return new state to fd 3
-printf '%s' '{"refresh":"xyz"}' >&3
-`)
-
-	auth := NewAuth(script)
-	token, err := auth.Run(context.Background(), nil, nil)
+	_, err = a.Token(context.Background(), nil)
 	require.NoError(t, err)
-	require.Equal(t, "my-token-2", token)
-	require.Equal(t, []byte(`{"refresh":"xyz"}`), auth.state)
+	require.Equal(t, int32(2), calls.Load(), "near-expiry token must be refreshed, not reused")
 }
 
-func TestAuth_Run_Success_StatePreservedAcrossCalls(t *testing.T) {
-	t.Parallel()
-	// First call returns token and state
-	script1 := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "token"
-printf '%s' '{"count":1}' >&3
-`)
+func TestConcurrentTokenCallsShareOneFetch(t *testing.T) {
+	idp := oidctest.New(t)
+	var calls atomic.Int32
+	release := make(chan struct{})
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		calls.Add(1)
+		fmt.Fprint(out, "visit: https://example/auth\n")
+		<-release
+		return mintValid(t, idp, time.Hour), nil
+	})
 
-	auth := NewAuth(script1)
-	token, err := auth.Run(context.Background(), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, "token", token)
-	require.Equal(t, []byte(`{"count":1}`), auth.state)
-
-	// Second call uses the state from first call
-	script2 := writeTestScript(t, `#!/bin/sh
-# Verify we received state on stdin
-input=$(cat)
-if echo "$input" | grep -q "count"; then
-    printf '%s' "token-fresh"
-    printf '%s' '{"count":2}' >&3
-else
-    echo "Expected state!" >&2
-    exit 1
-fi
-`)
-
-	auth.cmdLine = script2
-	token, err = auth.Run(context.Background(), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, "token-fresh", token)
-	require.Equal(t, []byte(`{"count":2}`), auth.state)
-}
-
-func TestAuth_Run_AuthFailure(t *testing.T) {
-	t.Parallel()
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-echo "Authentication failed" >&2
-exit 1
-`)
-
-	auth := NewAuth(script)
-	_, err := auth.Run(context.Background(), nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "Authentication failed")
-}
-
-func TestAuth_Run_CommandExecutionError(t *testing.T) {
-	t.Parallel()
-	script := writeTestScript(t, `#!/bin/sh
-echo "Something went wrong" >&2
-exit 1
-`)
-
-	auth := NewAuth(script)
-	_, err := auth.Run(context.Background(), nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "auth command failed")
-	require.Contains(t, err.Error(), "Something went wrong")
-}
-
-func TestAuth_Run_EmptyToken(t *testing.T) {
-	t.Parallel()
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-# No output to stdout - empty token
-`)
-
-	auth := NewAuth(script)
-	_, err := auth.Run(context.Background(), nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty token")
-}
-
-func TestAuth_Run_MustacheTemplateRendering(t *testing.T) {
-	t.Parallel()
-	// Test that mustache template is rendered in command line
-	auth := NewAuth(`printf '%s' "token-{{host}}"`)
-	token, err := auth.Run(context.Background(), map[string]string{"host": "ok"}, nil)
-	require.NoError(t, err)
-	require.Equal(t, "token-ok", token)
-}
-
-func TestAuth_Run_MustacheTemplateError(t *testing.T) {
-	t.Parallel()
-	auth := NewAuth("echo {{unclosed}")
-	_, err := auth.Run(context.Background(), nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to render command template")
-}
-
-func TestAuth_Run_Concurrent(t *testing.T) {
-	t.Parallel()
-	// Test that concurrent calls coalesce into a shared attempt (singleflight)
-	// and both receive the same token
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-sleep 0.05
-printf '%s' "token"
-printf '%s' '{"count":1}' >&3
-`)
-
-	auth := NewAuth(script)
-
-	// Run two calls concurrently
-	done := make(chan bool, 2)
-	for range 2 {
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
 		go func() {
-			token, err := auth.Run(context.Background(), nil, nil)
+			defer wg.Done()
+			_, err := a.Token(context.Background(), io.Discard)
 			require.NoError(t, err)
-			require.Equal(t, "token", token)
-			done <- true
 		}()
 	}
-
-	// Wait for both to complete
-	<-done
-	<-done
-
-	// State should be consistent (last write wins)
-	require.Equal(t, []byte(`{"count":1}`), auth.state)
+	time.Sleep(100 * time.Millisecond) // Let everyone join the flight.
+	close(release)
+	wg.Wait()
+	require.Equal(t, int32(1), calls.Load())
 }
 
-// Helper function to write a test script to a temporary file
-func writeTestScript(t *testing.T, content string) string {
+func TestForceRefreshDiscardsCachedToken(t *testing.T) {
+	idp := oidctest.New(t)
+	var calls atomic.Int32
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		calls.Add(1)
+		return mintValid(t, idp, time.Hour), nil
+	})
+	_, _ = a.Token(context.Background(), nil)
+	_, err := a.ForceRefresh(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), calls.Load())
+}
+
+// TestForceRefreshReturnsAndCachesTheFetchedToken guards against the bug
+// where ForceRefresh re-invoked fetch but fetch, unaware anything had
+// changed, handed back the exact credential the CA had just rejected
+// (pkg/auth/oidc's Authenticate returns prev unchanged while prev.Valid()).
+// fetch here honors force by minting a genuinely different token, the way a
+// real TokenFunc must; ForceRefresh must surface that new token, and it must
+// become the cache so the next plain Token() doesn't re-fetch.
+func TestForceRefreshReturnsAndCachesTheFetchedToken(t *testing.T) {
+	idp := oidctest.New(t)
+	first := mintValid(t, idp, time.Hour)
+	second := mintValid(t, idp, time.Hour)
+	var calls atomic.Int32
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			require.False(t, force, "the initial fetch is not a forced one")
+			return first, nil
+		}
+		require.True(t, force, "ForceRefresh must invoke fetch with force=true")
+		return second, nil
+	})
+
+	tok, err := a.Token(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, first, tok)
+
+	tok, err = a.ForceRefresh(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, second, tok, "ForceRefresh must return the freshly fetched token, not the stale cached one")
+
+	// The new token must be cached: a subsequent Token() call must not fetch again.
+	tok, err = a.Token(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, second, tok)
+	require.Equal(t, int32(2), calls.Load(), "the cached post-ForceRefresh token must not trigger a third fetch")
+}
+
+func TestParseJWTExpiry(t *testing.T) {
+	idp := oidctest.New(t)
+	exp := time.Now().Add(7 * time.Minute).Truncate(time.Second)
+	got, err := parseJWTExpiry(idp.MintIDToken("x@y.z", exp))
+	require.NoError(t, err)
+	require.WithinDuration(t, exp, got, time.Second)
+
+	_, err = parseJWTExpiry("not-a-jwt")
+	require.Error(t, err)
+}
+
+// waitForWaiters polls until the in-flight fetch has n attached waiters.
+func waitForWaiters(t *testing.T, a *Auth, n int) *authFlight {
 	t.Helper()
-
-	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "test-script.sh")
-
-	err := os.WriteFile(scriptPath, []byte(content), 0755)
-	require.NoError(t, err)
-
-	return scriptPath
+	var flight *authFlight
+	require.Eventually(t, func() bool {
+		a.mu.Lock()
+		flight = a.inflight
+		a.mu.Unlock()
+		if flight == nil {
+			return false
+		}
+		flight.mu.Lock()
+		defer flight.mu.Unlock()
+		return flight.waiters == n
+	}, 5*time.Second, 10*time.Millisecond, "waiting for %d waiters", n)
+	return flight
 }
 
-func TestAuth_Run_EmptyStateHandling(t *testing.T) {
-	t.Parallel()
-	// Test that empty state is sent on first call
-	script := writeTestScript(t, `#!/bin/sh
-input=$(cat)
-if [ -z "$input" ]; then
-    printf '%s' "first-call-token"
-else
-    echo "Expected empty state" >&2
-    exit 1
-fi
-`)
+// TestAbandonedFlightRetriesOnSameAuth exercises the abandoned-flight retry
+// loop in acquire: a second caller arriving on the SAME Auth instance after
+// the sole waiter of an in-flight fetch has canceled must not join that
+// dying flight (attach returns ok=false because it's abandoned) — it has to
+// wait for the flight to actually wind down and then trigger a brand new
+// fetch. A prior version of this test used a second, separate Auth instance
+// for the "fresh attempt" half, which never exercised that retry branch at
+// all (a nil a.inflight on a fresh Auth always takes the "start a new
+// flight" path, never the "wait for abandoned flight, then retry" path).
+func TestAbandonedFlightRetriesOnSameAuth(t *testing.T) {
+	idp := oidctest.New(t)
+	started := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var calls atomic.Int32
+	var fetchCtxDone atomic.Bool
+	fresh := mintValid(t, idp, time.Hour)
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-ctx.Done() // Observe the flight's own context being canceled...
+			fetchCtxDone.Store(true)
+			<-releaseFirst // ...but don't actually finish until the test says so,
+			// so the flight is provably abandoned-but-unfinished when the
+			// second caller arrives.
+			return "", ctx.Err()
+		}
+		return fresh, nil
+	})
 
-	auth := NewAuth(script)
-	token, err := auth.Run(context.Background(), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, "first-call-token", token)
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := a.Token(leaderCtx, nil)
+		leaderErr <- err
+	}()
+	<-started
+
+	// Abandon the flow (e.g. user killed the ssh session). The leader is the
+	// only waiter, so this cancels the flight's own context too.
+	cancelLeader()
+	select {
+	case err := <-leaderErr:
+		require.ErrorIs(t, err, context.Canceled)
+		require.Contains(t, err.Error(), "authentication canceled")
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader Token did not return after context cancelation")
+	}
+	require.Eventually(t, func() bool {
+		return fetchCtxDone.Load()
+	}, 5*time.Second, 10*time.Millisecond, "fetch was not canceled")
+
+	// At this point the flight is abandoned but its fetch is still blocked
+	// on releaseFirst (flight.done not yet closed, a.inflight not yet nil).
+	// A second caller arriving now must see attach() fail and wait.
+	secondStarted := make(chan struct{})
+	secondDone := make(chan struct{})
+	var secondToken string
+	var secondErr error
+	go func() {
+		close(secondStarted)
+		secondToken, secondErr = a.Token(context.Background(), nil)
+		close(secondDone)
+	}()
+	<-secondStarted
+	time.Sleep(100 * time.Millisecond) // Let it reach the abandoned-flight wait.
+
+	select {
+	case <-secondDone:
+		t.Fatal("second Token returned before the abandoned flight wound down")
+	default:
+	}
+
+	// Let the abandoned flight finish; the second caller must then retry
+	// with a fresh flight rather than staying stuck behind it.
+	close(releaseFirst)
+	select {
+	case <-secondDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second Token did not complete after the abandoned flight finished")
+	}
+	require.NoError(t, secondErr)
+	require.Equal(t, fresh, secondToken)
+	require.Equal(t, int32(2), calls.Load(), "abandoned flight retry must trigger exactly one fresh fetch")
 }
 
-func TestAuth_Run_StateClearing(t *testing.T) {
-	t.Parallel()
-	// Test that plugin can clear state by not writing to fd 3
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "token"
-# No output to fd 3 - should clear existing state
-`)
+func TestJoinerKeepsFlightAliveAfterLeaderCancels(t *testing.T) {
+	idp := oidctest.New(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		close(started)
+		fmt.Fprint(out, "visit: https://example/auth\n")
+		<-release
+		return mintValid(t, idp, time.Hour), nil
+	})
 
-	auth := NewAuth(script)
-	auth.state = []byte("old-state") // Set some initial state
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := a.Token(leaderCtx, nil)
+		leaderErr <- err
+	}()
+	<-started
 
-	token, err := auth.Run(context.Background(), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, "token", token)
-	require.Empty(t, auth.state) // State should be cleared
+	var joinerOut fmtBuffer
+	joinerResult := make(chan string, 1)
+	joinerErrCh := make(chan error, 1)
+	go func() {
+		token, err := a.Token(context.Background(), &joinerOut)
+		joinerResult <- token
+		joinerErrCh <- err
+	}()
+	waitForWaiters(t, a, 2)
+
+	// Replay: the joiner sees output already emitted before it attached.
+	require.Eventually(t, func() bool {
+		return joinerOut.String() != ""
+	}, 5*time.Second, 10*time.Millisecond, "joiner did not receive replayed output")
+	require.Contains(t, joinerOut.String(), "visit: https://example/auth")
+
+	// Leader abandons; the flight must survive for the joiner.
+	cancelLeader()
+	select {
+	case err := <-leaderErr:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader Token did not return after cancelation")
+	}
+
+	close(release)
+	select {
+	case token := <-joinerResult:
+		require.NoError(t, <-joinerErrCh)
+		require.NotEmpty(t, token)
+	case <-time.After(5 * time.Second):
+		t.Fatal("joiner Token did not complete")
+	}
 }
 
-func TestIntegration_FullAuthFlow(t *testing.T) {
-	t.Parallel()
-	// Integration test: simulate a full auth flow with state management
-
-	// First auth call - no state, returns token and state
-	script1 := writeTestScript(t, `#!/bin/sh
-input=$(cat)
-if [ -z "$input" ]; then
-    # Initial auth - return token and state
-    printf '%s' "initial-auth-token"
-    printf '%s' '{"refresh":"r1","exp":100}' >&3
-else
-    echo "Expected initial empty state" >&2
-    exit 1
-fi
-`)
-
-	auth := NewAuth(script1)
-	token, err := auth.Run(context.Background(), map[string]string{"user": "alice"}, nil)
-	require.NoError(t, err)
-	require.Equal(t, "initial-auth-token", token)
-	require.NotEmpty(t, auth.state)
-
-	// Second auth call - uses state from first call
-	script2 := writeTestScript(t, `#!/bin/sh
-input=$(cat)
-# Check that we got state with refresh token
-if echo "$input" | grep -q "refresh.*r1"; then
-    # Token refresh - return new token and updated state
-    printf '%s' "refreshed-token-123"
-    printf '%s' '{"refresh":"r2","exp":200}' >&3
-else
-    echo "Expected refresh state" >&2
-    exit 1
-fi
-`)
-
-	auth.cmdLine = script2
-	token, err = auth.Run(context.Background(), map[string]string{"user": "alice"}, nil)
-	require.NoError(t, err)
-	require.Equal(t, "refreshed-token-123", token)
-	require.Contains(t, string(auth.state), "r2")
-
-	// Third auth call - simulate token expiration, auth fails
-	script3 := writeTestScript(t, `#!/bin/sh
-input=$(cat)
-if echo "$input" | grep -q "refresh.*r2"; then
-    # Simulate refresh token expired
-    echo "Refresh token expired, full re-auth required" >&2
-    exit 1
-else
-    echo "Expected refresh state" >&2
-    exit 1
-fi
-`)
-
-	auth.cmdLine = script3
-	_, err = auth.Run(context.Background(), nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "Refresh token expired, full re-auth required")
-	// State should NOT be updated on error - the code returns early before state update
-	// So the state from the previous successful call should still be present
-	require.Equal(t, []byte(`{"refresh":"r2","exp":200}`), auth.state)
+// fmtBuffer is a minimal concurrency-safe io.Writer for assertions that poll
+// its contents from a different goroutine than the one writing to it.
+type fmtBuffer struct {
+	mu  sync.Mutex
+	buf []byte
 }
 
-func TestAuth_Token(t *testing.T) {
-	t.Parallel()
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "my-token-abc"
-`)
-
-	auth := NewAuth(script)
-
-	// Token should be empty initially
-	require.Empty(t, auth.Token())
-
-	// Run auth
-	token, err := auth.Run(context.Background(), nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, "my-token-abc", token)
-
-	// Token() should return the stored token
-	require.Equal(t, "my-token-abc", auth.Token())
+func (b *fmtBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
 }
 
-// TODO: Re-enable this test with a faster implementation
-// The current shell-based approach is too slow for CI
-/*
-func TestAuth_Run_StateSizeLimit(t *testing.T) {
-	// Test that state exceeding MaxStateBlobSize is rejected
-	// Use head to generate exactly 11 MiB of data
-	script := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "token"
-# Write 11 MiB to fd 3 (exceeds 10 MiB limit)
-head -c 11534336 /dev/zero >&3
-`)
-
-	auth := NewAuth(script)
-	_, err := auth.Run(context.Background(), nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "exceeds maximum size")
-}
-*/
-
-func TestAuth_ClearToken(t *testing.T) {
-	t.Parallel()
-	auth := NewAuth("echo token")
-	auth.token = "existing-token"
-	auth.state = []byte("existing-state")
-
-	auth.ClearToken()
-
-	require.Empty(t, auth.Token())
-	require.Equal(t, []byte("existing-state"), auth.state) // State should be preserved
+func (b *fmtBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }
