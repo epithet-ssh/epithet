@@ -323,3 +323,20 @@ func TestHandler_RejectsUnsignedRequest(t *testing.T) {
 		t.Errorf("expected status 401, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestOversizedRequestReportsTooLarge(t *testing.T) {
+	handler, sign := newHandler(t, policyserver.Config{
+		Evaluator: &mockEvaluator{},
+	})
+
+	// Create a request body that exceeds MaxBodySize.
+	big := bytes.Repeat([]byte("a"), wire.MaxBodySize+1)
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(big))
+	sign(httpReq, big)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, httpReq)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	require.Contains(t, rec.Body.String(), "too large")
+}

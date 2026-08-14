@@ -10,6 +10,11 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
+// MaxBodySize is the maximum request body and trusted-peer response body size.
+// Real OIDC ID tokens with group claims run 4-8 KiB; 64 KiB leaves an order
+// of magnitude of headroom before truncation.
+const MaxBodySize = 64 * 1024
+
 // CertParams are the certificate parameters decided by the policy server.
 type CertParams struct {
 	Identity   string            `json:"identity"`

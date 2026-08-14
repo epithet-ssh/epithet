@@ -165,9 +165,14 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 		c.logger.Debug("http response", "method", "GET", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
-	buf, err := io.ReadAll(io.LimitReader(res.Body, 8192))
+	buf, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("error reading discovery response: %w", err)
+	}
+
+	// Check if policy server response exceeds the limit.
+	if len(buf) > wire.MaxBodySize {
+		return nil, fmt.Errorf("policy server response exceeds %d bytes", wire.MaxBodySize)
 	}
 
 	if res.StatusCode != 200 {
@@ -222,10 +227,14 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		c.logger.Debug("http response", "method", "POST", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
-	lim := io.LimitReader(res.Body, 8192)
-	buf, err := io.ReadAll(lim)
+	buf, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("error reading response: %w", err)
+	}
+
+	// Check if policy server response exceeds the limit.
+	if len(buf) > wire.MaxBodySize {
+		return nil, fmt.Errorf("policy server response exceeds %d bytes", wire.MaxBodySize)
 	}
 
 	if res.StatusCode != 200 {

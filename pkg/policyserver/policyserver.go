@@ -82,9 +82,6 @@ type Config struct {
 	// Evaluator makes authorization decisions based on identity.
 	Evaluator PolicyEvaluator
 
-	// MaxRequestSize limits the request body size (default: 8192 bytes).
-	MaxRequestSize int64
-
 	// Discovery is the configuration returned on GET / requests.
 	// The CA fetches this to serve discovery data to clients.
 	Discovery *wire.Discovery
@@ -108,9 +105,6 @@ func NewHandler(config Config) (http.Handler, error) {
 	if config.CAPublicKey == "" {
 		return nil, fmt.Errorf("CAPublicKey is required")
 	}
-	if config.MaxRequestSize == 0 {
-		config.MaxRequestSize = 8192
-	}
 
 	verifier, err := serviceauth.NewVerifier(config.CAPublicKey)
 	if err != nil {
@@ -124,12 +118,19 @@ func NewHandler(config Config) (http.Handler, error) {
 // which avoids the double body read RFC 9421's Content-Digest used to
 // require), verifies the request token, then routes by method.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, h.config.MaxRequestSize))
+	body, err := io.ReadAll(io.LimitReader(r.Body, wire.MaxBodySize+1))
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request: %v", err))
 		return
 	}
 	defer r.Body.Close()
+
+	// Check if request body exceeds the limit before verification to report a
+	// distinct "too large" error instead of a confusing verification failure.
+	if len(body) > wire.MaxBodySize {
+		h.writeError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+		return
+	}
 
 	// GET requests read back an empty (non-nil) slice, which hashes
 	// identically to the nil body the CA signed over for that request.

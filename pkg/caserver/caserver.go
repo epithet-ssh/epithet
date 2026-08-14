@@ -125,9 +125,6 @@ type CreateCertResponse struct {
 	Certificate sshcert.RawCertificate `json:"certificate"`
 }
 
-// RequestBodySizeLimit is the maximum request body size.
-const RequestBodySizeLimit = 8192
-
 // parseAuthHeader extracts the Bearer token from the Authorization header.
 func parseAuthHeader(r *http.Request) (string, error) {
 	auth := r.Header.Get("Authorization")
@@ -157,11 +154,16 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ccr := CreateCertRequest{}
-	lr := io.LimitReader(r.Body, RequestBodySizeLimit)
-
-	body, err := io.ReadAll(lr)
+	body, err := io.ReadAll(io.LimitReader(r.Body, wire.MaxBodySize+1))
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, "unable to read body: %s", err)
+		return
+	}
+
+	// Check if request body exceeds the limit to report a distinct "too large"
+	// error instead of a confusing JSON parse failure.
+	if len(body) > wire.MaxBodySize {
+		s.fail(w, http.StatusRequestEntityTooLarge, "Request body too large")
 		return
 	}
 

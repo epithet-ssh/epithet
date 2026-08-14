@@ -9,15 +9,8 @@ import (
 	"sync"
 
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
-
-// maxRequestLine caps a single protocol request line. Requests are small
-// (a Connection tuple or an empty Inspect marker), so this only guards
-// against a misbehaving or hostile peer forcing unbounded buffering.
-// wire.MaxBodySize doesn't exist yet (a later task unifies the broker and
-// HTTP body-size limits); until then this constant lives here, local to the
-// broker protocol.
-const maxRequestLine = 64 * 1024 // 64KiB.
 
 // Request is one line of JSON sent by the client. Exactly one field is set.
 type Request struct {
@@ -98,7 +91,7 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	defer cancel()
 
 	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 4096), maxRequestLine)
+	scanner.Buffer(make([]byte, 0, 4096), wire.MaxBodySize)
 	if !scanner.Scan() {
 		return // Client disconnected before sending a request; nothing to answer.
 	}
