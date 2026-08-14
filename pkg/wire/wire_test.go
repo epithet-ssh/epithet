@@ -14,7 +14,7 @@ func TestPolicyRequestWireShape(t *testing.T) {
 	req := PolicyRequest{Token: "tok"}
 	out, err := json.Marshal(req)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"token":"tok","connection":{"localHost":"","remoteHost":"","remoteUser":"","port":0,"proxyJump":"","hash":""}}`, string(out))
+	require.JSONEq(t, `{"token":"tok","connection":{"remoteHost":"","remoteUser":"","port":0,"proxyJump":"","hash":""}}`, string(out))
 }
 
 func TestCertParamsRoundTrip(t *testing.T) {

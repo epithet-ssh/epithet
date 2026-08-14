@@ -4,12 +4,14 @@ package policy
 // This is computed by OpenSSH from the connection parameters (local host, remote host, port, user, ProxyJump).
 type ConnectionHash string
 
-// Connection represents the complete tuple of SSH connection parameters.
-// This matches the parameters available in OpenSSH Match exec via %C hash:
-// local hostname (%l), remote hostname (%h), port (%p), remote user (%r), and ProxyJump (%j).
-// The Hash field contains the %C hash value computed by OpenSSH from these parameters.
+// Connection represents the SSH connection parameters epithet actually uses.
+// These come from OpenSSH's Match exec via %h/%p/%r/%j; local hostname (%l)
+// was transmitted here too but never read anywhere downstream, so it was
+// dropped (spec §13) along with the os.Hostname() call that populated it.
+// The Hash field contains the %C hash value computed by OpenSSH from the
+// full connection tuple (including local host), so it still uniquely
+// identifies the connection even without LocalHost as a separate field.
 type Connection struct {
-	LocalHost  string         `json:"localHost"`
 	RemoteHost string         `json:"remoteHost"`
 	RemoteUser string         `json:"remoteUser"`
 	Port       uint           `json:"port"`

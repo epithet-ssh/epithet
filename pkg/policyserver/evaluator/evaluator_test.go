@@ -199,7 +199,8 @@ func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 
 // TestEmptyConnection_WithDefaults_IsForbidden verifies that an empty
 // connection is Forbidden even when defaults are merged into a wildcard host
-// pattern - an empty RemoteHost still fails doublestar.Match("*", "").
+// pattern - "*" matches the empty RemoteHost, but the empty RemoteUser still
+// isn't in usersSet, so evaluateHosts never authorizes it.
 // Note: an explicit host pattern is required - defaults.Allow alone does NOT
 // create a wildcard pattern. To match all hosts, add "*": {} to Hosts.
 func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
@@ -374,6 +375,60 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("badb should match exactly, got error: %v", err)
+	}
+}
+
+// TestHostPatternWildcardSpansLabels pins the host-pattern glob semantics
+// after the doublestar -> stdlib path.Match swap (spec §13): "*" is refused
+// only by "/", which never appears in a hostname, so "*.example.com" matches
+// both a single subdomain label and a multi-label chain - it is not anchored
+// to one dot-separated segment the way shell/DNS wildcard intuition might
+// suggest. This matches doublestar's prior behavior exactly (verified before
+// the swap), so the switch changes zero real evaluator outcomes.
+func TestHostPatternWildcardSpansLabels(t *testing.T) {
+	cfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{
+			"alice@example.com": {"admin"},
+		},
+		Defaults: &policyserver.Rules{
+			Allow: map[string][]string{
+				"alice": {"admin"},
+			},
+		},
+		Hosts: map[string]*policyserver.Rules{
+			"*.example.com": {},
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	// Single label: "a" in "a.example.com".
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
+		RemoteHost: "a.example.com",
+		RemoteUser: "alice",
+	})
+	if err != nil {
+		t.Errorf("*.example.com should match a.example.com, got error: %v", err)
+	}
+
+	// Multiple labels: "a.b" in "a.b.example.com" - "*" is not confined to one
+	// label, since "." isn't a path.Match separator.
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
+		RemoteHost: "a.b.example.com",
+		RemoteUser: "alice",
+	})
+	if err != nil {
+		t.Errorf("*.example.com should also match a.b.example.com (wildcard spans labels), got error: %v", err)
+	}
+
+	// The bare domain itself never matches - "*" requires a non-empty label
+	// before ".example.com".
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
+		RemoteHost: "example.com",
+		RemoteUser: "alice",
+	})
+	if err == nil {
+		t.Error("*.example.com should not match the bare domain example.com, got nil error")
 	}
 }
 

@@ -142,7 +142,6 @@ func Test_MatchRequestFields(t *testing.T) {
 
 	// Test with all fields populated.
 	result := callMatch(t, socketPath, policy.Connection{
-		LocalHost:  "mylaptop.local",
 		RemoteHost: "server.example.com",
 		RemoteUser: "root",
 		Port:       22,
@@ -281,7 +280,7 @@ func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, policyCfg *policyserver.Po
 	caInstance, err := ca.New(caPriv, policySrv.URL)
 	require.NoError(t, err)
 
-	casrv := caserver.New(caInstance, testLogger(t), nil, nil)
+	casrv := caserver.New(caInstance, testLogger(t), nil)
 	hits = new(int32)
 	mux := http.NewServeMux()
 	mux.Handle("/", countingHandler(hits, casrv.Handler()))

@@ -20,10 +20,6 @@ type Entry[S any] struct {
 	// Priority determines failover order. Higher values are tried first.
 	// If zero, DefaultPriority (100) is used.
 	Priority int
-
-	// Settings overrides the pool's default gobreaker settings for this entry.
-	// If nil, the pool's default settings are used.
-	Settings *gobreaker.Settings
 }
 
 // Pool manages circuit breakers with priority-based failover.
@@ -92,12 +88,7 @@ func New[T, S any](entries []Entry[S], defaults gobreaker.Settings) *Pool[T, S] 
 		}
 		sortedEntries[i] = e
 
-		// Create circuit breaker with entry settings or defaults
-		settings := defaults
-		if e.Settings != nil {
-			settings = *e.Settings
-		}
-		breakers[i] = gobreaker.NewCircuitBreaker[T](settings)
+		breakers[i] = gobreaker.NewCircuitBreaker[T](defaults)
 	}
 
 	// Group into tiers by priority
@@ -307,9 +298,4 @@ func (p *Pool[T, S]) Status() []EndpointStatus[S] {
 		}
 	}
 	return statuses
-}
-
-// Len returns the number of entries in the pool.
-func (p *Pool[T, S]) Len() int {
-	return len(p.entries)
 }

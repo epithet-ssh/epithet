@@ -2,8 +2,6 @@ package caserver
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +20,6 @@ import (
 
 type caServer struct {
 	c          *ca.CA
-	httpClient *http.Client
 	log        *slog.Logger
 	certLogger CertLogger
 }
@@ -30,18 +27,11 @@ type caServer struct {
 // New creates a new CA Server which needs to then
 // be attached to some http server, a la
 // `http.ListenAndServeTLS(...)`.
-func New(c *ca.CA, log *slog.Logger, httpClient *http.Client, certLogger CertLogger) *caServer {
+func New(c *ca.CA, log *slog.Logger, certLogger CertLogger) *caServer {
 	cas := &caServer{
 		c:          c,
 		log:        log,
-		httpClient: httpClient,
 		certLogger: certLogger,
-	}
-
-	if cas.httpClient == nil {
-		cas.httpClient = &http.Client{
-			Timeout: time.Second * 30,
-		}
 	}
 
 	if cas.certLogger == nil {
@@ -233,7 +223,7 @@ func (s *caServer) logCertIssuance(
 	policyResp *wire.PolicyResponse,
 	conn policy.Connection,
 ) error {
-	parsedCert, err := parseCert(cert)
+	parsedCert, err := sshcert.Parse(cert)
 	if err != nil {
 		return fmt.Errorf("failed to parse certificate: %w", err)
 	}
@@ -244,7 +234,7 @@ func (s *caServer) logCertIssuance(
 	}
 
 	// Cert fingerprint matches what `epithet agent inspect` displays.
-	certFP := "SHA256:" + base64.RawStdEncoding.EncodeToString(sha256Sum(parsedCert.Marshal()))
+	certFP := ssh.FingerprintSHA256(parsedCert)
 
 	event := &CertEvent{
 		Timestamp:            time.Now(),
@@ -262,21 +252,6 @@ func (s *caServer) logCertIssuance(
 	return s.certLogger.LogCert(ctx, event)
 }
 
-// parseCert parses a raw SSH certificate to extract metadata.
-func parseCert(cert sshcert.RawCertificate) (*ssh.Certificate, error) {
-	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cert))
-	if err != nil {
-		return nil, err
-	}
-
-	sshCert, ok := pubKey.(*ssh.Certificate)
-	if !ok {
-		return nil, fmt.Errorf("not a certificate")
-	}
-
-	return sshCert, nil
-}
-
 // generateFingerprint generates an SSH fingerprint for a public key.
 func generateFingerprint(pubKey sshcert.RawPublicKey) (string, error) {
 	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pubKey))
@@ -285,9 +260,4 @@ func generateFingerprint(pubKey sshcert.RawPublicKey) (string, error) {
 	}
 
 	return ssh.FingerprintSHA256(key), nil
-}
-
-func sha256Sum(data []byte) []byte {
-	h := sha256.Sum256(data)
-	return h[:]
 }

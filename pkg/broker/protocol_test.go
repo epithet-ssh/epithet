@@ -56,7 +56,7 @@ func newTestBroker(t *testing.T, tokenFn TokenFunc) *Broker {
 // dialBroker connects to b's protocol socket.
 func dialBroker(t *testing.T, b *Broker) net.Conn {
 	t.Helper()
-	conn, err := net.Dial("unix", b.BrokerSocketPath())
+	conn, err := net.Dial("unix", b.brokerSocketPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
 	return conn
@@ -167,5 +167,5 @@ func TestInspectReturnsInspectEvent(t *testing.T) {
 	var ev Event
 	require.NoError(t, json.Unmarshal(sc.Bytes(), &ev))
 	require.NotNil(t, ev.Inspect)
-	require.Equal(t, b.BrokerSocketPath(), ev.Inspect.SocketPath)
+	require.Equal(t, b.brokerSocketPath, ev.Inspect.SocketPath)
 }

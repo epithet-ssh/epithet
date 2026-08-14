@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 	"time"
 
@@ -17,20 +16,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
-	"gotest.tools/assert"
 )
-
-func TestURLStuff(t *testing.T) {
-	base, err := url.Parse("https://epithet.io/")
-	require.NoError(t, err)
-
-	rel1, err := url.Parse("pubkey")
-	require.NoError(t, err)
-
-	abs := base.ResolveReference(rel1)
-
-	assert.Equal(t, "https://epithet.io/pubkey", abs.String())
-}
 
 // newTestCAWithPolicyURL creates a CA instance pointed at the given policy
 // server URL, generating a fresh CA keypair.
@@ -55,7 +41,7 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server
 	caInstance := newTestCAWithPolicyURL(t, policyServer.URL)
 
 	logger := slog.Default()
-	server := caserver.New(caInstance, logger, nil, nil)
+	server := caserver.New(caInstance, logger, nil)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", server.Handler())
@@ -88,7 +74,7 @@ func TestDiscoveryIsAnonymousPassThrough(t *testing.T) {
 	defer policySrv.Close()
 
 	c := newTestCAWithPolicyURL(t, policySrv.URL)
-	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil, nil)
+	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
 
 	req := httptest.NewRequest("GET", "/discovery", nil) // no Authorization header
 	rec := httptest.NewRecorder()
@@ -112,7 +98,7 @@ func TestDiscoveryHandler_FallbackCacheControl(t *testing.T) {
 	defer policySrv.Close()
 
 	c := newTestCAWithPolicyURL(t, policySrv.URL)
-	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil, nil)
+	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
 
 	req := httptest.NewRequest("GET", "/discovery", nil)
 	rec := httptest.NewRecorder()

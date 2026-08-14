@@ -3,11 +3,11 @@ package evaluator
 import (
 	"context"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
@@ -140,7 +140,11 @@ func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []str
 			continue
 		}
 
-		matched, err := doublestar.Match(pattern, conn.RemoteHost)
+		// path.Match's "*" only refuses to cross "/", which never appears in a
+		// hostname, so it matches doublestar.Match on every pattern shape this
+		// evaluator sees ("*.example.com" still spans multiple labels, e.g.
+		// matching "a.b.example.com" - see TestHostPatternWildcardSpansLabels).
+		matched, err := path.Match(pattern, conn.RemoteHost)
 		if err != nil || !matched {
 			continue
 		}

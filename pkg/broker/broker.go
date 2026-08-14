@@ -315,12 +315,7 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 		return fmt.Errorf("failed to create agent socket directory: %w", err)
 	}
 
-	// Create the agent (Note: agent.New expects *caclient.Client, but we don't need it for UseCredential)
-	// We pass nil because we're manually managing certificates via UseCredential
-	ag, err := agent.New(&b.log, nil, socketPath)
-	if err != nil {
-		return fmt.Errorf("failed to create agent: %w", err)
-	}
+	ag := agent.New(&b.log, socketPath)
 
 	// Start the agent in background
 	go func() {
@@ -369,11 +364,6 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 // This is used by SSH to connect to the per-connection agent.
 func (b *Broker) AgentSocketPath(hash policy.ConnectionHash) string {
 	return filepath.Join(b.agentSocketDir, string(hash))
-}
-
-// BrokerSocketPath returns the path to the broker's RPC socket.
-func (b *Broker) BrokerSocketPath() string {
-	return b.brokerSocketPath
 }
 
 func (b *Broker) serve(ctx context.Context) {

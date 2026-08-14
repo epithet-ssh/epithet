@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mikesmitty/edkey"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -58,9 +57,9 @@ func GenerateKeys() (RawPublicKey, RawPrivateKey, error) {
 		return "", "", err
 	}
 
-	pemKey := &pem.Block{
-		Type:  "OPENSSH PRIVATE KEY",
-		Bytes: edkey.MarshalED25519PrivateKey(privKey),
+	pemKey, err := ssh.MarshalPrivateKey(privKey, "")
+	if err != nil {
+		return "", "", err
 	}
 	privateKey := pem.EncodeToMemory(pemKey)
 	authorizedKey := ssh.MarshalAuthorizedKey(publicKey)

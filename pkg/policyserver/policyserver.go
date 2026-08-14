@@ -37,23 +37,6 @@ type PolicyEvaluator interface {
 	Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error)
 }
 
-// Standard errors for policy evaluation.
-var (
-	// ErrUnauthorized indicates token is invalid or expired (401).
-	ErrUnauthorized = &wire.PolicyError{StatusCode: http.StatusUnauthorized, Message: "Unauthorized"}
-
-	// ErrForbidden indicates token valid but access denied by policy (403).
-	ErrForbidden = &wire.PolicyError{StatusCode: http.StatusForbidden, Message: "Forbidden"}
-
-	// ErrNotHandled indicates this policy server does not handle the connection (422).
-	ErrNotHandled = &wire.PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: "connection not handled"}
-)
-
-// Unauthorized returns a 401 error with the given message.
-func Unauthorized(message string) error {
-	return &wire.PolicyError{StatusCode: http.StatusUnauthorized, Message: message}
-}
-
 // Forbidden returns a 403 error with the given message.
 func Forbidden(message string) error {
 	return &wire.PolicyError{StatusCode: http.StatusForbidden, Message: message}
@@ -62,12 +45,6 @@ func Forbidden(message string) error {
 // InternalError returns a 500 error with the given message.
 func InternalError(message string) error {
 	return &wire.PolicyError{StatusCode: http.StatusInternalServerError, Message: message}
-}
-
-// NotHandled returns a 422 error indicating this policy server does not handle
-// the requested connection. The CA will return 422 to the client.
-func NotHandled(message string) error {
-	return &wire.PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: message}
 }
 
 // Config configures the policy server HTTP handler.

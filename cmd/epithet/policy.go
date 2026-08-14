@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -15,8 +16,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 )
 
 // PolicyOIDCConfig holds OIDC configuration for the policy server.
@@ -103,12 +102,9 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		return fmt.Errorf("failed to create policy handler: %w", err)
 	}
 
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	// net/http.Server already recovers handler panics per-request (see
+	// listenAndServe), so no Recoverer middleware is needed.
+	r := http.NewServeMux()
 
 	// Single handler for both GET (discovery) and POST (cert evaluation).
 	r.Handle("/", handler)

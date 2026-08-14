@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func TestBasics(t *testing.T) {
@@ -34,8 +36,7 @@ func TestBasics(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	a, err := agent.New(testLogger(t), nil, "")
-	require.NoError(t, err)
+	a := agent.New(testLogger(t), "")
 
 	// Serve in background
 	go func() {
@@ -79,6 +80,46 @@ func TestBasics(t *testing.T) {
 	if !os.IsNotExist(err) {
 		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())
 	}
+}
+
+// TestAgentRefusesAdd confirms that a client connected to the agent's socket
+// - i.e. any child process ssh spawns with SSH_AUTH_SOCK pointed here - can't
+// add its own key to the keyring. Epithet's agent hands out exactly one
+// broker-issued credential; accepting client-added keys would let a
+// compromised child process smuggle its own identity onto the wire.
+func TestAgentRefusesAdd(t *testing.T) {
+	a := agent.New(testLogger(t), "")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		err := a.Serve(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("agent.Serve error: %v", err)
+		}
+	}()
+	require.NoError(t, a.WaitReady())
+
+	conn, err := net.Dial("unix", a.AgentSocketPath())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	client := sshagent.NewClient(conn)
+
+	_, priv, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	rawKey, err := ssh.ParseRawPrivateKey([]byte(priv))
+	require.NoError(t, err)
+
+	// The SSH agent wire protocol collapses any server-side error into a
+	// generic SSH_AGENT_FAILURE, so the client only ever sees "agent:
+	// failure" - the "read-only" message text is asserted directly against
+	// readOnlyKeyring in agent_internal_test.go. What matters here is that
+	// Add is refused at all, over the real wire protocol a client actually
+	// speaks.
+	err = client.Add(sshagent.AddedKey{PrivateKey: rawKey})
+	require.Error(t, err)
 }
 
 func sign(signer ssh.Signer, rawPubKey sshcert.RawPublicKey) (sshcert.RawCertificate, error) {

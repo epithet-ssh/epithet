@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/alecthomas/kong"
 	kongyaml "github.com/alecthomas/kong-yaml"
@@ -48,14 +47,6 @@ var cli struct {
 }
 
 func main() {
-	// Allow binary to be named epithet-agent etc. to imply a command.
-	if baseName := filepath.Base(os.Args[0]); strings.Contains(baseName, "-") {
-		parts := strings.SplitN(baseName, "-", 2)
-		if len(parts) == 2 {
-			os.Args = append([]string{parts[0], parts[1]}, os.Args[1:]...)
-		}
-	}
-
 	// Expand config globs to find existing config files.
 	configPaths, _ := config.ExpandGlobs(defaultConfigPatterns)
 

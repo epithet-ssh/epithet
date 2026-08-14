@@ -98,7 +98,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	caInstance, err := ca.New(caPrivateKey, policyServer.URL)
 	require.NoError(t, err)
 
-	casrv := caserver.New(caInstance, logger, nil, nil)
+	casrv := caserver.New(caInstance, logger, nil)
 	mux := http.NewServeMux()
 	mux.Handle("/", casrv.Handler())
 	mux.Handle("/discovery", casrv.DiscoveryHandler())
@@ -162,7 +162,6 @@ func TestBrokerEndToEnd(t *testing.T) {
 	// MatchWithUserOutput directly (TestBrokerEndToEnd_TagGatedSSHConfig
 	// below drives the real subprocess/wire path instead).
 	conn := policy.Connection{
-		LocalHost:  "localhost",
 		RemoteHost: "localhost",
 		RemoteUser: stack.sshdServer.User,
 		Port:       uint(stack.sshdServer.Port),

@@ -9,36 +9,35 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 
-	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
 
-var errAgentStopped = errors.New("agent has been stopped")
-
-// Agent represents an SSH agent that manages certificates.
+// Agent represents a read-only SSH agent that hands out a single,
+// broker-issued credential. Epithet is not a general-purpose ssh-agent: the
+// agent socket exists only so `ssh` can sign with the certificate the broker
+// minted for this connection, so the keyring never accepts client-added
+// keys - see UseCredential and readOnlyKeyring.
 //
-// Concurrency: Agent is safe for concurrent use. The keyring (golang.org/x/crypto/ssh/agent)
-// has internal synchronization and can be safely accessed from multiple goroutines.
+// Concurrency: Agent is safe for concurrent use. readOnlyKeyring holds its
+// live credential behind an atomic.Pointer, so UseCredential can swap in a
+// fresh credential while other goroutines are mid-List/Sign without a lock.
 // The done channel and closeOnce provide safe shutdown coordination.
 //
-// Immutable after creation: agentSocketPath, publicKey, privateKey, caClient, log
-// Protected by internal sync: keyring (uses its own locking)
+// Immutable after creation: agentSocketPath, log
+// Self-synchronized: keyring (atomic swap)
 // Protected by closeOnce: agentListener, done channel
 // agentListener/startErr: written once by Serve() (which may run in its own
 // goroutine), then guarded for readers by the ready channel - see WaitReady.
 type Agent struct {
-	keyring  agent.Agent // Thread-safe (has internal locking)
-	caClient *caclient.Client
-	log      *slog.Logger // Immutable after New()
+	keyring *readOnlyKeyring // Self-synchronized (atomic swap)
+	log     *slog.Logger     // Immutable after New()
 
 	agentSocketPath string // Immutable after New()
 	agentListener   net.Listener
-
-	publicKey  sshcert.RawPublicKey  // Immutable after New()
-	privateKey sshcert.RawPrivateKey // Immutable after New()
 
 	// ready is closed once startAgentListener has run (successfully or not).
 	// Callers that start Serve in a goroutine (e.g. broker.ensureAgent) must
@@ -57,22 +56,14 @@ type Agent struct {
 
 // New creates a new SSH agent. This does not start listening - call Serve() to begin accepting connections.
 // If agentSocketPath is empty, a temporary socket will be created when Serve() is called.
-func New(logger *slog.Logger, caClient *caclient.Client, agentSocketPath string) (*Agent, error) {
-	pub, priv, err := sshcert.GenerateKeys()
-	if err != nil {
-		return nil, err
-	}
-
+func New(logger *slog.Logger, agentSocketPath string) *Agent {
 	return &Agent{
 		agentSocketPath: agentSocketPath,
-		keyring:         agent.NewKeyring(),
-		caClient:        caClient,
+		keyring:         newReadOnlyKeyring(),
 		log:             logger,
-		publicKey:       pub,
-		privateKey:      priv,
 		ready:           make(chan struct{}),
 		done:            make(chan struct{}),
-	}, nil
+	}
 }
 
 // Serve starts the agent listening on the configured socket and blocks until the context is cancelled.
@@ -118,45 +109,17 @@ type Credential struct {
 	Certificate sshcert.RawCertificate
 }
 
-// UseCredential replaces the current credentials in the agent with the provided credential
+// UseCredential replaces the agent's live credential with the provided one.
+// The swap is atomic (see readOnlyKeyring): a client mid-List/Sign against
+// the old credential is unaffected, and no lock/Close dance is needed since
+// the old keyring is simply dropped, not mutated.
 func (a *Agent) UseCredential(c Credential) error {
 	if !a.Running() {
-		return errAgentStopped
+		return errors.New("agent has been stopped")
 	}
 
 	a.log.Debug("replacing credentials")
-	oldKeys, err := a.keyring.List()
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to list current credentials: %w", err)
-	}
-
-	cert, err := sshcert.Parse(c.Certificate)
-	if err != nil {
-		return fmt.Errorf("error parsing certificate: %w", err)
-	}
-
-	priv, err := ssh.ParseRawPrivateKey([]byte(c.PrivateKey))
-	if err != nil {
-		return fmt.Errorf("error parsing private key: %w", err)
-	}
-	err = a.keyring.Add(agent.AddedKey{
-		PrivateKey:  priv,
-		Certificate: cert,
-	})
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to add new credential: %w", err)
-	}
-
-	for _, k := range oldKeys {
-		err = a.keyring.Remove(k)
-		if err != nil {
-			a.Close()
-			return fmt.Errorf("unable to remove old credential: %w", err)
-		}
-	}
-	return nil
+	return a.keyring.swap(c)
 }
 
 func (a *Agent) startAgentListener() error {
@@ -233,11 +196,6 @@ func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
 }
 
-// IsAgentStopped returns true if the error indicates that the agent has been stopped
-func IsAgentStopped(err error) bool {
-	return errors.Is(err, errAgentStopped)
-}
-
 // Running returns true if the agent is currently running and accepting connections
 func (a *Agent) Running() bool {
 	select {
@@ -263,3 +221,87 @@ func (a *Agent) Close() {
 		close(a.done)
 	})
 }
+
+// errReadOnly is returned by every mutating readOnlyKeyring method. Epithet
+// hands this agent's socket to arbitrary child processes (ssh, scp, git);
+// none of them may add, replace, or lock the one credential the broker
+// issued, so every write path is refused rather than merely discouraged.
+var errReadOnly = fmt.Errorf("epithet agent is read-only")
+
+// readOnlyKeyring implements agent.ExtendedAgent as a read-only view over an
+// in-memory keyring holding at most one credential. List/Sign/SignWithFlags/
+// Signers delegate to the current inner keyring; swap replaces it atomically
+// so UseCredential never needs to lock out concurrent Sign calls or unwind a
+// partial list-add-remove sequence on error.
+type readOnlyKeyring struct {
+	inner atomic.Pointer[agent.Agent]
+}
+
+// newReadOnlyKeyring creates a readOnlyKeyring with an empty inner keyring,
+// so List/Sign behave sanely before the first UseCredential call.
+func newReadOnlyKeyring() *readOnlyKeyring {
+	r := &readOnlyKeyring{}
+	empty := agent.NewKeyring()
+	r.inner.Store(&empty)
+	return r
+}
+
+// swap parses the credential and installs it as the sole entry of a freshly
+// built inner keyring, then atomically publishes it. Building the new
+// keyring before publishing means a parse failure never disturbs the
+// credential already being served.
+func (r *readOnlyKeyring) swap(c Credential) error {
+	cert, err := sshcert.Parse(c.Certificate)
+	if err != nil {
+		return fmt.Errorf("error parsing certificate: %w", err)
+	}
+
+	priv, err := ssh.ParseRawPrivateKey([]byte(c.PrivateKey))
+	if err != nil {
+		return fmt.Errorf("error parsing private key: %w", err)
+	}
+
+	fresh := agent.NewKeyring()
+	if err := fresh.Add(agent.AddedKey{PrivateKey: priv, Certificate: cert}); err != nil {
+		return fmt.Errorf("unable to add new credential: %w", err)
+	}
+
+	r.inner.Store(&fresh)
+	return nil
+}
+
+func (r *readOnlyKeyring) current() agent.Agent {
+	return *r.inner.Load()
+}
+
+func (r *readOnlyKeyring) List() ([]*agent.Key, error) {
+	return r.current().List()
+}
+
+func (r *readOnlyKeyring) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+	return r.current().Sign(key, data)
+}
+
+func (r *readOnlyKeyring) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
+	if ext, ok := r.current().(agent.ExtendedAgent); ok {
+		return ext.SignWithFlags(key, data, flags)
+	}
+	return r.current().Sign(key, data)
+}
+
+func (r *readOnlyKeyring) Signers() ([]ssh.Signer, error) {
+	return r.current().Signers()
+}
+
+func (r *readOnlyKeyring) Extension(extensionType string, contents []byte) ([]byte, error) {
+	if ext, ok := r.current().(agent.ExtendedAgent); ok {
+		return ext.Extension(extensionType, contents)
+	}
+	return nil, agent.ErrExtensionUnsupported
+}
+
+func (r *readOnlyKeyring) Add(key agent.AddedKey) error   { return errReadOnly }
+func (r *readOnlyKeyring) Remove(key ssh.PublicKey) error { return errReadOnly }
+func (r *readOnlyKeyring) RemoveAll() error               { return errReadOnly }
+func (r *readOnlyKeyring) Lock(passphrase []byte) error   { return errReadOnly }
+func (r *readOnlyKeyring) Unlock(passphrase []byte) error { return errReadOnly }

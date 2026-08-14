@@ -4,15 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 )
 
 type CACLI struct {
@@ -43,21 +41,18 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
 
-	// Set up HTTP router.
-	r := chi.NewRouter()
-
-	// Middleware stack.
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	// Set up HTTP router. net/http.Server already recovers handler panics
+	// per-request (see listenAndServe), so no Recoverer middleware is needed;
+	// request logging goes through slog at the call sites that matter
+	// (certificate issuance, discovery failures) rather than an access log
+	// for every hit.
+	r := http.NewServeMux()
 
 	// Create certificate logger for audit trail.
 	// Audit logs always emit at Info regardless of global verbosity.
 	certLogger := caserver.NewSlogCertLogger(certAuditLogger(logger))
 
-	server := caserver.New(caInstance, logger, nil, certLogger)
+	server := caserver.New(caInstance, logger, certLogger)
 	r.Handle("/", server.Handler())
 	r.Handle("/discovery", server.DiscoveryHandler())
 

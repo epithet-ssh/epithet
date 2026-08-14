@@ -123,7 +123,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	// handler passes evaluator errors through unchanged.
 	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
-		err: policyserver.Unauthorized("Invalid token"),
+		err: &wire.PolicyError{StatusCode: http.StatusUnauthorized, Message: "Invalid token"},
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{
@@ -219,7 +219,7 @@ func TestHandler_Forbidden(t *testing.T) {
 func TestHandler_NotHandled(t *testing.T) {
 	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
-		err: policyserver.NotHandled("connection not handled by this policy server"),
+		err: &wire.PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: "connection not handled by this policy server"},
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{

@@ -67,7 +67,7 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 
 	if ca.httpClient == nil {
 		ca.httpClient = &http.Client{
-			Timeout: time.Second * 30,
+			Timeout: tlsconfig.DefaultTimeout,
 		}
 	}
 
@@ -96,18 +96,12 @@ func (f optionFunc) apply(a *CA) error {
 	return f(a)
 }
 
-// WithHTTPClient configures the CA to use the specified HTTP Client.
-func WithHTTPClient(httpClient *http.Client) Option {
-	return optionFunc(func(c *CA) error {
-		c.httpClient = httpClient
-		return nil
-	})
-}
-
-// WithTLSConfig creates an HTTP client with the specified TLS configuration.
+// WithTLSConfig creates an HTTP client with the specified TLS configuration,
+// using tlsconfig's shared default timeout rather than a locally-duplicated
+// literal.
 func WithTLSConfig(cfg tlsconfig.Config) Option {
 	return optionFunc(func(c *CA) error {
-		httpClient, err := tlsconfig.NewHTTPClientWithTimeout(cfg, time.Second*30)
+		httpClient, err := tlsconfig.NewHTTPClient(cfg)
 		if err != nil {
 			return fmt.Errorf("failed to create HTTP client: %w", err)
 		}
@@ -302,12 +296,4 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertPara
 		return "", errors.New("unknown problem marshaling certificate")
 	}
 	return sshcert.RawCertificate(string(rawCert)), nil
-}
-
-// AuthToken is the token passed from the plugin through to
-// the CA (and to the ca verifier plugin matching Provider).
-// Token is opaque and can hold whatever the plugins need it to.
-type AuthToken struct {
-	Provider string
-	Token    string
 }

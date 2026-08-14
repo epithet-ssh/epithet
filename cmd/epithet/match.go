@@ -35,12 +35,6 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 		return fmt.Errorf("failed to expand broker socket path: %w", err)
 	}
 
-	// Get local hostname.
-	localHost, err := os.Hostname()
-	if err != nil {
-		return fmt.Errorf("failed to get local hostname: %w", err)
-	}
-
 	// Connect to the broker over its Unix socket and send one request line.
 	conn, err := net.Dial("unix", brokerSock)
 	if err != nil {
@@ -49,7 +43,6 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 	defer conn.Close()
 
 	req := broker.Request{Match: &policy.Connection{
-		LocalHost:  localHost,
 		RemoteHost: m.Host,
 		RemoteUser: m.User,
 		Port:       m.Port,

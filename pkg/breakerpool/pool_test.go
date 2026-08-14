@@ -80,7 +80,7 @@ func TestPool_Execute_PriorityOrder(t *testing.T) {
 
 func TestPool_Execute_DefaultPriority(t *testing.T) {
 	entries := []Entry[testState]{
-		{State: testState{url: "https://ca1.example.com"}},              // uses DefaultPriority
+		{State: testState{url: "https://ca1.example.com"}},               // uses DefaultPriority
 		{State: testState{url: "https://ca2.example.com"}, Priority: 50}, // explicit lower priority
 	}
 	pool := New[string](entries, testDefaults(time.Minute))
@@ -238,16 +238,6 @@ func TestPool_AllUnavailable(t *testing.T) {
 	require.True(t, pool.AllUnavailable())
 }
 
-func TestPool_Len(t *testing.T) {
-	entries := []Entry[testState]{
-		{State: testState{url: "https://ca1.example.com"}, Priority: 100},
-		{State: testState{url: "https://ca2.example.com"}, Priority: 50},
-	}
-	pool := New[string](entries, testDefaults(time.Minute))
-
-	require.Equal(t, 2, pool.Len())
-}
-
 func TestPool_Execute_ConcurrentSafety(t *testing.T) {
 	entries := []Entry[testState]{
 		{State: testState{url: "https://ca1.example.com"}, Priority: 100},
@@ -272,37 +262,6 @@ func TestPool_Execute_ConcurrentSafety(t *testing.T) {
 
 	wg.Wait()
 	require.Equal(t, int32(100), counter.Load())
-}
-
-func TestPool_PerEntrySettings(t *testing.T) {
-	// Custom settings for one entry with longer cooldown
-	customSettings := &gobreaker.Settings{
-		Timeout: time.Hour, // Very long timeout
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures >= 5 // Require more failures
-		},
-		IsSuccessful: func(err error) bool {
-			return err == nil
-		},
-	}
-
-	entries := []Entry[testState]{
-		{State: testState{url: "https://ca1.example.com"}},                        // uses defaults
-		{State: testState{url: "https://ca2.example.com"}, Settings: customSettings}, // custom settings
-	}
-	pool := New[string](entries, testDefaults(time.Minute))
-
-	// Both should work
-	var calls []string
-	for i := 0; i < 2; i++ {
-		_, err := pool.Execute(func(s testState) (string, error) {
-			calls = append(calls, s.url)
-			return "ok", nil
-		})
-		require.NoError(t, err)
-	}
-
-	require.Len(t, calls, 2)
 }
 
 func TestPool_Execute_AllOpenFallbackRecovers(t *testing.T) {
