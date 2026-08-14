@@ -12,6 +12,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -71,7 +72,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	ctx := context.Background()
 
 	var eval *evaluator.Evaluator
-	var validator policyserver.TokenValidator
+	var validator *oidc.Validator
 	var policyProvider policyserver.PolicyProvider
 
 	if c.PolicySource != "" {

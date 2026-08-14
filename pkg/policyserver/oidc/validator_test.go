@@ -1,147 +1,52 @@
-package oidc_test
+package oidc
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
+	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
+	"github.com/stretchr/testify/require"
 )
 
-// mockOIDCServer returns a test server that serves the two endpoints
-// coreos/go-oidc needs for provider discovery: openid-configuration
-// and an empty JWKS.
-func mockOIDCServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	var url string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":%q,"authorization_endpoint":%q,"token_endpoint":%q,"response_types_supported":["code"]}`,
-				url, url+"/jwks", url+"/auth", url+"/token")
-		case "/jwks":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"keys":[]}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	url = srv.URL
-	t.Cleanup(srv.Close)
-	return srv
+func newValidator(t *testing.T, idp *oidctest.IdP) *Validator {
+	v, err := NewValidator(context.Background(), Config{
+		Issuer:   idp.Issuer(),
+		ClientID: oidctest.ClientID,
+	})
+	require.NoError(t, err)
+	return v
 }
 
-func TestNewValidator_InvalidIssuer(t *testing.T) {
-	ctx := context.Background()
+func TestValidateReturnsIdentityAndExpiry(t *testing.T) {
+	idp := oidctest.New(t)
+	v := newValidator(t, idp)
 
-	_, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: "https://invalid-oidc-provider-that-does-not-exist.example.com",
-	})
-
-	if err == nil {
-		t.Fatal("expected error for invalid issuer, got nil")
-	}
+	exp := time.Now().Add(5 * time.Minute).Truncate(time.Second)
+	claims, err := v.Validate(context.Background(), idp.MintIDToken("alice@example.com", exp))
+	require.NoError(t, err)
+	require.Equal(t, "alice@example.com", claims.Identity)
+	require.WithinDuration(t, exp, claims.ExpiresAt, time.Second)
 }
 
-func TestNewValidator_EmptyIssuer(t *testing.T) {
-	ctx := context.Background()
-
-	_, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: "",
-	})
-
-	if err == nil {
-		t.Fatal("expected error for empty issuer, got nil")
-	}
-
-	if err.Error() != "issuer is required" {
-		t.Errorf("expected 'issuer is required' error, got: %v", err)
-	}
+func TestValidateRejectsExpiredToken(t *testing.T) {
+	idp := oidctest.New(t)
+	v := newValidator(t, idp)
+	_, err := v.Validate(context.Background(), idp.MintIDToken("alice@example.com", time.Now().Add(-time.Minute)))
+	require.Error(t, err)
 }
 
-// TestNewValidator_Success tests that we can create a validator against a mock OIDC provider.
-func TestNewValidator_Success(t *testing.T) {
-	mock := mockOIDCServer(t)
-
-	ctx := context.Background()
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: mock.URL,
-	})
-
-	if err != nil {
-		t.Fatalf("failed to create validator: %v", err)
-	}
-
-	if validator == nil {
-		t.Fatal("validator is nil")
-	}
+func TestValidateRejectsWrongAudience(t *testing.T) {
+	idp := oidctest.New(t)
+	v := newValidator(t, idp)
+	tok := idp.MintIDTokenWithAudience("alice@example.com", "someone-else", time.Now().Add(time.Minute))
+	_, err := v.Validate(context.Background(), tok)
+	require.Error(t, err)
 }
 
-// TestValidate_InvalidToken tests that invalid tokens are rejected.
-func TestValidate_InvalidToken(t *testing.T) {
-	mock := mockOIDCServer(t)
-
-	ctx := context.Background()
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: mock.URL,
-	})
-	if err != nil {
-		t.Fatalf("failed to create validator: %v", err)
-	}
-
-	// Try to validate an invalid token.
-	_, err = validator.Validate(ctx, "invalid.token.string")
-	if err == nil {
-		t.Fatal("expected error for invalid token, got nil")
-	}
-}
-
-// TestValidate_ExpiredToken tests that expired tokens are rejected.
-func TestValidate_ExpiredToken(t *testing.T) {
-	mock := mockOIDCServer(t)
-
-	ctx := context.Background()
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: mock.URL,
-	})
-	if err != nil {
-		t.Fatalf("failed to create validator: %v", err)
-	}
-
-	// Crafted JWT with an invalid signature — fails at JWKS verification
-	// because the mock serves an empty key set.
-	expiredToken := "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE4MmU0NTU0YjZlNWQxYjEzMDQzZWNiYjFhYTE2MmZlMzU0YTViOWMiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhenAiOiIxMjM0NTY3ODkwIiwiYXVkIjoiMTIzNDU2Nzg5MCIsInN1YiI6IjExMjIzMzQ0NTU2Njc3ODg5OTAwIiwiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImlhdCI6MTYwMDAwMDAwMCwiZXhwIjoxNjAwMDAzNjAwfQ.invalid-signature"
-
-	_, err = validator.Validate(ctx, expiredToken)
-	if err == nil {
-		t.Fatal("expected error for expired token, got nil")
-	}
-}
-
-// ExampleValidator is illustrative — it shows how the validator API is used
-// but requires a real OIDC provider to actually run.
-func ExampleValidator() {
-	ctx := context.Background()
-
-	// Create validator for Google.
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: "https://accounts.google.com",
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	// Validate a token (this would come from epithet auth oidc).
-	claims, err := validator.Validate(ctx, "token-from-auth-command")
-	if err != nil {
-		panic(err)
-	}
-
-	// Use the claims.
-	_ = claims.Identity // "user@example.com"
-	_ = claims.Email    // "user@example.com"
-	_ = claims.Subject  // "1234567890"
+func TestNewValidatorRequiresClientID(t *testing.T) {
+	idp := oidctest.New(t)
+	_, err := NewValidator(context.Background(), Config{Issuer: idp.Issuer()})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "client_id")
 }

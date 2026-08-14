@@ -22,7 +22,7 @@ func TestHandler_GETDiscovery(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
+		// Validator is unused by the GET (discovery) path.
 		Evaluator: &mockEvaluator{},
 		Discovery: discovery,
 	})
@@ -60,7 +60,6 @@ func TestHandler_GETDiscovery(t *testing.T) {
 
 func TestHandler_GETDiscovery_NotConfigured(t *testing.T) {
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
 		Evaluator: &mockEvaluator{},
 		// No Discovery configured.
 	})
@@ -77,7 +76,6 @@ func TestHandler_GETDiscovery_NotConfigured(t *testing.T) {
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
 		Evaluator: &mockEvaluator{},
 	})
 

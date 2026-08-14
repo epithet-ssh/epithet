@@ -9,6 +9,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/httpsig"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
@@ -31,14 +32,6 @@ type PolicyEvaluator interface {
 	// - Return ErrForbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
 	Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error)
-}
-
-// TokenValidator validates authentication tokens and extracts identity.
-// Used by handlers to authenticate requests before policy evaluation.
-type TokenValidator interface {
-	// ValidateAndExtractIdentity validates the token and returns the identity.
-	// Returns an error if the token is invalid or expired.
-	ValidateAndExtractIdentity(token string) (identity string, err error)
 }
 
 // Standard errors for policy evaluation.
@@ -81,7 +74,7 @@ type Config struct {
 	CAPublicKey sshcert.RawPublicKey
 
 	// Validator validates tokens and extracts identity (authentication).
-	Validator TokenValidator
+	Validator *oidc.Validator
 
 	// Evaluator makes authorization decisions based on identity.
 	Evaluator PolicyEvaluator
@@ -176,14 +169,14 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate token and extract identity (authentication).
-	identity, err := h.config.Validator.ValidateAndExtractIdentity(req.Token)
+	claims, err := h.config.Validator.Validate(r.Context(), req.Token)
 	if err != nil {
 		h.writeError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid token: %v", err))
 		return
 	}
 
 	// Evaluate policy based on identity (authorization).
-	resp, err := h.config.Evaluator.Evaluate(r.Context(), identity, req.Connection)
+	resp, err := h.config.Evaluator.Evaluate(r.Context(), claims.Identity, req.Connection)
 	if err != nil {
 		if policyErr, ok := err.(*wire.PolicyError); ok {
 			h.writeError(w, policyErr.StatusCode, policyErr.Message)

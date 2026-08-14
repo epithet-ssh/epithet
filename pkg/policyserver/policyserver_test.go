@@ -9,25 +9,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/stretchr/testify/require"
 )
 
-// mockValidator is a simple test token validator.
-type mockValidator struct {
-	identity string
-	err      error
-}
-
-func (m *mockValidator) ValidateAndExtractIdentity(token string) (string, error) {
-	if m.err != nil {
-		return "", m.err
-	}
-	if m.identity != "" {
-		return m.identity, nil
-	}
-	return "test@example.com", nil
+// newTestValidator builds a real validator against a fake IdP, so handler
+// tests exercise the actual token-validation path rather than a stub.
+func newTestValidator(t *testing.T) (*oidc.Validator, *oidctest.IdP) {
+	t.Helper()
+	idp := oidctest.New(t)
+	v, err := oidc.NewValidator(context.Background(), oidc.Config{
+		Issuer:   idp.Issuer(),
+		ClientID: oidctest.ClientID,
+	})
+	require.NoError(t, err)
+	return v, idp
 }
 
 // mockEvaluator is a simple test evaluator.
@@ -44,6 +44,7 @@ func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, conn poli
 }
 
 func TestHandler_Success(t *testing.T) {
+	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		response: &wire.PolicyResponse{
 			CertParams: wire.CertParams{
@@ -63,12 +64,12 @@ func TestHandler_Success(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
+		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: "test-token",
+		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -97,17 +98,21 @@ func TestHandler_Success(t *testing.T) {
 }
 
 func TestHandler_Unauthorized(t *testing.T) {
+	// Evaluator-forced 401: the token itself is valid, but the evaluator
+	// rejects it (e.g. a policy-layer authentication concern). Confirms the
+	// handler passes evaluator errors through unchanged.
+	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		err: policyserver.Unauthorized("Invalid token"),
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
+		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: "invalid-token",
+		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -126,18 +131,50 @@ func TestHandler_Unauthorized(t *testing.T) {
 	}
 }
 
+func TestHandler_InvalidToken(t *testing.T) {
+	// Real 401 from the validator itself: an expired token must be rejected
+	// before the evaluator ever runs.
+	validator, idp := newTestValidator(t)
+	evaluator := &mockEvaluator{}
+
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: validator,
+		Evaluator: evaluator,
+	})
+
+	req := wire.PolicyRequest{
+		Token: idp.MintIDToken("test@example.com", time.Now().Add(-time.Minute)),
+		Connection: policy.Connection{
+			RemoteHost: "server.example.com",
+			RemoteUser: "testuser",
+			Port:       22,
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, httpReq)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandler_Forbidden(t *testing.T) {
+	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		err: policyserver.Forbidden("Access denied by policy"),
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
+		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: "valid-token",
+		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -157,17 +194,18 @@ func TestHandler_Forbidden(t *testing.T) {
 }
 
 func TestHandler_NotHandled(t *testing.T) {
+	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		err: policyserver.NotHandled("connection not handled by this policy server"),
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
+		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: "valid-token",
+		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "unknown.example.com",
 			RemoteUser: "testuser",
@@ -187,8 +225,9 @@ func TestHandler_NotHandled(t *testing.T) {
 }
 
 func TestHandler_InvalidJSON(t *testing.T) {
+	validator, _ := newTestValidator(t)
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
+		Validator: validator,
 		Evaluator: &mockEvaluator{},
 	})
 
@@ -203,6 +242,7 @@ func TestHandler_InvalidJSON(t *testing.T) {
 }
 
 func TestHandlerAcceptsBareToken(t *testing.T) {
+	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		response: &wire.PolicyResponse{
 			CertParams: wire.CertParams{
@@ -222,11 +262,12 @@ func TestHandlerAcceptsBareToken(t *testing.T) {
 	}
 
 	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{identity: "alice@example.com"},
+		Validator: validator,
 		Evaluator: evaluator,
 	})
 
-	body, _ := json.Marshal(wire.PolicyRequest{Token: "raw.jwt.token"})
+	token := idp.MintIDToken("alice@example.com", time.Now().Add(time.Minute))
+	body, _ := json.Marshal(wire.PolicyRequest{Token: token})
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 

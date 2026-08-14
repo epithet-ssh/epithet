@@ -22,8 +22,6 @@ type Evaluator struct {
 
 	// For dynamic policy loading.
 	policyProvider policyserver.PolicyProvider
-
-	validator *oidc.Validator
 }
 
 // New creates a new policy evaluator with a new OIDC validator.
@@ -41,7 +39,6 @@ func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlscon
 
 	return &Evaluator{
 		staticPolicy: cfg.ExtractPolicyConfig(),
-		validator:    validator,
 	}, validator, nil
 }
 
@@ -59,7 +56,6 @@ func NewWithProvider(ctx context.Context, serverCfg *policyserver.ServerConfig, 
 
 	return &Evaluator{
 		policyProvider: provider,
-		validator:      validator,
 	}, validator, nil
 }
 

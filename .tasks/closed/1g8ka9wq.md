@@ -3,7 +3,7 @@ yatl_version: 1
 title: 'Security: OIDC validator skips audience check when client_id empty'
 id: 1g8ka9wq
 created: 2026-06-23T16:52:29.960526897Z
-updated: 2026-06-23T16:52:29.960526897Z
+updated: 2026-08-14T15:47:02.854082Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -33,3 +33,8 @@ Fix: make NewValidator reject an empty ClientID (or require an explicit SkipClie
 # Log: 2026-06-23T16:52:29Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-08-14T15:47:02Z Brian McCallister
+
+Closed: Fixed in task 4 of oidc-only-auth-plan: NewValidator now rejects empty ClientID, and SkipExpiryCheck/SkipClientIDCheck were deleted entirely along with the TokenValidator interface.
