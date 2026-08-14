@@ -24,7 +24,7 @@ editor policy.yaml
 ```
 
 Update:
-- `ca_public_key`: Paste contents of `ca_key.pub`
+- `ca-pubkey`: Paste contents of `ca_key.pub`
 - `oidc`: Your OIDC provider URL
 - `users`: Add your team members
 
@@ -46,13 +46,14 @@ Update:
 
 ### 4. Configure epithet agent
 
-Create `~/.epithet/config.yaml`:
+Create `~/.epithet/config.yaml`. OIDC issuer/client-id are fetched from the
+CA's `/discovery` endpoint at startup - the client needs no auth config of
+its own:
 
 ```yaml
-# Host patterns are obtained from CA discovery - no static match config needed
 agent:
   ca-url: http://localhost:8080
-  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
+  name: default
 ```
 
 Start the agent:
@@ -63,9 +64,13 @@ epithet agent
 
 ### 5. Add SSH configuration
 
-Add to `~/.ssh/config`:
+Tag the hosts this profile should handle, then include epithet's
+auto-generated config *after* those Tag lines (requires **OpenSSH 9.4+**
+for `Tag`/`Match tagged`):
 
 ```
+Host *.example.com
+    Tag epithet-default
 Include ~/.epithet/run/*/ssh-config.conf
 ```
 

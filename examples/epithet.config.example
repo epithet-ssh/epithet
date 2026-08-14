@@ -13,10 +13,12 @@
 # tls-ca-cert: /path/to/ca.crt
 
 # Agent configuration (epithet agent)
-# Host patterns are obtained dynamically from CA discovery - no static match config needed
+# OIDC issuer/client-id are fetched from the CA's /discovery endpoint at
+# startup - nothing to configure here. Host gating lives in your own
+# ~/.ssh/config via Tag/Include, not in this file.
 agent:
   ca-url: https://ca.example.com
-  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
+  name: default   # profile name; determines the rundir and ssh Tag (epithet-<name>)
 
 # CA server configuration (epithet ca)
 # ca:
@@ -25,16 +27,18 @@ agent:
 #   listen: "0.0.0.0:8080"
 
 # Policy server configuration (epithet policy)
-# All policy config is now unified here - no separate policy.yaml needed
+# All policy config is unified here - no separate policy.yaml needed
 # policy:
 #   listen: "0.0.0.0:9999"
 #   ca-pubkey: ssh-ed25519 AAAAC3...  # or URL like https://ca.example.com/pubkey
 #   default-expiration: "5m"
 #
-#   # OIDC configuration for token validation
+#   # OIDC configuration for token validation - client-id is required so
+#   # audience checking can never be silently skipped. Config-file keys
+#   # here are kebab-case (derived from the CLI flag names).
 #   oidc:
 #     issuer: "https://accounts.google.com"
-#     audience: "your-client-id"
+#     client-id: "your-client-id"
 #
 #   # Map users (by email) to tags (roles/teams)
 #   users:
@@ -50,23 +54,14 @@ agent:
 #       permit-pty: ""
 #       permit-agent-forwarding: ""
 #
-#   # Per-host policy overrides
+#   # Per-host policy overrides (host patterns use path.Match semantics;
+#   # "*" crosses dots, so "*.prod.example.com" also matches
+#   # "a.b.prod.example.com")
 #   hosts:
 #     "*.prod.example.com":
 #       expiration: "2m"       # shorter expiration for production
 #       allow:
 #         root: [admin]        # only admins can access as root
 
-# Auth OIDC configuration (epithet auth oidc)
-# auth:
-#   oidc:
-#     issuer: https://accounts.google.com
-#     client-id: YOUR_CLIENT_ID
-#     client-secret: YOUR_CLIENT_SECRET  # Optional if using PKCE
-#     scopes:
-#       - openid
-#       - email
-#       - profile
-
 # Note: Broker socket and agent directories are automatically managed
-# in ~/.epithet/run/<instance-id>/ - no configuration needed!
+# in ~/.epithet/run/<name>/ - no configuration needed!

@@ -29,7 +29,7 @@ editor config/policy.yaml
 ```
 
 Update `config/policy.yaml`:
-- Set `ca_public_key` to contents of `config/ca_key.pub`
+- Set `ca-pubkey` to contents of `config/ca_key.pub`
 - Configure your OIDC provider
 - Add your users
 

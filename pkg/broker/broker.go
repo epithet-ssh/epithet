@@ -167,10 +167,10 @@ func (b *Broker) startBrokerListener() error {
 
 type MatchResponse struct {
 	// Should the `Match exec` actually match?
-	Allow bool
+	Allow bool `json:"allow"`
 
 	// Error contains any error which should be reported to the user on stderr
-	Error string
+	Error string `json:"error,omitempty"`
 }
 
 // InspectRequest is the input for Broker.Inspect RPC
@@ -206,9 +206,9 @@ func (b *Broker) deny(err error) MatchResponse {
 }
 
 // MatchWithUserOutput performs the match operation, streaming auth user output
-// to userOutput. This is the core match implementation used by the gRPC server.
-// Canceling ctx (e.g. the requesting `epithet match` process went away)
-// abandons this match's auth and CA work.
+// to userOutput. This is the core match implementation used by the JSON
+// protocol server (protocol.go). Canceling ctx (e.g. the requesting
+// `epithet match` process went away) abandons this match's auth and CA work.
 func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection, userOutput io.Writer) MatchResponse {
 	b.log.Debug("match request received", "connection", conn)
 

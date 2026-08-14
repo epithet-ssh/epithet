@@ -11,10 +11,9 @@ User=epithet
 Group=epithet
 
 # Policy server configuration
-ExecStart=/usr/local/bin/epithet policy \
-  --config-file /etc/epithet/policy.yaml \
+ExecStart=/usr/local/bin/epithet --config /etc/epithet/policy.yaml policy \
   --ca-pubkey "$(cat /etc/epithet/ca_key.pub)" \
-  --port 9999
+  --listen 0.0.0.0:9999
 
 # Security hardening
 NoNewPrivileges=true

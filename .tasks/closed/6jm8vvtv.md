@@ -3,7 +3,7 @@ yatl_version: 1
 title: Add SSH session detection for OIDC auth plugin
 id: 6jm8vvtv
 created: 2026-02-01T04:13:49.720155Z
-updated: 2026-02-01T04:16:24.130994Z
+updated: 2026-08-14T19:04:01.093443Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -79,3 +79,8 @@ if isRemoteSession {
     // Use authorization code + PKCE with local browser
     browserAuth()
 }
+
+---
+# Log: 2026-08-14T19:04:01Z Brian McCallister
+
+Closed: auth plugins removed; no plugin env contract to extend

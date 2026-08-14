@@ -3,7 +3,7 @@ yatl_version: 1
 title: Remove direct CUE dependency
 id: 0wxy5vnz
 created: 2026-04-10T14:32:25.298636Z
-updated: 2026-04-10T14:32:36.719529Z
+updated: 2026-08-14T19:04:01.104101Z
 author: Brian McCallister
 priority: medium
 ---
@@ -14,3 +14,8 @@ Goal: remove the runtime dependency on CUE for config loading while preserving t
 # Log: 2026-04-10T14:32:25Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-08-14T19:04:01Z Brian McCallister
+
+Closed: already done; no CUE dependency remains in the tree

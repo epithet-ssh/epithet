@@ -114,6 +114,36 @@ func TestMalformedRequestGetsErrorResult(t *testing.T) {
 	require.NotEmpty(t, ev.Result.Error)
 }
 
+// TestMatchResultWireShapeIsLowercase pins the actual JSON emitted on the
+// wire for a terminal Result event: MatchResponse must marshal as
+// lowercase "allow"/"error" keys, matching what docs/architecture.md
+// documents and what a third-party client (or `epithet match` itself)
+// parses. Unmarshaling into the Go MatchResponse type would pass even if
+// the struct had no json tags at all (Go's default field-name matching is
+// case-insensitive), which is exactly the bug this test guards against -
+// it inspects the raw bytes on the wire instead.
+func TestMatchResultWireShapeIsLowercase(t *testing.T) {
+	t.Parallel()
+	b := newTestBroker(t, nil)
+	client := dialBroker(t, b)
+	fmt.Fprintln(client, "{not json")
+
+	sc := bufio.NewScanner(client)
+	require.True(t, sc.Scan())
+	line := sc.Bytes()
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(line, &raw))
+	require.Contains(t, raw, "result")
+
+	var result map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw["result"], &result))
+	require.Contains(t, result, "allow", "MatchResponse must marshal its Allow field as lowercase \"allow\"")
+	require.Contains(t, result, "error", "MatchResponse must marshal its Error field as lowercase \"error\"")
+	require.NotContains(t, result, "Allow", "MatchResponse must not marshal the unexported-looking capitalized field name")
+	require.NotContains(t, result, "Error", "MatchResponse must not marshal the unexported-looking capitalized field name")
+}
+
 // TestClientCloseCancelsMatch ports Test_MatchStreamsUserOutput's
 // close-abandons-work semantics from the old grpc_server_test.go (Task 11):
 // closing the client connection before a Result arrives must cancel the

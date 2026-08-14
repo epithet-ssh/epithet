@@ -1,11 +1,13 @@
 openapi: 3.0.3
 info:
   title: Epithet Policy Server API
-  version: 2.0.0
+  version: 3.0.0
   description: |
     The Policy Server API is called by the Epithet CA to make authorization decisions
-    for SSH certificate requests. Your policy server receives authentication tokens,
-    connection details, and returns certificate parameters if the request is approved.
+    for SSH certificate requests, and to serve the anonymous OIDC bootstrap config the
+    CA passes through on its own `/discovery` endpoint. Your policy server receives
+    the user's authentication token (always a JWT) and connection details, and returns
+    certificate parameters if the request is approved.
 
     This OpenAPI specification can be used to:
     - Generate server stubs in your preferred language
@@ -15,9 +17,11 @@ info:
 
     ## Security
 
-    The CA signs the authentication token with its private key and includes the signature
-    in the request. Your policy server MUST verify this signature before processing
-    the request to prevent unauthorized certificate issuance.
+    Every request — GET and POST alike — carries a short-lived JWT the CA mints per
+    request and signs with its own SSH private key (`pkg/serviceauth`). Your policy
+    server MUST verify this token (signature, audience, freshness, body hash, method,
+    and target) before processing the request. There is no unauthenticated variant of
+    either route.
 
   contact:
     name: Epithet Project
@@ -32,6 +36,37 @@ servers:
 
 paths:
   /:
+    get:
+      operationId: getDiscovery
+      summary: Anonymous OIDC bootstrap config
+      description: |
+        Called by the CA to populate its own anonymous `GET /discovery` endpoint,
+        which clients fetch once at startup to learn how to authenticate. Still
+        requires the CA's service JWT (see Security), even though the payload
+        itself carries no user secrets — this endpoint has no unauthenticated
+        variant in epithet's own implementation.
+      security:
+        - ServiceJWT: []
+      responses:
+        '200':
+          description: OIDC bootstrap config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discovery'
+              examples:
+                typical:
+                  value:
+                    auth:
+                      issuer: "https://accounts.google.com"
+                      client_id: "123456.apps.googleusercontent.com"
+        '401':
+          description: Invalid or missing service JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
     post:
       operationId: evaluatePolicy
       summary: Evaluate certificate request policy
@@ -40,11 +75,13 @@ paths:
         the certificate parameters (principals, expiration, extensions).
 
         The policy server should:
-        1. Verify the signature to ensure the request came from your CA
-        2. Validate the authentication token
-        3. Check authorization (can this user access this host?)
-        4. Determine principals (which usernames to allow)
-        5. Set appropriate expiration and extensions
+        1. Verify the CA's service JWT (see Security)
+        2. Validate the user's token (JWT: signature, issuer, audience, expiry)
+        3. Check authorization (can this identity access this host as the requested user?)
+        4. Set principals (exactly the one requested user), expiration, notAfter, and extensions
+
+      security:
+        - ServiceJWT: []
 
       requestBody:
         required: true
@@ -57,10 +94,7 @@ paths:
                 summary: Typical policy request
                 value:
                   token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  signature: "MEUCIQDx1KZ2vH..."
                   connection:
-                    localHost: "alice-laptop.corp.example.com"
-                    localUser: "alice"
                     remoteHost: "prod-web-01.example.com"
                     remoteUser: "deploy"
                     port: 22
@@ -80,25 +114,24 @@ paths:
                   value:
                     certParams:
                       identity: "alice@example.com"
-                      principals: ["deploy", "www-data"]
-                      expiration: "5m0s"
+                      principals: ["deploy"]
+                      expiration: 300000000000
+                      notAfter: "2026-08-13T18:30:00Z"
                       extensions:
                         permit-pty: ""
                         permit-agent-forwarding: ""
-                    policy:
-                      hostPattern: "*.example.com"
 
         '401':
-          description: Invalid signature or authentication token
+          description: Invalid service JWT, or invalid/expired user token
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
               examples:
-                invalidSignature:
-                  summary: Signature verification failed
+                invalidToken:
+                  summary: User token verification failed
                   value:
-                    error: "invalid signature from CA"
+                    error: "Invalid token: token is expired"
 
         '403':
           description: User not authorized for this access
@@ -110,7 +143,15 @@ paths:
                 notAuthorized:
                   summary: User not permitted
                   value:
-                    error: "user alice not authorized for deploy@prod-web-01.example.com"
+                    error: "User alice not authorized for deploy@prod-web-01.example.com"
+
+        '413':
+          description: Request body exceeded the 64 KiB limit (`wire.MaxBodySize`)
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "Request body too large"
 
         '500':
           description: Internal server error
@@ -121,27 +162,43 @@ paths:
 
 components:
   schemas:
+    Discovery:
+      type: object
+      properties:
+        auth:
+          $ref: '#/components/schemas/AuthConfig'
+
+    AuthConfig:
+      type: object
+      required:
+        - issuer
+        - client_id
+      properties:
+        issuer:
+          type: string
+          description: OIDC issuer URL
+          example: "https://accounts.google.com"
+        client_id:
+          type: string
+          description: OAuth2 client ID. Required — audience checking can never be silently skipped.
+          example: "123456.apps.googleusercontent.com"
+        client_secret:
+          type: string
+          description: OAuth2 client secret, only present for confidential clients. Omitted (not empty-stringed) when unset.
+          example: ""
+
     PolicyRequest:
       type: object
       required:
         - token
-        - signature
         - connection
       properties:
         token:
           type: string
           description: |
-            Authentication token from the user. The format is determined by your
-            auth plugin (could be JWT, OIDC token, SAML assertion, etc.)
+            The user's ID token. Always a JWT, end to end — there is no other
+            token shape in epithet.
           example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-        signature:
-          type: string
-          description: |
-            Base64-encoded cryptographic signature of the token, signed by the
-            CA's private key using Rekor/Sigstore. MUST be verified before
-            processing the request.
-          example: "MEUCIQDx1KZ2vH..."
 
         connection:
           $ref: '#/components/schemas/Connection'
@@ -149,23 +206,11 @@ components:
     Connection:
       type: object
       required:
-        - localHost
-        - localUser
         - remoteHost
         - remoteUser
         - port
         - hash
       properties:
-        localHost:
-          type: string
-          description: User's local hostname (OpenSSH %l)
-          example: "alice-laptop.corp.example.com"
-
-        localUser:
-          type: string
-          description: User's local username
-          example: "alice"
-
         remoteHost:
           type: string
           description: Target SSH server hostname (OpenSSH %h)
@@ -173,7 +218,10 @@ components:
 
         remoteUser:
           type: string
-          description: Target username on remote server (OpenSSH %r)
+          description: |
+            Target username on remote server (OpenSSH %r) - the single principal
+            being requested. The issued certificate, if approved, names exactly
+            this principal and no others.
           example: "deploy"
 
         port:
@@ -193,20 +241,16 @@ components:
           type: string
           description: |
             OpenSSH %C hash - unique identifier for this connection, computed
-            from local host, remote host, port, remote user, and proxy jump
+            by OpenSSH from the full connection tuple.
           example: "a1b2c3d4e5f67890"
-          pattern: "^[a-f0-9]{16}$"
 
     PolicyResponse:
       type: object
       required:
         - certParams
-        - policy
       properties:
         certParams:
           $ref: '#/components/schemas/CertParams'
-        policy:
-          $ref: '#/components/schemas/Policy'
 
     CertParams:
       type: object
@@ -226,22 +270,38 @@ components:
         principals:
           type: array
           description: |
-            List of usernames this certificate can authenticate as on the
-            remote server. Must match entries in the server's authorized_principals
-            file or TrustedUserCAKeys configuration.
+            The certificate's principals. Epithet's own evaluator always
+            returns exactly one entry — the requested connection.remoteUser —
+            since certificates are minted per connection and never cached or
+            reused across a different host/user pair. A custom policy server
+            may return more, but epithet's client-side code never relies on
+            more than the one it asked for.
           items:
             type: string
-          example: ["deploy", "www-data", "ubuntu"]
+          example: ["deploy"]
           minItems: 1
 
         expiration:
-          type: string
+          type: integer
+          format: int64
           description: |
-            Certificate validity duration in Go duration format (e.g., "5m", "10m", "1h").
-            Recommended: 2-10 minutes for short-lived certificates that limit
-            exposure if compromised.
-          example: "5m0s"
-          pattern: "^[0-9]+(ns|us|µs|ms|s|m|h)$"
+            Certificate validity **in nanoseconds**. This is Go's
+            `time.Duration` marshaled by the standard library's default
+            `encoding/json` behavior - an integer, not a duration string.
+            Recommended: 2-10 minutes (120000000000-600000000000 ns) for
+            short-lived certificates that limit exposure if compromised.
+          example: 300000000000
+
+        notAfter:
+          type: string
+          format: date-time
+          description: |
+            Absolute ceiling on certificate validity (RFC 3339), typically
+            derived from the user token's own expiry. The CA signs with
+            `min(now + expiration, notAfter)`, so a certificate can never
+            outlive the auth session that requested it. Omit (or send the
+            zero time) for no additional ceiling beyond `expiration`.
+          example: "2026-08-13T18:30:00Z"
 
         extensions:
           type: object
@@ -260,26 +320,6 @@ components:
             permit-agent-forwarding: ""
           minProperties: 0
 
-    Policy:
-      type: object
-      required:
-        - hostPattern
-      properties:
-        hostPattern:
-          type: string
-          description: |
-            Glob pattern for hosts this certificate is valid for. The pattern
-            is matched against the remote hostname. Use specific patterns in
-            production to limit certificate scope.
-
-            Examples:
-            - "*.example.com" - All hosts in example.com
-            - "prod-*.example.com" - Production hosts only
-            - "server-01.example.com" - Single specific host
-            - "*" - All hosts (NOT recommended for production)
-          example: "*.example.com"
-          pattern: "^[a-zA-Z0-9.*_-]+$"
-
     Error:
       type: object
       required:
@@ -291,11 +331,31 @@ components:
           example: "user not authorized"
 
   securitySchemes:
-    SignatureVerification:
-      type: apiKey
-      in: header
-      name: X-CA-Signature
+    ServiceJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
       description: |
-        While not a traditional API key, the signature field in the request
-        body serves as authentication. Your implementation MUST verify this
-        signature using the CA's public key before processing requests.
+        A JWT the CA mints per request and signs with its own SSH private key,
+        sent as `Authorization: Bearer <jwt>`. Claims:
+
+        | Claim | Meaning |
+        |---|---|
+        | iss | CA identity: SHA256 fingerprint of the CA's SSH public key |
+        | aud | `"epithet-policy"` |
+        | iat / exp | Issued-at / expiry, ~60 seconds apart |
+        | jti | Random token ID |
+        | bh | base64url (raw, unpadded) of sha256(request body); empty-string body for GET |
+        | htm | HTTP method |
+        | htu | Request target: host + path |
+
+        The signing algorithm is derived from the CA's key type
+        (ed25519→EdDSA, RSA→PS256, ECDSA→ES256/ES384). `htm`/`htu` binding
+        prevents a captured token from being replayed against a different
+        method or path that happens to share the same body hash (e.g. an
+        empty body on both a GET and a POST). Your implementation MUST
+        verify this token — signature, audience, freshness, and body hash —
+        before processing any request; there is no unauthenticated mode.
+
+security:
+  - ServiceJWT: []

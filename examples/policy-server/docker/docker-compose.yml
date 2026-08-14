@@ -5,10 +5,10 @@ services:
     image: epithet:latest
     container_name: epithet-policy
     command: >
+      --config /config/policy.yaml
       policy
-      --config-file /config/policy.yaml
       --ca-pubkey "$$(cat /config/ca_key.pub)"
-      --port 9999
+      --listen 0.0.0.0:9999
     volumes:
       - ./config:/config:ro
     ports:
@@ -30,7 +30,7 @@ services:
       ca
       --key /config/ca_key
       --policy http://policy:9999
-      --address :8080
+      --listen :8080
     volumes:
       - ./config:/config:ro
     ports:

@@ -1,7 +1,9 @@
 # Example epithet client configuration
 # Place in ~/.epithet/ as config.yaml or config.json
 
-# Host patterns are obtained dynamically from CA discovery - no static match config needed
+# OIDC issuer/client-id are fetched from the CA's /discovery endpoint at
+# startup - nothing to configure here. Host gating lives in your own
+# ~/.ssh/config via Tag/Include, not in this file.
 agent:
   ca-url: https://ca.example.com/
-  auth: epithet auth oidc --issuer https://accounts.google.com --client-id abc123 --client-secret xyz098
+  name: default

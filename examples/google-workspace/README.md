@@ -23,49 +23,49 @@ Follow the [OIDC Setup Guide](../../docs/oidc-setup.md#google-workspace--google-
 - Application type: Desktop app
 - You'll get: **Client ID** and **Client Secret**
 
-### 2. Configure epithet
+### 2. Configure the policy server
 
-Create `~/.epithet/config.yaml`:
+OIDC configuration lives on the **policy server**, not the client. Point it
+at Google in `~/.epithet/policy.yaml`:
 
-**For UWP apps (recommended):**
+```yaml
+policy:
+  oidc:
+    issuer: "https://accounts.google.com"
+    client-id: "YOUR_CLIENT_ID.apps.googleusercontent.com"
+    # client-secret: "YOUR_CLIENT_SECRET"   # only for Desktop apps
+```
+
+### 3. Configure the client
+
+Create `~/.epithet/config.yaml` on each client:
+
 ```yaml
 agent:
-  # CA server URL - host patterns are obtained from CA discovery
   ca-url: https://ca.corp.example.com
-
-  # Authentication: Google Workspace via OIDC (no client secret needed)
-  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com
+  name: default
 ```
 
-**For Desktop apps:**
-```yaml
-agent:
-  # CA server URL - host patterns are obtained from CA discovery
-  ca-url: https://ca.corp.example.com
+The agent fetches the issuer and client ID from the CA's `/discovery`
+endpoint at startup - there's no OIDC configuration on the client at all.
 
-  # Authentication: Google Workspace via OIDC (client secret required)
-  auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET
-```
+### 4. Configure SSH
 
-Replace `YOUR_CLIENT_ID` (and optionally `YOUR_CLIENT_SECRET`) with your actual credentials from step 1.
-
-**Note**: Host patterns (which hosts should use epithet) are obtained dynamically from the CA's discovery endpoint. The CA policy server determines which hosts are covered.
-
-### 3. Configure SSH
-
-Add to `~/.ssh/config` to include epithet's auto-generated config:
+Tag the hosts this profile should handle, then include epithet's
+auto-generated config *after* those Tag lines, in `~/.ssh/config`
+(requires **OpenSSH 9.4+** for `Tag`/`Match tagged`):
 
 ```
-# Include epithet's auto-generated SSH config
+Host *.corp.example.com
+    Tag epithet-default
 Include ~/.epithet/run/*/ssh-config.conf
 ```
 
-When you start `epithet agent`, it generates an SSH config that tells SSH to:
-1. Run `epithet match` for all connections
-2. The broker checks CA discovery patterns and returns non-zero for hosts that don't match
-3. If epithet match succeeds, use the per-connection agent at `~/.epithet/run/<hash>/agent/%C`
+When you start `epithet agent`, it (re)generates a per-profile SSH config
+gated by `Match tagged epithet-default`. Only hosts you tagged trigger
+`epithet match`; everything else is untouched by epithet.
 
-### 4. Start the broker
+### 5. Start the broker
 
 ```bash
 epithet agent
@@ -77,50 +77,29 @@ Or for more verbose output:
 epithet agent -vv
 ```
 
-The broker will run in the foreground. In production, you'd typically run it as a daemon.
+The broker will run in the foreground. In production, you'd typically run it as a daemon (see `contrib/macos/` for a launchd example).
 
 ## Advanced configuration
 
-### Custom scopes
+### Multiple profiles
 
-If your CA needs additional Google APIs:
+Run separate named profiles for different purposes (work vs personal,
+different CAs). Each profile gets its own rundir, socket, and ssh Tag:
 
-```
-auth epithet auth oidc \
-  --issuer https://accounts.google.com \
-  --client-id YOUR_CLIENT_ID \
-  --scopes openid,profile,email,https://www.googleapis.com/auth/admin.directory.user.readonly
-```
-
-**Note**: Additional sensitive scopes may require Google app verification.
-
-### Multiple brokers
-
-Run separate brokers for different purposes (host patterns come from each CA's discovery endpoint):
-
-**Work connections:**
 ```bash
-epithet agent \
-  --broker ~/.epithet/work-broker.sock \
-  --agent-dir ~/.epithet/work-agent/ \
-  --ca-url https://work-ca.example.com \
-  --auth "epithet auth oidc --issuer https://accounts.google.com --client-id WORK_CLIENT_ID"
+epithet agent --name work --ca-url https://work-ca.example.com
+epithet agent --name personal --ca-url https://personal-ca.example.com
 ```
 
-**Personal connections:**
-```bash
-epithet agent \
-  --broker ~/.epithet/personal-broker.sock \
-  --agent-dir ~/.epithet/personal-agent/ \
-  --ca-url https://personal-ca.example.com \
-  --auth "epithet auth oidc --issuer https://accounts.google.com --client-id PERSONAL_CLIENT_ID"
+Tag hosts for each profile in `~/.ssh/config`:
+
+```
+Host *.work.example.com
+    Tag epithet-work
+Host *.personal.example.com
+    Tag epithet-personal
+Include ~/.epithet/run/*/ssh-config.conf
 ```
 
-Update `~/.ssh/config` (optional `host` filter for optimization, since broker checks discovery patterns dynamically):
-```
-Match exec "epithet match --broker ~/.epithet/work-broker.sock --host %h --port %p --user %r --hash %C" host *.work.example.com
-    IdentityAgent ~/.epithet/work-agent/%C
-
-Match exec "epithet match --broker ~/.epithet/personal-broker.sock --host %h --port %p --user %r --hash %C" host *.personal.example.com
-    IdentityAgent ~/.epithet/personal-agent/%C
-```
+The single glob `Include` picks up every profile's generated config; no
+per-profile SSH config editing is needed beyond the `Tag` lines.

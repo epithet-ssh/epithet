@@ -4,6 +4,10 @@
 
 Epithet is an SSH certificate authority that replaces static authorized_keys with short-lived certificates (2-10 minutes). It creates on-demand SSH agents for each outbound connection, enabling real-time policy enforcement without touching your target hosts.
 
+Authentication is OIDC only, handled in-process by the broker — no plugins, no subprocess auth commands.
+
+**Requires OpenSSH 9.4+** on the client (for `Tag`/`Match tagged`; see below).
+
 ## Quick start
 
 **1. Build epithet:**
@@ -15,14 +19,17 @@ make build
 
 **2. Start the agent:**
 ```bash
-epithet agent \
-  --ca-url https://your-ca.example.com \
-  --auth "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID"
+epithet agent --ca-url https://your-ca.example.com --name work
 ```
 
-**3. Add to your SSH config** (`~/.ssh/config`):
+The agent fetches its OIDC issuer and client ID from the CA's `/discovery`
+endpoint — nothing to configure locally.
+
+**3. Tag the hosts this profile should handle, then include the generated config** (`~/.ssh/config`):
 ```ssh_config
-Include ~/.epithet/run/*/ssh-config.conf
+Host *.example.com
+    Tag epithet-work
+Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
 ```
 
 **4. SSH as normal:**
@@ -30,18 +37,18 @@ Include ~/.epithet/run/*/ssh-config.conf
 ssh server.example.com
 ```
 
-First connection opens your browser for authentication (~2-5 seconds). Subsequent connections use cached tokens (~100-200ms).
+First connection opens your browser for authentication (~2-5 seconds). Subsequent connections reuse the refreshed token (~100-200ms).
 
 ## How it works
 
-When you run `ssh server.example.com`, OpenSSH's Match exec triggers `epithet match`, which asks the broker for a certificate. The broker handles authentication (via browser-based OIDC or a custom auth plugin), requests a signed certificate from the CA (which checks policy in real-time), and spins up a per-connection SSH agent with the short-lived certificate. See [architecture](docs/architecture.md#sequence-diagrams) for detailed sequence diagrams.
+When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithet match` for hosts you've tagged in your own ssh config. `epithet match` asks the broker for a certificate. The broker authenticates in-process via OIDC, requests a signed certificate from the CA (which checks policy in real time), and spins up a per-connection SSH agent with the short-lived certificate. See [architecture](docs/architecture.md#sequence-diagrams) for detailed sequence diagrams.
 
 **Components:**
 
-- **Broker** (`epithet agent`): Daemon managing authentication state and certificate lifecycle. Creates per-connection SSH agents.
-- **CA Server** (`epithet ca`): Signs SSH certificates after validating tokens against a policy server.
-- **Policy Server** (`epithet policy`): Makes authorization decisions - who can access what hosts as which users.
-- **Per-connection Agents**: In-process SSH agents, one per unique connection, serving short-lived certificates.
+- **Broker** (`epithet agent`): Daemon managing OIDC authentication state and certificate lifecycle. Creates per-connection SSH agents.
+- **CA Server** (`epithet ca`): Signs SSH certificates after passing the caller's token through to a policy server for validation.
+- **Policy Server** (`epithet policy`): Validates tokens and makes authorization decisions - who can access what hosts as which users.
+- **Per-connection Agents**: In-process SSH agents, one per unique connection, serving a certificate minted for that connection alone.
 
 ## Commands
 
@@ -49,17 +56,16 @@ When you run `ssh server.example.com`, OpenSSH's Match exec triggers `epithet ma
 |---------|-------------|
 | `epithet agent` | Start the broker daemon that manages certificates and agents |
 | `epithet agent inspect` | Query a running broker's state |
-| `epithet server` | Run the CA and policy server together |
-| `epithet match` | Called by SSH Match exec to trigger certificate flow |
+| `epithet server` | Run the CA and policy server as supervised subprocesses behind one port |
+| `epithet match` | Called by SSH `Match exec` to trigger certificate flow |
 | `epithet ca` | Run the certificate authority server |
-| `epithet policy` | Run the policy server with OIDC authorization |
-| `epithet auth oidc` | Built-in OIDC/OAuth2 authentication plugin |
+| `epithet policy` | Run the policy server with OIDC-based authorization |
 
 ## Documentation
 
 - [Architecture](docs/architecture.md) - How epithet works under the hood
 - [Policy Server Guide](docs/policy-server.md) - Setup and configuration for the policy server
-- [Authentication](docs/authentication.md) - Auth plugin protocol and custom plugins
+- [Authentication](docs/authentication.md) - The OIDC token contract and in-process auth flow
 - [OIDC Setup](docs/oidc-setup.md) - Provider-specific OIDC configuration (Google, Okta, Azure AD)
 - [Releasing](docs/RELEASING.md) - Notes on cutting releases
 

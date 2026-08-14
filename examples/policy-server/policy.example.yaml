@@ -19,7 +19,7 @@ policy:
   #   Azure AD: issuer: https://login.microsoftonline.com/{tenant-id}/v2.0
   oidc:
     issuer: "https://accounts.google.com"
-    audience: "your-client-id"  # Your OAuth2 client ID
+    client-id: "your-client-id"  # Required - audience checking can never be silently skipped
 
   # Map users (by email or OIDC sub claim) to tags
   # Tags represent roles or team membership

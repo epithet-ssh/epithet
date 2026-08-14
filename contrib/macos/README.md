@@ -8,16 +8,23 @@ This directory contains a launchd plist for running `epithet agent` as a backgro
    ```yaml
    agent:
      ca-url: https://ca.example.com
-     auth: epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID
+     name: default
    ```
+
+   The agent fetches its OIDC issuer/client ID from the CA's `/discovery`
+   endpoint at startup - there's nothing auth-related to configure here.
 
 2. Create the log directory:
    ```bash
    mkdir -p ~/.epithet/logs
    ```
 
-3. Add epithet to your SSH config (`~/.ssh/config`):
+3. Tag the hosts this profile should handle and include the generated
+   config, in `~/.ssh/config` (requires **OpenSSH 9.4+** for `Tag`/`Match
+   tagged`; the `Include` line must come after your `Tag` lines):
    ```
+   Host *.example.com
+       Tag epithet-default
    Include ~/.epithet/run/*/ssh-config.conf
    ```
 

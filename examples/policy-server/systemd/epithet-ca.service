@@ -13,7 +13,7 @@ Group=epithet
 ExecStart=/usr/local/bin/epithet ca \
   --key /etc/epithet/ca_key \
   --policy http://localhost:9999 \
-  --address :8080
+  --listen :8080
 
 # Security hardening
 NoNewPrivileges=true

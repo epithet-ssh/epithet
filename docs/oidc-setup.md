@@ -4,9 +4,11 @@ This guide walks through setting up OAuth2/OIDC authentication with popular iden
 
 ## Overview
 
-To use `epithet auth oidc`, you need to create an OAuth2 application in your identity provider's console. This gives you a **client ID** and optionally a **client secret** to use with epithet.
+Epithet's OIDC config lives on the **policy server**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the policy server with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA passes this configuration through to clients anonymously via `GET /discovery`, so `epithet agent` needs no OIDC configuration of its own — just `--ca-url`.
 
-**Important**: Epithet uses PKCE (Proof Key for Code Exchange), so the client secret is optional. For most providers, you can create a "desktop app" or "native app" which doesn't require a client secret.
+**Important**: Epithet uses PKCE (Proof Key for Code Exchange), so the client secret is optional for most providers. Where a provider requires one anyway, it goes in the policy server's config, not on the client — the secret never appears in a broker or ssh config.
+
+Scopes are not configurable: epithet always requests `openid profile email`. Nothing in epithet consumes any other claim, so there is nothing to add here.
 
 ## Google Workspace / Google Cloud
 
@@ -32,7 +34,7 @@ To use `epithet auth oidc`, you need to create an OAuth2 application in your ide
 - Choose **"Desktop app"**
 - **Advantage**: Standard Desktop app type
 - **Disadvantage**: Google requires client secret even with PKCE
-- You'll need to include `--client-secret` in your epithet configuration
+- You'll need to configure `client-secret` on the policy server
 
 ### Step 2: configure redirect URI
 
@@ -42,48 +44,36 @@ Both app types automatically accept `http://localhost` with any port. No manual 
 
 You'll see a dialog with:
 - **Client ID**: Something like `123456-abc.apps.googleusercontent.com`
-- **Client secret**: 
+- **Client secret**:
   - **UWP apps**: Not needed (can ignore)
   - **Desktop apps**: Required - note this value
 
-### Step 4: configure epithet
+### Step 4: configure the policy server
 
-**For UWP apps (no client secret needed):**
+In `~/.epithet/policy.yaml` (or wherever your policy config lives):
+
+```yaml
+policy:
+  oidc:
+    issuer: "https://accounts.google.com"
+    client-id: "YOUR_CLIENT_ID.apps.googleusercontent.com"
+    # client-secret: "YOUR_CLIENT_SECRET"   # only for Desktop apps
+```
+
+Config-file keys for these CLI-backed scalars are kebab-case (derived from
+the flag names — `client-id`, not `client_id`); see the casing note in the
+[policy server guide](./policy-server.md#configuration-structure).
+
+Or via flags:
 
 ```bash
-epithet agent \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc \
-    --issuer https://accounts.google.com \
-    --client-id YOUR_CLIENT_ID.apps.googleusercontent.com"
+epithet policy \
+  --ca-pubkey ... \
+  --oidc-issuer https://accounts.google.com \
+  --oidc-client-id YOUR_CLIENT_ID.apps.googleusercontent.com
 ```
 
-**For Desktop apps (client secret required):**
-
-```bash
-epithet agent \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc \
-    --issuer https://accounts.google.com \
-    --client-id YOUR_CLIENT_ID.apps.googleusercontent.com \
-    --client-secret YOUR_CLIENT_SECRET"
-```
-
-**Or in a config file (`~/.epithet/config.yaml`):**
-
-UWP apps:
-```yaml
-agent:
-  ca-url: https://ca.example.com
-  auth: "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com"
-```
-
-Desktop apps:
-```yaml
-agent:
-  ca-url: https://ca.example.com
-  auth: "epithet auth oidc --issuer https://accounts.google.com --client-id YOUR_CLIENT_ID.apps.googleusercontent.com --client-secret YOUR_CLIENT_SECRET"
-```
+Clients need nothing beyond `--ca-url` — they learn the issuer and client ID from `GET /discovery` on first start.
 
 ### Step 5: first authentication
 
@@ -95,7 +85,7 @@ When you first connect via SSH:
 5. Browser will show "Authentication successful"
 6. Return to your terminal - SSH connection proceeds
 
-Subsequent connections use the refresh token automatically (no browser needed).
+Subsequent connections reuse the refresh token automatically (no browser needed).
 
 ### Google Workspace admin allowlist (optional)
 
@@ -106,18 +96,6 @@ If you're using a shared OAuth app or want to skip the "unverified" warning:
 3. Click **Configure** under "Trusted apps"
 4. Add your OAuth client ID
 5. Users in your domain won't see the warning
-
-### Scopes
-
-Default scopes (`openid,profile,email`) are usually sufficient. Your CA server will receive the ID token for validation.
-
-If your CA needs additional Google APIs, add them to `--scopes`:
-
-```bash
---scopes openid,profile,email,https://www.googleapis.com/auth/admin.directory.user.readonly
-```
-
-**Note**: Additional scopes may require app verification if you exceed 100 users.
 
 ---
 
@@ -163,25 +141,16 @@ To verify:
 2. Find your authorization server
 3. Copy the **Issuer URI**
 
-### Step 5: configure epithet
+### Step 5: configure the policy server
 
 ```bash
-epithet agent \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc \
-    --issuer https://your-domain.okta.com/oauth2/default \
-    --client-id YOUR_CLIENT_ID"
+epithet policy \
+  --ca-pubkey ... \
+  --oidc-issuer https://your-domain.okta.com/oauth2/default \
+  --oidc-client-id YOUR_CLIENT_ID
 ```
 
-### Scopes
-
-Default scopes work for most cases. Okta supports:
-- `openid` (required)
-- `profile` (user profile info)
-- `email` (email address)
-- `offline_access` (refresh tokens - automatically included by epithet)
-
-Custom scopes can be defined in your authorization server configuration.
+Okta supports `openid`, `profile`, `email`, and `offline_access` (refresh tokens); these are the same scopes epithet already requests.
 
 ---
 
@@ -211,14 +180,13 @@ Custom scopes can be defined in your authorization server configuration.
 - **Directory (tenant) ID**: Also from the Overview page
 - **Client secret**: Not needed for public clients
 
-### Step 4: configure epithet
+### Step 4: configure the policy server
 
 ```bash
-epithet agent \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc \
-    --issuer https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0 \
-    --client-id YOUR_CLIENT_ID"
+epithet policy \
+  --ca-pubkey ... \
+  --oidc-issuer https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0 \
+  --oidc-client-id YOUR_CLIENT_ID
 ```
 
 Replace:
@@ -230,14 +198,6 @@ Replace:
 - **Specific tenant**: Use your tenant ID (e.g., `12345678-1234-1234-1234-123456789012`)
 - **Organizations**: Use `organizations` (any Azure AD tenant)
 - **Common**: Use `common` (any Azure AD or personal Microsoft account)
-
-### Scopes
-
-Default scopes work for most cases. Azure AD supports:
-- `openid` (required)
-- `profile` (user profile info)
-- `email` (email address)
-- `offline_access` (refresh tokens - automatically included by epithet)
 
 ---
 
@@ -262,58 +222,53 @@ https://your-provider.com/.well-known/openid-configuration
 
 The issuer URL is usually the base URL (without `/.well-known/...`).
 
-### Step 3: configure epithet
+### Step 3: configure the policy server
 
 ```bash
-epithet agent \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc \
-    --issuer https://your-provider.com \
-    --client-id YOUR_CLIENT_ID \
-    --scopes openid,profile,email"
+epithet policy \
+  --ca-pubkey ... \
+  --oidc-issuer https://your-provider.com \
+  --oidc-client-id YOUR_CLIENT_ID
 ```
 
 ---
 
-## Testing your configuration
+## Client setup
 
-### Test the auth plugin directly
-
-You can test authentication without running the full broker:
+Once the policy server is configured, clients need only the CA URL:
 
 ```bash
-# Run the auth plugin manually
-echo "" | epithet auth oidc \
-  --issuer https://accounts.google.com \
-  --client-id YOUR_CLIENT_ID \
-  3>&1 1>/dev/null
-
-# This should:
-# 1. Open your browser
-# 2. Prompt for authentication
-# 3. Output state to fd 3 (which we redirect to stdout)
+epithet agent --ca-url https://ca.example.com --name work
 ```
 
----
+Then tag the hosts this profile should handle and include the generated config, in `~/.ssh/config`:
+
+```ssh_config
+Host *.example.com
+    Tag epithet-work
+Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
+```
+
+`Tag`/`Match tagged` requires **OpenSSH 9.4+** (macOS Sequoia and Ubuntu 24.04 both qualify).
 
 ## Troubleshooting
 
 ### "Failed to create OIDC provider"
 
-- Check that your `--issuer` URL is correct
+- Check that the policy server's `--oidc-issuer` URL is correct
 - Verify your provider supports OIDC discovery
 - Try accessing `{issuer}/.well-known/openid-configuration` in a browser
 
 ### "Authentication failed" in browser
 
-- Verify your `--client-id` is correct
+- Verify the policy server's `--oidc-client-id` is correct
 - Check that the OAuth app is enabled in your provider
 - Ensure redirect URI is configured correctly (`http://localhost` or `http://localhost:8080/callback`)
 
 ### Browser opens but shows error
 
 - **"redirect_uri_mismatch"**: Add `http://localhost:8080/callback` (or your configured port) to your OAuth app's redirect URIs
-- **"invalid_client"**: Double-check your client ID
+- **"invalid_client"**: Double-check the client ID configured on the policy server
 - **"unauthorized_client"**: Your OAuth app may not be configured for authorization code flow or PKCE
 
 ### Token refresh fails repeatedly
@@ -321,7 +276,7 @@ echo "" | epithet auth oidc \
 - Refresh token may have expired (Google: 6 months inactive)
 - OAuth app may have been disabled or deleted
 - User may have revoked access
-- Solution: Delete broker state and re-authenticate (or restart broker)
+- Solution: restart `epithet agent` to force full re-authentication (refresh state is memory-only)
 
 ### "This app isn't verified" (Google)
 
@@ -332,5 +287,6 @@ This is normal for personal OAuth apps. Options:
 
 ## Next steps
 
-- [Authentication overview](./authentication.md) - How auth plugins work
+- [Authentication overview](./authentication.md) - How the in-process OIDC flow works
+- [Policy server guide](./policy-server.md) - Full policy server configuration
 - [Example configurations](../examples/) - Complete working examples

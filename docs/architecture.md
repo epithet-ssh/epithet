@@ -4,58 +4,35 @@ Epithet is an SSH certificate management tool that creates on-demand SSH agents 
 
 ## Terminology
 
-- **Broker**: The daemon process started by `epithet agent`. It manages user authentication state, certificate lifecycle, and creates per-connection agent instances. The broker is the central coordinator for all epithet functionality on an endpoint. Each broker instance creates a unique directory under `~/.epithet/run/<instance-hash>/` containing its socket, agent sockets, and auto-generated SSH config.
-- **Per-connection agents**: Individual in-process SSH agent instances (from `pkg/agent`), one per unique SSH connection (identified by %C hash). Each serves a single certificate via an agent socket at `~/.epithet/run/<instance-hash>/agent/%C`. Uses `golang.org/x/crypto/ssh/agent` for efficient in-process agent implementation (much lower overhead than spawning OpenSSH ssh-agent processes).
-- **Auth command**: External command configured by the user (via `--auth` flag) that handles authentication with identity providers (SAML, OIDC, etc). The broker invokes this command to obtain authentication tokens. Can be a custom script or use the built-in `epithet auth oidc` command for OAuth2/OIDC providers.
+- **Broker**: The daemon process started by `epithet agent`. It manages OIDC authentication state, certificate lifecycle, and creates per-connection agent instances. The broker is the central coordinator for all epithet functionality on an endpoint. Each broker instance is a named **profile**: its rundir is `~/.epithet/run/<name>/` (default name `default`), containing its socket, agent sockets, and auto-generated SSH config.
+- **Per-connection agents**: Individual in-process SSH agent instances (from `pkg/agent`), one per unique SSH connection (identified by the `%C` hash). Each serves a single certificate, minted fresh for that connection, via an agent socket at `~/.epithet/run/<name>/agent/%C`. Uses `golang.org/x/crypto/ssh/agent` for efficient in-process agent implementation (much lower overhead than spawning OpenSSH ssh-agent processes).
+- **OIDC authentication**: The broker authenticates in-process via `pkg/auth/oidc`, an authorization-code-with-PKCE flow against the issuer and client ID it learns from the CA's discovery endpoint. There is no external auth command and no plugin protocol — see [authentication.md](authentication.md).
 
 ## Sequence diagrams
 
 ### Broker startup
 
-What happens when you run `epithet agent` — all local, no network calls:
+What happens when you run `epithet agent`:
 
 ```mermaid
 sequenceDiagram
     participant user as epithet agent
     participant fs as filesystem
+    participant ca as CA server
     participant sock as broker socket
 
     user ->> user: Validate CA URLs
-    user ->> fs: Clean stale broker processes from ~/.epithet/run/
-    user ->> fs: Create instance directory ~/.epithet/run/<hash>/
-    user ->> user: Initialize CA client (circuit breaker pool, no connections yet)
-    user ->> fs: Generate ssh-config.conf
+    user ->> fs: Create profile rundir ~/.epithet/run/<name>/, take flock
+    user ->> ca: GET /discovery (anonymous)
+    ca -->> user: {"auth": {"issuer", "client_id"}}
+    user ->> fs: Generate ssh-config.conf (Match tagged epithet-<name> ...)
     user ->> sock: Start broker socket listener
     Note over user,sock: Ready — waiting for SSH connections
 ```
 
-### First-connection discovery
-
-On the **first** SSH connection, the broker performs lazy initialization to learn about the CA's capabilities:
-
-```mermaid
-sequenceDiagram
-    participant match as epithet match
-    participant broker as broker
-    participant ca as CA server
-    participant discovery as discovery endpoint
-
-    match ->> broker: {matchdata}
-    broker ->> ca: Hello() (unauthenticated)
-    ca -->> broker: Link header with discovery URL
-    broker ->> discovery: Fetch discovery config
-    discovery -->> broker: Auth config + host patterns
-    broker ->> broker: Resolve auth command (discovery or --auth flag)
-    broker ->> broker: Check host patterns against target host
-
-    Note over broker: Discovery is cached — subsequent connections skip this
-
-    broker ->> broker: Proceed to certificate flow
-```
-
 ### Per-connection certificate flow
 
-The full flow for each SSH connection after discovery:
+The full flow for each SSH connection:
 
 ```mermaid
 sequenceDiagram
@@ -63,6 +40,7 @@ sequenceDiagram
         participant ssh
         participant match
         participant broker
+        participant oidc as OIDC provider
     end
 
     box out on the internet
@@ -70,24 +48,24 @@ sequenceDiagram
         participant policy
     end
 
-    ssh ->> match: Match exec ...
-    match ->> broker: {matchdata}
+    ssh ->> match: Match tagged epithet-<name> exec ...
+    match ->> broker: {"match": {connection...}}\n (JSON line, unix socket)
 
-    create participant auth
-    broker ->> auth: {state}
+    alt no cached JWT valid for expiryBuffer
+        broker ->> oidc: authorization code + PKCE (browser) or refresh
+        oidc -->> broker: id_token (JWT)
+    end
 
-    destroy auth
-    auth ->> broker: {token, state, error}
-
-    broker ->> ca: {token, pubkey}
-    ca ->> policy: {token, pubkey}
-    policy ->> ca: {cert-params}
-    ca ->> broker: {cert}
+    broker ->> ca: POST / {"token", "connection"} — Authorization: Bearer <jwt>
+    ca ->> policy: POST / {"token","connection"} — Authorization: Bearer <service JWT>
+    policy ->> policy: verify user JWT (JWKS); verify service JWT (CA pubkey)
+    policy ->> ca: {"certParams": {identity, principals, expiration, notAfter, extensions}}
+    ca ->> broker: {"certificate"}
 
     create participant agent
-    broker ->> agent: create agent
-    broker ->> match: {true/false, error}
-    match ->> ssh: {true/false}
+    broker ->> agent: create agent with certificate
+    broker ->> match: {"result": {"allow": true}}\n
+    match ->> ssh: exit 0
     ssh ->> agent: list keys
     agent ->> ssh: {cert, pubkey}
     ssh ->> agent: sign-with-cert
@@ -95,50 +73,40 @@ sequenceDiagram
 
 ## Match workflow
 
-The `epithet match` workflow implements 5 key steps (`pkg/broker/broker.go:Match()`):
+The `epithet match` workflow (`pkg/broker/broker.go:MatchWithUserOutput()`) is two steps past the fast path:
 
-1. **Host pattern matching**: Check if the host should be handled by epithet at all (abort early if not)
-2. **Certificate lookup**: Check for existing, unexpired certificate for the target user/host (with 5-second expiry buffer)
-3. **Agent with existing cert**: If certificate exists, ensure agent socket at %C exists with that certificate
-4. **Certificate request**: If no certificate exists, request one (including authentication), then go to step 3
-5. **Expiry cleanup**: Background cleanup deletes expired agent sockets every 30 seconds
+1. **Existing agent check**: If an agent socket already exists for this connection hash (`%C`) with an unexpired certificate (with a 5-second expiry buffer), allow immediately — no auth, no CA call.
+2. **Fresh certificate mint**: Otherwise, generate an ephemeral keypair, get a JWT (from cache or via OIDC), request a certificate from the CA, and start a per-connection agent serving it.
 
-**Certificate swapping**: The broker implements intelligent certificate reuse via `Agent.UseCredential()` - when a certificate expires, the broker can swap a fresh certificate into the existing agent without changing the socket path. This provides seamless renewal for long-running SSH sessions.
+Certificates are never cached or reused across connections — every mint past the fast path is a fresh policy decision naming exactly the requested principal. A background sweep deletes expired agent sockets every 30 seconds.
 
 ## Command structure
 
-The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML config file support via `kong-yaml`. Config files use YAML or JSON format.
+The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML config file support via `kong-yaml`. Config files use YAML or JSON format under `/etc/epithet/` or `~/.epithet/`.
 
 ### epithet match
 
 ```
-epithet match --host %h --port %p --user %r --hash %C [--jump %j] [--broker <path>]
+epithet match --host %h --port %p --user %r --hash %C [--jump %j] --broker <path>
 ```
 
-- Invoked by OpenSSH Match exec during connection establishment
-- Implements 5-step certificate/agent workflow via RPC to broker
-- Communicates with the broker (started by `epithet agent`) to request certificates
+- Invoked by OpenSSH `Match tagged <tag> exec` during connection establishment (the generated per-profile config supplies the tag and broker path)
+- Sends one JSON request line to the broker's unix socket and reads streamed events back
 - Returns success/failure to OpenSSH to control whether connection proceeds
-- Optional `--broker` flag specifies broker socket path (for multiple broker instances)
 
 ### epithet agent
 
 ```
-epithet agent --ca-url <url> --auth <command> [--config <file>]
+epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 ```
 
-- Starts the broker daemon with RPC server on Unix domain socket
-- Required flags (can be set in config file with mustache template support):
-  - `--ca-url`: CA URL(s) - repeatable for multi-CA failover. Optionally prefix with `priority=N:` (e.g., `priority=50:https://backup.example.com`); plain URLs default to priority 100. Higher priority CAs are tried first; circuit breakers skip failed CAs.
-  - `--auth`: Command to invoke for user authentication (can use templates)
-- Host patterns are obtained dynamically from CA discovery (no static `--match` flag needed)
-- Auto-generates SSH config file at `~/.epithet/run/<instance-hash>/ssh-config.conf`
-- The broker maintains (with proper concurrency controls):
-  - Map of connection hash → per-connection agent instance (`pkg/agent.Agent`)
-  - Map of user identity → authentication state (token + state blob)
-  - Certificate store with policy-based matching and expiration tracking
-- Creates in-process SSH agent instances for each unique connection (low memory overhead)
-- Manages authentication state and token refresh with retry logic
+- Starts the broker daemon, listening on `~/.epithet/run/<name>/broker.sock`
+- `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
+- `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>`. A flock on the rundir prevents two agent processes from sharing the same profile.
+- Fetches OIDC issuer/client ID from the CA's `/discovery` endpoint once at startup — no local auth configuration
+- Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`, gated by `Match tagged epithet-<name>`
+- Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
+- Creates in-process SSH agent instances for each unique connection
 - Graceful shutdown with proper cleanup
 
 ### epithet ca
@@ -148,202 +116,155 @@ epithet ca --policy <url> --key <path> --listen <addr>
 ```
 
 - Runs the CA server as a standalone HTTP service
-- Listens on specified address (default 0.0.0.0:8080)
+- Listens on specified address (default `0.0.0.0:8080`)
 - Reads CA private key from file
-- Validates certificate requests against policy server with cryptographic verification
+- `GET /` returns the CA's public key; `POST /` signs a certificate
+- `GET /discovery` is an anonymous pass-through of the policy server's own discovery response
+- The CA never validates the user's JWT itself — it forwards it to the policy server and signs whatever `CertParams` comes back
 
-### epithet auth oidc
+### epithet policy
 
 ```
-epithet auth oidc --issuer <url> --client-id <id> [--client-secret <secret>]
+epithet policy --ca-pubkey <key> --oidc-issuer <url> --oidc-client-id <id> --listen <addr>
 ```
 
-- Built-in OIDC/OAuth2 authentication plugin
-- Implements the auth command protocol (stdin/stdout/fd3)
-- Supports PKCE for public clients (no client secret needed)
-- Handles token refresh automatically via refresh tokens
-- Works with Google Workspace, Okta, Azure AD, and other OIDC providers
-- Uses browser-based authentication flow with local callback server
-- See `examples/google-workspace/` for setup guide
+- Runs the policy server: validates OIDC tokens and makes authorization decisions
+- Config (users/hosts/defaults) is loaded once at startup; reload is a process restart
+- See [policy-server.md](policy-server.md) for the full configuration and HTTP API
+
+### epithet server
+
+```
+epithet server --listen <addr> --ca-key <path>
+```
+
+- Runs the CA and policy server as supervised subprocesses behind a single public port; the policy server listens on an internal unix socket the CA proxies to
+- The CA/policy process boundary is otherwise deliberate — this mode is a convenience wrapper, not a merged implementation
 
 ## Core components
 
-The system consists of four main components:
+1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and passes it through unvalidated to the policy server, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Signs public keys into certificates using the `CertParams` the policy server returns, clamping validity to `min(now + expiration, NotAfter)`.
 
-1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet-ca`): The certificate authority that signs SSH certificates. Accepts tokens via `Authorization: Bearer` header. Uses shape-based routing: empty body for hello requests (token validation only), or full body with publicKey+connection for certificate requests. Validates tokens against a policy server using cryptographic verification (SSH signature via Rekor/Sigstore over the request body), then signs public keys to create certificates. Returns certificates with policy metadata (hostPattern) for intelligent reuse.
+2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
-2. **CA Client** (`pkg/caclient`): HTTP client library that requests certificates from the CA server. Sends tokens in the `Authorization: Bearer` header. Provides `GetCert()` for certificate requests and `Hello()` for token validation without requesting a certificate. Includes domain-specific error types for different failure modes (InvalidTokenError, PolicyDeniedError, ConnectionNotHandledError, CAUnavailableError). Supports multi-CA failover with circuit breakers.
+3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and OIDC authentication on endpoints. Communicates with `epithet match`/`epithet agent inspect` over newline-framed JSON on a unix socket — see [Protocols](#protocols). Implements per-connection agent creation and automatic expiry cleanup.
 
-3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and authentication on endpoints. Orchestrates auth commands (stdin/stdout/fd3 protocol), CA requests with retry logic, and per-connection agent instances. Uses net/rpc over Unix domain socket for communication with `epithet match`. Implements policy-based certificate reuse and automatic expiry cleanup.
-
-4. **Per-connection Agents** (`pkg/agent`): In-process SSH agent implementation using `golang.org/x/crypto/ssh/agent`. One agent instance per unique connection, each exposing a Unix socket at `~/.epithet/run/<instance-hash>/agent/%C`. Provides low-overhead SSH agent protocol implementation without spawning external processes. Supports atomic certificate swapping via `UseCredential()`.
+4. **Per-connection agents** (`pkg/agent`): In-process, read-only (`List`/`Sign` only) SSH agent implementation using `golang.org/x/crypto/ssh/agent`. One agent instance per unique connection, each exposing a unix socket at `~/.epithet/run/<name>/agent/%C`.
 
 ## Authentication mechanism
 
-The broker uses an external **auth command** to obtain authentication tokens. This design allows epithet to work with any identity provider (SAML, OIDC, Kerberos, custom) without the broker needing to understand authentication protocols.
-
-### Auth command protocol
-
-The broker communicates with auth plugins using a file descriptor protocol: stdin receives previous state, stdout returns the token, fd 3 returns new state, stderr receives errors. State is opaque to the broker (max 10 MiB) and never touches disk.
-
-See [authentication.md](authentication.md) for full protocol details, examples in Bash/Python/Go, and the `examples/bash_auth_example.bash` reference implementation.
+The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no external auth command and no plugin protocol. See [authentication.md](authentication.md) for the full token contract, the proactive-refresh design, and the 401 safety net.
 
 ### Certificate lifecycle with short-lived certificates
 
-**Key timing decision**: SSH certificates are **short-lived (2-10 minutes)** to enable real-time policy enforcement.
+**Key timing decision**: SSH certificates are **short-lived (2-10 minutes)**, and additionally clamped to never outlive the auth token that authorized them (`NotAfter`, derived from the token's `exp`) — see [policy-server.md](policy-server.md).
 
 **Authentication vs certificate expiry:**
-- **Auth sessions**: Long-lived (hours/days) via refresh tokens stored in state blob
-- **SSH certificates**: Short-lived (2-10 minutes) for just-in-time authorization
-- **Auth command calls**: Only when certificate expires (not proactively)
+- **Auth sessions**: Long-lived (hours/days) via OIDC refresh tokens held in the broker's memory
+- **SSH certificates**: Short-lived (2-10 minutes, further clamped to the token's remaining lifetime) for just-in-time authorization, minted fresh per connection
+- **OIDC calls**: Proactive, ahead of JWT expiry, plus a single forced retry on a CA 401
 
 **User experience:**
 - First connection of the day: 2-5 seconds (browser auth flow)
-- Subsequent connections (within refresh token lifetime): ~100-200ms (token refresh via auth command)
-- After refresh token expires (e.g., 8 hours later): 2-5 seconds (full re-auth)
-
-**Flow when epithet match is called:**
-
-1. **Certificate exists and valid** (common case):
-   - Broker returns immediately, no auth call, no CA request
-   - SSH uses existing certificate from agent socket
-
-2. **Certificate expired or missing**:
-   - Broker looks up auth state for this user identity
-   - Broker invokes auth command with state on stdin, fd 3 open for new state
-   - Auth command uses refresh token to get fresh access token (~100ms)
-   - Auth command outputs: token to stdout, updated state to fd 3
-   - Broker calls CA: `request_certificate(token, connection_details)`
-   - CA validates token and evaluates policy in real-time
-   - CA returns certificate with 2-10 minute expiry
-   - Broker stores certificate and updated auth state
-   - Broker updates/creates agent socket with new certificate
-   - SSH proceeds with fresh certificate
+- Subsequent connections (token still fresh or proactively refreshed): ~100-200ms
+- After the refresh token expires: 2-5 seconds (full re-auth)
 
 ## Key data flow
 
-1. User initiates SSH connection → OpenSSH Match exec calls `epithet match`
-2. Broker checks if certificate exists and is valid for this connection hash
-3. If expired/missing: Broker calls auth command with previous state blob
-4. Auth command returns fresh token + updated state
-5. Broker generates ephemeral keypair for this connection
-6. Broker requests certificate from CA server with token and connection details
-7. CA server validates token against policy server (external HTTP endpoint)
-8. CA server evaluates real-time policy: "Can this user access this host as this user RIGHT NOW?"
-9. CA server returns signed certificate with principals, expiration (2-10 min), and extensions
-10. Broker stores certificate and auth state
-11. Broker ensures per-connection agent socket exists with this certificate
-12. SSH agent serves certificate via SSH agent protocol on the per-connection socket
-13. OpenSSH uses certificate from agent socket to establish connection
+1. User initiates SSH connection → OpenSSH `Match tagged` (via the user's own `Tag` lines) calls `epithet match`
+2. Broker checks if an agent with an unexpired certificate already exists for this connection hash
+3. If not: broker gets a JWT (cached, proactively refreshed, or freshly acquired via OIDC)
+4. Broker generates an ephemeral keypair for this connection
+5. Broker requests a certificate from the CA, sending the JWT and connection details
+6. CA authenticates itself to the policy server with a service JWT and forwards the user's JWT and connection details unvalidated
+7. Policy server validates the user's JWT (JWKS, issuer, audience, expiry), evaluates policy: "can this identity access this host as this exact requested user right now?"
+8. Policy server returns `CertParams` — identity, principals (exactly the requested user), expiration, `NotAfter`, extensions
+9. CA signs a certificate clamped to `min(now + expiration, NotAfter)` and returns it
+10. Broker starts (or reuses) a per-connection agent socket serving this certificate
+11. OpenSSH uses the certificate from the agent socket to establish the connection
 
 ## Important types and abstractions
 
 - **`sshcert.RawPrivateKey`, `RawPublicKey`, `RawCertificate`**: Type-safe wrappers for SSH keys/certs in on-disk format (string-based)
-- **`ca.CertParams`**: Policy response containing identity, principals, expiration, and extensions for a certificate
-- **`policy.Connection`**: Connection details (%h, %p, %r, %C, %j) passed through Match → Broker → CA → Policy
-- **`policy.Policy`**: Policy metadata (hostPattern) returned with certificates for intelligent reuse
+- **`wire.CertParams`**: Policy response containing identity, principals, expiration, absolute `NotAfter`, and extensions for a certificate
+- **`policy.Connection`**: Connection details (`%h`, `%p`, `%r`, `%C`, `%j`) passed through `match` → broker → CA → policy server
 - **`agent.Credential`**: Private key + certificate pair used by the agent
 - **`caclient.InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`**: Domain-specific error types for CA failures
 
 ## Protocols
 
+### Broker ↔ epithet match/inspect (local IPC)
+
+Newline-framed JSON over the broker's unix socket — no gRPC, no protobuf. Both peers are the same binary, and the socket is 0700 in the profile rundir, so there is no cross-version or cross-language contract to protect.
+
+- `epithet match` sends one line: `{"match": {"remoteHost":...,"remoteUser":...,"port":...,"proxyJump":...,"hash":...}}`. The broker streams zero or more `{"output": "<text>"}` events (auth progress, e.g. a device-code URL, written to the user's stderr) followed by exactly one `{"result": {"allow": bool, "error": "..."}}`.
+- `epithet agent inspect` sends `{"inspect": {}}` and receives one `{"inspect": {...}}` response describing the broker's current agents and CA endpoint states.
+
 ### Broker → CA protocol
 
-The broker requests certificates from the CA over HTTP with tokens in `Authorization: Bearer` header. Shape-based routing: both `publicKey` + `connection` for cert requests, empty body for hello/validation requests.
+The broker requests certificates from the CA over HTTP with the user's JWT in `Authorization: Bearer`. `POST /` with `{"publicKey","connection"}` returns `{"certificate"}`.
 
-**Error codes**: 401 (re-auth needed), 403 (policy denied), 422 (connection not handled), 5xx (CA unavailable, triggers failover).
+**Error codes**: 401 (token rejected — triggers the single forced-refresh retry), 403 (policy denied), 422 (connection not handled by this CA), 5xx (CA unavailable, triggers failover).
 
 ### CA → policy server protocol
 
-The CA validates tokens by calling the policy server over HTTP. The CA signs the request body using its SSH private key (Sigstore SSH signing); the policy server verifies this signature to ensure requests come from the legitimate CA.
+The CA authenticates to the policy server with a short-lived JWT it mints itself, signed with the CA's SSH private key (`pkg/serviceauth`), replacing the old RFC 9421 HTTP message signatures. Claims: `iss` (CA's SSH fingerprint), `aud: "epithet-policy"`, `iat`, `exp` (~60s), `jti`, `bh` (base64url-raw sha256 of the request body), `htm` (method), `htu` (host+path) — the last two bind the token to the exact request it was minted for, closing a same-body replay window body-hashing alone would leave open. The signing algorithm is derived from the CA key type (ed25519→EdDSA, RSA→PS256, ECDSA→ES256/ES384). The policy server verifies this service token on every request, in addition to validating the user's own JWT.
 
-See [policy-server.md](policy-server.md) for the full HTTP API specification, request/response formats, and error handling details.
+See [policy-server.md](policy-server.md) for the full HTTP API specification.
 
 ## Error handling and match behavior
 
-These design decisions affect how epithet interacts with SSH's Match exec behavior.
+These design decisions affect how epithet interacts with SSH's `Match exec` behavior.
 
 ### SSH config precedence
 
 - SSH uses **first match wins** for configuration parameters
-- More specific Match blocks should appear before general ones
-- When a Match exec returns non-zero, that Match block doesn't apply and SSH continues to the next Match or default config
+- `Match tagged` blocks are only evaluated for hosts the user tagged in their own `Host` blocks, evaluated in order
+- When a `Match exec` returns non-zero, that Match block doesn't apply and SSH continues to the next Match or default config
 
 ### Match failure strategy
 
 When epithet cannot obtain a certificate (auth failures, CA errors, agent creation failures):
-1. **Log clear error to stderr** - User-friendly message explaining what went wrong (verbosity matching configured log level)
-2. **Exit with non-zero status** - Fail the Match so SSH falls through to next config
-3. **Allow SSH fallback** - Enables breakglass/escape hatch scenarios
+1. **Log clear error to stderr** - user-friendly message explaining what went wrong
+2. **Exit with non-zero status** - fail the Match so SSH falls through to next config
+3. **Allow SSH fallback** - enables breakglass/escape hatch scenarios
 
 **Rationale:**
-- Enables breakglass accounts: users can have epithet Match blocks first, then special-case configs (e.g., `Match host *.example.com user breakglass` with specific IdentityFile)
+- Enables breakglass accounts: users can have epithet `Match tagged` blocks first, then special-case configs with a specific `IdentityFile`
 - If epithet fails the Match, SSH can try other auth methods (default keys, other agents)
-- Trade-off: May leak connection attempts to fallback systems, but this is acceptable to enable legitimate escape hatches
-- Users who need strict security can configure SSH with no fallbacks after epithet Match blocks
+- Users who need strict security can configure SSH with no fallbacks after epithet's blocks
 
-**Multiple concurrent brokers**: Epithet supports multiple broker instances (work vs personal, different CAs). Each needs a unique socket path via `--broker`. See `examples/` for configuration patterns.
+**Multiple concurrent brokers**: Epithet supports multiple named profiles (work vs personal, different CAs). Each gets its own rundir, socket, and `Tag epithet-<name>`; the same `Include ~/.epithet/run/*/ssh-config.conf` line picks up all of them.
 
 ### CA error handling
 
-**HTTP 401 Unauthorized** - Token is invalid or expired:
-1. Clear the current token
-2. Invoke auth plugin (may use refresh token from state or do full re-auth)
-3. Retry cert request with new token
-4. Limit retries (2-3 attempts) to prevent infinite loops with buggy auth plugins
-5. Use immediate retries (no backoff) - if persistent issue, user will retry SSH connection
-6. If retries exhausted, fail the Match with clear error
+**HTTP 401 Unauthorized** - token rejected:
+1. Broker forces exactly one refresh via `Auth.ForceRefresh` and retries once
+2. If the retry also fails, fail the Match with a clear error
 
-**HTTP 403 Forbidden** - Authentication succeeded but policy denied the request:
-1. Keep the token (it's valid, just not authorized for this connection)
-2. Fail the Match with clear error explaining policy denial
-3. Do not retry (policy decision is intentional)
+**HTTP 403 Forbidden** - policy denied the request:
+1. Fail the Match with a clear error explaining the denial; do not retry
 
-**HTTP 422 Unprocessable Content** - CA/policy server does not handle this connection:
-1. Keep the token (it's valid, just not for this CA)
-2. Fail the Match with clear error
-3. Do not retry (this CA simply doesn't handle this connection type/host)
-4. SSH will fall through to other auth methods (different CA, password, breakglass key, etc.)
+**HTTP 422 Unprocessable Content** - this CA/policy server does not handle the connection:
+1. Fail the Match; do not retry; SSH falls through to other auth methods
 
-**HTTP 5xx Server Error** - Transient CA/policy server issue:
-1. Keep the token
-2. Fail the Match with clear error
-3. User can retry SSH connection
-
-**HTTP 4xx Client Error** (other than 401/403):
-1. Keep the token
-2. Fail the Match with clear error
-3. Do not retry (likely a permanent client-side issue)
-
-### Auth plugin error handling
-
-**Exit 0 with error field** - User-facing auth failure (cancelled flow, MFA failed, invalid credentials):
-1. Keep the existing state (don't clear it)
-2. Fail the Match with the error message from auth plugin
-3. User can retry SSH connection when ready
-
-**Non-zero exit** - Unexpected error (network issue, plugin crash, etc):
-1. Keep the existing state
-2. Retry up to limit (same as CA 401 retry limit)
-3. If retries exhausted, fail the Match with error
-4. Use immediate retries (no backoff)
+**HTTP 5xx Server Error** - transient CA/policy server issue:
+1. Fail the Match; user can retry the SSH connection (or a different CA endpoint takes over via the circuit breaker)
 
 ### Certificate and agent management
 
-**Certificate storage:**
-- Always store certificates obtained from CA, even if agent creation later fails
-- Certificates are bound to policies (hostPattern), not individual agents
-- Multiple agents (different connection hashes) may reuse the same certificate if policy matches
-- Keep certificates in store even on agent creation failures (cert is still valid)
-
-**Agent creation failures:**
-- Typically local system issues (permissions, disk space, socket directory problems)
-- Keep certificate in store (it's valid, may work on retry)
-- Fail the Match with clear error explaining the local issue (not a cert/auth problem)
-- User can fix local issue and retry
+Certificates are minted fresh per connection and are not stored independently of their agent: if agent creation fails after a successful mint, the certificate is simply discarded (a retry mints a new one). Agent creation failures are typically local (permissions, disk space, socket directory problems) and are surfaced as Match failures distinct from auth/policy denials.
 
 ## Configuration and SSH integration
 
-When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<instance-hash>/ssh-config.conf`. Include it via `Include ~/.epithet/run/*/ssh-config.conf` in your `~/.ssh/config`.
+When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<name>/ssh-config.conf`, gated by `Match tagged epithet-<name>`. Tag the `Host` blocks it should handle in your own `~/.ssh/config`, then include the generated configs *after* those Tag lines:
+
+```ssh_config
+Host *.example.com
+    Tag epithet-<name>
+Include ~/.epithet/run/*/ssh-config.conf
+```
+
+`Tag`/`Match tagged` requires OpenSSH 9.4+ (macOS Sequoia and Ubuntu 24.04 both qualify).
 
 Config files use YAML or JSON in `~/.epithet/`. Use `kebab-case` in config keys to match CLI flag names (e.g., `ca-pubkey` maps to `--ca-pubkey`). See `examples/` for complete examples.

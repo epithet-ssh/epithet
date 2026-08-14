@@ -1,156 +1,116 @@
 # Authentication
 
-Epithet uses external authentication plugins to obtain tokens for the CA server. This design allows epithet to work with any identity provider without needing to understand specific authentication protocols.
+Epithet authenticates with OIDC only. There is no plugin protocol and no
+subprocess auth command: the broker (`epithet agent`) authenticates
+in-process using `pkg/auth/oidc`, and the resulting token is a JWT from
+first acquisition to final verification.
 
-## Overview
+## The token contract
 
-The broker invokes authentication plugins when certificates need to be requested. Auth plugins follow a simple protocol:
+One rule holds everywhere: the auth token is always a JWT.
 
-- **stdin**: State from previous invocation (empty on first call)
-- **stdout**: Authentication token (raw bytes)
-- **fd 3**: New state to persist for next invocation (max 10 MiB)
-- **stderr**: Human-readable messages and errors
-- **Exit code**: 0 = success, non-zero = failure
+- The broker acquires it in-process via the OIDC authorization-code-with-PKCE
+  flow and sends it verbatim as `Authorization: Bearer <jwt>` when it
+  requests a certificate.
+- The CA passes it through untouched — no parsing, no validation. All trust
+  decisions live in the policy server.
+- The policy server is the sole validator: it checks the JWT's signature
+  against the issuer's JWKS, its issuer, its audience (`client_id`, which is
+  required configuration), and its expiry.
 
-## Built-in auth plugins
+Because the token is always a JWT, there is no wrapping or encoding step
+between acquisition and use — a JWT is already base64url-segmented ASCII.
 
-### OIDC/OAuth2 (`epithet auth oidc`)
+## Discovery
 
-Generic OIDC/OAuth2 authentication that works with Google Workspace, Okta, Azure AD, and any OIDC-compliant identity provider.
+Before the broker can authenticate anyone, it needs to know which OIDC
+issuer and client ID to use. It fetches this once at startup from the CA's
+anonymous bootstrap endpoint:
 
-**Features:**
-- Authorization code flow with PKCE
-- Automatic token refresh
-- Dynamic port selection (no configuration needed)
-- Silent browser launch for authentication
-
-**Usage:**
-
-```bash
-epithet agent \
-  --ca-url https://ca.example.com \
-  --auth "epithet auth oidc \
-    --issuer https://accounts.google.com \
-    --client-id 123456.apps.googleusercontent.com \
-    --scopes openid,profile,email"
+```
+GET /discovery
 ```
 
-**Configuration:**
-
-| Flag | Required | Description |
-|------|----------|-------------|
-| `--issuer` | Yes | OIDC issuer URL (e.g., `https://accounts.google.com`) |
-| `--client-id` | Yes | OAuth2 client ID from your identity provider |
-| `--client-secret` | No | OAuth2 client secret (optional if using PKCE) |
-| `--scopes` | No | OAuth2 scopes (default: `openid,profile,email`) |
-
-See [OIDC Setup Guide](./oidc-setup.md) for detailed instructions.
-
-## Custom auth plugins
-
-You can write custom authentication plugins in any language. They just need to follow the protocol:
-
-### Example: simple token plugin (Bash)
-
-```bash
-#!/bin/bash
-# Read state from stdin (unused in this example)
-state=$(cat)
-
-# Get token somehow
-token=$(my-auth-command)
-
-# Output token to stdout
-echo -n "$token"
-
-# Output state to fd 3 (empty in this example)
-echo -n "" >&3
+```json
+{
+  "auth": {
+    "issuer": "https://accounts.google.com",
+    "client_id": "123456.apps.googleusercontent.com"
+  }
+}
 ```
 
-### Example: token with refresh (Python)
+This endpoint requires no token — a fresh client has none yet — and the CA
+serves it as a pass-through of the policy server's own `GET /` discovery
+response. There are no server-advertised host-match patterns in this
+document; which hosts epithet handles is decided entirely by the user's own
+ssh config (see [architecture.md](architecture.md)).
 
-```python
-#!/usr/bin/env python3
-import sys
-import os
-import json
-import requests
+## In-process OIDC flow
 
-# Read state from stdin
-state_bytes = sys.stdin.buffer.read()
-state = json.loads(state_bytes) if state_bytes else {}
+`epithet agent` calls `pkg/auth/oidc.Authenticate(ctx, cfg, prev, out)`,
+which drives an authorization-code flow with PKCE:
 
-# Check if we have a refresh token
-if 'refresh_token' in state:
-    # Refresh the token
-    response = requests.post('https://auth.example.com/token', data={
-        'grant_type': 'refresh_token',
-        'refresh_token': state['refresh_token'],
-        'client_id': 'client123',
-    })
-    data = response.json()
-    access_token = data['access_token']
-    new_refresh_token = data.get('refresh_token', state['refresh_token'])
-else:
-    # Perform initial authentication
-    # (implementation depends on your auth system)
-    access_token, new_refresh_token = do_initial_auth()
+1. Opens the user's browser to the identity provider's authorization
+   endpoint (or prints the URL to `out` if it can't launch a browser).
+2. Runs a local callback listener to receive the authorization code.
+3. Exchanges the code for tokens and returns the ID token (a JWT).
 
-# Output access token to stdout
-sys.stdout.buffer.write(access_token.encode())
+Scopes are not configurable: the client always requests
+`openid profile email`. This is the only claim set anything in epithet
+consumes (`email`/`sub` for identity), so there is nothing to override.
 
-# Output new state to fd 3
-state_fd = os.fdopen(3, 'wb')
-state_fd.write(json.dumps({
-    'refresh_token': new_refresh_token
-}).encode())
-state_fd.close()
-```
+On later calls, `prev` carries the previous `oauth2.Token` (including its
+refresh token). `Authenticate` reuses a still-valid access token or uses the
+refresh token to get a new one silently, without opening a browser.
 
-## Token lifecycle
+## Refresh state
 
-1. **First SSH connection:**
-   - Broker has no token
-   - Broker invokes auth plugin with empty stdin
-   - Plugin performs full authentication (browser flow, etc.)
-   - Plugin returns token and state
-   - Broker uses token to request certificate from CA
+Refresh state (an `oauth2.Token`) lives in memory only, inside the broker
+process. It is never written to disk and never persisted across broker
+restarts. Concurrent ssh sessions share one token source
+(`pkg/broker.Auth`): the first caller to need a token runs the fetch, and
+concurrent joiners are coalesced onto that same in-flight attempt, seeing a
+replay of its user-visible output (e.g. "visit this URL...") rather than
+triggering a second browser flow.
 
-2. **Subsequent connections (certificate expired):**
-   - Broker invokes auth plugin with previous state on stdin
-   - Plugin uses refresh token from state to get new access token
-   - Plugin returns new token and updated state
-   - Broker uses token to request certificate from CA
+## Proactive refresh
 
-3. **CA returns 401 Unauthorized:**
-   - Broker clears current token
-   - Broker invokes auth plugin (may use refresh token from state)
-   - Plugin returns fresh token
-   - Broker retries certificate request
+The broker parses the `exp` claim out of its cached JWT — an unverified
+local read, advisory only; the policy server still does the real
+verification — and refreshes ahead of expiry once fewer than `expiryBuffer`
+remains, the same idiom the rest of epithet uses for expiry buffers. Most
+certificate requests never wait on an auth round trip because the token is
+already fresh.
 
-## Security considerations
+## The 401 safety net
 
-- **State never touches disk**: Broker stores state in memory only
-- **10 MiB state limit**: Prevents memory exhaustion from buggy plugins
-- **Tokens are opaque**: Broker doesn't parse or understand token format
-- **Browser-based auth**: User authenticates in their browser, not in terminal
-- **Refresh tokens**: Long-lived sessions without repeated browser auth
+Proactive refresh handles the common case, but a token can still be rejected
+— server-side revocation, clock skew, or an IdP-side session change. If the
+CA returns 401 for a certificate request, the broker calls
+`Auth.ForceRefresh`, which discards the cached token, forces a genuinely new
+token (not a replay of the one just rejected), and retries the certificate
+request exactly once. There is no unbounded retry loop and no
+`maxRetries` counter — one forced refresh is the entire safety net.
 
 ## Troubleshooting
 
-### "Authentication failed" errors
+**Browser doesn't open / "visit this URL" printed instead**
 
-Check the auth plugin's stderr output for details. Common issues:
-- Invalid client ID or secret
-- Incorrect issuer URL
-- User cancelled authentication in browser
-- Network connectivity issues
+Normal in headless or remote-shell environments — copy the printed URL into
+any browser with access to your identity provider.
 
-### "Token refresh failed"
+**Repeated re-authentication**
 
-The refresh token may have expired or been revoked. This triggers a new full authentication flow. If it continues failing:
-- Check that `--scopes` includes the scopes needed by your CA
-- Verify the OAuth app is still active in your identity provider
-- Check the CA server logs for token validation errors
+The refresh token may have expired or been revoked, or the OAuth
+application may have been disabled. Since refresh state is memory-only,
+restarting `epithet agent` also forces full re-authentication.
 
-For provider-specific details, see the [OIDC setup guide](./oidc-setup.md).
+**"Invalid token" from the CA / connection refused**
+
+The policy server rejected the JWT — check its logs. Common causes: issuer
+mismatch, expired token, or `client_id` not matching the token's audience.
+
+See the [OIDC setup guide](oidc-setup.md) for provider-specific
+configuration and the [policy server guide](policy-server.md) for how
+tokens are verified.

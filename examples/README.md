@@ -4,7 +4,6 @@ This directory contains example deployments and reference implementations for ep
 
 ## Available examples
 
-- **`bash_auth_example.bash`**: Reference bash auth plugin demonstrating the stdin/stdout/fd3 protocol
 - **`epithet.config.example`**: Sample config file in YAML format (also supports JSON)
 - **`google-workspace/`**: OIDC setup guide for Google Workspace integration
 - **`policy-server/`**: Policy server configuration examples
@@ -24,4 +23,3 @@ Features:
 - S3 certificate archival
 - OpenTofu/Terraform infrastructure
 - Cost-effective (~$1/month)
-

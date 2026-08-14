@@ -9,7 +9,9 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 **Key Features:**
 - OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
 - Tag-based authorization for flexible access control
-- Per-host policy overrides
+- Per-host policy overrides, matched longest-pattern-first
+- Certificates minted per connection, carrying only the requested principal
+- Certificate validity clamped to the auth token's remaining lifetime
 - YAML config files (`.json` also works, since JSON is valid YAML - see
   "Configuration format" below)
 - Built-in to the epithet binary (no separate deployment needed)
@@ -20,7 +22,7 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 
 ### 1. Get the CA public key
 
-The policy server needs your CA's public key to verify requests are coming from the legitimate CA:
+The policy server needs your CA's public key to verify the CA-minted service JWT on every request (see [Service authentication](#service-authentication-ca--policy-server) below):
 
 ```bash
 # If running the CA server locally
@@ -40,13 +42,13 @@ policy:
   # Address to listen on
   listen: "0.0.0.0:9999"
 
-  # CA public key for signature verification
+  # CA public key, used to verify the CA's service JWT on every request
   ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
 
   # OIDC configuration for token validation
   oidc:
     issuer: "https://accounts.google.com"
-    client_id: "your-client-id"
+    client-id: "your-client-id"
 
   # Map users (by email/identity) to tags
   users:
@@ -75,16 +77,16 @@ policy:
   hosts:
     prod-db-01:
       allow:
-        dbadmins: [admin]     # Only admins get 'dbadmins' group on prod-db
+        dbadmins: [admin]     # Only admins get 'dbadmins' access on prod-db
       expiration: "2m"        # Shorter expiration for production database
 
     dev-server:
       allow:
-        docker: [eng]         # Engineers get 'docker' group on dev server
+        docker: [eng]         # Engineers get 'docker' access on dev server
       expiration: "10m"       # Longer expiration for dev environment
 ```
 
-**Important**: Certificates contain **all principals** the user is authorized for (union of global defaults + all host-specific policies). For example, if alice has the `admin` tag, her certificate will include: `wheel`, `dbadmins`, `developers` (if admin also grants eng access), etc.
+**Important:** Each issued certificate carries **only the principal actually requested** for that connection (`ssh <principal>@<host>`), never the union of everything the user's tags could reach elsewhere. A certificate is minted fresh for every connection past the broker's local cache of still-valid agents — there is no cross-connection certificate cache and nothing the policy server decides ever leaves the policy server on the wire.
 
 ### 3. Start the policy server
 
@@ -118,22 +120,7 @@ Config files are parsed as YAML. The default search paths match `*.yaml`,
 `defaultConfigPatterns` in `cmd/epithet/main.go`), so a `.json` file is
 picked up too - not because its format is detected, but because JSON is a
 syntactic subset of YAML and the same YAML parser (`gopkg.in/yaml.v3`)
-accepts it directly:
-
-**YAML** (`.yaml` or `.yml`):
-```yaml
-users:
-  alice@example.com: [admin]
-```
-
-**JSON** (`.json`, parsed as YAML):
-```json
-{
-  "users": {
-    "alice@example.com": ["admin"]
-  }
-}
-```
+accepts it directly.
 
 There is no per-file content-type or extension sniffing - every matched file
 goes through the same YAML unmarshal call.
@@ -147,6 +134,7 @@ policy:
   ca-pubkey: "ssh-ed25519 ..."
   oidc:
     issuer: "https://accounts.google.com"
+    client-id: "your-client-id"
   users:
     alice@example.com: [admin]
   defaults:
@@ -164,12 +152,24 @@ server (dynamic reload from a URL was removed - config is the only source).
 All fields go under the `policy:` section in `~/.epithet/*.yaml`:
 
 - **`listen`** (optional): Address to listen on (default: `0.0.0.0:9999`)
-- **`ca-pubkey`** (required): SSH public key of the CA for signature verification
-- **`oidc`** (required): OIDC configuration object with `issuer` and `client_id` fields
+- **`ca-pubkey`** (required): SSH public key of the CA, used to verify the CA's service JWT
+- **`oidc`** (required): OIDC configuration object with `issuer` and `client-id` fields (config-file keys are kebab-case, derived from the CLI flag names — see the note below) — `client-id` is required so audience checking can never be silently skipped
 - **`users`** (required): Map of user identities to tags
 - **`defaults`** (optional): Global policy defaults
 - **`hosts`** (optional): Per-host policy overrides
-- **`defaults.expiration`** (optional): Default certificate expiration under the `defaults:` section (e.g., `5m`)
+
+> **Key casing note:** `listen`, `ca-pubkey`, `oidc.issuer`, `oidc.client-id`,
+> `oidc.client-secret`, and `default-expiration` are resolved by Kong from
+> the CLI flag names, so their config-file keys are **kebab-case** (e.g.
+> `client-id`, not `client_id`) — using the underscored spelling silently
+> fails to populate the value and surfaces later as "oidc.client_id is
+> required". `users`, `defaults`, and `hosts` (and the fields inside
+> `Rules`: `allow`, `expiration`, `extensions`) are decoded separately by a
+> plain YAML unmarshal against Go struct tags, which happen to have no
+> multi-word keys today so the casing question doesn't currently bite there.
+> This split-brain config loading (two different resolvers reading the same
+> file) is tracked for cleanup in the policy-server config parsing rework
+> task (see `ideas/oidc-only-auth.md` §7).
 
 #### Users section
 
@@ -189,7 +189,7 @@ users:
 
 #### Defaults section
 
-Defines global policies that apply to all hosts unless overridden:
+Defines global rules that apply to all hosts unless overridden:
 
 ```yaml
 defaults:
@@ -197,7 +197,7 @@ defaults:
     root: [admin]         # Principal → allowed tags
     ubuntu: [dev, ops]
   expiration: "5m"        # Certificate lifetime
-  extensions:             # SSH certificate extensions
+  extensions:              # SSH certificate extensions
     permit-pty: ""
     permit-agent-forwarding: ""
 ```
@@ -206,15 +206,16 @@ defaults:
 - **`allow`** (optional): Map of principals to allowed tags
   - Key: SSH principal (username on target host)
   - Value: List of tags that grant access to this principal
-  - User needs **at least one** matching tag to be authorized
+  - User needs **at least one** matching tag to be authorized for the requested principal
 - **`expiration`** (optional): Certificate lifetime (e.g., `5m`, `1h`, `2h30m`)
   - Default: `5m` (5 minutes)
+  - Always further clamped to the auth token's remaining lifetime (`NotAfter`) — a certificate never outlives the session that requested it
 - **`extensions`** (optional): SSH certificate extensions
   - Default: `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`
 
 #### Hosts section
 
-Per-host policy overrides:
+Per-host policy overrides, keyed by a host pattern:
 
 ```yaml
 hosts:
@@ -224,50 +225,50 @@ hosts:
     expiration: "2m"       # Override: shorter expiration
     extensions:            # Override: restricted extensions
       permit-pty: ""
-  
-  dev-server: {}           # Empty: use defaults for this host
+
+  "*.dev.example.com": {}  # Empty: use defaults for these hosts
 ```
 
-**Behavior:**
-- If a host is listed, its `allow` rules override global defaults (not merged)
-- `expiration` and `extensions` are used if specified, otherwise fall back to defaults
-- If a principal is not listed in host-specific `allow`, check global `defaults.allow`
-- If a host is not listed at all, use global defaults
+**Host pattern matching:** patterns are matched against `remoteHost` using
+Go's `path.Match` semantics (the same glob syntax as `doublestar`/shell
+globs, since `path.Match`'s `*` only refuses to cross `/`, which never
+appears in a hostname). This means **`*` crosses dot boundaries**:
+`*.example.com` matches `a.b.example.com`, not just single-label hosts like
+`a.example.com`. Only `/` is a boundary character for `*`.
+
+Since YAML maps don't preserve key order, patterns are evaluated
+**longest-pattern-first** (ties broken lexicographically) — a deterministic,
+config-order-independent way to prefer the most specific match. The first
+pattern that matches the connection's host contributes its `expiration` and
+`extensions` overrides (falling back to `defaults` for anything it doesn't
+set); `allow` rules from the matching host pattern and from `defaults` are
+merged when deciding whether the requested principal is authorized.
 
 > **Important:** SSH certificates are validated by the target host based only on CA trust and principal matching. Host restrictions in policy config only apply at certificate issuance time. Use `AuthorizedPrincipalsCommand` on target hosts for additional enforcement.
 
 ## Authorization logic
 
-When a user requests access, the policy server:
+When a user requests access, the policy server (`pkg/policyserver/evaluator`):
 
 1. **Validates the OIDC token**
    - Verifies JWT signature against OIDC provider's JWKS
-   - Checks token expiration and issuer
-   - Extracts user identity from claims
+   - Checks token expiration, issuer, and audience (`client_id`)
+   - Extracts user identity and the token's expiry from claims
 
-2. **Looks up user's tags**
+2. **Looks up the user's tags**
    - If user not in `users` map → deny (403)
    - Otherwise, get their tag list
 
-3. **Computes ALL authorized principals**
-   - Union of principals from `defaults.allow` where user has matching tags
-   - Union of principals from all `hosts[*].allow` where user has matching tags
-   - For example, if user has tag `[admin]` and config has:
-     - `defaults.allow: {wheel: [admin], developers: [admin]}`
-     - `hosts.prod-db.allow: {dbadmins: [admin]}`
-   - Then authorized principals = `["dbadmins", "developers", "wheel"]`
+3. **Checks the one requested principal**
+   - The merged `allow` rules (matching host pattern + defaults) for the requested principal must include at least one of the user's tags
+   - If not authorized → deny (403)
 
-4. **Checks requested principal**
-   - From the SSH connection's `RemoteUser` field
-   - If requested principal is in the authorized set → approve
-   - Otherwise → deny (403)
-
-5. **Issues certificate with ALL authorized principals**
-   - Principals: ALL principals user is authorized for (not just the one requested)
-   - Identity: user's email/identity from token
-   - This allows the certificate to be used for any authorized principal
-   - Expiration: from host policy or defaults
-   - Extensions: from host policy or defaults
+4. **Issues a certificate naming only that principal**
+   - `principals`: exactly `[requestedPrincipal]` — never a union of everything the user could reach
+   - `identity`: user's email/identity from the token, for audit logs
+   - `expiration`: from the matching host pattern or defaults
+   - `notAfter`: the token's expiry — an absolute ceiling the CA clamps against
+   - `extensions`: from the matching host pattern or defaults
 
 ## Using AuthorizedPrincipalsFile
 
@@ -293,7 +294,7 @@ For each local user, create `/etc/ssh/auth_principals/[username]` listing which 
 # /etc/ssh/auth_principals/root
 wheel
 
-# /etc/ssh/auth_principals/ubuntu  
+# /etc/ssh/auth_principals/ubuntu
 developers
 operators
 
@@ -316,8 +317,8 @@ sudo chmod 644 /etc/ssh/auth_principals/*
 When a user with a certificate attempts SSH:
 
 1. **sshd validates certificate**: Is it signed by trusted CA? (checks `TrustedUserCAKeys`)
-2. **sshd checks principals**: Does certificate contain any principal listed in `/etc/ssh/auth_principals/%u`?
-3. **Access granted** if certificate has at least one matching principal
+2. **sshd checks principals**: Does the certificate's single principal appear in `/etc/ssh/auth_principals/%u`?
+3. **Access granted** if the certificate's principal matches
 
 See [OIDC setup guide](./oidc-setup.md) for provider-specific configuration (Google, Okta, Azure AD).
 
@@ -362,20 +363,19 @@ sudo systemctl start epithet-policy
 - Verify the OIDC provider is sending the expected claim
 
 **"Invalid token" (401)**
-- Token signature verification failed
+- User JWT signature verification failed
 - Token is expired
-- Token issuer doesn't match the OIDC configuration
+- Token issuer or audience doesn't match the OIDC configuration
 - Check system clock synchronization
 
-**"Not authorized for principal" (403)**
-- User doesn't have the required tags for the requested principal
+**"Not authorized for" (403)**
+- User doesn't have a tag matching the requested principal's `allow` rules
 - Check the user's tags in the configuration
-- Verify the principal's allowed tags in `defaults.allow` or `hosts[].allow`
+- Verify the principal's allowed tags in `defaults.allow` or the matching `hosts[].allow`
 
-**"Invalid CA signature" (400)**
-- The signature from the CA doesn't verify with the configured public key
+**"request verification failed" (401)**
+- The CA's service JWT failed verification: expired (>60s old), wrong `aud`, body-hash mismatch, method/target mismatch, or the wrong signing key
 - Check that `ca-pubkey` in the config matches the CA's actual public key
-- Ensure the CA and policy server are using compatible key formats
 
 ### Debugging
 
@@ -397,20 +397,47 @@ The CA server communicates with the policy server over HTTP. This section docume
 
 ### HTTP endpoint
 
-**Method:** `POST`
-**Content-Type:** `application/json`
+A single route, `/`, handles both methods:
 
-### Request format
+- **`GET /`** — anonymous discovery: returns the OIDC bootstrap config the CA passes through on its own `/discovery` endpoint
+- **`POST /`** — cert evaluation request
 
-The CA sends a JSON request with the following fields:
+Both require a valid CA-minted service JWT (see [Service authentication](#service-authentication-ca--policy-server)) — there is no unauthenticated variant of either.
+
+### Discovery request
+
+```
+GET /
+Authorization: Bearer <service JWT>
+```
+
+Response (`HTTP 200`):
 
 ```json
 {
-  "token": "authentication-token-from-user",
-  "signature": "base64-encoded-signature",
+  "auth": {
+    "issuer": "https://accounts.google.com",
+    "client_id": "your-client-id"
+  }
+}
+```
+
+`client_secret` is included (unencrypted) only if configured. There are no
+host-match patterns in this response — host gating lives entirely in the
+user's own ssh config.
+
+### Cert evaluation request format
+
+```
+POST /
+Authorization: Bearer <service JWT>
+Content-Type: application/json
+```
+
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
   "connection": {
-    "localHost": "user-laptop.local",
-    "localUser": "alice",
     "remoteHost": "server.example.com",
     "remoteUser": "ubuntu",
     "port": 22,
@@ -421,16 +448,17 @@ The CA sends a JSON request with the following fields:
 ```
 
 **Fields:**
-- `token` (string): The authentication token from the user (format determined by your auth plugin)
-- `signature` (string): Base64-encoded cryptographic signature of the token, signed by the CA's private key
-- `connection` (object): Full SSH connection parameters
-  - `localHost` (string): User's local hostname (OpenSSH `%l`)
-  - `localUser` (string): User's local username
+- `token` (string): The user's ID token — always a JWT
+- `connection` (object): SSH connection parameters
   - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
-  - `remoteUser` (string): Target username on remote server (OpenSSH `%r`)
+  - `remoteUser` (string): Target username on remote server (OpenSSH `%r`) — the single principal the caller is asking for
   - `port` (uint): Target SSH port (OpenSSH `%p`)
   - `proxyJump` (string): ProxyJump configuration (OpenSSH `%j`), empty if not used
   - `hash` (string): OpenSSH `%C` hash - unique identifier for this connection
+
+Request and response bodies are capped at 64 KiB (`wire.MaxBodySize`); an
+oversized body gets `413` with a "too large" message rather than a JSON
+parse error.
 
 ### Response format
 
@@ -440,51 +468,72 @@ The CA sends a JSON request with the following fields:
 {
   "certParams": {
     "identity": "alice@example.com",
-    "principals": ["ubuntu", "root", "deploy"],
-    "expiration": "5m0s",
+    "principals": ["ubuntu"],
+    "expiration": 300000000000,
+    "notAfter": "2026-08-13T18:30:00Z",
     "extensions": {
       "permit-pty": "",
       "permit-agent-forwarding": "",
-      "permit-port-forwarding": "",
-      "permit-user-rc": "",
-      "permit-X11-forwarding": ""
+      "permit-user-rc": ""
     }
-  },
-  "policy": {
-    "hostPattern": "*.example.com"
   }
 }
 ```
 
 **Fields:**
 - `certParams.identity` (string): Certificate identity/key ID (for audit logs)
-- `certParams.principals` ([]string): List of usernames this cert can authenticate as
-- `certParams.expiration` (string): Certificate validity duration (e.g., "5m", "10m", "1h")
+- `certParams.principals` ([]string): Exactly one entry — the requested principal
+- `certParams.expiration` (integer): Certificate validity, in **nanoseconds** (this is `time.Duration` marshaled by Go's default `encoding/json`, i.e. an integer, not a duration string like `"5m"`)
+- `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, derived from the user token's expiry. The CA signs with `min(now + expiration, notAfter)`. Omitted (zero value) means no ceiling beyond `expiration`.
 - `certParams.extensions` (map[string]string): SSH certificate extensions to grant
-- `policy.hostPattern` (string): Glob pattern for hosts this certificate is valid for
 
 **Denial (HTTP 403 or 401):**
 
-Return any non-200 status code to deny the certificate request.
+```json
+{"error": "User alice not authorized for deploy@prod-web-01.example.com"}
+```
 
-### Signature verification
+Return any non-200 status code with this shape to deny the certificate request.
 
-**IMPORTANT:** Your policy server must verify the CA's request signature before processing the request. This proves the request came from your CA server and not a malicious actor.
+### Service authentication (CA → policy server)
 
-The CA signs all requests using [RFC 9421 HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421). The `pkg/httpsig` package provides helpers for verification:
+Every request — `GET /` and `POST /` alike — must carry a short-lived JWT the CA mints per request, signed with the CA's own SSH private key:
+
+```
+Authorization: Bearer <jwt>
+```
+
+Claims:
+
+| Claim | Meaning |
+|---|---|
+| `iss` | CA identity: SHA256 fingerprint of the CA's SSH public key |
+| `aud` | `"epithet-policy"` |
+| `iat` / `exp` | Issued-at / expiry, ~60 seconds apart |
+| `jti` | Random token ID |
+| `bh` | `base64url(sha256(request body))` — raw, unpadded encoding — binds the token to this exact body (empty string for `GET`) |
+| `htm` | HTTP method |
+| `htu` | Request target: host + path |
+
+The signing algorithm is derived from the CA's key type: ed25519→EdDSA,
+RSA→PS256, ECDSA→ES256/ES384. `htm`/`htu` binding closes a same-body replay
+window that body-hashing alone would leave open (e.g. a captured `GET /`
+token replayed against a `POST /` with the same empty body).
+
+A minimal Go verifier:
 
 ```go
-import "github.com/epithet-ssh/epithet/pkg/httpsig"
+import "github.com/epithet-ssh/epithet/pkg/serviceauth"
 
-// Create verifier from CA public key (authorized_keys format)
-verifier, err := httpsig.NewVerifier(caPubKey)
-// Then in your handler:
-err = verifier.VerifyRequest(r)
-if err != nil {
+verifier, err := serviceauth.NewVerifier(caPubKey) // authorized_keys format
+// ...
+if err := verifier.Verify(r, body); err != nil {
     http.Error(w, "invalid signature", http.StatusUnauthorized)
     return
 }
 ```
+
+Verification is required — there is no unauthenticated mode.
 
 A complete OpenAPI 3.0 specification is available at [`policy-server-api.yaml`](./policy-server-api.yaml).
 
