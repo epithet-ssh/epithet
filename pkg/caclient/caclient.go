@@ -19,6 +19,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/gregjones/httpcache"
 	gobreaker "github.com/sony/gobreaker/v2"
 )
@@ -84,29 +85,6 @@ func (e *ConnectionNotHandledError) Error() string {
 		return fmt.Sprintf("connection not handled: %s", e.Message)
 	}
 	return "connection not handled by CA"
-}
-
-// Discovery contains information from the discovery endpoint.
-// Unauthenticated: Auth only. Authenticated: Auth + MatchPatterns.
-type Discovery struct {
-	Auth          *BootstrapAuth `json:"auth,omitempty"`
-	MatchPatterns []string       `json:"matchPatterns,omitempty"`
-}
-
-// BootstrapAuth represents the auth configuration from the discovery endpoint.
-// The Type field discriminates between auth methods.
-type BootstrapAuth struct {
-	// Type identifies the auth method: "oidc" or "command"
-	Type string `json:"type"`
-
-	// OIDC fields (when type="oidc")
-	Issuer       string   `json:"issuer,omitempty"`
-	ClientID     string   `json:"client_id,omitempty"`
-	ClientSecret string   `json:"client_secret,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-
-	// Command field (when type="command") - opaque string
-	Command string `json:"command,omitempty"`
 }
 
 // CertResponse contains a certificate and discovery information.
@@ -303,7 +281,7 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 // GetDiscovery fetches discovery data using the cached discovery URL.
 // If no URL is cached (from a previous cert request), returns nil.
 // The discovery response itself is cached via httpcache.
-func (c *Client) GetDiscovery(ctx context.Context, token string) (*Discovery, error) {
+func (c *Client) GetDiscovery(ctx context.Context, token string) (*wire.Discovery, error) {
 	c.discoveryMu.RLock()
 	url := c.discoveryURL
 	c.discoveryMu.RUnlock()
@@ -491,7 +469,7 @@ func (c *Client) doGetPublicKey(ctx context.Context, caURL string) (string, erro
 // fetchDiscovery fetches discovery data from the given URL.
 // Uses the cached HTTP client for RFC 7234 compliant caching.
 // When token is empty, no Authorization header is sent (unauthenticated bootstrap path).
-func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*Discovery, error) {
+func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*wire.Discovery, error) {
 	if c.logger != nil {
 		c.logger.Debug("http request", "method", "GET", "url", url)
 	}
@@ -539,7 +517,7 @@ func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (
 		}
 	}
 
-	var discovery Discovery
+	var discovery wire.Discovery
 	if err := json.Unmarshal(respBody, &discovery); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal discovery response: %w", err)
 	}

@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 func TestHandler_GETDiscovery(t *testing.T) {
-	discovery := &policyserver.DiscoveryResponse{
-		Auth: &policyserver.BootstrapAuth{
+	discovery := &wire.Discovery{
+		Auth: &wire.AuthConfig{
 			Type:     "oidc",
 			Issuer:   "https://accounts.google.com",
 			ClientID: "test-client-id",
@@ -35,7 +36,7 @@ func TestHandler_GETDiscovery(t *testing.T) {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var got policyserver.DiscoveryResponse
+	var got wire.Discovery
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cbroglie/mustache"
-	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // MaxStateBlobSize is the maximum size of the state blob (10 MiB).
@@ -329,7 +329,7 @@ func execute(ctx context.Context, cmdLine string, state []byte, userOutput io.Wr
 // For type="oidc": constructs "<executable> auth oidc --issuer X --client-id Y --scopes Z"
 // For type="command": returns the command as-is (substituting "epithet" with os.Executable())
 // Returns an error if the auth type is unknown or if os.Executable() fails.
-func AuthConfigToCommand(auth caclient.BootstrapAuth) (string, error) {
+func AuthConfigToCommand(auth wire.AuthConfig) (string, error) {
 	switch auth.Type {
 	case "oidc":
 		// Construct the OIDC auth command

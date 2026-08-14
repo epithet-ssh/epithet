@@ -19,6 +19,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"google.golang.org/grpc"
 )
 
@@ -497,7 +498,7 @@ func (b *Broker) shouldHandle(ctx context.Context, hostname string, userOutput i
 }
 
 // getDiscoveryPatterns fetches discovery patterns, authenticating and calling Hello if needed.
-func (b *Broker) getDiscoveryPatterns(ctx context.Context, userOutput io.Writer) (*caclient.Discovery, error) {
+func (b *Broker) getDiscoveryPatterns(ctx context.Context, userOutput io.Writer) (*wire.Discovery, error) {
 	// Fast path: try cached discovery first.
 	token := b.auth.Token()
 	if token != "" {

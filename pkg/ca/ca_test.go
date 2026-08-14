@@ -10,6 +10,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -69,7 +70,7 @@ func TestCA_Sign(t *testing.T) {
 	c, err := ca.New(caPrivKey, "")
 	require.NoError(err)
 
-	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{
+	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &wire.CertParams{
 		Identity:   "brianm",
 		Expiration: time.Second * 10000,
 		Names:      []string{"root", "deployer"},

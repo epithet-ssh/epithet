@@ -17,6 +17,7 @@ import (
 	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -42,7 +43,7 @@ func testCAClientWithDiscovery(t *testing.T, patterns []string) *caclient.Client
 	// Create a discovery server.
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(caclient.Discovery{MatchPatterns: patterns})
+		json.NewEncoder(w).Encode(wire.Discovery{MatchPatterns: patterns})
 	}))
 	t.Cleanup(discoveryServer.Close)
 
@@ -557,7 +558,7 @@ func Test_DiscoveryReauthOnExpiredToken(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// No caching so each call hits the server.
 		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(caclient.Discovery{MatchPatterns: []string{"*.example.com"}})
+		json.NewEncoder(w).Encode(wire.Discovery{MatchPatterns: []string{"*.example.com"}})
 	}))
 	defer discoveryServer.Close()
 

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // mockValidator is a simple test token validator.
@@ -33,11 +33,11 @@ func (m *mockValidator) ValidateAndExtractIdentity(token string) (string, error)
 
 // mockEvaluator is a simple test evaluator.
 type mockEvaluator struct {
-	response *policyserver.Response
+	response *wire.PolicyResponse
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*policyserver.Response, error) {
+func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -51,8 +51,8 @@ func encodeToken(token string) string {
 
 func TestHandler_Success(t *testing.T) {
 	evaluator := &mockEvaluator{
-		response: &policyserver.Response{
-			CertParams: ca.CertParams{
+		response: &wire.PolicyResponse{
+			CertParams: wire.CertParams{
 				Identity:   "test@example.com",
 				Names:      []string{"testuser"},
 				Expiration: 5 * time.Minute,
@@ -73,7 +73,7 @@ func TestHandler_Success(t *testing.T) {
 		Evaluator: evaluator,
 	})
 
-	req := policyserver.Request{
+	req := wire.PolicyRequest{
 		Token: encodeToken("test-token"),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -92,7 +92,7 @@ func TestHandler_Success(t *testing.T) {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp policyserver.Response
+	var resp wire.PolicyResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 		Evaluator: evaluator,
 	})
 
-	req := policyserver.Request{
+	req := wire.PolicyRequest{
 		Token: encodeToken("invalid-token"),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -142,7 +142,7 @@ func TestHandler_Forbidden(t *testing.T) {
 		Evaluator: evaluator,
 	})
 
-	req := policyserver.Request{
+	req := wire.PolicyRequest{
 		Token: encodeToken("valid-token"),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -172,7 +172,7 @@ func TestHandler_NotHandled(t *testing.T) {
 		Evaluator: evaluator,
 	})
 
-	req := policyserver.Request{
+	req := wire.PolicyRequest{
 		Token: encodeToken("valid-token"),
 		Connection: policy.Connection{
 			RemoteHost: "unknown.example.com",
@@ -214,7 +214,7 @@ func TestHandler_InvalidTokenEncoding(t *testing.T) {
 		Evaluator: &mockEvaluator{},
 	})
 
-	req := policyserver.Request{
+	req := wire.PolicyRequest{
 		Token: "!!!not-valid-base64!!!",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",

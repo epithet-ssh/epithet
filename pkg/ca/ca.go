@@ -19,20 +19,10 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/gregjones/httpcache"
 	"golang.org/x/crypto/ssh"
 )
-
-// PolicyError represents an error from the policy server.
-// The CA server should return the same status code to the client.
-type PolicyError struct {
-	StatusCode int
-	Message    string
-}
-
-func (e *PolicyError) Error() string {
-	return fmt.Sprintf("policy server returned %d: %s", e.StatusCode, e.Message)
-}
 
 // CA performs CA operations.
 type CA struct {
@@ -162,41 +152,6 @@ func (c *CA) PublicKey() sshcert.RawPublicKey {
 	return sshcert.RawPublicKey(string(ssh.MarshalAuthorizedKey(pk)))
 }
 
-// CertParams are options which can be set on a certificate.
-type CertParams struct {
-	Identity   string            `json:"identity"`
-	Names      []string          `json:"principals"`
-	Expiration time.Duration     `json:"expiration"`
-	Extensions map[string]string `json:"extensions"`
-}
-
-// PolicyResponse is the response from the policy server, containing both
-// the certificate parameters and the policy.
-type PolicyResponse struct {
-	CertParams CertParams    `json:"certParams"`
-	Policy     policy.Policy `json:"policy"`
-}
-
-// DiscoveryResponse is the discovery data fetched from the policy server.
-type DiscoveryResponse struct {
-	Auth          *BootstrapAuth `json:"auth"`
-	MatchPatterns []string       `json:"matchPatterns,omitempty"`
-
-	// CacheControl is the Cache-Control header from the policy server response.
-	// Not serialized to JSON — used by the CA server to pass through to clients.
-	CacheControl string `json:"-"`
-}
-
-// BootstrapAuth represents the auth configuration from the policy server.
-type BootstrapAuth struct {
-	Type         string   `json:"type"`
-	Issuer       string   `json:"issuer,omitempty"`
-	ClientID     string   `json:"client_id,omitempty"`
-	ClientSecret string   `json:"client_secret,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-	Command      string   `json:"command,omitempty"`
-}
-
 // FetchDiscovery fetches discovery data from the policy server.
 // Uses HTTP caching (Cache-Control headers) to avoid unnecessary requests.
 // The request is signed with RFC 9421 HTTP Message Signatures.
@@ -204,7 +159,7 @@ type BootstrapAuth struct {
 // The signature has a 30s expiry while the cache TTL is 300s. This is safe
 // because httpcache serves directly from cache during max-age and creates a
 // fresh (newly signed) request after the cache expires.
-func (c *CA) FetchDiscovery(ctx context.Context) (*DiscoveryResponse, error) {
+func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 	req, err := http.NewRequest("GET", c.policyURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -243,7 +198,7 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*DiscoveryResponse, error) {
 		return nil, fmt.Errorf("policy server returned %d for discovery: %s", res.StatusCode, string(buf))
 	}
 
-	var discovery DiscoveryResponse
+	var discovery wire.Discovery
 	if err := json.Unmarshal(buf, &discovery); err != nil {
 		return nil, fmt.Errorf("error parsing discovery response: %w", err)
 	}
@@ -256,11 +211,8 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*DiscoveryResponse, error) {
 
 // RequestPolicy requests policy from the policy server for a cert request.
 // The request is signed with RFC 9421 HTTP Message Signatures.
-func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*PolicyResponse, error) {
-	body, err := json.Marshal(&map[string]any{
-		"token":      token,
-		"connection": conn,
-	})
+func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*wire.PolicyResponse, error) {
+	body, err := json.Marshal(wire.PolicyRequest{Token: token, Connection: conn})
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling request body: %w", err)
 	}
@@ -302,13 +254,13 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	}
 
 	if res.StatusCode != 200 {
-		return nil, &PolicyError{
+		return nil, &wire.PolicyError{
 			StatusCode: res.StatusCode,
 			Message:    string(buf),
 		}
 	}
 
-	policyResp := &PolicyResponse{}
+	policyResp := &wire.PolicyResponse{}
 	err = json.Unmarshal(buf, policyResp)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
@@ -317,7 +269,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 }
 
 // SignPublicKey signs a key to generate a certificate.
-func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (sshcert.RawCertificate, error) {
+func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertParams) (sshcert.RawCertificate, error) {
 	buf := make([]byte, 8)
 	_, err := rand.Read(buf)
 	if err != nil {

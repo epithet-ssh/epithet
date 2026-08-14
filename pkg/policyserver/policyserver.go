@@ -8,30 +8,11 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/httpsig"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
-
-// Request from CA to policy server.
-type Request struct {
-	Token      string            `json:"token"`
-	Connection policy.Connection `json:"connection"`
-}
-
-// Response from policy server to CA.
-type Response struct {
-	CertParams ca.CertParams `json:"certParams"`
-	Policy     policy.Policy `json:"policy"`
-}
-
-// DiscoveryResponse is returned by GET / on the policy server.
-// The CA fetches this and serves it to clients on /discovery.
-type DiscoveryResponse struct {
-	Auth          *BootstrapAuth `json:"auth"`
-	MatchPatterns []string       `json:"matchPatterns,omitempty"`
-}
 
 // PolicyEvaluator makes authorization decisions based on identity and connection details.
 // The token has already been validated and identity extracted by the handler.
@@ -44,13 +25,13 @@ type PolicyEvaluator interface {
 	// The identity has already been extracted from a validated token.
 	// The context is used for loading dynamic policy if configured.
 	// Returns:
-	// - *Response: Certificate parameters and policy if authorized
+	// - *wire.PolicyResponse: Certificate parameters and policy if authorized
 	// - error: If authorization denied
 	//
 	// Error handling:
 	// - Return ErrForbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(ctx context.Context, identity string, conn policy.Connection) (*Response, error)
+	Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error)
 }
 
 // TokenValidator validates authentication tokens and extracts identity.
@@ -64,44 +45,34 @@ type TokenValidator interface {
 // Standard errors for policy evaluation.
 var (
 	// ErrUnauthorized indicates token is invalid or expired (401).
-	ErrUnauthorized = &PolicyError{StatusCode: http.StatusUnauthorized, Message: "Unauthorized"}
+	ErrUnauthorized = &wire.PolicyError{StatusCode: http.StatusUnauthorized, Message: "Unauthorized"}
 
 	// ErrForbidden indicates token valid but access denied by policy (403).
-	ErrForbidden = &PolicyError{StatusCode: http.StatusForbidden, Message: "Forbidden"}
+	ErrForbidden = &wire.PolicyError{StatusCode: http.StatusForbidden, Message: "Forbidden"}
 
 	// ErrNotHandled indicates this policy server does not handle the connection (422).
-	ErrNotHandled = &PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: "connection not handled"}
+	ErrNotHandled = &wire.PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: "connection not handled"}
 )
-
-// PolicyError represents a policy evaluation error with HTTP status code.
-type PolicyError struct {
-	StatusCode int
-	Message    string
-}
-
-func (e *PolicyError) Error() string {
-	return fmt.Sprintf("policy error %d: %s", e.StatusCode, e.Message)
-}
 
 // Unauthorized returns a 401 error with the given message.
 func Unauthorized(message string) error {
-	return &PolicyError{StatusCode: http.StatusUnauthorized, Message: message}
+	return &wire.PolicyError{StatusCode: http.StatusUnauthorized, Message: message}
 }
 
 // Forbidden returns a 403 error with the given message.
 func Forbidden(message string) error {
-	return &PolicyError{StatusCode: http.StatusForbidden, Message: message}
+	return &wire.PolicyError{StatusCode: http.StatusForbidden, Message: message}
 }
 
 // InternalError returns a 500 error with the given message.
 func InternalError(message string) error {
-	return &PolicyError{StatusCode: http.StatusInternalServerError, Message: message}
+	return &wire.PolicyError{StatusCode: http.StatusInternalServerError, Message: message}
 }
 
 // NotHandled returns a 422 error indicating this policy server does not handle
 // the requested connection. The CA will return 422 to the client.
 func NotHandled(message string) error {
-	return &PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: message}
+	return &wire.PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: message}
 }
 
 // Config configures the policy server HTTP handler.
@@ -121,7 +92,7 @@ type Config struct {
 
 	// Discovery is the configuration returned on GET / requests.
 	// The CA fetches this to serve discovery data to clients.
-	Discovery *DiscoveryResponse
+	Discovery *wire.Discovery
 }
 
 // handler holds the config and implements the HTTP handler methods.
@@ -199,7 +170,7 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	var req Request
+	var req wire.PolicyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 		return
@@ -223,7 +194,7 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request) {
 	// Evaluate policy based on identity (authorization).
 	resp, err := h.config.Evaluator.Evaluate(r.Context(), identity, req.Connection)
 	if err != nil {
-		if policyErr, ok := err.(*PolicyError); ok {
+		if policyErr, ok := err.(*wire.PolicyError); ok {
 			h.writeError(w, policyErr.StatusCode, policyErr.Message)
 			return
 		}

@@ -19,6 +19,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -54,8 +55,8 @@ func TestBrokerEndToEnd(t *testing.T) {
 		}
 		// POST: cert evaluation — approves all requests.
 		// Principals must match the sshd auth_principals file ("a\nb").
-		resp := ca.PolicyResponse{
-			CertParams: ca.CertParams{
+		resp := wire.PolicyResponse{
+			CertParams: wire.CertParams{
 				Identity:   "test-user",
 				Names:      []string{"a", "b"},
 				Expiration: 5 * time.Minute,

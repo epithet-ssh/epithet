@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -382,7 +382,7 @@ printf '\x80\x81\x82token\xff\xfe'
 func TestAuthConfigToCommand_OIDC(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type:     "oidc",
 		Issuer:   "https://accounts.google.com",
 		ClientID: "my-client-id",
@@ -402,7 +402,7 @@ func TestAuthConfigToCommand_OIDC(t *testing.T) {
 func TestAuthConfigToCommand_OIDC_NoScopes(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type:     "oidc",
 		Issuer:   "https://example.com",
 		ClientID: "test-client",
@@ -422,7 +422,7 @@ func TestAuthConfigToCommand_OIDC_NoScopes(t *testing.T) {
 func TestAuthConfigToCommand_OIDC_WithClientSecret(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type:         "oidc",
 		Issuer:       "https://example.com",
 		ClientID:     "test-client",
@@ -444,7 +444,7 @@ func TestAuthConfigToCommand_OIDC_WithClientSecret(t *testing.T) {
 func TestAuthConfigToCommand_Command(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type:    "command",
 		Command: "/usr/local/bin/custom-auth --tenant prod",
 	}
@@ -459,7 +459,7 @@ func TestAuthConfigToCommand_Command(t *testing.T) {
 func TestAuthConfigToCommand_Command_WithEpithetSubstitution(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type:    "command",
 		Command: "epithet auth oidc --issuer https://example.com",
 	}
@@ -475,7 +475,7 @@ func TestAuthConfigToCommand_Command_WithEpithetSubstitution(t *testing.T) {
 func TestAuthConfigToCommand_Command_Empty(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type:    "command",
 		Command: "",
 	}
@@ -488,7 +488,7 @@ func TestAuthConfigToCommand_Command_Empty(t *testing.T) {
 func TestAuthConfigToCommand_UnknownType(t *testing.T) {
 	t.Parallel()
 
-	auth := caclient.BootstrapAuth{
+	auth := wire.AuthConfig{
 		Type: "saml",
 	}
 

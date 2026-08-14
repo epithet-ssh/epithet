@@ -14,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
 )
@@ -62,8 +63,8 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server
 func TestDiscoveryLinkHeader_OnCertResponse(t *testing.T) {
 	// Mock policy server that approves cert requests.
 	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := ca.PolicyResponse{
-			CertParams: ca.CertParams{
+		resp := wire.PolicyResponse{
+			CertParams: wire.CertParams{
 				Identity:   "test-user",
 				Names:      []string{"testuser"},
 				Expiration: 5 * time.Minute,
@@ -167,8 +168,8 @@ func TestDiscoveryLinkHeader_OnPolicyError(t *testing.T) {
 func TestDiscoveryLinkHeader_OnHelloRequest(t *testing.T) {
 	// Mock policy server that approves hello requests.
 	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := ca.PolicyResponse{
-			CertParams: ca.CertParams{
+		resp := wire.PolicyResponse{
+			CertParams: wire.CertParams{
 				Identity:   "test-user",
 				Names:      []string{"testuser"},
 				Expiration: 5 * time.Minute,

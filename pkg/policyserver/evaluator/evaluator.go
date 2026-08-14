@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // Evaluator implements policyserver.PolicyEvaluator using tag-based authorization.
@@ -89,7 +89,7 @@ func (e *Evaluator) getPolicy(ctx context.Context) (*policyserver.PolicyConfig, 
 
 // Evaluate implements policyserver.PolicyEvaluator.
 // The identity has already been extracted from a validated token by the handler.
-func (e *Evaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*policyserver.Response, error) {
+func (e *Evaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error) {
 	// Load current policy.
 	cfg, err := e.getPolicy(ctx)
 	if err != nil {
@@ -254,15 +254,15 @@ func (e *Evaluator) isAuthorized(hostUsers map[string][]string, conn policy.Conn
 }
 
 // buildResponseWithHostUsers builds a policy response with HostUsers mapping.
-func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, identity string, principals []string, expirationOverride string, extensionsOverride map[string]string, hostUsers map[string][]string) (*policyserver.Response, error) {
+func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, identity string, principals []string, expirationOverride string, extensionsOverride map[string]string, hostUsers map[string][]string) (*wire.PolicyResponse, error) {
 	// Determine expiration.
 	expiration := e.getExpiration(cfg, expirationOverride)
 
 	// Determine extensions.
 	extensions := e.getExtensions(cfg, extensionsOverride)
 
-	return &policyserver.Response{
-		CertParams: ca.CertParams{
+	return &wire.PolicyResponse{
+		CertParams: wire.CertParams{
 			Identity:   identity,
 			Names:      principals,
 			Expiration: expiration,

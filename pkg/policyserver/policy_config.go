@@ -3,6 +3,8 @@ package policyserver
 import (
 	"fmt"
 	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // PolicyRulesConfig represents the policy server rules configuration.
@@ -44,13 +46,13 @@ func (c *ServerConfig) Validate() error {
 
 // BootstrapAuth returns the auth configuration for the bootstrap endpoint.
 // Currently only supports OIDC auth type.
-func (c *ServerConfig) BootstrapAuth() BootstrapAuth {
+func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
 	scopes := c.OIDC.Scopes
 	if len(scopes) == 0 {
 		scopes = DefaultScopes()
 	}
 
-	return BootstrapAuth{
+	return wire.AuthConfig{
 		Type:         "oidc",
 		Issuer:       c.OIDC.Issuer,
 		ClientID:     c.OIDC.ClientID,
@@ -89,22 +91,6 @@ type OIDCConfig struct {
 // DefaultScopes returns the default OIDC scopes
 func DefaultScopes() []string {
 	return []string{"openid", "profile", "email"}
-}
-
-// BootstrapAuth represents the auth configuration returned by the bootstrap endpoint.
-// The Type field discriminates between auth methods.
-type BootstrapAuth struct {
-	// Type identifies the auth method: "oidc" or "command"
-	Type string `json:"type"`
-
-	// OIDC fields (when type="oidc")
-	Issuer       string   `json:"issuer,omitempty"`
-	ClientID     string   `json:"client_id,omitempty"`
-	ClientSecret string   `json:"client_secret,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-
-	// Command field (when type="command") - opaque string
-	Command string `json:"command,omitempty"`
 }
 
 // DefaultPolicy defines default policy settings
@@ -182,13 +168,13 @@ func DefaultExpiration() string {
 
 // BootstrapAuth returns the auth configuration for the bootstrap endpoint.
 // Currently only supports OIDC auth type.
-func (c *PolicyRulesConfig) BootstrapAuth() BootstrapAuth {
+func (c *PolicyRulesConfig) BootstrapAuth() wire.AuthConfig {
 	scopes := c.OIDC.Scopes
 	if len(scopes) == 0 {
 		scopes = DefaultScopes()
 	}
 
-	return BootstrapAuth{
+	return wire.AuthConfig{
 		Type:         "oidc",
 		Issuer:       c.OIDC.Issuer,
 		ClientID:     c.OIDC.ClientID,

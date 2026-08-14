@@ -14,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -127,7 +128,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	matchPatterns := initialPolicy.HostPatterns()
 
 	// Build discovery response that the CA will fetch via GET /.
-	discovery := &policyserver.DiscoveryResponse{
+	discovery := &wire.Discovery{
 		Auth:          &authConfig,
 		MatchPatterns: matchPatterns,
 	}

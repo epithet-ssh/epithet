@@ -16,6 +16,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -107,7 +108,7 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 				authenticated = true
 			} else {
 				// Check if it's an auth error vs infrastructure error.
-				var policyErr *ca.PolicyError
+				var policyErr *wire.PolicyError
 				if errors.As(err, &policyErr) && policyErr.StatusCode == http.StatusUnauthorized {
 					// Invalid token — return 401.
 					setDiscoveryLink(w)
@@ -129,7 +130,7 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 		}
 
 		// Build response: always include auth, only include match patterns if authenticated.
-		resp := &ca.DiscoveryResponse{
+		resp := &wire.Discovery{
 			Auth: discovery.Auth,
 		}
 		if authenticated {
@@ -249,7 +250,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	policyResp, err := s.c.RequestPolicy(r.Context(), token, *ccr.Connection)
 	if err != nil {
-		var policyErr *ca.PolicyError
+		var policyErr *wire.PolicyError
 		if errors.As(err, &policyErr) {
 			setDiscoveryLink(w)
 			w.Header().Add("Content-type", "text/plain")
@@ -312,7 +313,7 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 func (s *caServer) handleHello(w http.ResponseWriter, r *http.Request, token string) {
 	policyResp, err := s.c.RequestPolicy(r.Context(), token, policy.Connection{})
 	if err != nil {
-		var policyErr *ca.PolicyError
+		var policyErr *wire.PolicyError
 		if errors.As(err, &policyErr) {
 			setDiscoveryLink(w)
 			w.Header().Add("Content-type", "text/plain")
@@ -337,7 +338,7 @@ func (s *caServer) logCertIssuance(
 	ctx context.Context,
 	cert sshcert.RawCertificate,
 	pubKey sshcert.RawPublicKey,
-	policyResp *ca.PolicyResponse,
+	policyResp *wire.PolicyResponse,
 	conn policy.Connection,
 ) error {
 	parsedCert, err := parseCert(cert)
