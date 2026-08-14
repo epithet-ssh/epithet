@@ -79,8 +79,7 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	fmt.Printf("Broker State\n")
 	fmt.Printf("============\n\n")
 	fmt.Printf("Socket: %s\n", resp.SocketPath)
-	fmt.Printf("Agent Dir: %s\n", resp.AgentSocketDir)
-	fmt.Printf("Discovery Patterns: %v\n\n", resp.DiscoveryPatterns)
+	fmt.Printf("Agent Dir: %s\n\n", resp.AgentSocketDir)
 
 	fmt.Printf("CA Endpoints (%d)\n", len(resp.CaEndpoints))
 	fmt.Printf("-----------------\n")
@@ -141,12 +140,11 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 
 // inspectResponseJSON is a simplified structure for JSON output.
 type inspectResponseJSON struct {
-	SocketPath        string               `json:"socketPath"`
-	AgentSocketDir    string               `json:"agentSocketDir"`
-	DiscoveryPatterns []string             `json:"discoveryPatterns,omitempty"`
-	Agents            []agentInfoJSON      `json:"agents"`
-	Certificates      []certInfoJSON       `json:"certificates"`
-	CAEndpoints       []caEndpointInfoJSON `json:"caEndpoints"`
+	SocketPath     string               `json:"socketPath"`
+	AgentSocketDir string               `json:"agentSocketDir"`
+	Agents         []agentInfoJSON      `json:"agents"`
+	Certificates   []certInfoJSON       `json:"certificates"`
+	CAEndpoints    []caEndpointInfoJSON `json:"caEndpoints"`
 }
 
 type caEndpointInfoJSON struct {
@@ -202,12 +200,11 @@ func inspectResponseToJSON(resp *pb.InspectResponse) inspectResponseJSON {
 	}
 
 	return inspectResponseJSON{
-		SocketPath:        resp.SocketPath,
-		AgentSocketDir:    resp.AgentSocketDir,
-		DiscoveryPatterns: resp.DiscoveryPatterns,
-		Agents:            agents,
-		Certificates:      certs,
-		CAEndpoints:       caEndpoints,
+		SocketPath:     resp.SocketPath,
+		AgentSocketDir: resp.AgentSocketDir,
+		Agents:         agents,
+		Certificates:   certs,
+		CAEndpoints:    caEndpoints,
 	}
 }
 

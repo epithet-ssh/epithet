@@ -3,21 +3,17 @@ package broker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
 	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -35,37 +31,18 @@ func testCAClient(t *testing.T, url string) *caclient.Client {
 	return client
 }
 
-// testCAClientWithDiscovery creates a CA client with a mock discovery
-// endpoint that returns a non-nil (but otherwise empty) discovery document.
-//
-// patterns is unused: server-advertised match patterns were removed from
-// the wire format in Task 8, and shouldHandle no longer consults them
-// (TEMPORARY handle-everything, see broker.go). The parameter stays so
-// existing callers — several of which are skipped pending Task 14's
-// gating rewrite — don't all need their call sites rewritten twice.
-func testCAClientWithDiscovery(t *testing.T, patterns []string) *caclient.Client {
+// testCAClientOK creates a CA client backed by a server that accepts any
+// request with a bare 200 OK and no body. Used by tests that only need the
+// match flow to reach the CA (past auth), not to receive a real certificate.
+func testCAClientOK(t *testing.T) *caclient.Client {
 	t.Helper()
 
-	// Create a discovery server.
-	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(wire.Discovery{})
-	}))
-	t.Cleanup(discoveryServer.Close)
-
-	// Create a CA server that returns the discovery URL in Link header.
 	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(caServer.Close)
 
-	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
-	client, err := caclient.New(endpoints)
-	if err != nil {
-		t.Fatalf("failed to create test CA client: %v", err)
-	}
-	return client
+	return testCAClient(t, caServer.URL)
 }
 
 // testGRPCClient creates a gRPC client connected to the given socket path.
@@ -148,8 +125,7 @@ printf '%s' "test-token"
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	// Use discovery-enabled CA client.
-	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
+	caClient := testCAClientOK(t)
 	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
@@ -168,7 +144,7 @@ printf '%s' "test-token"
 
 	client := testGRPCClient(t, socketPath)
 
-	// Test with all fields populated - host matches discovery pattern.
+	// Test with all fields populated.
 	req := &pb.MatchRequest{
 		Connection: &pb.Connection{
 			LocalHost:  "mylaptop.local",
@@ -182,164 +158,10 @@ printf '%s' "test-token"
 
 	result := callMatch(t, client, req)
 
-	// Host matches discovery pattern, but no CA to issue cert.
-	// The mock CA server doesn't return valid certs, so we expect an error.
+	// The mock CA server doesn't return a valid cert, so we expect an error.
 	require.False(t, result.Allow)
 	// Error will be about failing to unmarshal CA response (mock doesn't return valid cert).
 	require.NotEmpty(t, result.Error)
-}
-
-func Test_ShouldHandle(t *testing.T) {
-	// shouldHandle no longer matches hostnames against discovery patterns
-	// (server-advertised patterns were removed from the wire format in
-	// Task 8; shouldHandle TEMPORARILY treats any fetched discovery as
-	// "handle everything" — see broker.go). Rewired in Task 14.
-	t.Skip("pattern matching removed pending Task 14 gating rewrite")
-	t.Parallel()
-	tests := []struct {
-		name     string
-		patterns []string
-		hostname string
-		expected bool
-	}{
-		{
-			name:     "exact match",
-			patterns: []string{"example.com"},
-			hostname: "example.com",
-			expected: true,
-		},
-		{
-			name:     "wildcard match",
-			patterns: []string{"*.example.com"},
-			hostname: "server.example.com",
-			expected: true,
-		},
-		{
-			name:     "multiple patterns - first matches",
-			patterns: []string{"*.example.com", "*.test.com"},
-			hostname: "server.example.com",
-			expected: true,
-		},
-		{
-			name:     "multiple patterns - second matches",
-			patterns: []string{"*.example.com", "*.test.com"},
-			hostname: "host.test.com",
-			expected: true,
-		},
-		{
-			name:     "no match",
-			patterns: []string{"*.example.com"},
-			hostname: "other.com",
-			expected: false,
-		},
-		{
-			name:     "wildcard all",
-			patterns: []string{"*"},
-			hostname: "anything.com",
-			expected: true,
-		},
-		{
-			name:     "complex pattern",
-			patterns: []string{"server-*.prod.example.com"},
-			hostname: "server-01.prod.example.com",
-			expected: true,
-		},
-		{
-			name:     "complex pattern - no match",
-			patterns: []string{"server-*.prod.example.com"},
-			hostname: "server-01.dev.example.com",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "test-token"
-`)
-			// Use short paths to avoid Unix socket path length limits.
-			tmpDir := shortTempDir(t)
-			socketPath := tmpDir + "/b.sock"
-			agentSocketDir := tmpDir + "/a"
-
-			// Use testCAClientWithDiscovery to provide patterns via discovery.
-			caClient := testCAClientWithDiscovery(t, tt.patterns)
-
-			b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
-			require.NoError(t, err)
-			b.SetShutdownTimeout(0) // Skip waiting in tests.
-
-			result := b.shouldHandle(context.Background(), tt.hostname, nil)
-			require.Equal(t, tt.expected, result, "hostname: %s, patterns: %v", tt.hostname, tt.patterns)
-		})
-	}
-}
-
-func Test_MatchWithPatternFiltering(t *testing.T) {
-	// See Test_ShouldHandle: pattern-based filtering is TEMPORARILY gone
-	// (Task 8); everything with fetched discovery is handled. Rewired in
-	// Task 14.
-	t.Skip("pattern matching removed pending Task 14 gating rewrite")
-	t.Parallel()
-	ctx := t.Context()
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "test-token"
-`)
-	// Use short paths to avoid Unix socket path length limits.
-	tmpDir := shortTempDir(t)
-	socketPath := tmpDir + "/b.sock"
-	agentSocketDir := tmpDir + "/a"
-
-	// Create broker with discovery that only handles *.example.com.
-	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
-	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
-	require.NoError(t, err)
-	b.SetShutdownTimeout(0) // Skip waiting in tests.
-
-	// Serve in background.
-	go func() {
-		err := b.Serve(ctx)
-		if err != nil && err != ctx.Err() {
-			t.Errorf("broker.Serve error: %v", err)
-		}
-	}()
-	defer b.Close()
-
-	// Wait for broker to be ready.
-	<-b.Ready()
-
-	client := testGRPCClient(t, socketPath)
-
-	// Test 1: Host that matches discovery pattern.
-	req1 := &pb.MatchRequest{
-		Connection: &pb.Connection{
-			RemoteHost: "server.example.com",
-			RemoteUser: "user",
-			Port:       22,
-			Hash:       "hash1",
-		},
-	}
-	result1 := callMatch(t, client, req1)
-	// Should proceed past pattern check (will fail later because mock CA doesn't return valid cert).
-	require.False(t, result1.Allow)
-	require.NotContains(t, result1.Error, "does not match") // Pattern matched, failed for other reason.
-
-	// Test 2: Host that doesn't match discovery pattern.
-	req2 := &pb.MatchRequest{
-		Connection: &pb.Connection{
-			RemoteHost: "other.com",
-			RemoteUser: "user",
-			Port:       22,
-			Hash:       "hash2",
-		},
-	}
-	result2 := callMatch(t, client, req2)
-	// Should be rejected at pattern check - Allow=false, no error (not an error condition).
-	require.False(t, result2.Allow)
-	require.Empty(t, result2.Error)
 }
 
 func testLogger(t *testing.T) *slog.Logger {
@@ -362,74 +184,6 @@ func shortTempDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	return dir
-}
-
-func Test_ShouldHandle_UsesDiscoveryPatterns(t *testing.T) {
-	// See Test_ShouldHandle: pattern-based filtering is TEMPORARILY gone
-	// (Task 8). Rewired in Task 14.
-	t.Skip("pattern matching removed pending Task 14 gating rewrite")
-	t.Parallel()
-	// Start a discovery server that returns specific patterns.
-	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "max-age=300")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
-	}))
-	defer discoveryServer.Close()
-
-	// CA server returns Link header pointing to discovery.
-	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer caServer.Close()
-
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "test-token"
-`)
-	// Use short paths to avoid Unix socket path length limits.
-	tmpDir := shortTempDir(t)
-	socketPath := tmpDir + "/b.sock"
-	agentSocketDir := tmpDir + "/a"
-
-	client := testCAClient(t, caServer.URL)
-	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir)
-	require.NoError(t, err)
-	b.SetShutdownTimeout(0)
-
-	// shouldHandle triggers auth + Hello + discovery fetch.
-	// Discovery patterns should be used for matching.
-	require.True(t, b.shouldHandle(context.Background(), "server.example.com", nil), "discovery pattern should match *.example.com")
-	require.False(t, b.shouldHandle(context.Background(), "other.com", nil), "discovery pattern should not match other.com")
-}
-
-func Test_ShouldHandle_NoDiscovery_ReturnsFalse(t *testing.T) {
-	t.Parallel()
-	// CA server with no discovery URL (no Link header).
-	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// No Link header - no discovery available.
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer caServer.Close()
-
-	authCommand := writeTestScript(t, `#!/bin/sh
-cat > /dev/null
-printf '%s' "test-token"
-`)
-	// Use short paths to avoid Unix socket path length limits.
-	tmpDir := shortTempDir(t)
-	socketPath := tmpDir + "/b.sock"
-	agentSocketDir := tmpDir + "/a"
-
-	b, err := New(*testLogger(t), socketPath, authCommand, testCAClient(t, caServer.URL), agentSocketDir)
-	require.NoError(t, err)
-	b.SetShutdownTimeout(0)
-
-	// With no discovery available, shouldHandle returns false for all hosts.
-	require.False(t, b.shouldHandle(context.Background(), "server.example.com", nil), "no discovery should return false")
-	require.False(t, b.shouldHandle(context.Background(), "anything.com", nil), "no discovery should return false")
 }
 
 func TestCleanupExpiredAgents(t *testing.T) {
@@ -510,8 +264,7 @@ printf '%s' "test-token"
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	// Discovery-enabled CA so the match proceeds past shouldHandle.
-	caClient := testCAClientWithDiscovery(t, []string{"*.example.com"})
+	caClient := testCAClientOK(t)
 	b, err := New(*testLogger(t), socketPath, authCommand, caClient, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
@@ -560,82 +313,6 @@ printf '%s' "test-token"
 	// Allow will be false because the mock CA can't issue real certs — that's fine,
 	// we're testing that user output streams through, not cert issuance.
 	require.False(t, result.Allow)
-}
-
-// Test_DiscoveryReauthOnExpiredToken verifies that when a cached auth token has
-// expired at the server, getDiscoveryPatterns re-authenticates and retries Hello
-// instead of failing the match.
-func Test_DiscoveryReauthOnExpiredToken(t *testing.T) {
-	t.Parallel()
-
-	// Track whether the CA should reject the current token.
-	var rejectToken sync.Mutex
-	tokenExpired := false
-
-	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// No caching so each call hits the server.
-		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(wire.Discovery{})
-	}))
-	defer discoveryServer.Close()
-
-	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rejectToken.Lock()
-		expired := tokenExpired
-		rejectToken.Unlock()
-
-		if expired && r.Header.Get("Authorization") == "Bearer token-1" {
-			// First token is expired — return 401.
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("token expired"))
-			return
-		}
-		w.Header().Set("Link", `<`+discoveryServer.URL+`>; rel="discovery"`)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer caServer.Close()
-
-	// Auth script that returns different tokens on each invocation.
-	// Uses a counter file to produce token-1, token-2, etc.
-	countFile := t.TempDir() + "/auth_count"
-	authCommand := writeTestScript(t, fmt.Sprintf(`#!/bin/sh
-cat > /dev/null
-count_file="%s"
-if [ -f "$count_file" ]; then
-    count=$(cat "$count_file")
-else
-    count=0
-fi
-count=$((count + 1))
-echo "$count" > "$count_file"
-printf "token-%%d" "$count"
-`, countFile))
-
-	tmpDir := shortTempDir(t)
-	socketPath := tmpDir + "/b.sock"
-	agentSocketDir := tmpDir + "/a"
-
-	client := testCAClient(t, caServer.URL)
-	b, err := New(*testLogger(t), socketPath, authCommand, client, agentSocketDir)
-	require.NoError(t, err)
-	b.SetShutdownTimeout(0)
-
-	// First call: should succeed — fresh token, Hello accepts it.
-	result := b.shouldHandle(context.Background(), "server.example.com", nil)
-	require.True(t, result, "first call should succeed with fresh token")
-
-	// Simulate token expiry at the server.
-	rejectToken.Lock()
-	tokenExpired = true
-	rejectToken.Unlock()
-
-	// Clear the cached discovery URL so getDiscoveryPatterns must go through Hello again.
-	client.SetDiscoveryURL("")
-
-	// Second call: token-1 is now rejected. Broker should re-auth (get token-2) and succeed.
-	result = b.shouldHandle(context.Background(), "server.example.com", nil)
-	require.True(t, result, "should succeed after re-authenticating with new token")
 }
 
 // Test_UserOutputStreaming tests that user output from fd 4 is streamed to the writer.

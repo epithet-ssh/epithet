@@ -9,9 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/breakerpool"
@@ -20,7 +18,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
-	"github.com/gregjones/httpcache"
 	gobreaker "github.com/sony/gobreaker/v2"
 )
 
@@ -87,11 +84,10 @@ func (e *ConnectionNotHandledError) Error() string {
 	return "connection not handled by CA"
 }
 
-// CertResponse contains a certificate and discovery information.
+// CertResponse contains a certificate and its associated policy.
 type CertResponse struct {
-	Certificate  sshcert.RawCertificate
-	Policy       policy.Policy
-	DiscoveryURL string
+	Certificate sshcert.RawCertificate
+	Policy      policy.Policy
 }
 
 // DefaultTimeout is the default per-request timeout for CA requests.
@@ -102,18 +98,12 @@ const DefaultCooldown = 10 * time.Minute
 
 // Client is a CA Client with support for multiple CA endpoints and failover.
 type Client struct {
-	httpClient      *http.Client
-	discoveryClient *http.Client // Uses HTTP caching for discovery responses
-	endpoints       []CAEndpoint
-	pool            *breakerpool.Pool[any, string]
-	timeout         time.Duration
-	cooldown        time.Duration
-	logger          *slog.Logger
-
-	// Cached discovery URL from Link header. Protected by discoveryMu.
-	// Learned from GetPublicKey() or Hello() response.
-	discoveryMu  sync.RWMutex
-	discoveryURL string
+	httpClient *http.Client
+	endpoints  []CAEndpoint
+	pool       *breakerpool.Pool[any, string]
+	timeout    time.Duration
+	cooldown   time.Duration
+	logger     *slog.Logger
 }
 
 // New creates a new CA Client with the given endpoints.
@@ -123,20 +113,12 @@ func New(endpoints []CAEndpoint, options ...Option) (*Client, error) {
 		return nil, fmt.Errorf("at least one CA endpoint is required")
 	}
 
-	// Create a cached transport for discovery requests
-	// This uses in-memory caching with RFC 7234 compliance
-	cachedTransport := httpcache.NewMemoryCacheTransport()
-
 	client := &Client{
 		endpoints: endpoints,
 		timeout:   DefaultTimeout,
 		cooldown:  DefaultCooldown,
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
-		},
-		discoveryClient: &http.Client{
-			Transport: cachedTransport,
-			Timeout:   DefaultTimeout,
 		},
 	}
 
@@ -178,14 +160,6 @@ type optionFunc func(*Client) error
 
 func (f optionFunc) apply(a *Client) error {
 	return f(a)
-}
-
-// WithHTTPClient specifies the http client to use
-func WithHTTPClient(httpClient *http.Client) Option {
-	return optionFunc(func(c *Client) error {
-		c.httpClient = httpClient
-		return nil
-	})
 }
 
 // WithLogger specifies the logger to use
@@ -250,7 +224,7 @@ func (c *Client) EndpointStatus() []CAEndpointStatus {
 // GetCert requests a certificate from the CA, with automatic failover to backup CAs.
 // It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
 // The token is sent in the Authorization header, not in the request body.
-// Returns CertResponse containing the certificate, policy, and discovery URL.
+// Returns CertResponse containing the certificate and policy.
 func (c *Client) GetCert(ctx context.Context, token string, req *caserver.CreateCertRequest) (*CertResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -278,122 +252,79 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 	return result.(*CertResponse), nil
 }
 
-// GetDiscovery fetches discovery data using the cached discovery URL.
-// If no URL is cached (from a previous cert request), returns nil.
-// The discovery response itself is cached via httpcache.
-func (c *Client) GetDiscovery(ctx context.Context, token string) (*wire.Discovery, error) {
-	c.discoveryMu.RLock()
-	url := c.discoveryURL
-	c.discoveryMu.RUnlock()
-
-	if url == "" {
-		// No cached URL - discovery not available yet
-		// URL will be learned from the next cert request's Link header
-		return nil, nil
-	}
-
-	if c.logger != nil {
-		c.logger.Debug("fetching discovery from cached URL", "url", url)
-	}
-
-	return c.fetchDiscovery(ctx, url, token)
-}
-
-// Hello validates a token with the CA and learns the discovery URL.
-// This sends an empty body to the CA's hello endpoint, which validates the token
-// with the policy server and returns the discovery URL in the Link header.
-// Returns nil on success. The discovery URL is cached for subsequent GetDiscovery calls.
-func (c *Client) Hello(ctx context.Context, token string) error {
-	// Hello sends an empty JSON object - the CA routes based on body shape.
-	body := []byte("{}")
-
-	_, err := c.pool.Execute(func(caURL string) (any, error) {
+// GetDiscovery fetches the CA's discovery document from its anonymous
+// /discovery endpoint, with automatic failover to backup CAs. The endpoint
+// requires no authentication, so no token is sent. Callers are responsible
+// for caching the result if they need to avoid repeated fetches.
+func (c *Client) GetDiscovery(ctx context.Context) (*wire.Discovery, error) {
+	result, err := c.pool.Execute(func(caURL string) (any, error) {
 		if c.logger != nil {
-			c.logger.Debug("Hello request", "url", caURL)
+			c.logger.Debug("GetDiscovery request", "url", caURL)
 		}
-		return nil, c.doHello(ctx, caURL, token, body)
+		return c.doGetDiscovery(ctx, caURL)
 	})
 
 	if err != nil {
 		var allUnavail *breakerpool.AllUnavailableError
 		if errors.As(err, &allUnavail) {
-			return &AllCAsUnavailableError{Message: allUnavail.Error()}
+			return nil, &AllCAsUnavailableError{Message: allUnavail.Error()}
 		}
-		return err
+		return nil, err
 	}
-	return nil
+	return result.(*wire.Discovery), nil
 }
 
-// doHello makes a single hello request to a CA.
-func (c *Client) doHello(ctx context.Context, caURL string, token string, body []byte) error {
+// doGetDiscovery makes a single unauthenticated GET request to a CA's
+// discovery endpoint.
+func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*wire.Discovery, error) {
+	url := strings.TrimSuffix(caURL, "/") + "/discovery"
+
 	if c.logger != nil {
-		c.logger.Debug("http request", "method", "POST", "url", caURL, "body_size", len(body))
+		c.logger.Debug("http request", "method", "GET", "url", url)
 	}
 
-	rq, err := http.NewRequest("POST", caURL, bytes.NewReader(body))
+	rq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	rq.Header.Set("Content-Type", "application/json")
-	rq.Header.Set("Authorization", "Bearer "+token)
 
 	start := time.Now()
 	res, err := c.httpClient.Do(rq.WithContext(ctx))
 	duration := time.Since(start)
 	if err != nil {
 		if c.logger != nil {
-			c.logger.Debug("http request failed", "method", "POST", "url", caURL, "duration_ms", duration.Milliseconds(), "error", err)
+			c.logger.Debug("http request failed", "method", "GET", "url", url, "duration_ms", duration.Milliseconds(), "error", err)
 		}
-		return err
+		return nil, err
 	}
 	defer res.Body.Close()
 
 	respBody, err := io.ReadAll(res.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if c.logger != nil {
-		c.logger.Debug("http response", "method", "POST", "url", caURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
+		c.logger.Debug("http response", "method", "GET", "url", url, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
 	}
 
 	if res.StatusCode != http.StatusOK {
-		switch res.StatusCode {
-		case http.StatusUnauthorized:
-			return &InvalidTokenError{Message: string(respBody)}
-		case http.StatusForbidden:
-			return &PolicyDeniedError{Message: string(respBody)}
-		default:
-			if res.StatusCode >= 500 {
-				return &CAUnavailableError{Message: string(respBody)}
-			}
-			return &InvalidRequestError{Message: string(respBody)}
+		// The discovery endpoint is anonymous, so there is no 401 case here.
+		if res.StatusCode >= 500 {
+			return nil, &CAUnavailableError{Message: string(respBody)}
 		}
+		return nil, &InvalidRequestError{Message: string(respBody)}
 	}
 
-	// Extract and cache discovery URL from Link header
-	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery", caURL)
-	if discoveryURL != "" {
-		c.discoveryMu.Lock()
-		c.discoveryURL = discoveryURL
-		c.discoveryMu.Unlock()
-		if c.logger != nil {
-			c.logger.Debug("cached discovery URL from Hello", "url", discoveryURL)
-		}
+	var discovery wire.Discovery
+	if err := json.Unmarshal(respBody, &discovery); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal discovery response: %w", err)
 	}
 
-	return nil
+	return &discovery, nil
 }
 
-// SetDiscoveryURL sets the cached discovery URL. This is primarily for testing.
-// In normal operation, the URL is learned from CA cert response Link headers.
-func (c *Client) SetDiscoveryURL(url string) {
-	c.discoveryMu.Lock()
-	c.discoveryURL = url
-	c.discoveryMu.Unlock()
-}
-
-// GetPublicKey fetches the CA's public key and extracts the discovery URL from the Link header.
+// GetPublicKey fetches the CA's public key.
 // This is the first step in the discovery flow - no authentication required.
 // Returns the public key as a string.
 func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
@@ -452,80 +383,10 @@ func (c *Client) doGetPublicKey(ctx context.Context, caURL string) (string, erro
 		return "", &InvalidRequestError{Message: string(respBody)}
 	}
 
-	// Extract and cache discovery URL from Link header.
-	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery", caURL)
-	if discoveryURL != "" {
-		c.discoveryMu.Lock()
-		c.discoveryURL = discoveryURL
-		c.discoveryMu.Unlock()
-		if c.logger != nil {
-			c.logger.Debug("cached discovery URL from GetPublicKey", "url", discoveryURL)
-		}
-	}
-
 	return strings.TrimSpace(string(respBody)), nil
 }
 
-// fetchDiscovery fetches discovery data from the given URL.
-// Uses the cached HTTP client for RFC 7234 compliant caching.
-// When token is empty, no Authorization header is sent (unauthenticated bootstrap path).
-func (c *Client) fetchDiscovery(ctx context.Context, url string, token string) (*wire.Discovery, error) {
-	if c.logger != nil {
-		c.logger.Debug("http request", "method", "GET", "url", url)
-	}
-
-	rq, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		rq.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	// Use the cached client for discovery requests
-	start := time.Now()
-	res, err := c.discoveryClient.Do(rq.WithContext(ctx))
-	duration := time.Since(start)
-	if err != nil {
-		if c.logger != nil {
-			c.logger.Debug("http request failed", "method", "GET", "url", url, "duration_ms", duration.Milliseconds(), "error", err)
-		}
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	respBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if c.logger != nil {
-		c.logger.Debug("http response", "method", "GET", "url", url, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
-	}
-
-	if res.StatusCode != http.StatusOK {
-		switch res.StatusCode {
-		case http.StatusUnauthorized:
-			return nil, &InvalidTokenError{Message: string(respBody)}
-		case http.StatusForbidden:
-			return nil, &PolicyDeniedError{Message: string(respBody)}
-		default:
-			if res.StatusCode >= 500 {
-				return nil, &CAUnavailableError{Message: string(respBody)}
-			}
-			return nil, &InvalidRequestError{Message: string(respBody)}
-		}
-	}
-
-	var discovery wire.Discovery
-	if err := json.Unmarshal(respBody, &discovery); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal discovery response: %w", err)
-	}
-
-	return &discovery, nil
-}
-
-// doRequest makes a single HTTP request to a CA and returns the response with discovery URL.
+// doRequest makes a single HTTP request to a CA and returns the response.
 func (c *Client) doRequest(ctx context.Context, caURL string, token string, body []byte) (*CertResponse, error) {
 	if c.logger != nil {
 		c.logger.Debug("http request", "method", "POST", "url", caURL, "body_size", len(body))
@@ -580,18 +441,9 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 		return nil, fmt.Errorf("failed to unmarshal CA response (body=%s): %w", string(respBody), err)
 	}
 
-	// Extract and cache discovery URL from Link header
-	discoveryURL := parseLinkHeader(res.Header.Get("Link"), "discovery", caURL)
-	if discoveryURL != "" {
-		c.discoveryMu.Lock()
-		c.discoveryURL = discoveryURL
-		c.discoveryMu.Unlock()
-	}
-
 	return &CertResponse{
-		Certificate:  caResp.Certificate,
-		Policy:       caResp.Policy,
-		DiscoveryURL: discoveryURL,
+		Certificate: caResp.Certificate,
+		Policy:      caResp.Policy,
 	}, nil
 }
 
@@ -636,43 +488,4 @@ func isSuccessfulForCircuitBreaker(err error) bool {
 	// Unknown errors - treat as infrastructure failures to be safe
 	// This includes connection refused, DNS failures, TLS errors, etc.
 	return false
-}
-
-// parseLinkHeader extracts the URL for a given rel from a Link header.
-// Link header format: <url>; rel="name"
-// Relative URLs are resolved against baseURL.
-// Returns empty string if not found or malformed.
-func parseLinkHeader(header, rel string, baseURL string) string {
-	if header == "" {
-		return ""
-	}
-
-	// Parse Link header: <url>; rel="..."
-	start := strings.Index(header, "<")
-	end := strings.Index(header, ">")
-	if start == -1 || end == -1 || end <= start {
-		return ""
-	}
-
-	linkURL := header[start+1 : end]
-
-	// Check for the rel parameter
-	relParam := `rel="` + rel + `"`
-	if !strings.Contains(header, relParam) {
-		return ""
-	}
-
-	// Resolve relative URLs against the base URL.
-	parsed, err := url.Parse(linkURL)
-	if err != nil {
-		return linkURL
-	}
-	if !parsed.IsAbs() && baseURL != "" {
-		base, err := url.Parse(baseURL)
-		if err == nil {
-			return base.ResolveReference(parsed).String()
-		}
-	}
-
-	return linkURL
 }

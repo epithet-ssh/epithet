@@ -116,12 +116,11 @@ func inspectResponseToProto(resp *InspectResponse) *pb.InspectResponse {
 	}
 
 	return &pb.InspectResponse{
-		SocketPath:        resp.SocketPath,
-		AgentSocketDir:    resp.AgentSocketDir,
-		DiscoveryPatterns: resp.DiscoveryPatterns,
-		Agents:            agents,
-		Certificates:      certs,
-		CaEndpoints:       caEndpoints,
+		SocketPath:     resp.SocketPath,
+		AgentSocketDir: resp.AgentSocketDir,
+		Agents:         agents,
+		Certificates:   certs,
+		CaEndpoints:    caEndpoints,
 	}
 }
 

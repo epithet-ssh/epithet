@@ -18,7 +18,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 	"google.golang.org/grpc"
 )
 
@@ -202,12 +201,11 @@ type CAEndpointInfo struct {
 
 // InspectResponse contains the current broker state
 type InspectResponse struct {
-	SocketPath        string           `json:"socketPath"`
-	AgentSocketDir    string           `json:"agentSocketDir"`
-	DiscoveryPatterns []string         `json:"discoveryPatterns,omitempty"` // Fetched live from CA (HTTP cached)
-	Agents            []AgentInfo      `json:"agents"`
-	Certificates      []CertInfo       `json:"certificates"`
-	CAEndpoints       []CAEndpointInfo `json:"caEndpoints"`
+	SocketPath     string           `json:"socketPath"`
+	AgentSocketDir string           `json:"agentSocketDir"`
+	Agents         []AgentInfo      `json:"agents"`
+	Certificates   []CertInfo       `json:"certificates"`
+	CAEndpoints    []CAEndpointInfo `json:"caEndpoints"`
 }
 
 // Match is invoked via rpc from `epithet match` invocations.
@@ -225,14 +223,7 @@ func (b *Broker) Match(input MatchRequest, output *MatchResponse) error {
 func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection, userOutput io.Writer) MatchResponse {
 	b.log.Debug("match request received", "connection", conn)
 
-	// Step 1: Check if this host should be handled by epithet at all.
-	if !b.shouldHandle(ctx, conn.RemoteHost, userOutput) {
-		b.log.Debug("host does not match discovery patterns", "host", conn.RemoteHost)
-		// No error - this is normal, just means epithet doesn't handle this host.
-		return MatchResponse{Allow: false}
-	}
-
-	// Step 2: Check if agent already exists for this connection hash.
+	// Step 1: Check if agent already exists for this connection hash.
 	b.lock.Lock()
 	if entry, exists := b.agents[conn.Hash]; exists {
 		// Check if agent's certificate is still valid (with buffer).
@@ -248,11 +239,11 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 	}
 	b.lock.Unlock()
 
-	// Step 3: Check for existing, valid certificate in cert store.
+	// Step 2: Check for existing, valid certificate in cert store.
 	cred, found := b.certStore.Lookup(conn)
 	if found {
 		b.log.Debug("found valid certificate in store", "host", conn.RemoteHost)
-		// Step 4: Set up agent with existing certificate.
+		// Step 3: Set up agent with existing certificate.
 		err := b.ensureAgent(conn.Hash, cred)
 		if err != nil {
 			b.log.Error("failed to create agent", "error", err)
@@ -261,7 +252,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 		return MatchResponse{Allow: true}
 	}
 
-	// Step 5: No valid certificate exists, request one from CA.
+	// Step 4: No valid certificate exists, request one from CA.
 	b.log.Debug("no valid certificate found, requesting from CA", "host", conn.RemoteHost)
 
 	// Generate ephemeral keypair for this connection.
@@ -372,7 +363,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 
 	b.log.Debug("certificate obtained and stored", "host", conn.RemoteHost, "user", conn.RemoteUser, "policy", certResp.Policy.HostUsers)
 
-	// Step 6: Create agent with new certificate.
+	// Step 5: Create agent with new certificate.
 	credential := agent.Credential{
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
@@ -461,70 +452,6 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 
 	b.log.Info("agent created and started", "hash", connectionHash, "socket", socketPath)
 	return nil
-}
-
-// shouldHandle reports whether epithet should handle this connection.
-//
-// TEMPORARY until Task 14: server-advertised match patterns are gone from
-// the wire format (Task 8), but the gating call site here hasn't been
-// removed yet. Until then, treat a successfully fetched discovery document
-// as "handle everything" — the hostname is no longer consulted.
-func (b *Broker) shouldHandle(ctx context.Context, hostname string, userOutput io.Writer) bool {
-	discovery, err := b.getDiscoveryPatterns(ctx, userOutput)
-	if err != nil {
-		b.log.Error("failed to get discovery", "error", err)
-		return false // Can't determine - don't handle
-	}
-
-	return discovery != nil
-}
-
-// getDiscoveryPatterns fetches discovery patterns, authenticating and calling Hello if needed.
-func (b *Broker) getDiscoveryPatterns(ctx context.Context, userOutput io.Writer) (*wire.Discovery, error) {
-	// Fast path: try cached discovery first.
-	token := b.auth.Token()
-	if token != "" {
-		discovery, err := b.caClient.GetDiscovery(ctx, token)
-		if err == nil && discovery != nil {
-			return discovery, nil
-		}
-		// Discovery fetch failed or no cached URL - continue to Hello.
-	}
-
-	// Slow path: authenticate if needed, then Hello to learn discovery URL.
-	if token == "" {
-		b.log.Debug("no auth token, authenticating to get discovery")
-		var err error
-		token, err = b.auth.Run(ctx, nil, userOutput)
-		if err != nil {
-			return nil, fmt.Errorf("authentication failed: %w", err)
-		}
-	}
-
-	// Call Hello to learn discovery URL from Link header.
-	b.log.Debug("calling Hello to learn discovery URL")
-	err := b.caClient.Hello(ctx, token)
-	if err != nil {
-		// If token expired, clear it, re-authenticate, and retry Hello.
-		var invalidToken *caclient.InvalidTokenError
-		if errors.As(err, &invalidToken) {
-			b.log.Debug("token expired during Hello, re-authenticating")
-			b.auth.ClearToken()
-			token, err = b.auth.Run(ctx, nil, userOutput)
-			if err != nil {
-				return nil, fmt.Errorf("authentication failed: %w", err)
-			}
-			err = b.caClient.Hello(ctx, token)
-			if err != nil {
-				return nil, fmt.Errorf("hello failed after re-auth: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("hello failed: %w", err)
-		}
-	}
-
-	// Now GetDiscovery should work (URL was cached by Hello).
-	return b.caClient.GetDiscovery(ctx, token)
 }
 
 // LookupCertificate finds a valid certificate for the given connection.
@@ -675,11 +602,6 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 
 	output.SocketPath = b.brokerSocketPath
 	output.AgentSocketDir = b.agentSocketDir
-
-	// output.DiscoveryPatterns is left empty: server-advertised match
-	// patterns were removed from the wire format in Task 8. The field
-	// itself is still defined on the (generated) proto message; it goes
-	// away when the RPC gating is rewired in Task 14.
 
 	// Get agent info
 	output.Agents = make([]AgentInfo, 0, len(b.agents))

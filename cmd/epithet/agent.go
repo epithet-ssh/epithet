@@ -120,7 +120,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	if authCommand == "" {
 		logger.Debug("no --auth provided, discovering from CA")
 
-		discovery, err := caClient.GetDiscovery(context.Background(), "")
+		discovery, err := caClient.GetDiscovery(context.Background())
 		if err != nil || discovery == nil || discovery.Auth == nil {
 			return fmt.Errorf("failed to get discovery config: %w", err)
 		}

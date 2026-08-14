@@ -38,7 +38,6 @@ require (
 	github.com/alecthomas/kong-yaml v0.2.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-jose/go-jose/v4 v4.1.4
-	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79
 	github.com/sony/gobreaker/v2 v2.4.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
