@@ -86,7 +86,9 @@ func (e *Evaluator) getPolicy(ctx context.Context) (*policyserver.PolicyConfig, 
 
 // Evaluate implements policyserver.PolicyEvaluator.
 // The identity has already been extracted from a validated token by the handler.
-func (e *Evaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error) {
+// tokenExpiry is carried into CertParams.NotAfter so the CA can clamp the
+// issued certificate's validity to the auth session's remaining lifetime.
+func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
 	// Load current policy.
 	cfg, err := e.getPolicy(ctx)
 	if err != nil {
@@ -112,7 +114,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, conn policy.C
 	authorizedPrincipals := e.computeAuthorizedPrincipals(cfg, userTags)
 
 	// Build response with HostUsers mapping.
-	return e.buildResponseWithHostUsers(cfg, identity, authorizedPrincipals, expiration, extensions, hostUsers)
+	return e.buildResponseWithHostUsers(cfg, identity, tokenExpiry, authorizedPrincipals, expiration, extensions, hostUsers)
 }
 
 // computeAuthorizedPrincipals computes ALL principals the user is authorized for
@@ -255,7 +257,7 @@ func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []str
 }
 
 // buildResponseWithHostUsers builds a policy response with HostUsers mapping.
-func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, identity string, principals []string, expirationOverride string, extensionsOverride map[string]string, hostUsers map[string][]string) (*wire.PolicyResponse, error) {
+func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, identity string, tokenExpiry time.Time, principals []string, expirationOverride string, extensionsOverride map[string]string, hostUsers map[string][]string) (*wire.PolicyResponse, error) {
 	// Determine expiration.
 	expiration := e.getExpiration(cfg, expirationOverride)
 
@@ -268,6 +270,7 @@ func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, i
 			Names:      principals,
 			Expiration: expiration,
 			Extensions: extensions,
+			NotAfter:   tokenExpiry,
 		},
 		Policy: policy.Policy{
 			HostUsers: hostUsers,

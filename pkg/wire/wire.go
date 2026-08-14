@@ -16,6 +16,12 @@ type CertParams struct {
 	Names      []string          `json:"principals"`
 	Expiration time.Duration     `json:"expiration"`
 	Extensions map[string]string `json:"extensions"`
+
+	// NotAfter is an absolute ceiling on certificate validity, derived from
+	// the auth token's expiry. It travels as an absolute time (not a
+	// duration) because a duration would decay during the time between
+	// policy evaluation and CA signing. Zero value means no ceiling.
+	NotAfter time.Time `json:"notAfter,omitempty"`
 }
 
 // PolicyRequest is the CA→policy-server cert evaluation request body.

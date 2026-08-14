@@ -84,6 +84,70 @@ func TestCA_Sign(t *testing.T) {
 	require.Equal([]string{"root", "deployer"}, crt.ValidPrincipals)
 }
 
+// newTestCA builds a CA using the fixed test key material, with no policy
+// server URL since these tests only exercise local signing.
+func newTestCA(t *testing.T) *ca.CA {
+	t.Helper()
+	c, err := ca.New(caPrivKey, "")
+	require.NoError(t, err)
+	return c
+}
+
+// signTestCert signs userPubKey with the given params and parses the result,
+// so tests can assert on the decoded certificate fields directly.
+func signTestCert(t *testing.T, c *ca.CA, params *wire.CertParams) *ssh.Certificate {
+	t.Helper()
+	rawCert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), params)
+	require.NoError(t, err)
+
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(rawCert))
+	require.NoError(t, err)
+
+	cert, ok := pub.(*ssh.Certificate)
+	require.True(t, ok, "expected parsed key to be a certificate")
+	return cert
+}
+
+// TestSignPublicKeyClampsToNotAfter verifies that a NotAfter ceiling tighter
+// than the requested Expiration wins - the certificate must never outlive
+// the auth session that requested it.
+func TestSignPublicKeyClampsToNotAfter(t *testing.T) {
+	c := newTestCA(t)
+	notAfter := time.Now().Add(90 * time.Second)
+	cert := signTestCert(t, c, &wire.CertParams{
+		Identity:   "alice@example.com",
+		Names:      []string{"root"},
+		Expiration: 10 * time.Minute, // Would outlive the token.
+		NotAfter:   notAfter,
+	})
+	require.LessOrEqual(t, cert.ValidBefore, uint64(notAfter.Unix()))
+}
+
+// TestSignPublicKeyUsesExpirationWhenNoNotAfter verifies that a zero
+// NotAfter (no ceiling) leaves Expiration as the sole determinant of
+// validity.
+func TestSignPublicKeyUsesExpirationWhenNoNotAfter(t *testing.T) {
+	c := newTestCA(t)
+	cert := signTestCert(t, c, &wire.CertParams{
+		Identity: "alice@example.com", Names: []string{"root"}, Expiration: 5 * time.Minute,
+	})
+	require.Greater(t, cert.ValidBefore, uint64(time.Now().Add(4*time.Minute).Unix()))
+}
+
+// TestSignPublicKeyRejectsPastNotAfter verifies that a NotAfter already in
+// the past is refused outright rather than silently issuing a
+// dead-on-arrival certificate.
+func TestSignPublicKeyRejectsPastNotAfter(t *testing.T) {
+	c := newTestCA(t)
+	_, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &wire.CertParams{
+		Identity:   "alice@example.com",
+		Names:      []string{"root"},
+		Expiration: 5 * time.Minute,
+		NotAfter:   time.Now().Add(-time.Minute),
+	})
+	require.Error(t, err)
+}
+
 func TestCA_GetPublicKey(t *testing.T) {
 	c, err := ca.New(caPrivKey, "")
 	require.NoError(t, err)

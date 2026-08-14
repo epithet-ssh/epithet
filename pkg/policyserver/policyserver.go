@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/httpsig"
 	"github.com/epithet-ssh/epithet/pkg/policy"
@@ -23,6 +24,9 @@ import (
 type PolicyEvaluator interface {
 	// Evaluate makes an authorization decision for the given identity and connection.
 	// The identity has already been extracted from a validated token.
+	// tokenExpiry is the auth token's expiry, used to clamp the issued
+	// certificate's validity so it can never outlive the auth session that
+	// requested it.
 	// The context is used for loading dynamic policy if configured.
 	// Returns:
 	// - *wire.PolicyResponse: Certificate parameters and policy if authorized
@@ -31,7 +35,7 @@ type PolicyEvaluator interface {
 	// Error handling:
 	// - Return ErrForbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error)
+	Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error)
 }
 
 // Standard errors for policy evaluation.
@@ -176,7 +180,7 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Evaluate policy based on identity (authorization).
-	resp, err := h.config.Evaluator.Evaluate(r.Context(), claims.Identity, req.Connection)
+	resp, err := h.config.Evaluator.Evaluate(r.Context(), claims.Identity, claims.ExpiresAt, req.Connection)
 	if err != nil {
 		if policyErr, ok := err.(*wire.PolicyError); ok {
 			h.writeError(w, policyErr.StatusCode, policyErr.Message)

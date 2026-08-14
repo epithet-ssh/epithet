@@ -270,6 +270,12 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 
 // SignPublicKey signs a key to generate a certificate.
 func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertParams) (sshcert.RawCertificate, error) {
+	// A ceiling already in the past can never produce a usable certificate,
+	// and signing one anyway would silently hand out a dead credential.
+	if !params.NotAfter.IsZero() && params.NotAfter.Before(time.Now()) {
+		return "", fmt.Errorf("certificate NotAfter %s is in the past", params.NotAfter)
+	}
+
 	buf := make([]byte, 8)
 	_, err := rand.Read(buf)
 	if err != nil {
@@ -282,13 +288,21 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertPara
 		return "", err
 	}
 
+	// The certificate must never outlive the auth session that requested it,
+	// so clamp its validity to NotAfter when that ceiling is tighter than
+	// the requested Expiration.
+	validBefore := time.Now().Add(params.Expiration)
+	if !params.NotAfter.IsZero() && params.NotAfter.Before(validBefore) {
+		validBefore = params.NotAfter
+	}
+
 	certificate := ssh.Certificate{
 		Serial:          serial,
 		Key:             pubKey,
 		KeyId:           params.Identity,
 		ValidPrincipals: params.Names,
 		ValidAfter:      uint64(time.Now().Unix() - 60),
-		ValidBefore:     uint64(time.Now().Add(params.Expiration).Unix()),
+		ValidBefore:     uint64(validBefore.Unix()),
 		CertType:        ssh.UserCert,
 		Permissions: ssh.Permissions{
 			CriticalOptions: map[string]string{},

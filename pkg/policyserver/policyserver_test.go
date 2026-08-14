@@ -36,7 +36,7 @@ type mockEvaluator struct {
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, conn policy.Connection) (*wire.PolicyResponse, error) {
+func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}

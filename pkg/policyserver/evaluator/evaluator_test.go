@@ -179,7 +179,7 @@ func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// An empty connection matches no host pattern, so it is Forbidden.
-	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{})
 	if err == nil {
 		t.Fatal("expected empty connection to be forbidden, got nil error")
 	}
@@ -187,7 +187,7 @@ func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 	// A real, matching connection still succeeds and still reports hostUsers
 	// for discovery - the mapping is built for every pattern the user has
 	// access to, not only the one matched by this connection.
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "postgres",
 	})
@@ -226,13 +226,13 @@ func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
 
 	eval := evaluator.NewForTesting(cfg)
 
-	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{})
 	if err == nil {
 		t.Fatal("expected empty connection to be forbidden, got nil error")
 	}
 
 	// A real, matching connection still succeeds and reports hostUsers.
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "anyhost",
 		RemoteUser: "root",
 	})
@@ -265,7 +265,7 @@ func TestCertRequest_AuthorizationEnforced(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// Authorized request should succeed
-	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "postgres",
 	})
@@ -274,7 +274,7 @@ func TestCertRequest_AuthorizationEnforced(t *testing.T) {
 	}
 
 	// Unauthorized host should fail
-	_, err = eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "web-server-01",
 		RemoteUser: "postgres",
 	})
@@ -283,7 +283,7 @@ func TestCertRequest_AuthorizationEnforced(t *testing.T) {
 	}
 
 	// Unauthorized user should fail
-	_, err = eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "root",
 	})
@@ -303,7 +303,7 @@ func TestEvaluate_UnknownUser(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// Unknown user should fail (checked before any host matching happens).
-	_, err := eval.Evaluate(context.Background(), "unknown@example.com", policy.Connection{})
+	_, err := eval.Evaluate(context.Background(), "unknown@example.com", time.Time{}, policy.Connection{})
 	if err == nil {
 		t.Error("unknown user should fail, got nil error")
 	}
@@ -328,7 +328,7 @@ func TestEmptyConnection_UserWithNoAccess_IsForbidden(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// User exists but has no authorized hosts (their tag doesn't grant access)
-	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{})
 	if err == nil {
 		t.Error("user with no authorized hosts should fail, got nil error")
 	}
@@ -357,7 +357,7 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// "wobble" doesn't match any pattern in Hosts - should be rejected
-	_, err := eval.Evaluate(context.Background(), "brianm@skife.org", policy.Connection{
+	_, err := eval.Evaluate(context.Background(), "brianm@skife.org", time.Time{}, policy.Connection{
 		RemoteHost: "wobble",
 		RemoteUser: "brianm",
 	})
@@ -366,7 +366,7 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 	}
 
 	// "v1" matches "v*" - should succeed
-	_, err = eval.Evaluate(context.Background(), "brianm@skife.org", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "brianm@skife.org", time.Time{}, policy.Connection{
 		RemoteHost: "v1",
 		RemoteUser: "brianm",
 	})
@@ -375,7 +375,7 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 	}
 
 	// "badb" matches exactly - should succeed
-	_, err = eval.Evaluate(context.Background(), "brianm@skife.org", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "brianm@skife.org", time.Time{}, policy.Connection{
 		RemoteHost: "badb",
 		RemoteUser: "brianm",
 	})
@@ -406,7 +406,7 @@ func TestDefaultsApplyToMatchedHosts(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// server1 with empty Allow should get "root" from defaults
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "server1",
 		RemoteUser: "root",
 	})
@@ -418,7 +418,7 @@ func TestDefaultsApplyToMatchedHosts(t *testing.T) {
 	}
 
 	// "app" user is not in defaults.Allow, so should fail
-	_, err = eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "server1",
 		RemoteUser: "app",
 	})
@@ -451,7 +451,7 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// Should be able to connect as postgres (from host policy)
-	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "postgres",
 	})
@@ -460,7 +460,7 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 	}
 
 	// Should also be able to connect as root (from defaults merged in)
-	_, err = eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "root",
 	})
@@ -470,7 +470,7 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 
 	// Check that hostUsers contains both principals. Uses a real, matching
 	// connection - an empty connection is Forbidden (no pattern matches "").
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "postgres",
 	})
@@ -501,13 +501,13 @@ func TestOnlyDefaultsNoHosts(t *testing.T) {
 	eval := evaluator.NewForTesting(cfg)
 
 	// Empty connection should fail - no host patterns exist.
-	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{})
 	if err == nil {
 		t.Error("empty connection should fail with no hosts configured, got nil")
 	}
 
 	// Cert request should also fail
-	_, err = eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+	_, err = eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "any-server",
 		RemoteUser: "root",
 	})
@@ -544,11 +544,31 @@ func TestHostRuleSelectionIsDeterministic(t *testing.T) {
 
 	// Run many times: map iteration order must not leak into the result.
 	for range 50 {
-		resp, err := e.Evaluate(context.Background(), "alice@example.com", conn)
+		resp, err := e.Evaluate(context.Background(), "alice@example.com", time.Time{}, conn)
 		require.NoError(t, err)
 		require.Equal(t, 2*time.Minute, resp.CertParams.Expiration,
 			"longest (most specific) pattern must always win")
 	}
+}
+
+// TestEvaluateSetsNotAfterFromTokenExpiry verifies that the tokenExpiry
+// passed into Evaluate flows through unchanged into CertParams.NotAfter, so
+// the CA can later clamp the issued certificate to the auth session's
+// remaining lifetime.
+func TestEvaluateSetsNotAfterFromTokenExpiry(t *testing.T) {
+	cfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{"alice@example.com": {"admin"}},
+		Hosts: map[string]*policyserver.Rules{
+			"web.example.com": {Allow: map[string][]string{"root": {"admin"}}},
+		},
+	}
+	e := evaluatorForConfig(cfg)
+	exp := time.Now().Add(3 * time.Minute)
+
+	resp, err := e.Evaluate(context.Background(), "alice@example.com", exp,
+		policy.Connection{RemoteHost: "web.example.com", RemoteUser: "root"})
+	require.NoError(t, err)
+	require.Equal(t, exp, resp.CertParams.NotAfter)
 }
 
 // Example showing how the evaluator would be used
@@ -583,5 +603,5 @@ func ExampleEvaluator() {
 		Port:       22,
 	}
 
-	_, _ = eval.Evaluate(ctx, "oidc-token-from-auth-command", conn)
+	_, _ = eval.Evaluate(ctx, "oidc-token-from-auth-command", time.Time{}, conn)
 }
