@@ -61,7 +61,7 @@ func TestPolicyRulesConfig_Validate(t *testing.T) {
 				CAPublicKey: "ssh-ed25519 AAAA...",
 				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
 				Users:       map[string][]string{"alice": {"tag"}},
-				Defaults:    &policyserver.DefaultPolicy{Expiration: "invalid"},
+				Defaults:    &policyserver.Rules{Expiration: "invalid"},
 			},
 			wantErr: true,
 		},
@@ -71,7 +71,7 @@ func TestPolicyRulesConfig_Validate(t *testing.T) {
 				CAPublicKey: "ssh-ed25519 AAAA...",
 				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
 				Users:       map[string][]string{"alice": {"tag"}},
-				Defaults:    &policyserver.DefaultPolicy{Expiration: "5m"},
+				Defaults:    &policyserver.Rules{Expiration: "5m"},
 			},
 			wantErr: false,
 		},
@@ -183,4 +183,3 @@ func TestBootstrapAuth_WithCustomScopes(t *testing.T) {
 		}
 	}
 }
-

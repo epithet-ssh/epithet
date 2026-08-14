@@ -265,7 +265,7 @@ func TestPolicyConfig_HostPatterns(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"*.example.com": {},
 			"prod-*":        {},
 		},

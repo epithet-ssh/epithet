@@ -187,7 +187,7 @@ func (c *PolicyServerCLI) loadInlinePolicy() (*policyserver.PolicyRulesConfig, e
 	cfg.OIDC.ClientSecret = c.OIDC.ClientSecret
 	if c.DefaultExpiration != "" {
 		if cfg.Defaults == nil {
-			cfg.Defaults = &policyserver.DefaultPolicy{}
+			cfg.Defaults = &policyserver.Rules{}
 		}
 		cfg.Defaults.Expiration = c.DefaultExpiration
 	}

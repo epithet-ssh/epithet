@@ -12,11 +12,11 @@ import (
 // For new deployments, consider using ServerConfig + PolicyConfig separately
 // to enable dynamic policy loading via policy_url.
 type PolicyRulesConfig struct {
-	CAPublicKey string                 `yaml:"ca_pubkey" json:"ca_pubkey"`
-	OIDC        OIDCConfig             `yaml:"oidc" json:"oidc"`
-	Users       map[string][]string    `yaml:"users" json:"users"` // user identity → tags
-	Defaults    *DefaultPolicy         `yaml:"defaults,omitempty" json:"defaults,omitempty"`
-	Hosts       map[string]*HostPolicy `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host policy
+	CAPublicKey string              `yaml:"ca_pubkey" json:"ca_pubkey"`
+	OIDC        OIDCConfig          `yaml:"oidc" json:"oidc"`
+	Users       map[string][]string `yaml:"users" json:"users"` // user identity → tags
+	Defaults    *Rules              `yaml:"defaults,omitempty" json:"defaults,omitempty"`
+	Hosts       map[string]*Rules   `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host rules
 }
 
 // ServerConfig contains static server configuration loaded at startup.
@@ -93,18 +93,14 @@ func DefaultScopes() []string {
 	return []string{"openid", "profile", "email"}
 }
 
-// DefaultPolicy defines default policy settings
-type DefaultPolicy struct {
+// Rules defines a set of policy rules: which principals are allowed, cert
+// expiration, and cert extensions. It is used both as the global default
+// (PolicyConfig.Defaults) and as a per-host override (PolicyConfig.Hosts),
+// since the two were structurally identical and only differed by name.
+type Rules struct {
 	Allow      map[string][]string `yaml:"allow,omitempty" json:"allow,omitempty"`           // principal → allowed tags
-	Expiration string              `yaml:"expiration,omitempty" json:"expiration,omitempty"` // Default cert expiration (e.g., "5m")
-	Extensions map[string]string   `yaml:"extensions,omitempty" json:"extensions,omitempty"` // Default cert extensions
-}
-
-// HostPolicy defines per-host policy overrides
-type HostPolicy struct {
-	Allow      map[string][]string `yaml:"allow,omitempty" json:"allow,omitempty"`           // principal → allowed tags
-	Expiration string              `yaml:"expiration,omitempty" json:"expiration,omitempty"` // Override expiration
-	Extensions map[string]string   `yaml:"extensions,omitempty" json:"extensions,omitempty"` // Override extensions
+	Expiration string              `yaml:"expiration,omitempty" json:"expiration,omitempty"` // Cert expiration (e.g., "5m")
+	Extensions map[string]string   `yaml:"extensions,omitempty" json:"extensions,omitempty"` // Cert extensions
 }
 
 // Validate checks that the PolicyRulesConfig is valid
@@ -132,10 +128,10 @@ func (c *PolicyRulesConfig) Validate() error {
 		}
 	}
 
-	// Validate host policy expirations
-	for hostname, hostPolicy := range c.Hosts {
-		if hostPolicy.Expiration != "" {
-			if err := ValidateDuration(hostPolicy.Expiration); err != nil {
+	// Validate host rule expirations
+	for hostname, hostRules := range c.Hosts {
+		if hostRules.Expiration != "" {
+			if err := ValidateDuration(hostRules.Expiration); err != nil {
 				return fmt.Errorf("invalid expiration for host %s: %w", hostname, err)
 			}
 		}

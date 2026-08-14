@@ -19,9 +19,9 @@ import (
 // PolicyConfig contains the dynamic policy data that can be loaded from a URL.
 // This includes users, defaults, and hosts that can change without restarting the server.
 type PolicyConfig struct {
-	Users    map[string][]string    `yaml:"users" json:"users"`       // user identity → tags
-	Defaults *DefaultPolicy         `yaml:"defaults,omitempty" json:"defaults,omitempty"`
-	Hosts    map[string]*HostPolicy `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host policy
+	Users    map[string][]string `yaml:"users" json:"users"` // user identity → tags
+	Defaults *Rules              `yaml:"defaults,omitempty" json:"defaults,omitempty"`
+	Hosts    map[string]*Rules   `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host rules
 }
 
 // Validate checks that the PolicyConfig is valid.
@@ -37,10 +37,10 @@ func (c *PolicyConfig) Validate() error {
 		}
 	}
 
-	// Validate host policy expirations.
-	for hostname, hostPolicy := range c.Hosts {
-		if hostPolicy.Expiration != "" {
-			if err := ValidateDuration(hostPolicy.Expiration); err != nil {
+	// Validate host rule expirations.
+	for hostname, hostRules := range c.Hosts {
+		if hostRules.Expiration != "" {
+			if err := ValidateDuration(hostRules.Expiration); err != nil {
 				return fmt.Errorf("invalid expiration for host %s: %w", hostname, err)
 			}
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/stretchr/testify/require"
 )
 
 // mockOIDCServer returns a test server that serves the two endpoints
@@ -51,7 +52,7 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 			"alice@example.com": {"admin"},
 			"bob@example.com":   {"user"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"root": {"admin"},
 				"app":  {"user"},
@@ -80,7 +81,7 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"root":  {"admin"},
 				"guest": {"visitor"},
@@ -110,7 +111,7 @@ func TestEvaluateHostPolicy(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"prod-db-01": {
 				Allow: map[string][]string{
 					"postgres": {"dba"},
@@ -152,16 +153,20 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 
 // Unit tests using NewForTesting (no OIDC validation required)
 
-// TestHelloRequest_NoDefaults verifies that Hello requests succeed when only
-// host-specific policies exist (no defaults). This was a bug where Hello requests
-// failed because isAuthorized couldn't match empty host against host-specific patterns.
-func TestHelloRequest_NoDefaults(t *testing.T) {
+// TestEmptyConnection_NoDefaults_IsForbidden verifies that an empty connection
+// (formerly treated as a "Hello request" that succeeded if the user had access
+// to anything) is now simply Forbidden - no pattern matches an empty
+// RemoteHost, so evaluateHosts finds no authorized match. Hello requests are
+// removed entirely in a later task; this only confirms Evaluate no longer
+// special-cases them. Discovery of the full hostUsers mapping still works, but
+// requires a real (matching) connection - verified below.
+func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 	cfg := &policyserver.PolicyRulesConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
-		// No Defaults - only host-specific policies
-		Hosts: map[string]*policyserver.HostPolicy{
+		// No Defaults - only host-specific rules.
+		Hosts: map[string]*policyserver.Rules{
 			"prod-db-*": {
 				Allow: map[string][]string{
 					"postgres": {"dba"},
@@ -173,13 +178,22 @@ func TestHelloRequest_NoDefaults(t *testing.T) {
 
 	eval := evaluator.NewForTesting(cfg)
 
-	// Hello request has empty connection
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
-	if err != nil {
-		t.Fatalf("Hello request should succeed, got error: %v", err)
+	// An empty connection matches no host pattern, so it is Forbidden.
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	if err == nil {
+		t.Fatal("expected empty connection to be forbidden, got nil error")
 	}
 
-	// Should return hostUsers mapping for discovery
+	// A real, matching connection still succeeds and still reports hostUsers
+	// for discovery - the mapping is built for every pattern the user has
+	// access to, not only the one matched by this connection.
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+		RemoteHost: "prod-db-01",
+		RemoteUser: "postgres",
+	})
+	if err != nil {
+		t.Fatalf("matching connection should succeed, got error: %v", err)
+	}
 	if resp.Policy.HostUsers == nil {
 		t.Fatal("expected hostUsers in response")
 	}
@@ -188,33 +202,43 @@ func TestHelloRequest_NoDefaults(t *testing.T) {
 	}
 }
 
-// TestHelloRequest_WithDefaults verifies Hello requests work when defaults are merged into host patterns.
-// Note: With the new behavior, an explicit host pattern is required - defaults.Allow alone
-// does NOT create a wildcard pattern. To match all hosts, add "*": {} to Hosts.
-func TestHelloRequest_WithDefaults(t *testing.T) {
+// TestEmptyConnection_WithDefaults_IsForbidden verifies that an empty
+// connection is Forbidden even when defaults are merged into a wildcard host
+// pattern - an empty RemoteHost still fails doublestar.Match("*", "").
+// Note: an explicit host pattern is required - defaults.Allow alone does NOT
+// create a wildcard pattern. To match all hosts, add "*": {} to Hosts.
+func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
 	cfg := &policyserver.PolicyRulesConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"root": {"admin"},
 			},
 			Expiration: "5m",
 		},
-		// Explicit wildcard pattern - defaults.Allow is merged into this
-		Hosts: map[string]*policyserver.HostPolicy{
+		// Explicit wildcard pattern - defaults.Allow is merged into this.
+		Hosts: map[string]*policyserver.Rules{
 			"*": {},
 		},
 	}
 
 	eval := evaluator.NewForTesting(cfg)
 
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
-	if err != nil {
-		t.Fatalf("Hello request should succeed, got error: %v", err)
+	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	if err == nil {
+		t.Fatal("expected empty connection to be forbidden, got nil error")
 	}
 
+	// A real, matching connection still succeeds and reports hostUsers.
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+		RemoteHost: "anyhost",
+		RemoteUser: "root",
+	})
+	if err != nil {
+		t.Fatalf("matching connection should succeed, got error: %v", err)
+	}
 	if resp.Policy.HostUsers == nil {
 		t.Fatal("expected hostUsers in response")
 	}
@@ -229,7 +253,7 @@ func TestCertRequest_AuthorizationEnforced(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"prod-db-*": {
 				Allow: map[string][]string{
 					"postgres": {"dba"},
@@ -278,20 +302,21 @@ func TestEvaluate_UnknownUser(t *testing.T) {
 
 	eval := evaluator.NewForTesting(cfg)
 
-	// Unknown user should fail for Hello request
+	// Unknown user should fail (checked before any host matching happens).
 	_, err := eval.Evaluate(context.Background(), "unknown@example.com", policy.Connection{})
 	if err == nil {
 		t.Error("unknown user should fail, got nil error")
 	}
 }
 
-// TestHelloRequest_UserWithNoAccess verifies Hello rejects users who exist but have no authorized hosts
-func TestHelloRequest_UserWithNoAccess(t *testing.T) {
+// TestEmptyConnection_UserWithNoAccess_IsForbidden verifies that a user who
+// exists but has no authorized hosts (their tag grants nothing) is rejected.
+func TestEmptyConnection_UserWithNoAccess_IsForbidden(t *testing.T) {
 	cfg := &policyserver.PolicyRulesConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"guest"}, // Has 'guest' tag but no policies allow 'guest'
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"prod-db-*": {
 				Allow: map[string][]string{
 					"postgres": {"dba"}, // Only 'dba' tag is allowed
@@ -316,13 +341,13 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 		Users: map[string][]string{
 			"brianm@skife.org": {"wheel"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"brianm": {"wheel"},
 			},
 			Expiration: "5m",
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"v*":   {Allow: map[string][]string{"brianm": {"wheel"}, "arch": {"wheel"}}},
 			"badb": {},
 			"hati": {},
@@ -366,13 +391,13 @@ func TestDefaultsApplyToMatchedHosts(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"root": {"admin"},
 			},
 			Expiration: "10m",
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"server1": {}, // Empty - should use defaults.Allow
 			"server2": {}, // Empty - should use defaults.Allow
 		},
@@ -409,12 +434,12 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"dba", "admin"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"root": {"admin"}, // admin tag can be root everywhere
 			},
 		},
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"prod-db-*": {
 				Allow: map[string][]string{
 					"postgres": {"dba"}, // dba tag can be postgres on prod-db-*
@@ -443,10 +468,14 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 		t.Errorf("root should be allowed via merged defaults, got error: %v", err)
 	}
 
-	// Check that hostUsers contains both principals
-	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
+	// Check that hostUsers contains both principals. Uses a real, matching
+	// connection - an empty connection is Forbidden (no pattern matches "").
+	resp, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{
+		RemoteHost: "prod-db-01",
+		RemoteUser: "postgres",
+	})
 	if err != nil {
-		t.Fatalf("Hello request failed: %v", err)
+		t.Fatalf("evaluate failed: %v", err)
 	}
 
 	users := resp.Policy.HostUsers["prod-db-*"]
@@ -461,7 +490,7 @@ func TestOnlyDefaultsNoHosts(t *testing.T) {
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"root": {"admin"},
 			},
@@ -471,10 +500,10 @@ func TestOnlyDefaultsNoHosts(t *testing.T) {
 
 	eval := evaluator.NewForTesting(cfg)
 
-	// Hello request should fail - no host patterns exist
+	// Empty connection should fail - no host patterns exist.
 	_, err := eval.Evaluate(context.Background(), "alice@example.com", policy.Connection{})
 	if err == nil {
-		t.Error("Hello request should fail with no hosts configured, got nil")
+		t.Error("empty connection should fail with no hosts configured, got nil")
 	}
 
 	// Cert request should also fail
@@ -484,6 +513,41 @@ func TestOnlyDefaultsNoHosts(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("Cert request should fail with no hosts configured, got nil")
+	}
+}
+
+// evaluatorForConfig builds an evaluator directly from a *policyserver.PolicyConfig
+// (as opposed to the PolicyRulesConfig used by NewForTesting), via a static provider.
+// Useful for tests that need Hosts/Defaults without the OIDC/CAPublicKey scaffolding.
+func evaluatorForConfig(cfg *policyserver.PolicyConfig) *evaluator.Evaluator {
+	return evaluator.NewForTestingWithProvider(policyserver.NewStaticProvider(cfg))
+}
+
+// TestHostRuleSelectionIsDeterministic verifies that when multiple host
+// patterns match a connection, the same (most specific) pattern wins every
+// time - regardless of Go's randomized map iteration order. Before this was
+// fixed, "*.example.com" and "prod-*.example.com" could each win depending on
+// map order, so the resulting cert expiration was flaky.
+func TestHostRuleSelectionIsDeterministic(t *testing.T) {
+	cfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{"alice@example.com": {"admin"}},
+		Defaults: &policyserver.Rules{
+			Allow: map[string][]string{"root": {"admin"}}, Expiration: "30m",
+		},
+		Hosts: map[string]*policyserver.Rules{
+			"*.example.com":      {Expiration: "30m"},
+			"prod-*.example.com": {Expiration: "2m"},
+		},
+	}
+	e := evaluatorForConfig(cfg)
+	conn := policy.Connection{RemoteHost: "prod-db.example.com", RemoteUser: "root"}
+
+	// Run many times: map iteration order must not leak into the result.
+	for range 50 {
+		resp, err := e.Evaluate(context.Background(), "alice@example.com", conn)
+		require.NoError(t, err)
+		require.Equal(t, 2*time.Minute, resp.CertParams.Expiration,
+			"longest (most specific) pattern must always win")
 	}
 }
 
@@ -498,13 +562,13 @@ func ExampleEvaluator() {
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
-		Defaults: &policyserver.DefaultPolicy{
+		Defaults: &policyserver.Rules{
 			Allow: map[string][]string{
 				"alice": {"admin"},
 			},
 		},
 		// Host patterns are required - defaults.Allow is merged into these
-		Hosts: map[string]*policyserver.HostPolicy{
+		Hosts: map[string]*policyserver.Rules{
 			"*.example.com": {},
 		},
 	}
