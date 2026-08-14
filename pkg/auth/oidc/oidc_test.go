@@ -3,171 +3,59 @@ package oidc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"io"
+	"net/http"
+	"regexp"
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 )
 
-// TestNotifyUser tests that user-visible progress goes to the fd 4 writer
-// and that a missing fd 4 does not panic.
-func TestNotifyUser(t *testing.T) {
-	orig := userOutput
-	defer func() { userOutput = orig }()
+func TestAuthenticateCompletesCodeFlowViaAutoApprovingIdP(t *testing.T) {
+	idp := oidctest.New(t)
+	cfg := Config{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
 
-	var buf bytes.Buffer
-	userOutput = &buf
-	notifyUser("To authenticate, visit: %s\n", "https://example.com/auth")
-	if got := buf.String(); got != "To authenticate, visit: https://example.com/auth\n" {
-		t.Errorf("unexpected user output: %q", got)
-	}
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	userOutput = nil
-	notifyUser("should not panic")
-}
-
-// TestTokenStateMarshaling tests that oauth2.Token can be marshaled/unmarshaled as expected.
-func TestTokenStateMarshaling(t *testing.T) {
-	original := &oauth2.Token{
-		AccessToken:  "access123",
-		TokenType:    "Bearer",
-		RefreshToken: "refresh456",
-		Expiry:       time.Now().Add(1 * time.Hour).Round(time.Second),
-	}
-
-	// Marshal to JSON
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("failed to marshal token: %v", err)
-	}
-
-	// Unmarshal from JSON
-	var restored oauth2.Token
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("failed to unmarshal token: %v", err)
-	}
-
-	// Verify fields match
-	if restored.AccessToken != original.AccessToken {
-		t.Errorf("access token mismatch: got %q, want %q", restored.AccessToken, original.AccessToken)
-	}
-	if restored.RefreshToken != original.RefreshToken {
-		t.Errorf("refresh token mismatch: got %q, want %q", restored.RefreshToken, original.RefreshToken)
-	}
-	if restored.TokenType != original.TokenType {
-		t.Errorf("token type mismatch: got %q, want %q", restored.TokenType, original.TokenType)
-	}
-	if !restored.Expiry.Equal(original.Expiry) {
-		t.Errorf("expiry mismatch: got %v, want %v", restored.Expiry, original.Expiry)
-	}
-}
-
-// TestTokenValidation tests the oauth2.Token Valid() method.
-func TestTokenValidation(t *testing.T) {
-	tests := []struct {
-		name  string
-		token *oauth2.Token
-		valid bool
-	}{
-		{
-			name: "valid token",
-			token: &oauth2.Token{
-				AccessToken: "access123",
-				Expiry:      time.Now().Add(1 * time.Hour),
-			},
-			valid: true,
-		},
-		{
-			name: "expired token",
-			token: &oauth2.Token{
-				AccessToken: "access123",
-				Expiry:      time.Now().Add(-1 * time.Hour),
-			},
-			valid: false,
-		},
-		{
-			name: "empty token",
-			token: &oauth2.Token{
-				AccessToken: "",
-			},
-			valid: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.token.Valid(); got != tt.valid {
-				t.Errorf("token.Valid() = %v, want %v", got, tt.valid)
+	// The flow prints "To authenticate, visit: <url>"; a goroutine plays the
+	// browser by GETting that URL, which the fake IdP auto-approves.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		urlRe := regexp.MustCompile(`visit: (\S+)`)
+		deadline := time.Now().Add(25 * time.Second)
+		for time.Now().Before(deadline) {
+			if m := urlRe.FindSubmatch(out.Bytes()); m != nil {
+				resp, err := http.Get(string(m[1]))
+				if err == nil {
+					resp.Body.Close()
+				}
+				return
 			}
-		})
-	}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	idToken, next, err := Authenticate(ctx, cfg, nil, &out)
+	<-done
+	require.NoError(t, err)
+	require.NotEmpty(t, idToken)
+	require.NotNil(t, next)
+	require.Contains(t, idToken, ".") // it is a JWT
 }
 
-// TestConfigValidation tests that Config fields are validated appropriately.
-func TestConfigValidation(t *testing.T) {
-	tests := []struct {
-		name      string
-		cfg       Config
-		shouldErr bool
-	}{
-		{
-			name: "valid config",
-			cfg: Config{
-				IssuerURL: "https://accounts.google.com",
-				ClientID:  "client123",
-				Scopes:    []string{"openid", "profile", "email"},
-			},
-			shouldErr: false,
-		},
-		{
-			name: "missing issuer",
-			cfg: Config{
-				ClientID: "client123",
-				Scopes:   []string{"openid"},
-			},
-			shouldErr: true,
-		},
-		{
-			name: "missing client ID",
-			cfg: Config{
-				IssuerURL: "https://accounts.google.com",
-				Scopes:    []string{"openid"},
-			},
-			shouldErr: true,
-		},
-	}
+func TestAuthenticateReusesValidToken(t *testing.T) {
+	idp := oidctest.New(t)
+	cfg := Config{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
+	prev := &oauth2.Token{AccessToken: "still-good", Expiry: time.Now().Add(time.Hour)}
+	prev = prev.WithExtra(map[string]any{"id_token": idp.MintIDToken("x@y.z", time.Now().Add(time.Hour))})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Basic validation - empty issuer or client ID should be caught
-			// by the OIDC provider or OAuth2 config setup
-			if tt.cfg.IssuerURL == "" && !tt.shouldErr {
-				t.Error("expected error for empty issuer URL")
-			}
-			if tt.cfg.ClientID == "" && !tt.shouldErr {
-				t.Error("expected error for empty client ID")
-			}
-		})
-	}
-}
-
-// TestContextCancellation tests that Run respects context cancellation.
-func TestContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	cfg := Config{
-		IssuerURL: "https://accounts.google.com",
-		ClientID:  "client123",
-		Scopes:    []string{"openid"},
-	}
-
-	// This should fail quickly due to context cancellation
-	// Note: This will still fail because we can't actually connect to the issuer
-	// but it demonstrates the context is being passed through
-	err := Run(ctx, cfg)
-	if err == nil {
-		t.Error("expected error with cancelled context, got nil")
-	}
+	idToken, _, err := Authenticate(context.Background(), cfg, prev, io.Discard)
+	require.NoError(t, err)
+	require.NotEmpty(t, idToken)
 }
