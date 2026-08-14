@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/httpsig"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
@@ -73,8 +73,8 @@ func NotHandled(message string) error {
 
 // Config configures the policy server HTTP handler.
 type Config struct {
-	// CAPublicKey is the CA's SSH public key for verifying RFC 9421 request signatures.
-	// If empty, signature verification is skipped (not recommended for production).
+	// CAPublicKey is the CA's SSH public key, used to verify the request-bound
+	// JWT (pkg/serviceauth) on every request. Required.
 	CAPublicKey sshcert.RawPublicKey
 
 	// Validator validates tokens and extracts identity (authentication).
@@ -94,7 +94,7 @@ type Config struct {
 // handler holds the config and implements the HTTP handler methods.
 type handler struct {
 	config   Config
-	verifier *httpsig.Verifier // nil if CAPublicKey is empty.
+	verifier *serviceauth.Verifier
 }
 
 // NewHandler creates an HTTP handler for the policy server.
@@ -103,42 +103,49 @@ type handler struct {
 //	GET /  — returns discovery data (auth, match patterns, default expiration)
 //	POST / — evaluates a cert request (token + connection)
 //
-// All requests are verified using RFC 9421 HTTP Message Signatures if
-// CAPublicKey is configured.
-func NewHandler(config Config) http.Handler {
+// Every request must carry a valid CA-minted request token (pkg/serviceauth);
+// CAPublicKey is therefore required.
+func NewHandler(config Config) (http.Handler, error) {
+	if config.CAPublicKey == "" {
+		return nil, fmt.Errorf("CAPublicKey is required")
+	}
 	if config.MaxRequestSize == 0 {
 		config.MaxRequestSize = 8192
 	}
-	h := &handler{config: config}
 
-	// Create RFC 9421 verifier if CA public key is provided.
-	if config.CAPublicKey != "" {
-		v, err := httpsig.NewVerifier(config.CAPublicKey)
-		if err != nil {
-			// This is a startup-time configuration error.
-			panic(fmt.Sprintf("failed to create HTTP signature verifier: %v", err))
-		}
-		h.verifier = v
+	verifier, err := serviceauth.NewVerifier(config.CAPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CA public key: %w", err)
 	}
 
-	return h
+	return &handler{config: config, verifier: verifier}, nil
 }
 
-// ServeHTTP routes requests by method.
+// ServeHTTP reads the body once (needed for both verification and dispatch,
+// which avoids the double body read RFC 9421's Content-Digest used to
+// require), verifies the request token, then routes by method.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Verify RFC 9421 signature on all requests.
-	if h.verifier != nil {
-		if err := h.verifier.VerifyRequest(r); err != nil {
-			h.writeError(w, http.StatusUnauthorized, fmt.Sprintf("signature verification failed: %v", err))
-			return
-		}
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.config.MaxRequestSize))
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request: %v", err))
+		return
+	}
+	defer r.Body.Close()
+
+	// GET requests read back an empty (non-nil) slice, which hashes
+	// identically to the nil body the CA signed over for that request.
+	// Verify takes r itself (not just the header) to check the htm/htu
+	// claims against the method and target actually received.
+	if err := h.verifier.Verify(r, body); err != nil {
+		h.writeError(w, http.StatusUnauthorized, fmt.Sprintf("request verification failed: %v", err))
+		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
 		h.handleDiscovery(w, r)
 	case http.MethodPost:
-		h.handleCertRequest(w, r)
+		h.handleCertRequest(w, r, body)
 	default:
 		h.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
@@ -156,16 +163,9 @@ func (h *handler) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	h.writeJSON(w, http.StatusOK, h.config.Discovery)
 }
 
-// handleCertRequest processes a cert evaluation request.
-func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request) {
-	// Parse request body.
-	body, err := io.ReadAll(io.LimitReader(r.Body, h.config.MaxRequestSize))
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read request: %v", err))
-		return
-	}
-	defer r.Body.Close()
-
+// handleCertRequest processes a cert evaluation request. body was already
+// read (and verified) by ServeHTTP.
+func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req wire.PolicyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))

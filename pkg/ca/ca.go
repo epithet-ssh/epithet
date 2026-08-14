@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/httpsig"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -32,8 +32,8 @@ type CA struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 
-	// RFC 9421 HTTP message signature signer.
-	httpSigner *httpsig.Signer
+	// svcSigner mints the request-bound JWT sent to the policy server.
+	svcSigner *serviceauth.Signer
 
 	// HTTP client with caching for discovery requests.
 	// Uses httpcache to respect Cache-Control headers from the policy server.
@@ -52,16 +52,16 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 		return nil, err
 	}
 
-	httpSigner, err := httpsig.NewSigner(privateKey)
+	svcSigner, err := serviceauth.NewSigner(privateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP signer: %w", err)
+		return nil, fmt.Errorf("failed to create service auth signer: %w", err)
 	}
 
 	ca := &CA{
 		signer:     sshSigner,
 		privateKey: privateKey,
 		policyURL:  policyURL,
-		httpSigner: httpSigner,
+		svcSigner:  svcSigner,
 	}
 
 	for _, o := range options {
@@ -154,9 +154,9 @@ func (c *CA) PublicKey() sshcert.RawPublicKey {
 
 // FetchDiscovery fetches discovery data from the policy server.
 // Uses HTTP caching (Cache-Control headers) to avoid unnecessary requests.
-// The request is signed with RFC 9421 HTTP Message Signatures.
+// The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
 //
-// The signature has a 30s expiry while the cache TTL is 300s. This is safe
+// The token has a 60s expiry while the cache TTL is 300s. This is safe
 // because httpcache serves directly from cache during max-age and creates a
 // fresh (newly signed) request after the cache expires.
 func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
@@ -165,8 +165,8 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-	// Sign the request with RFC 9421.
-	if err := c.httpSigner.SignRequest(req); err != nil {
+	// GET has no body, so the token's bh claim covers the empty string.
+	if err := c.svcSigner.Authorize(req, nil); err != nil {
 		return nil, fmt.Errorf("error signing request: %w", err)
 	}
 
@@ -210,7 +210,7 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 }
 
 // RequestPolicy requests policy from the policy server for a cert request.
-// The request is signed with RFC 9421 HTTP Message Signatures.
+// The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
 func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*wire.PolicyResponse, error) {
 	body, err := json.Marshal(wire.PolicyRequest{Token: token, Connection: conn})
 	if err != nil {
@@ -227,8 +227,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	}
 	req.Header.Add("Content-type", "application/json")
 
-	// Sign the request with RFC 9421 (replaces old Bearer signature).
-	if err := c.httpSigner.SignRequest(req); err != nil {
+	if err := c.svcSigner.Authorize(req, body); err != nil {
 		return nil, fmt.Errorf("error signing request: %w", err)
 	}
 

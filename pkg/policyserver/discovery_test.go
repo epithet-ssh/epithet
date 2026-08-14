@@ -21,13 +21,14 @@ func TestHandler_GETDiscovery(t *testing.T) {
 		MatchPatterns: []string{"*.example.com", "prod-*"},
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		// Validator is unused by the GET (discovery) path.
 		Evaluator: &mockEvaluator{},
 		Discovery: discovery,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	sign(req, nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -59,12 +60,13 @@ func TestHandler_GETDiscovery(t *testing.T) {
 }
 
 func TestHandler_GETDiscovery_NotConfigured(t *testing.T) {
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Evaluator: &mockEvaluator{},
 		// No Discovery configured.
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	sign(req, nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -75,11 +77,12 @@ func TestHandler_GETDiscovery_NotConfigured(t *testing.T) {
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Evaluator: &mockEvaluator{},
 	})
 
 	req := httptest.NewRequest(http.MethodPut, "/", nil)
+	sign(req, nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)

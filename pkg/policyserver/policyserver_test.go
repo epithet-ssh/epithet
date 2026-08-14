@@ -13,6 +13,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +30,28 @@ func newTestValidator(t *testing.T) (*oidc.Validator, *oidctest.IdP) {
 	})
 	require.NoError(t, err)
 	return v, idp
+}
+
+// newHandler builds a policyserver handler configured with a freshly
+// generated CA keypair, and returns a sign func that stamps requests the way
+// the real CA does. Every handler test request must now be service-signed
+// since NewHandler makes CAPublicKey (and therefore verification) required.
+func newHandler(t *testing.T, config policyserver.Config) (http.Handler, func(*http.Request, []byte)) {
+	t.Helper()
+	pub, priv, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	config.CAPublicKey = pub
+
+	handler, err := policyserver.NewHandler(config)
+	require.NoError(t, err)
+
+	signer, err := serviceauth.NewSigner(priv)
+	require.NoError(t, err)
+
+	sign := func(req *http.Request, body []byte) {
+		require.NoError(t, signer.Authorize(req, body))
+	}
+	return handler, sign
 }
 
 // mockEvaluator is a simple test evaluator.
@@ -63,7 +87,7 @@ func TestHandler_Success(t *testing.T) {
 		},
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: evaluator,
 	})
@@ -79,6 +103,7 @@ func TestHandler_Success(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	sign(httpReq, body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, httpReq)
@@ -106,7 +131,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 		err: policyserver.Unauthorized("Invalid token"),
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: evaluator,
 	})
@@ -122,6 +147,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	sign(httpReq, body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, httpReq)
@@ -137,7 +163,7 @@ func TestHandler_InvalidToken(t *testing.T) {
 	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: evaluator,
 	})
@@ -153,6 +179,7 @@ func TestHandler_InvalidToken(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	sign(httpReq, body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, httpReq)
@@ -168,7 +195,7 @@ func TestHandler_Forbidden(t *testing.T) {
 		err: policyserver.Forbidden("Access denied by policy"),
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: evaluator,
 	})
@@ -184,6 +211,7 @@ func TestHandler_Forbidden(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	sign(httpReq, body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, httpReq)
@@ -199,7 +227,7 @@ func TestHandler_NotHandled(t *testing.T) {
 		err: policyserver.NotHandled("connection not handled by this policy server"),
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: evaluator,
 	})
@@ -215,6 +243,7 @@ func TestHandler_NotHandled(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	sign(httpReq, body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, httpReq)
@@ -226,12 +255,14 @@ func TestHandler_NotHandled(t *testing.T) {
 
 func TestHandler_InvalidJSON(t *testing.T) {
 	validator, _ := newTestValidator(t)
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: &mockEvaluator{},
 	})
 
-	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("invalid json")))
+	body := []byte("invalid json")
+	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	sign(httpReq, body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, httpReq)
@@ -261,7 +292,7 @@ func TestHandlerAcceptsBareToken(t *testing.T) {
 		},
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, sign := newHandler(t, policyserver.Config{
 		Validator: validator,
 		Evaluator: evaluator,
 	})
@@ -269,11 +300,36 @@ func TestHandlerAcceptsBareToken(t *testing.T) {
 	token := idp.MintIDToken("alice@example.com", time.Now().Add(time.Minute))
 	body, _ := json.Marshal(wire.PolicyRequest{Token: token})
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+	sign(req, body)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNewHandler_RequiresCAPublicKey(t *testing.T) {
+	// Verification is no longer optional: an empty CAPublicKey must fail
+	// handler construction rather than silently skipping signature checks.
+	_, err := policyserver.NewHandler(policyserver.Config{
+		Evaluator: &mockEvaluator{},
+	})
+	require.Error(t, err)
+}
+
+func TestHandler_RejectsUnsignedRequest(t *testing.T) {
+	handler, _ := newHandler(t, policyserver.Config{
+		Evaluator: &mockEvaluator{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d: %s", w.Code, w.Body.String())
 	}
 }

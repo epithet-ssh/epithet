@@ -232,8 +232,11 @@ Replace `pkg/httpsig` (246 lines plus the `yaronf/httpsign`/`httpsfv` dependency
 tree) with a short-lived CA-minted JWT on every CA→policy request:
 
 - `Authorization: Bearer <jwt>`, signed with the CA's key.
-- Claims: `iss` (CA identity), `aud: "policy"`, `iat`, `exp` (~60 s), `jti`, and a
-  body-hash claim `bh = base64url(sha256(body))` for request integrity.
+- Claims: `iss` (CA identity), `aud: "epithet-policy"`, `iat`, `exp` (~60 s), `jti`, a
+  body-hash claim `bh = base64url(sha256(body))` for request integrity, and
+  request binding `htm` (HTTP method) + `htu` (target URL host and path) — added
+  after adversarial review showed body-only binding left a 60 s same-body replay
+  window that RFC 9421's `@method`/`@path` coverage used to close.
 - Policy server verifies against the already-configured `ca_pubkey`, checks
   freshness, recomputes the body hash.
 - Verification becomes **required**: delete the nil-verifier-when-no-pubkey branch

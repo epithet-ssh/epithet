@@ -19,28 +19,12 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-	github.com/dunglas/httpsfv v1.0.2 // indirect
-	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/int128/listener v1.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
-	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
-	github.com/lestrrat-go/dsig v1.0.0 // indirect
-	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
-	github.com/lestrrat-go/httpcc v1.0.1 // indirect
-	github.com/lestrrat-go/httprc v1.0.6 // indirect
-	github.com/lestrrat-go/httprc/v3 v3.0.1 // indirect
-	github.com/lestrrat-go/iter v1.0.2 // indirect
-	github.com/lestrrat-go/jwx/v2 v2.1.2 // indirect
-	github.com/lestrrat-go/jwx/v3 v3.0.12 // indirect
-	github.com/lestrrat-go/option v1.0.1 // indirect
-	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/segmentio/asm v1.2.1 // indirect
-	github.com/valyala/fastjson v1.6.4 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
@@ -56,7 +40,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79
 	github.com/sony/gobreaker/v2 v2.4.0
-	github.com/yaronf/httpsign v0.5.1
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1

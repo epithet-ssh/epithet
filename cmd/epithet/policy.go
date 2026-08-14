@@ -134,12 +134,15 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		MatchPatterns: matchPatterns,
 	}
 
-	handler := policyserver.NewHandler(policyserver.Config{
+	handler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: sshcert.RawPublicKey(caPubkey),
 		Validator:   validator,
 		Evaluator:   eval,
 		Discovery:   discovery,
 	})
+	if err != nil {
+		return fmt.Errorf("failed to create policy handler: %w", err)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
