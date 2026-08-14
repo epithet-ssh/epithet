@@ -10,7 +10,8 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 - OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
 - Tag-based authorization for flexible access control
 - Per-host policy overrides
-- Simple YAML or JSON configuration
+- YAML config files (`.json` also works, since JSON is valid YAML - see
+  "Configuration format" below)
 - Built-in to the epithet binary (no separate deployment needed)
 
 **Security Note:** SSH certificates issued by epithet can be used on any host that trusts the CA, regardless of host-specific policies in the configuration. Host restrictions are enforced at **certificate issuance time**, not validation time. For tighter security, consider using SSH's `AuthorizedPrincipalsCommand` on target hosts to enforce additional checks.
@@ -112,7 +113,12 @@ epithet ca \
 
 ### File formats
 
-The policy server supports YAML and JSON formats:
+Config files are parsed as YAML. The default search paths match `*.yaml`,
+`*.yml`, and `*.json` under `/etc/epithet/` and `~/.epithet/` (see
+`defaultConfigPatterns` in `cmd/epithet/main.go`), so a `.json` file is
+picked up too - not because its format is detected, but because JSON is a
+syntactic subset of YAML and the same YAML parser (`gopkg.in/yaml.v3`)
+accepts it directly:
 
 **YAML** (`.yaml` or `.yml`):
 ```yaml
@@ -120,7 +126,7 @@ users:
   alice@example.com: [admin]
 ```
 
-**JSON** (`.json`):
+**JSON** (`.json`, parsed as YAML):
 ```json
 {
   "users": {
@@ -129,13 +135,10 @@ users:
 }
 ```
 
-The format is auto-detected based on file extension or content type.
+There is no per-file content-type or extension sniffing - every matched file
+goes through the same YAML unmarshal call.
 
-### Configuration modes
-
-The policy server supports two configuration modes with **different formats**:
-
-#### Inline configuration (in ~/.epithet/*.yaml)
+### Configuration mode
 
 Policy is defined inside your main config file under a `policy:` section:
 
@@ -151,26 +154,8 @@ policy:
       wheel: [admin]
 ```
 
-#### Dynamic policy source (--policy-source)
-
-Policy is loaded from a separate file or URL using a **flat format** (no `policy:` wrapper):
-
-```yaml
-# No "policy:" wrapper - file is parsed directly
-users:
-  alice@example.com: [admin]
-defaults:
-  allow:
-    wheel: [admin]
-hosts:
-  prod-db:
-    allow:
-      postgres: [admin]
-```
-
-Start with: `epithet policy --policy-source ./policy.yaml`
-
-Dynamic sources are reloaded on each request, enabling policy updates without restart.
+Policy is read once at startup; picking up changes requires restarting the
+server (dynamic reload from a URL was removed - config is the only source).
 
 ### Configuration structure
 

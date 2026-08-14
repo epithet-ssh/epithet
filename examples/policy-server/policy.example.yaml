@@ -1,10 +1,7 @@
 # Epithet Policy Server - Inline Configuration Example
 #
-# Use this format for INLINE configuration in ~/.epithet/*.yaml files.
+# Use this format for configuration in ~/.epithet/*.yaml files.
 # The "policy:" wrapper is required because Kong resolves config by subcommand name.
-#
-# For DYNAMIC policy sources (--policy-source flag), use a flat format
-# WITHOUT the "policy:" wrapper. See policy-source.example.yaml.
 #
 # This configuration uses group names as principals, designed to work with
 # SSH's AuthorizedPrincipalsFile feature for fine-grained access control.

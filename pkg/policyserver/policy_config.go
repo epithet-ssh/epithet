@@ -8,9 +8,10 @@ import (
 )
 
 // PolicyRulesConfig represents the policy server rules configuration.
-// This defines users, hosts, and access policies - not CLI flags.
-// For new deployments, consider using ServerConfig + PolicyConfig separately
-// to enable dynamic policy loading via policy_url.
+// This defines users, hosts, and access policies - not CLI flags. It bundles
+// what ServerConfig and PolicyConfig hold separately, for the inline
+// single-file config case; ExtractServerConfig/ExtractPolicyConfig split it
+// into those two for the evaluator.
 type PolicyRulesConfig struct {
 	CAPublicKey string              `yaml:"ca_pubkey" json:"ca_pubkey"`
 	OIDC        OIDCConfig          `yaml:"oidc" json:"oidc"`
@@ -24,7 +25,40 @@ type PolicyRulesConfig struct {
 type ServerConfig struct {
 	CAPublicKey string     `yaml:"ca_pubkey" json:"ca_pubkey"`
 	OIDC        OIDCConfig `yaml:"oidc" json:"oidc"`
-	PolicyURL   string     `yaml:"policy_url,omitempty" json:"policy_url,omitempty"` // URL to load dynamic policy from
+}
+
+// PolicyConfig contains the policy rules the evaluator applies: users, host
+// patterns, and defaults. It is read once at startup from config; reload is
+// a process restart (dynamic reload via URL was removed, see task 8b).
+type PolicyConfig struct {
+	Users    map[string][]string `yaml:"users" json:"users"` // user identity → tags
+	Defaults *Rules              `yaml:"defaults,omitempty" json:"defaults,omitempty"`
+	Hosts    map[string]*Rules   `yaml:"hosts,omitempty" json:"hosts,omitempty"` // hostname → host rules
+}
+
+// Validate checks that the PolicyConfig is valid.
+func (c *PolicyConfig) Validate() error {
+	if c.Users == nil {
+		return fmt.Errorf("users is required")
+	}
+
+	// Validate default expiration if provided.
+	if c.Defaults != nil && c.Defaults.Expiration != "" {
+		if err := ValidateDuration(c.Defaults.Expiration); err != nil {
+			return fmt.Errorf("invalid defaults.expiration: %w", err)
+		}
+	}
+
+	// Validate host rule expirations.
+	for hostname, hostRules := range c.Hosts {
+		if hostRules.Expiration != "" {
+			if err := ValidateDuration(hostRules.Expiration); err != nil {
+				return fmt.Errorf("invalid expiration for host %s: %w", hostname, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // Validate checks that the ServerConfig is valid.
@@ -53,8 +87,8 @@ func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
 	}
 }
 
-// ExtractPolicyConfig extracts the dynamic policy portion from PolicyRulesConfig.
-// Used for backwards compatibility when policy is defined inline.
+// ExtractPolicyConfig extracts the policy-rules portion (users/hosts/defaults)
+// from PolicyRulesConfig, for passing to evaluator.New/NewForTesting.
 func (c *PolicyRulesConfig) ExtractPolicyConfig() *PolicyConfig {
 	return &PolicyConfig{
 		Users:    c.Users,

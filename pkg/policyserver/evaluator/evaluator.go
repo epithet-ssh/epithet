@@ -16,35 +16,14 @@ import (
 )
 
 // Evaluator implements policyserver.PolicyEvaluator using tag-based authorization.
-// It can load policy either from a static config or dynamically via PolicyProvider.
+// Policy is read once at startup from config; reload is a process restart
+// (dynamic loading via URL was removed, see task 8b).
 type Evaluator struct {
-	// For static policy (backwards compatibility).
-	staticPolicy *policyserver.PolicyConfig
-
-	// For dynamic policy loading.
-	policyProvider policyserver.PolicyProvider
+	policy *policyserver.PolicyConfig
 }
 
-// New creates a new policy evaluator with a new OIDC validator.
-// This constructor uses static policy from PolicyRulesConfig for backwards compatibility.
-func New(ctx context.Context, cfg *policyserver.PolicyRulesConfig, tlsCfg tlsconfig.Config) (*Evaluator, *oidc.Validator, error) {
-	// Create OIDC validator.
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer:    cfg.OIDC.Issuer,
-		ClientID:  cfg.OIDC.ClientID,
-		TLSConfig: tlsCfg,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create OIDC validator: %w", err)
-	}
-
-	return &Evaluator{
-		staticPolicy: cfg.ExtractPolicyConfig(),
-	}, validator, nil
-}
-
-// NewWithProvider creates a new policy evaluator that loads policy dynamically.
-func NewWithProvider(ctx context.Context, serverCfg *policyserver.ServerConfig, provider policyserver.PolicyProvider, tlsCfg tlsconfig.Config) (*Evaluator, *oidc.Validator, error) {
+// New creates the evaluator and its OIDC validator.
+func New(ctx context.Context, serverCfg *policyserver.ServerConfig, policyCfg *policyserver.PolicyConfig, tlsCfg tlsconfig.Config) (*Evaluator, *oidc.Validator, error) {
 	// Create OIDC validator.
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
 		Issuer:    serverCfg.OIDC.Issuer,
@@ -56,32 +35,17 @@ func NewWithProvider(ctx context.Context, serverCfg *policyserver.ServerConfig, 
 	}
 
 	return &Evaluator{
-		policyProvider: provider,
+		policy: policyCfg,
 	}, validator, nil
 }
 
-// NewForTesting creates an evaluator without OIDC validation for unit testing.
+// NewForTesting creates an evaluator without a validator.
 // The Evaluate method doesn't use the validator (validation happens in the handler),
 // so this is safe for testing policy logic.
-func NewForTesting(cfg *policyserver.PolicyRulesConfig) *Evaluator {
+func NewForTesting(policyCfg *policyserver.PolicyConfig) *Evaluator {
 	return &Evaluator{
-		staticPolicy: cfg.ExtractPolicyConfig(),
+		policy: policyCfg,
 	}
-}
-
-// NewForTestingWithProvider creates an evaluator with a policy provider for testing.
-func NewForTestingWithProvider(provider policyserver.PolicyProvider) *Evaluator {
-	return &Evaluator{
-		policyProvider: provider,
-	}
-}
-
-// getPolicy returns the current policy, either from static config or dynamic provider.
-func (e *Evaluator) getPolicy(ctx context.Context) (*policyserver.PolicyConfig, error) {
-	if e.policyProvider != nil {
-		return e.policyProvider.GetPolicy(ctx)
-	}
-	return e.staticPolicy, nil
 }
 
 // Evaluate implements policyserver.PolicyEvaluator.
@@ -89,11 +53,7 @@ func (e *Evaluator) getPolicy(ctx context.Context) (*policyserver.PolicyConfig, 
 // tokenExpiry is carried into CertParams.NotAfter so the CA can clamp the
 // issued certificate's validity to the auth session's remaining lifetime.
 func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
-	// Load current policy.
-	cfg, err := e.getPolicy(ctx)
-	if err != nil {
-		return nil, policyserver.InternalError(fmt.Sprintf("failed to load policy: %v", err))
-	}
+	cfg := e.policy
 
 	// Get user's tags.
 	userTags, exists := cfg.Users[identity]

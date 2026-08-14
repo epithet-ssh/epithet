@@ -61,7 +61,7 @@ func TestEvaluateGlobalPolicy_UserInList(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	eval, _, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
+	eval, _, err := evaluator.New(ctx, cfg.ExtractServerConfig(), cfg.ExtractPolicyConfig(), tlsconfig.Config{})
 	if err != nil {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestEvaluateGlobalPolicy_DefaultAllow(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	eval, _, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
+	eval, _, err := evaluator.New(ctx, cfg.ExtractServerConfig(), cfg.ExtractPolicyConfig(), tlsconfig.Config{})
 	if err != nil {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestEvaluateHostPolicy(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	eval, _, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
+	eval, _, err := evaluator.New(ctx, cfg.ExtractServerConfig(), cfg.ExtractPolicyConfig(), tlsconfig.Config{})
 	if err != nil {
 		t.Fatalf("failed to create evaluator: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, _, err := evaluator.New(ctx, cfg, tlsconfig.Config{})
+	_, _, err := evaluator.New(ctx, cfg.ExtractServerConfig(), cfg.ExtractPolicyConfig(), tlsconfig.Config{})
 	if err == nil {
 		t.Fatal("expected error for invalid OIDC issuer, got nil")
 	}
@@ -161,7 +161,7 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 // special-cases them. Discovery of the full hostUsers mapping still works, but
 // requires a real (matching) connection - verified below.
 func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
@@ -208,7 +208,7 @@ func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 // Note: an explicit host pattern is required - defaults.Allow alone does NOT
 // create a wildcard pattern. To match all hosts, add "*": {} to Hosts.
 func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
@@ -249,7 +249,7 @@ func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
 
 // TestCertRequest_AuthorizationEnforced verifies regular cert requests still check authorization
 func TestCertRequest_AuthorizationEnforced(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"dba"},
 		},
@@ -294,7 +294,7 @@ func TestCertRequest_AuthorizationEnforced(t *testing.T) {
 
 // TestEvaluate_UnknownUser verifies unknown users are rejected
 func TestEvaluate_UnknownUser(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
@@ -312,7 +312,7 @@ func TestEvaluate_UnknownUser(t *testing.T) {
 // TestEmptyConnection_UserWithNoAccess_IsForbidden verifies that a user who
 // exists but has no authorized hosts (their tag grants nothing) is rejected.
 func TestEmptyConnection_UserWithNoAccess_IsForbidden(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"guest"}, // Has 'guest' tag but no policies allow 'guest'
 		},
@@ -337,7 +337,7 @@ func TestEmptyConnection_UserWithNoAccess_IsForbidden(t *testing.T) {
 // TestHostMustMatchPattern_RejectsUnmatchedHost verifies that hosts not matching
 // any pattern in Hosts are rejected, even if defaults.Allow would permit them.
 func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"brianm@skife.org": {"wheel"},
 		},
@@ -387,7 +387,7 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 // TestDefaultsApplyToMatchedHosts verifies that defaults.Allow applies to hosts
 // with empty Allow blocks in their host policy.
 func TestDefaultsApplyToMatchedHosts(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
@@ -430,7 +430,7 @@ func TestDefaultsApplyToMatchedHosts(t *testing.T) {
 // TestHostPolicyMergesWithDefaults verifies that a host policy's Allow
 // is merged with defaults.Allow.
 func TestHostPolicyMergesWithDefaults(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"dba", "admin"},
 		},
@@ -486,7 +486,7 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 
 // TestOnlyDefaultsNoHosts verifies that having only defaults (no hosts) rejects all requests.
 func TestOnlyDefaultsNoHosts(t *testing.T) {
-	cfg := &policyserver.PolicyRulesConfig{
+	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
 			"alice@example.com": {"admin"},
 		},
@@ -516,11 +516,10 @@ func TestOnlyDefaultsNoHosts(t *testing.T) {
 	}
 }
 
-// evaluatorForConfig builds an evaluator directly from a *policyserver.PolicyConfig
-// (as opposed to the PolicyRulesConfig used by NewForTesting), via a static provider.
-// Useful for tests that need Hosts/Defaults without the OIDC/CAPublicKey scaffolding.
+// evaluatorForConfig is a thin wrapper around NewForTesting, kept as a named
+// helper so call sites read as "build an evaluator for this policy config".
 func evaluatorForConfig(cfg *policyserver.PolicyConfig) *evaluator.Evaluator {
-	return evaluator.NewForTestingWithProvider(policyserver.NewStaticProvider(cfg))
+	return evaluator.NewForTesting(cfg)
 }
 
 // TestHostRuleSelectionIsDeterministic verifies that when multiple host
@@ -594,7 +593,7 @@ func ExampleEvaluator() {
 	}
 
 	ctx := context.Background()
-	eval, _, _ := evaluator.New(ctx, cfg, tlsconfig.Config{})
+	eval, _, _ := evaluator.New(ctx, cfg.ExtractServerConfig(), cfg.ExtractPolicyConfig(), tlsconfig.Config{})
 
 	// Evaluate would be called with a real OIDC token
 	conn := policy.Connection{

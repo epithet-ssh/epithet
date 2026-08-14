@@ -12,7 +12,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -30,7 +29,7 @@ type PolicyOIDCConfig struct {
 // PolicyServerCLI defines the CLI flags for the policy server.
 // Scalar configuration comes from CLI flags, env vars, or config files
 // (resolved by Kong in that precedence order). Map data (users, hosts)
-// can only come from config files or --policy-source.
+// can only come from config files.
 type PolicyServerCLI struct {
 	Listen string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
 
@@ -39,8 +38,6 @@ type PolicyServerCLI struct {
 	CAPubkey string `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
 
 	DefaultExpiration string `help:"Default certificate expiration (e.g., 5m)" name:"default-expiration"`
-
-	PolicySource string `help:"URL/path to load policy from (http://, file://, or path)" name:"policy-source"`
 }
 
 func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
@@ -52,7 +49,6 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 			ClientID:     c.OIDC.ClientID,
 			ClientSecret: c.OIDC.ClientSecret,
 		},
-		PolicyURL: c.PolicySource,
 	}
 
 	// Resolve CA public key (may fetch from URL).
@@ -71,53 +67,25 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	ctx := context.Background()
 
-	var eval *evaluator.Evaluator
-	var validator *oidc.Validator
-	var policyProvider policyserver.PolicyProvider
+	// Load policy maps (users, hosts, defaults) from inline config.
+	cfg, err := c.loadInlinePolicy()
+	if err != nil {
+		return fmt.Errorf("failed to load policy config: %w", err)
+	}
 
-	if c.PolicySource != "" {
-		// Dynamic policy mode: load policy from URL/file on each request.
-		logger.Info("using dynamic policy loading", "source", c.PolicySource)
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid policy config: %w", err)
+	}
 
-		loader := policyserver.NewPolicyLoader(c.PolicySource)
-		policyProvider = policyserver.NewLoaderProvider(loader)
+	logger.Info("policy configuration loaded",
+		"users", len(cfg.Users),
+		"hosts", len(cfg.Hosts),
+		"oidc_issuer", cfg.OIDC.Issuer,
+		"oidc_client_id", cfg.OIDC.ClientID)
 
-		initialPolicy, err := loader.Load(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to load initial policy from %s: %w", c.PolicySource, err)
-		}
-
-		logger.Info("initial policy loaded",
-			"users", len(initialPolicy.Users),
-			"hosts", len(initialPolicy.Hosts))
-
-		eval, validator, err = evaluator.NewWithProvider(ctx, serverCfg, policyProvider, tlsCfg)
-		if err != nil {
-			return fmt.Errorf("failed to create policy evaluator: %w", err)
-		}
-	} else {
-		// Static policy mode: load policy maps from inline config.
-		cfg, err := c.loadInlinePolicy()
-		if err != nil {
-			return fmt.Errorf("failed to load policy config: %w", err)
-		}
-
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("invalid policy config: %w", err)
-		}
-
-		logger.Info("policy configuration loaded (static)",
-			"users", len(cfg.Users),
-			"hosts", len(cfg.Hosts),
-			"oidc_issuer", cfg.OIDC.Issuer,
-			"oidc_client_id", cfg.OIDC.ClientID)
-
-		eval, validator, err = evaluator.New(ctx, cfg, tlsCfg)
-		if err != nil {
-			return fmt.Errorf("failed to create policy evaluator: %w", err)
-		}
-
-		policyProvider = policyserver.NewStaticProvider(cfg.ExtractPolicyConfig())
+	eval, validator, err := evaluator.New(ctx, serverCfg, cfg.ExtractPolicyConfig(), tlsCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create policy evaluator: %w", err)
 	}
 
 	authConfig := serverCfg.BootstrapAuth()
@@ -147,8 +115,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
-		"ca_pubkey_length", len(caPubkey),
-		"dynamic_policy", c.PolicySource != "")
+		"ca_pubkey_length", len(caPubkey))
 
 	return listenAndServe(c.Listen, r)
 }

@@ -27,7 +27,6 @@ type PolicyEvaluator interface {
 	// tokenExpiry is the auth token's expiry, used to clamp the issued
 	// certificate's validity so it can never outlive the auth session that
 	// requested it.
-	// The context is used for loading dynamic policy if configured.
 	// Returns:
 	// - *wire.PolicyResponse: Certificate parameters and policy if authorized
 	// - error: If authorization denied
