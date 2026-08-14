@@ -21,7 +21,6 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dunglas/httpsfv v1.0.2 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/int128/listener v1.3.0 // indirect
@@ -54,6 +53,7 @@ require (
 require (
 	github.com/alecthomas/kong-yaml v0.2.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79
 	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/yaronf/httpsign v0.5.1
