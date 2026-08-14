@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
@@ -26,29 +26,12 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
-	// Mock OIDC server — serves the two endpoints coreos/go-oidc needs
-	// for provider discovery: the openid-configuration and an empty JWKS.
-	var mockURL string
-	mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{
-				"issuer": %q,
-				"jwks_uri": %q,
-				"authorization_endpoint": %q,
-				"token_endpoint": %q,
-				"response_types_supported": ["code"]
-			}`, mockURL, mockURL+"/jwks", mockURL+"/auth", mockURL+"/token")
-		case "/jwks":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"keys":[]}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	mockURL = mockOIDC.URL
-	defer mockOIDC.Close()
+	// Real in-process IdP: serves discovery, JWKS, and can mint real signed
+	// ID tokens, so this test (and any future addition to it) exercises the
+	// actual token-validation path rather than a stub that never verifies
+	// anything.
+	idp := oidctest.New(t)
+	mockURL := idp.Issuer()
 
 	// Build the epithet binary.
 	tmpDir := shortTempDir(t)
@@ -77,14 +60,14 @@ policy:
   ca-pubkey: "%s"
   oidc:
     issuer: "%s"
-    client-id: "test-client"
+    client-id: "%s"
   users:
     test@example.com: [admin]
   defaults:
     allow:
       root: [admin]
     expiration: "5m"
-`, caKeyPath, strings.TrimSpace(string(caPubkey)), mockURL)
+`, caKeyPath, strings.TrimSpace(string(caPubkey)), mockURL, oidctest.ClientID)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)

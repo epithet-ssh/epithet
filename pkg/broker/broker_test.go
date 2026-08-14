@@ -10,12 +10,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/policyserver"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 )
@@ -234,3 +241,164 @@ func TestCleanupExpiredAgents(t *testing.T) {
 // to the client before the terminal result) moved to protocol_test.go's
 // TestMatchStreamsOutputThenResult when the broker IPC switched from gRPC
 // streaming to newline-framed JSON.
+
+// countingHandler wraps h, incrementing hits on every request that reaches
+// it. Used to prove a CA hit count end to end, not just that a match succeeded.
+func countingHandler(hits *int32, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(hits, 1)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// realCAAndPolicy wires a real ca.CA, a real policyserver.NewHandler (real
+// OIDC validator against idp + a real evaluator), and a counting wrapper
+// around the CA's HTTP handler. It returns the CA HTTP server's URL and the
+// hit counter, so callers can assert exactly how many times the CA was
+// actually asked to mint a certificate - not just that the broker's match
+// calls succeeded.
+func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, policyCfg *policyserver.PolicyConfig) (caURL string, hits *int32) {
+	t.Helper()
+
+	caPub, caPriv, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+
+	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
+		Issuer:   idp.Issuer(),
+		ClientID: oidctest.ClientID,
+	})
+	require.NoError(t, err)
+
+	policyHandler, err := policyserver.NewHandler(policyserver.Config{
+		CAPublicKey: caPub,
+		Validator:   validator,
+		Evaluator:   evaluator.NewForTesting(policyCfg),
+	})
+	require.NoError(t, err)
+	policySrv := httptest.NewServer(policyHandler)
+	t.Cleanup(policySrv.Close)
+
+	caInstance, err := ca.New(caPriv, policySrv.URL)
+	require.NoError(t, err)
+
+	casrv := caserver.New(caInstance, testLogger(t), nil, nil)
+	hits = new(int32)
+	mux := http.NewServeMux()
+	mux.Handle("/", countingHandler(hits, casrv.Handler()))
+	caHTTPServer := httptest.NewServer(mux)
+	t.Cleanup(caHTTPServer.Close)
+
+	return caHTTPServer.URL, hits
+}
+
+// TestMatchFanOut_ThreeHostsThreeCAHits verifies the deletion-risk case from
+// spec §10: matching three distinct hosts under one shared policy mints
+// three separate certificates - one CA request per connection, never cached
+// or reused across connections (see Task 11b) - and each cert carries
+// exactly the principal requested for its own connection, never a union of
+// all three.
+func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	idp := oidctest.New(t)
+
+	policyCfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{"test@example.com": {"member"}},
+		Defaults: &policyserver.Rules{
+			Allow:      map[string][]string{"alice": {"member"}, "bob": {"member"}, "carol": {"member"}},
+			Expiration: "5m",
+		},
+		Hosts: map[string]*policyserver.Rules{"*": {}},
+	}
+	caURL, hits := realCAAndPolicy(t, idp, policyCfg)
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
+
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, caURL), agentSocketDir)
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	go func() {
+		err := b.Serve(ctx)
+		if err != nil && err != ctx.Err() {
+			t.Errorf("broker.Serve error: %v", err)
+		}
+	}()
+	t.Cleanup(b.Close)
+	<-b.Ready()
+
+	conns := []policy.Connection{
+		{RemoteHost: "host-a.example.com", RemoteUser: "alice", Hash: "hash-a"},
+		{RemoteHost: "host-b.example.com", RemoteUser: "bob", Hash: "hash-b"},
+		{RemoteHost: "host-c.example.com", RemoteUser: "carol", Hash: "hash-c"},
+	}
+	for _, conn := range conns {
+		result := callMatch(t, socketPath, conn)
+		require.True(t, result.Allow, "match for %s should be allowed: %s", conn.RemoteHost, result.Error)
+	}
+
+	require.Equal(t, int32(3), atomic.LoadInt32(hits), "expected exactly one CA hit per connection")
+
+	// Each connection's agent carries a cert naming exactly its own
+	// requested principal - not the union of alice/bob/carol.
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	require.Len(t, b.agents, 3)
+	for _, conn := range conns {
+		entry, ok := b.agents[conn.Hash]
+		require.True(t, ok, "expected an agent for %s", conn.Hash)
+		cert, err := sshcert.Parse(entry.certificate)
+		require.NoError(t, err)
+		require.Equal(t, []string{conn.RemoteUser}, cert.ValidPrincipals,
+			"cert for %s must name only the requested principal", conn.RemoteHost)
+	}
+}
+
+// TestMatchCADown_ReturnsHumanLegibleError covers the other deletion-risk
+// case from spec §10: when the CA is completely unreachable (the port is
+// closed, not merely erroring), the match must be denied with a non-empty
+// error that mentions the CA - this is the text a user actually sees via
+// ssh, not an opaque internal error.
+func TestMatchCADown_ReturnsHumanLegibleError(t *testing.T) {
+	t.Parallel()
+	idp := oidctest.New(t)
+
+	// Bind and immediately close a TCP port: nothing is listening there, so
+	// every request fails fast at the TCP level (connection refused) rather
+	// than hanging or getting an HTTP error response.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	closedAddr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	tmpDir := shortTempDir(t)
+	socketPath := tmpDir + "/b.sock"
+	agentSocketDir := tmpDir + "/a"
+
+	caClient := testCAClient(t, "http://"+closedAddr)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, agentSocketDir)
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	ctx := t.Context()
+	go func() {
+		err := b.Serve(ctx)
+		if err != nil && err != ctx.Err() {
+			t.Errorf("broker.Serve error: %v", err)
+		}
+	}()
+	t.Cleanup(b.Close)
+	<-b.Ready()
+
+	resp := b.MatchWithUserOutput(ctx, policy.Connection{
+		RemoteHost: "down.example.com",
+		RemoteUser: "root",
+		Hash:       "downhash",
+	}, nil)
+
+	require.False(t, resp.Allow)
+	require.NotEmpty(t, resp.Error)
+	require.Contains(t, resp.Error, "CA", "error should mention the CA so it reads clearly via ssh")
+}

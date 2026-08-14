@@ -13,3 +13,10 @@ ForceCommand {{.Path}}/command.sh
 HostKey {{.Path}}/ssh_host_ed25519_key
 TrustedUserCAKeys {{.Path}}/ca.pub
 AuthorizedPrincipalsFile {{.Path}}/auth_principals/%u
+
+# Without this, sshd falls back to ~/.ssh/authorized_keys, so on any machine
+# where the test-runner's own key happens to be authorized there, a client
+# could authenticate via that key instead of the cert this fixture exists to
+# test - silently passing even if epithet minted nothing. Disabling plain
+# authorized_keys makes cert auth (TrustedUserCAKeys above) the only way in.
+AuthorizedKeysFile none

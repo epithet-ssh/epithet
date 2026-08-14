@@ -330,6 +330,16 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 		}
 	}()
 
+	// Wait for the listener to actually start (or fail) before doing
+	// anything else with this agent. This also gives the eventual Close()
+	// call - which typically happens on a different goroutine (broker
+	// shutdown or cleanup, not this one) - a happens-before relationship
+	// with Serve's listener setup; without it that's a real data race, not
+	// just a timing risk (see the Agent struct's comment in pkg/agent).
+	if err := ag.WaitReady(); err != nil {
+		return fmt.Errorf("failed to start agent listener: %w", err)
+	}
+
 	// Set the credential
 	err = ag.UseCredential(credential)
 	if err != nil {

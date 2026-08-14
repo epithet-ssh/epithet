@@ -27,6 +27,8 @@ var errAgentStopped = errors.New("agent has been stopped")
 // Immutable after creation: agentSocketPath, publicKey, privateKey, caClient, log
 // Protected by internal sync: keyring (uses its own locking)
 // Protected by closeOnce: agentListener, done channel
+// agentListener/startErr: written once by Serve() (which may run in its own
+// goroutine), then guarded for readers by the ready channel - see WaitReady.
 type Agent struct {
 	keyring  agent.Agent // Thread-safe (has internal locking)
 	caClient *caclient.Client
@@ -37,6 +39,17 @@ type Agent struct {
 
 	publicKey  sshcert.RawPublicKey  // Immutable after New()
 	privateKey sshcert.RawPrivateKey // Immutable after New()
+
+	// ready is closed once startAgentListener has run (successfully or not).
+	// Callers that start Serve in a goroutine (e.g. broker.ensureAgent) must
+	// receive from Ready (or call WaitReady) before touching agentListener
+	// from another goroutine - e.g. before Close can safely run there.
+	// Without this, the write to agentListener inside Serve's goroutine and
+	// a later read in Close from a different goroutine have no
+	// happens-before relationship at all: a genuine data race, not merely a
+	// timing risk (caught by `go test -race`).
+	ready    chan struct{}
+	startErr error // Set before ready is closed; startAgentListener's result.
 
 	done      chan struct{} // Closed once by closeOnce
 	closeOnce sync.Once     // Protects Close() operations
@@ -57,6 +70,7 @@ func New(logger *slog.Logger, caClient *caclient.Client, agentSocketPath string)
 		log:             logger,
 		publicKey:       pub,
 		privateKey:      priv,
+		ready:           make(chan struct{}),
 		done:            make(chan struct{}),
 	}, nil
 }
@@ -64,7 +78,10 @@ func New(logger *slog.Logger, caClient *caclient.Client, agentSocketPath string)
 // Serve starts the agent listening on the configured socket and blocks until the context is cancelled.
 // Returns an error if the listener cannot be started, otherwise returns ctx.Err() when shutdown completes.
 func (a *Agent) Serve(ctx context.Context) error {
-	if err := a.startAgentListener(); err != nil {
+	err := a.startAgentListener()
+	a.startErr = err
+	close(a.ready) // See WaitReady: this is what makes agentListener safe to read from another goroutine.
+	if err != nil {
 		return err
 	}
 
@@ -76,6 +93,23 @@ func (a *Agent) Serve(ctx context.Context) error {
 	a.Close()
 
 	return ctx.Err()
+}
+
+// Ready returns a channel that is closed once the agent's listener has
+// started (or failed to). Use WaitReady if you also want the startup error.
+func (a *Agent) Ready() <-chan struct{} {
+	return a.ready
+}
+
+// WaitReady blocks until Serve has started the agent's listener (or failed
+// to) and returns any startup error. Callers that run Serve in a goroutine -
+// and especially any that may later call Close from a different goroutine -
+// must call this before doing either, so that the read of agentListener in
+// Close happens-after the write in startAgentListener (see the Agent struct
+// comment).
+func (a *Agent) WaitReady() error {
+	<-a.ready
+	return a.startErr
 }
 
 // Credential contains the private key and certificate in PEM format
