@@ -9,12 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -124,17 +122,6 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		}
 	}
 
-	fmt.Printf("\nCertificates (%d)\n", len(resp.Certificates))
-	fmt.Printf("-----------------\n")
-	if len(resp.Certificates) == 0 {
-		fmt.Printf("  (none)\n")
-	} else {
-		now := time.Now()
-		for idx, certInfo := range resp.Certificates {
-			printCertInfoProto(idx, certInfo, now)
-		}
-	}
-
 	return nil
 }
 
@@ -143,7 +130,6 @@ type inspectResponseJSON struct {
 	SocketPath     string               `json:"socketPath"`
 	AgentSocketDir string               `json:"agentSocketDir"`
 	Agents         []agentInfoJSON      `json:"agents"`
-	Certificates   []certInfoJSON       `json:"certificates"`
 	CAEndpoints    []caEndpointInfoJSON `json:"caEndpoints"`
 }
 
@@ -160,12 +146,6 @@ type agentInfoJSON struct {
 	Certificate string    `json:"certificate"`
 }
 
-type certInfoJSON struct {
-	Certificate string              `json:"certificate"`
-	HostUsers   map[string][]string `json:"hostUsers"`
-	ExpiresAt   time.Time           `json:"expiresAt"`
-}
-
 func inspectResponseToJSON(resp *pb.InspectResponse) inspectResponseJSON {
 	agents := make([]agentInfoJSON, len(resp.Agents))
 	for i, a := range resp.Agents {
@@ -174,19 +154,6 @@ func inspectResponseToJSON(resp *pb.InspectResponse) inspectResponseJSON {
 			SocketPath:  a.SocketPath,
 			ExpiresAt:   a.ExpiresAt.AsTime(),
 			Certificate: a.Certificate,
-		}
-	}
-
-	certs := make([]certInfoJSON, len(resp.Certificates))
-	for i, c := range resp.Certificates {
-		hostUsers := make(map[string][]string)
-		for pattern, list := range c.HostUsers {
-			hostUsers[pattern] = list.Values
-		}
-		certs[i] = certInfoJSON{
-			Certificate: c.Certificate,
-			HostUsers:   hostUsers,
-			ExpiresAt:   c.ExpiresAt.AsTime(),
 		}
 	}
 
@@ -203,7 +170,6 @@ func inspectResponseToJSON(resp *pb.InspectResponse) inspectResponseJSON {
 		SocketPath:     resp.SocketPath,
 		AgentSocketDir: resp.AgentSocketDir,
 		Agents:         agents,
-		Certificates:   certs,
 		CAEndpoints:    caEndpoints,
 	}
 }
@@ -217,80 +183,3 @@ func certFingerprint(rawCert sshcert.RawCertificate) string {
 	hash := sha256.Sum256(cert.Marshal())
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(hash[:])
 }
-
-// printCertInfoProto prints detailed certificate information from proto types.
-func printCertInfoProto(idx int, certInfo *pb.CertInfo, now time.Time) {
-	expiresAt := certInfo.ExpiresAt.AsTime()
-	remaining := expiresAt.Sub(now).Round(time.Second)
-	status := "valid"
-	if remaining < 0 {
-		status = "expired"
-		remaining = -remaining
-	}
-
-	fmt.Printf("  [%d]\n", idx)
-
-	// Parse certificate for details.
-	cert, err := sshcert.Parse(sshcert.RawCertificate(certInfo.Certificate))
-	if err != nil {
-		fmt.Printf("    (failed to parse certificate: %v)\n", err)
-		return
-	}
-
-	// Fingerprint.
-	hash := sha256.Sum256(cert.Marshal())
-	fingerprint := "SHA256:" + base64.RawStdEncoding.EncodeToString(hash[:])
-	fmt.Printf("    Fingerprint: %s\n", fingerprint)
-
-	// Serial number (correlates with CA issuance log).
-	fmt.Printf("    Serial: %d\n", cert.Serial)
-
-	// Identity (KeyId).
-	fmt.Printf("    Identity: %s\n", cert.KeyId)
-
-	// Principals.
-	fmt.Printf("    Principals: %v\n", cert.ValidPrincipals)
-
-	// Validity.
-	validAfter := time.Unix(int64(cert.ValidAfter), 0)
-	validBefore := time.Unix(int64(cert.ValidBefore), 0)
-	fmt.Printf("    Valid: %s to %s (%s, %s)\n",
-		validAfter.Format(time.RFC3339),
-		validBefore.Format(time.RFC3339),
-		status, remaining)
-
-	// Extensions.
-	if len(cert.Extensions) > 0 {
-		fmt.Printf("    Extensions:\n")
-		// Sort extensions for consistent output.
-		var extNames []string
-		for name := range cert.Extensions {
-			extNames = append(extNames, name)
-		}
-		sort.Strings(extNames)
-		for _, name := range extNames {
-			fmt.Printf("      %s\n", name)
-		}
-	}
-
-	// Critical options.
-	if len(cert.CriticalOptions) > 0 {
-		fmt.Printf("    Critical Options:\n")
-		for name, value := range cert.CriticalOptions {
-			if value == "" {
-				fmt.Printf("      %s\n", name)
-			} else {
-				fmt.Printf("      %s %s\n", name, value)
-			}
-		}
-	}
-
-	// Policy (HostUsers).
-	fmt.Printf("    Policy (HostUsers):\n")
-	for pattern, list := range certInfo.HostUsers {
-		fmt.Printf("      %s: %v\n", pattern, list.Values)
-	}
-}
-
-// Ensure ssh.Certificate is used (for type checking).
-var _ *ssh.Certificate

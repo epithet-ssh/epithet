@@ -77,11 +77,6 @@ func TestBrokerEndToEnd(t *testing.T) {
 					"permit-pty": "",
 				},
 			},
-			Policy: policy.Policy{
-				HostUsers: map[string][]string{
-					"*": {"a", "b"},
-				},
-			},
 		}
 		json.NewEncoder(w).Encode(resp)
 	}))

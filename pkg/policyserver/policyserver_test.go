@@ -79,11 +79,6 @@ func TestHandler_Success(t *testing.T) {
 					"permit-pty": "",
 				},
 			},
-			Policy: policy.Policy{
-				HostUsers: map[string][]string{
-					"*": {"testuser"},
-				},
-			},
 		},
 	}
 
@@ -282,11 +277,6 @@ func TestHandlerAcceptsBareToken(t *testing.T) {
 				Expiration: 5 * time.Minute,
 				Extensions: map[string]string{
 					"permit-pty": "",
-				},
-			},
-			Policy: policy.Policy{
-				HostUsers: map[string][]string{
-					"*": {"alice"},
 				},
 			},
 		},

@@ -123,7 +123,6 @@ type CreateCertRequest struct {
 // CreateCertResponse is response from a CreateCert request.
 type CreateCertResponse struct {
 	Certificate sshcert.RawCertificate `json:"certificate"`
-	Policy      policy.Policy          `json:"policy"`
 }
 
 // RequestBodySizeLimit is the maximum request body size.
@@ -201,7 +200,6 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 
 	resp := CreateCertResponse{
 		Certificate: cert,
-		Policy:      policyResp.Policy,
 	}
 	out, err := json.Marshal(&resp)
 	if err != nil {
@@ -257,7 +255,6 @@ func (s *caServer) logCertIssuance(
 		Extensions:           policyResp.CertParams.Extensions,
 		CertFingerprint:      certFP,
 		PublicKeyFingerprint: fingerprint,
-		Policy:               policyResp.Policy,
 	}
 
 	return s.certLogger.LogCert(ctx, event)

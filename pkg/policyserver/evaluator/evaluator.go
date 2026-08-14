@@ -61,56 +61,20 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not in users list", identity))
 	}
 
-	// Single pass over the host patterns: build the HostUsers mapping (for
-	// discovery), determine whether this connection is authorized, and pick up
-	// the expiration/extensions override from the first matching pattern.
-	hostUsers, authorized, expiration, extensions := e.evaluateHosts(cfg, userTags, conn)
+	// Single pass over the host patterns: determine whether this connection is
+	// authorized, and pick up the expiration/extensions override from the
+	// first matching pattern.
+	authorized, expiration, extensions := e.evaluateHosts(cfg, userTags, conn)
 
 	if !authorized {
 		return nil, policyserver.Forbidden(fmt.Sprintf("User %s not authorized for %s@%s", identity, conn.RemoteUser, conn.RemoteHost))
 	}
 
-	// Compute ALL principals this user is authorized for (for the certificate).
-	authorizedPrincipals := e.computeAuthorizedPrincipals(cfg, userTags)
-
-	// Build response with HostUsers mapping.
-	return e.buildResponseWithHostUsers(cfg, identity, tokenExpiry, authorizedPrincipals, expiration, extensions, hostUsers)
-}
-
-// computeAuthorizedPrincipals computes ALL principals the user is authorized for
-// based on their tags. This checks both global defaults and all host-specific rules,
-// returning the union of all authorized principals.
-func (e *Evaluator) computeAuthorizedPrincipals(cfg *policyserver.PolicyConfig, userTags []string) []string {
-	principalsSet := make(map[string]bool)
-
-	// Check global defaults.
-	if cfg.Defaults != nil && cfg.Defaults.Allow != nil {
-		for principal, allowedTags := range cfg.Defaults.Allow {
-			if e.hasAnyTag(userTags, allowedTags) {
-				principalsSet[principal] = true
-			}
-		}
-	}
-
-	// Check all host-specific rules.
-	for _, hostRules := range cfg.Hosts {
-		if hostRules.Allow != nil {
-			for principal, allowedTags := range hostRules.Allow {
-				if e.hasAnyTag(userTags, allowedTags) {
-					principalsSet[principal] = true
-				}
-			}
-		}
-	}
-
-	// Convert set to sorted slice.
-	principals := make([]string, 0, len(principalsSet))
-	for principal := range principalsSet {
-		principals = append(principals, principal)
-	}
-	slices.Sort(principals)
-
-	return principals
+	// The cert carries only the principal actually requested for this
+	// connection - never the union of everything the user's tags could reach
+	// elsewhere in the policy (see Task 11b: authorization maps leave the
+	// wire entirely, and certs become strictly per-connection).
+	return e.buildResponse(cfg, identity, tokenExpiry, conn.RemoteUser, expiration, extensions), nil
 }
 
 // hasAnyTag checks if user has any of the allowed tags.
@@ -142,19 +106,13 @@ func sortedHostPatterns(hosts map[string]*policyserver.Rules) []string {
 }
 
 // evaluateHosts makes a single pass over the host patterns (longest-first,
-// see sortedHostPatterns) to do everything that previously took three
-// separate walks of cfg.Hosts:
-//
-//   - build hostUsers, the full pattern → allowed-users mapping used for
-//     client-side discovery (every pattern the user has any access to, not
-//     just the one matching this connection);
-//   - determine whether conn is authorized, by checking membership in the
-//     users allowed for each pattern that matches conn.RemoteHost;
-//   - pick up the expiration/extensions override from the first
-//     (highest-specificity) matching pattern's Rules.
-func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []string, conn policy.Connection) (hostUsers map[string][]string, authorized bool, expiration string, extensions map[string]string) {
-	hostUsers = make(map[string][]string)
-
+// see sortedHostPatterns) to determine whether conn is authorized and to pick
+// up the expiration/extensions override from the first (highest-specificity)
+// matching pattern's Rules. A pattern that grants nobody access (merged
+// host+defaults Allow is empty for every principal) is skipped entirely, so
+// it can never "win" the expiration/extensions override away from a pattern
+// that actually authorizes someone.
+func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []string, conn policy.Connection) (authorized bool, expiration string, extensions map[string]string) {
 	firstMatchFound := false
 	for _, pattern := range sortedHostPatterns(cfg.Hosts) {
 		hostRules := cfg.Hosts[pattern]
@@ -182,13 +140,6 @@ func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []str
 			continue
 		}
 
-		users := make([]string, 0, len(usersSet))
-		for u := range usersSet {
-			users = append(users, u)
-		}
-		slices.Sort(users)
-		hostUsers[pattern] = users
-
 		matched, err := doublestar.Match(pattern, conn.RemoteHost)
 		if err != nil || !matched {
 			continue
@@ -208,16 +159,17 @@ func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []str
 			}
 		}
 
-		if slices.Contains(users, conn.RemoteUser) {
+		if usersSet[conn.RemoteUser] {
 			authorized = true
 		}
 	}
 
-	return hostUsers, authorized, expiration, extensions
+	return authorized, expiration, extensions
 }
 
-// buildResponseWithHostUsers builds a policy response with HostUsers mapping.
-func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, identity string, tokenExpiry time.Time, principals []string, expirationOverride string, extensionsOverride map[string]string, hostUsers map[string][]string) (*wire.PolicyResponse, error) {
+// buildResponse builds the policy response for an authorized connection. The
+// certificate names only conn.RemoteUser - see the comment on Evaluate.
+func (e *Evaluator) buildResponse(cfg *policyserver.PolicyConfig, identity string, tokenExpiry time.Time, remoteUser string, expirationOverride string, extensionsOverride map[string]string) *wire.PolicyResponse {
 	// Determine expiration.
 	expiration := e.getExpiration(cfg, expirationOverride)
 
@@ -227,15 +179,12 @@ func (e *Evaluator) buildResponseWithHostUsers(cfg *policyserver.PolicyConfig, i
 	return &wire.PolicyResponse{
 		CertParams: wire.CertParams{
 			Identity:   identity,
-			Names:      principals,
+			Names:      []string{remoteUser},
 			Expiration: expiration,
 			Extensions: extensions,
 			NotAfter:   tokenExpiry,
 		},
-		Policy: policy.Policy{
-			HostUsers: hostUsers,
-		},
-	}, nil
+	}
 }
 
 // getExpiration determines the certificate expiration duration.

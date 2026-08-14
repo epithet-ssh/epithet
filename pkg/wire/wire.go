@@ -30,10 +30,12 @@ type PolicyRequest struct {
 	Connection policy.Connection `json:"connection"`
 }
 
-// PolicyResponse is the policy server's answer to a PolicyRequest.
+// PolicyResponse is the policy server's answer to a PolicyRequest. It carries
+// only the cert parameters for this one connection - there is no
+// authorization map (Policy.HostUsers has been removed; see Task 11b), since
+// certs are minted per-connection and never cached or reused by the client.
 type PolicyResponse struct {
-	CertParams CertParams    `json:"certParams"`
-	Policy     policy.Policy `json:"policy"`
+	CertParams CertParams `json:"certParams"`
 }
 
 // AuthConfig tells a client how to authenticate: OIDC issuer and client

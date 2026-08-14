@@ -183,11 +183,11 @@ func TestClient_StatusCodes(t *testing.T) {
 	}
 }
 
-func TestGetCert_ReturnsCertificateAndPolicy(t *testing.T) {
+func TestGetCert_ReturnsCertificate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"certificate": "ssh-ed25519-cert-v01@openssh.com AAAA...", "policy": {"hostUsers": {"*.example.com": ["alice"]}}}`))
+		w.Write([]byte(`{"certificate": "ssh-ed25519-cert-v01@openssh.com AAAA..."}`))
 	}))
 	defer server.Close()
 

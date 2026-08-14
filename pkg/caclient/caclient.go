@@ -14,7 +14,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/breakerpool"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -84,10 +83,9 @@ func (e *ConnectionNotHandledError) Error() string {
 	return "connection not handled by CA"
 }
 
-// CertResponse contains a certificate and its associated policy.
+// CertResponse contains the certificate issued for this connection.
 type CertResponse struct {
 	Certificate sshcert.RawCertificate
-	Policy      policy.Policy
 }
 
 // DefaultTimeout is the default per-request timeout for CA requests.
@@ -224,7 +222,7 @@ func (c *Client) EndpointStatus() []CAEndpointStatus {
 // GetCert requests a certificate from the CA, with automatic failover to backup CAs.
 // It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
 // The token is sent in the Authorization header, not in the request body.
-// Returns CertResponse containing the certificate and policy.
+// Returns CertResponse containing the certificate.
 func (c *Client) GetCert(ctx context.Context, token string, req *caserver.CreateCertRequest) (*CertResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -443,7 +441,6 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 
 	return &CertResponse{
 		Certificate: caResp.Certificate,
-		Policy:      caResp.Policy,
 	}, nil
 }
 

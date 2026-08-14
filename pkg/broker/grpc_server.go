@@ -93,19 +93,6 @@ func inspectResponseToProto(resp *InspectResponse) *pb.InspectResponse {
 		}
 	}
 
-	certs := make([]*pb.CertInfo, len(resp.Certificates))
-	for i, c := range resp.Certificates {
-		hostUsers := make(map[string]*pb.StringList)
-		for pattern, users := range c.Policy.HostUsers {
-			hostUsers[pattern] = &pb.StringList{Values: users}
-		}
-		certs[i] = &pb.CertInfo{
-			Certificate: string(c.Certificate),
-			HostUsers:   hostUsers,
-			ExpiresAt:   timestamppb.New(c.ExpiresAt),
-		}
-	}
-
 	caEndpoints := make([]*pb.CAEndpointInfo, len(resp.CAEndpoints))
 	for i, ep := range resp.CAEndpoints {
 		caEndpoints[i] = &pb.CAEndpointInfo{
@@ -119,8 +106,10 @@ func inspectResponseToProto(resp *InspectResponse) *pb.InspectResponse {
 		SocketPath:     resp.SocketPath,
 		AgentSocketDir: resp.AgentSocketDir,
 		Agents:         agents,
-		Certificates:   certs,
-		CaEndpoints:    caEndpoints,
+		// Certificates is left unset - there is no cross-connection cert
+		// store to report on (see Task 11b). The proto field stays for wire
+		// compatibility but is never populated.
+		CaEndpoints: caEndpoints,
 	}
 }
 

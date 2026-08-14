@@ -24,6 +24,17 @@ import (
 // cleanupInterval is how often the broker checks for expired agents to clean up
 const cleanupInterval = 30 * time.Second
 
+// expiryBuffer is the time buffer before certificate expiration.
+// Certificates are considered expired this much time before their actual expiration
+// to account for:
+// - Socket setup and IPC delays (~100ms)
+// - SSH protocol negotiation and network transmission (~500ms-2s)
+// - Clock skew between client and server (±2s)
+// - General processing overhead (~100ms)
+// With short-lived certificates (2+ minutes), this 5s buffer provides safety
+// without meaningfully reducing usability.
+const expiryBuffer = 5 * time.Second
+
 // agentEntry tracks a running agent and when its certificate expires
 type agentEntry struct {
 	agent       *agent.Agent
@@ -31,15 +42,16 @@ type agentEntry struct {
 	certificate sshcert.RawCertificate
 }
 
-// Broker manages authentication, certificate storage, and per-connection SSH agents.
+// Broker manages authentication and per-connection SSH agents. Certificates
+// are minted fresh from the CA for every match past the agents-map fast path
+// - there is no cross-connection certificate cache (see Task 11b).
 //
 // Concurrency: Broker is safe for concurrent access from multiple RPC clients.
-// The primary lock (b.lock) protects the agents map and coordinates with Auth and CertificateStore.
+// The primary lock (b.lock) protects the agents map and coordinates with Auth.
 //
 // Locking invariants:
 //   - b.lock protects: agents map (both reads and writes)
 //   - Auth has its own internal lock (auth.mu) - safe to call without b.lock
-//   - CertificateStore has its own internal lock (certStore.lock) - safe to call without b.lock
 //   - Match() only holds b.lock around agents-map access, never across auth or
 //     CA calls, so concurrent matches can share an in-flight auth attempt.
 //     Concurrent matches for the same connection may each request a
@@ -49,7 +61,7 @@ type agentEntry struct {
 // Immutable after New(): brokerSocketPath, agentSocketDir, caClient, log
 // Protected by b.lock: agents map
 // Protected by closeOnce: brokerListener, done channel
-// Self-synchronized: auth (has internal lock), certStore (has internal lock)
+// Self-synchronized: auth (has internal lock)
 type Broker struct {
 	lock      sync.Mutex // Protects agents map
 	done      chan struct{}
@@ -60,9 +72,8 @@ type Broker struct {
 	brokerSocketPath string // Immutable after New()
 	brokerListener   net.Listener
 
-	auth      *Auth                                // Has internal locking, safe to call concurrently
-	certStore *CertificateStore                    // Has internal locking, safe to call concurrently
-	agents    map[policy.ConnectionHash]agentEntry // Protected by b.lock
+	auth   *Auth                                // Has internal locking, safe to call concurrently
+	agents map[policy.ConnectionHash]agentEntry // Protected by b.lock
 
 	caClient       *caclient.Client // Immutable after New()
 	agentSocketDir string           // Immutable after New()
@@ -91,7 +102,6 @@ func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient
 
 	b := &Broker{
 		auth:             NewAuth(fetch),
-		certStore:        NewCertificateStore(),
 		agents:           make(map[policy.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
@@ -176,13 +186,6 @@ type AgentInfo struct {
 	Certificate sshcert.RawCertificate `json:"certificate"`
 }
 
-// CertInfo contains information about a stored certificate
-type CertInfo struct {
-	Certificate sshcert.RawCertificate `json:"certificate"`
-	Policy      policy.Policy          `json:"policy"`
-	ExpiresAt   time.Time              `json:"expiresAt"`
-}
-
 // CAEndpointInfo contains the current state of a CA endpoint.
 type CAEndpointInfo struct {
 	URL      string `json:"url"`
@@ -195,7 +198,6 @@ type InspectResponse struct {
 	SocketPath     string           `json:"socketPath"`
 	AgentSocketDir string           `json:"agentSocketDir"`
 	Agents         []AgentInfo      `json:"agents"`
-	Certificates   []CertInfo       `json:"certificates"`
 	CAEndpoints    []CAEndpointInfo `json:"caEndpoints"`
 }
 
@@ -228,21 +230,11 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 	}
 	b.lock.Unlock()
 
-	// Step 2: Check for existing, valid certificate in cert store.
-	cred, found := b.certStore.Lookup(conn)
-	if found {
-		b.log.Debug("found valid certificate in store", "host", conn.RemoteHost)
-		// Step 3: Set up agent with existing certificate.
-		err := b.ensureAgent(conn.Hash, cred)
-		if err != nil {
-			b.log.Error("failed to create agent", "error", err)
-			return MatchResponse{Allow: false, Error: fmt.Sprintf("failed to create agent: %v", err)}
-		}
-		return MatchResponse{Allow: true}
-	}
-
-	// Step 4: No valid certificate exists, request one from CA.
-	b.log.Debug("no valid certificate found, requesting from CA", "host", conn.RemoteHost)
+	// Step 2: No agent exists (or it just expired). Mint a fresh,
+	// per-connection certificate - certs are never cached or reused across
+	// connections (see Task 11b), so every match past the fast path talks to
+	// the CA.
+	b.log.Debug("no existing agent, requesting certificate from CA", "host", conn.RemoteHost)
 
 	// Generate ephemeral keypair for this connection.
 	publicKey, privateKey, err := sshcert.GenerateKeys()
@@ -274,20 +266,9 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 		return b.deny(fmt.Errorf("certificate request failed: %w", err))
 	}
 
-	// Store the certificate with policy and expiration.
-	expiresAt, err := certResp.Certificate.Expiry()
-	if err != nil {
-		return b.deny(fmt.Errorf("failed to parse certificate expiry: %w", err))
-	}
-	b.certStore.Store(PolicyCert{
-		Policy:     certResp.Policy,
-		Credential: agent.Credential{PrivateKey: privateKey, Certificate: certResp.Certificate},
-		ExpiresAt:  expiresAt,
-	})
+	b.log.Debug("certificate obtained", "host", conn.RemoteHost, "user", conn.RemoteUser)
 
-	b.log.Debug("certificate obtained and stored", "host", conn.RemoteHost, "user", conn.RemoteUser, "policy", certResp.Policy.HostUsers)
-
-	// Step 5: Create agent with new certificate.
+	// Step 3: Create agent with new certificate.
 	credential := agent.Credential{
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
@@ -376,12 +357,6 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	return nil
 }
 
-// LookupCertificate finds a valid certificate for the given connection.
-// Returns the Credential and true if found and not expired, otherwise returns false.
-func (b *Broker) LookupCertificate(conn policy.Connection) (agent.Credential, bool) {
-	return b.certStore.Lookup(conn)
-}
-
 // AgentSocketPath returns the socket path for a given connection hash.
 // This is used by SSH to connect to the per-connection agent.
 func (b *Broker) AgentSocketPath(hash policy.ConnectionHash) string {
@@ -391,11 +366,6 @@ func (b *Broker) AgentSocketPath(hash policy.ConnectionHash) string {
 // BrokerSocketPath returns the path to the broker's RPC socket.
 func (b *Broker) BrokerSocketPath() string {
 	return b.brokerSocketPath
-}
-
-// StoreCertificate adds or updates a certificate for a given policy pattern.
-func (b *Broker) StoreCertificate(pc PolicyCert) {
-	b.certStore.Store(pc)
 }
 
 func (b *Broker) serve(ctx context.Context) {
@@ -536,9 +506,6 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 			Certificate: entry.certificate,
 		})
 	}
-
-	// Get certificate info
-	output.Certificates = b.certStore.List()
 
 	// Get CA endpoint status
 	for _, ep := range b.caClient.EndpointStatus() {

@@ -46,11 +46,6 @@ func TestSlogCertLogger(t *testing.T) {
 		ValidBefore:          time.Date(2025, 1, 15, 12, 10, 0, 0, time.UTC),
 		Extensions:           map[string]string{"permit-pty": ""},
 		PublicKeyFingerprint: "SHA256:abc123",
-		Policy: policy.Policy{
-			HostUsers: map[string][]string{
-				"*.example.com": {"alice"},
-			},
-		},
 	}
 
 	err := certLogger.LogCert(context.Background(), event)
@@ -182,11 +177,6 @@ func TestCertEvent_toJSON(t *testing.T) {
 		ValidBefore:          time.Date(2025, 1, 15, 12, 10, 0, 0, time.UTC),
 		Extensions:           map[string]string{"permit-pty": "", "permit-agent-forwarding": ""},
 		PublicKeyFingerprint: "SHA256:abc123",
-		Policy: policy.Policy{
-			HostUsers: map[string][]string{
-				"*.example.com": {"alice"},
-			},
-		},
 	}
 
 	jsonBytes, err := event.toJSON()
@@ -224,9 +214,6 @@ func TestCertEvent_toJSON(t *testing.T) {
 	}
 	if parsed.PublicKeyFingerprint != "SHA256:abc123" {
 		t.Errorf("Expected public_key_fingerprint=SHA256:abc123, got %s", parsed.PublicKeyFingerprint)
-	}
-	if len(parsed.HostUsers) != 1 || len(parsed.HostUsers["*.example.com"]) != 1 {
-		t.Errorf("Expected host_users with *.example.com -> [alice], got %v", parsed.HostUsers)
 	}
 	if len(parsed.Extensions) != 2 {
 		t.Errorf("Expected 2 extensions, got %d", len(parsed.Extensions))

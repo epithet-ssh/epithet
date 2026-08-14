@@ -158,8 +158,7 @@ func TestNew_InvalidOIDCIssuer(t *testing.T) {
 // to anything) is now simply Forbidden - no pattern matches an empty
 // RemoteHost, so evaluateHosts finds no authorized match. Hello requests are
 // removed entirely in a later task; this only confirms Evaluate no longer
-// special-cases them. Discovery of the full hostUsers mapping still works, but
-// requires a real (matching) connection - verified below.
+// special-cases them.
 func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
@@ -184,9 +183,8 @@ func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 		t.Fatal("expected empty connection to be forbidden, got nil error")
 	}
 
-	// A real, matching connection still succeeds and still reports hostUsers
-	// for discovery - the mapping is built for every pattern the user has
-	// access to, not only the one matched by this connection.
+	// A real, matching connection still succeeds, and the cert carries only
+	// the requested principal.
 	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "postgres",
@@ -194,11 +192,8 @@ func TestEmptyConnection_NoDefaults_IsForbidden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matching connection should succeed, got error: %v", err)
 	}
-	if resp.Policy.HostUsers == nil {
-		t.Fatal("expected hostUsers in response")
-	}
-	if _, ok := resp.Policy.HostUsers["prod-db-*"]; !ok {
-		t.Error("expected 'prod-db-*' pattern in hostUsers")
+	if len(resp.CertParams.Names) != 1 || resp.CertParams.Names[0] != "postgres" {
+		t.Errorf("expected cert principal [postgres], got %v", resp.CertParams.Names)
 	}
 }
 
@@ -231,7 +226,8 @@ func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
 		t.Fatal("expected empty connection to be forbidden, got nil error")
 	}
 
-	// A real, matching connection still succeeds and reports hostUsers.
+	// A real, matching connection still succeeds, and the cert carries only
+	// the requested principal.
 	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "anyhost",
 		RemoteUser: "root",
@@ -239,11 +235,8 @@ func TestEmptyConnection_WithDefaults_IsForbidden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matching connection should succeed, got error: %v", err)
 	}
-	if resp.Policy.HostUsers == nil {
-		t.Fatal("expected hostUsers in response")
-	}
-	if _, ok := resp.Policy.HostUsers["*"]; !ok {
-		t.Error("expected '*' pattern in hostUsers (from Hosts with defaults merged)")
+	if len(resp.CertParams.Names) != 1 || resp.CertParams.Names[0] != "root" {
+		t.Errorf("expected cert principal [root], got %v", resp.CertParams.Names)
 	}
 }
 
@@ -468,8 +461,10 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 		t.Errorf("root should be allowed via merged defaults, got error: %v", err)
 	}
 
-	// Check that hostUsers contains both principals. Uses a real, matching
-	// connection - an empty connection is Forbidden (no pattern matches "").
+	// The cert carries only the requested principal, not the union of
+	// everything the user could ask for on this host pattern. Uses a real,
+	// matching connection - an empty connection is Forbidden (no pattern
+	// matches "").
 	resp, err := eval.Evaluate(context.Background(), "alice@example.com", time.Time{}, policy.Connection{
 		RemoteHost: "prod-db-01",
 		RemoteUser: "postgres",
@@ -477,11 +472,7 @@ func TestHostPolicyMergesWithDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("evaluate failed: %v", err)
 	}
-
-	users := resp.Policy.HostUsers["prod-db-*"]
-	if len(users) != 2 {
-		t.Errorf("expected 2 users in hostUsers[prod-db-*], got %d: %v", len(users), users)
-	}
+	require.Equal(t, []string{"postgres"}, resp.CertParams.Names)
 }
 
 // TestOnlyDefaultsNoHosts verifies that having only defaults (no hosts) rejects all requests.
@@ -548,6 +539,28 @@ func TestHostRuleSelectionIsDeterministic(t *testing.T) {
 		require.Equal(t, 2*time.Minute, resp.CertParams.Expiration,
 			"longest (most specific) pattern must always win")
 	}
+}
+
+// TestCertCarriesOnlyRequestedPrincipal verifies that the certificate names
+// only the principal actually requested for this connection - not the union
+// of every principal the user's tags could reach anywhere in the policy (see
+// Task 11b: authorization maps leave the wire entirely, and certs become
+// strictly per-connection).
+func TestCertCarriesOnlyRequestedPrincipal(t *testing.T) {
+	cfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{"alice@example.com": {"admin"}},
+		Defaults: &policyserver.Rules{
+			Allow: map[string][]string{"root": {"admin"}, "deploy": {"admin"}},
+		},
+		Hosts: map[string]*policyserver.Rules{"*.example.com": {}},
+	}
+	e := evaluator.NewForTesting(cfg)
+	resp, err := e.Evaluate(context.Background(), "alice@example.com",
+		time.Now().Add(5*time.Minute),
+		policy.Connection{RemoteHost: "web.example.com", RemoteUser: "root"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"root"}, resp.CertParams.Names,
+		"cert must not carry the union of all authorized principals")
 }
 
 // TestEvaluateSetsNotAfterFromTokenExpiry verifies that the tokenExpiry

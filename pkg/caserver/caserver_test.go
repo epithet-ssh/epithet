@@ -148,9 +148,6 @@ func TestCreateCert_Success(t *testing.T) {
 				Expiration: 5 * time.Minute,
 				Extensions: map[string]string{"permit-pty": ""},
 			},
-			Policy: policy.Policy{
-				HostUsers: map[string][]string{"*": {"testuser"}},
-			},
 		}
 		json.NewEncoder(w).Encode(resp)
 	})
