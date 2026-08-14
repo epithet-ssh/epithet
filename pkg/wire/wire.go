@@ -36,21 +36,20 @@ type PolicyResponse struct {
 	Policy     policy.Policy `json:"policy"`
 }
 
-// AuthConfig tells a client how to authenticate. Shape matches today's
-// BootstrapAuth; Type/Command/Scopes are removed by later tasks.
+// AuthConfig tells a client how to authenticate: OIDC issuer and client
+// credentials. This is the only auth mechanism epithet supports, so there is
+// no type discriminator.
 type AuthConfig struct {
-	Type         string   `json:"type"`
-	Issuer       string   `json:"issuer,omitempty"`
-	ClientID     string   `json:"client_id,omitempty"`
-	ClientSecret string   `json:"client_secret,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-	Command      string   `json:"command,omitempty"`
+	Issuer       string `json:"issuer"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
-// Discovery is the discovery document.
+// Discovery is the discovery document: the anonymous bootstrap endpoint's
+// entire payload. It carries only auth config — no server-advertised match
+// patterns, since gating on those was removed.
 type Discovery struct {
-	Auth          *AuthConfig `json:"auth,omitempty"`
-	MatchPatterns []string    `json:"matchPatterns,omitempty"`
+	Auth *AuthConfig `json:"auth,omitempty"`
 
 	// CacheControl carries the upstream Cache-Control header; never serialized.
 	CacheControl string `json:"-"`

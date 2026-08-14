@@ -20,7 +20,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
-	"github.com/gregjones/httpcache"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -34,10 +33,6 @@ type CA struct {
 
 	// svcSigner mints the request-bound JWT sent to the policy server.
 	svcSigner *serviceauth.Signer
-
-	// HTTP client with caching for discovery requests.
-	// Uses httpcache to respect Cache-Control headers from the policy server.
-	discoveryClient *http.Client
 }
 
 // PolicyURL returns the URL of the policy server.
@@ -76,30 +71,13 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 		}
 	}
 
-	// Create a caching HTTP client for discovery requests.
-	// Wraps the httpClient's transport (which may have custom TLS config)
-	// so discovery requests use the same TLS settings as policy requests.
-	cachedTransport := httpcache.NewMemoryCacheTransport()
-	if ca.httpClient.Transport != nil {
-		cachedTransport.Transport = ca.httpClient.Transport
-	}
-	ca.discoveryClient = &http.Client{
-		Transport: cachedTransport,
-		Timeout:   time.Second * 30,
-	}
-
-	// When the policy URL is a unix socket, configure both HTTP transports
-	// to dial the socket and rewrite the URL to http://localhost.
+	// When the policy URL is a unix socket, configure the HTTP transport to
+	// dial the socket and rewrite the URL to http://localhost.
 	if socketPath, ok := strings.CutPrefix(ca.policyURL, "unix://"); ok {
 		dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 		}
 		ca.httpClient.Transport = &http.Transport{DialContext: dialFunc}
-
-		// Wrap the caching transport to dial via unix socket.
-		sockCachedTransport := httpcache.NewMemoryCacheTransport()
-		sockCachedTransport.Transport = &http.Transport{DialContext: dialFunc}
-		ca.discoveryClient.Transport = sockCachedTransport
 
 		ca.policyURL = "http://localhost/"
 	}
@@ -153,12 +131,10 @@ func (c *CA) PublicKey() sshcert.RawPublicKey {
 }
 
 // FetchDiscovery fetches discovery data from the policy server.
-// Uses HTTP caching (Cache-Control headers) to avoid unnecessary requests.
-// The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
-//
-// The token has a 60s expiry while the cache TTL is 300s. This is safe
-// because httpcache serves directly from cache during max-age and creates a
-// fresh (newly signed) request after the cache expires.
+// The request carries a CA-minted, request-bound JWT (pkg/serviceauth). The
+// response's Cache-Control header is preserved on the returned Discovery so
+// callers (the CA server's /discovery handler) can pass it through to
+// clients; this CA client itself does not cache.
 func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 	req, err := http.NewRequest("GET", c.policyURL, nil)
 	if err != nil {
@@ -175,7 +151,7 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 	}
 
 	start := time.Now()
-	res, err := c.discoveryClient.Do(req.WithContext(ctx))
+	res, err := c.httpClient.Do(req.WithContext(ctx))
 	duration := time.Since(start)
 	if err != nil {
 		if c.logger != nil {

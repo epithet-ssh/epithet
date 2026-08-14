@@ -45,19 +45,11 @@ func (c *ServerConfig) Validate() error {
 }
 
 // BootstrapAuth returns the auth configuration for the bootstrap endpoint.
-// Currently only supports OIDC auth type.
 func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
-	scopes := c.OIDC.Scopes
-	if len(scopes) == 0 {
-		scopes = DefaultScopes()
-	}
-
 	return wire.AuthConfig{
-		Type:         "oidc",
 		Issuer:       c.OIDC.Issuer,
 		ClientID:     c.OIDC.ClientID,
 		ClientSecret: c.OIDC.ClientSecret,
-		Scopes:       scopes,
 	}
 }
 
@@ -82,15 +74,9 @@ func (c *PolicyRulesConfig) ExtractServerConfig() *ServerConfig {
 
 // OIDCConfig represents OIDC configuration for token validation
 type OIDCConfig struct {
-	Issuer       string   `yaml:"issuer" json:"issuer"`
-	ClientID     string   `yaml:"client_id" json:"client_id"`
-	ClientSecret string   `yaml:"client_secret,omitempty" json:"client_secret,omitempty"` // Optional, for confidential clients
-	Scopes       []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`               // Optional, defaults to ["openid", "profile", "email"]
-}
-
-// DefaultScopes returns the default OIDC scopes
-func DefaultScopes() []string {
-	return []string{"openid", "profile", "email"}
+	Issuer       string `yaml:"issuer" json:"issuer"`
+	ClientID     string `yaml:"client_id" json:"client_id"`
+	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"` // Optional, for confidential clients
 }
 
 // Rules defines a set of policy rules: which principals are allowed, cert
@@ -160,21 +146,4 @@ func DefaultExtensions() map[string]string {
 // DefaultExpiration returns the default certificate expiration duration
 func DefaultExpiration() string {
 	return "5m"
-}
-
-// BootstrapAuth returns the auth configuration for the bootstrap endpoint.
-// Currently only supports OIDC auth type.
-func (c *PolicyRulesConfig) BootstrapAuth() wire.AuthConfig {
-	scopes := c.OIDC.Scopes
-	if len(scopes) == 0 {
-		scopes = DefaultScopes()
-	}
-
-	return wire.AuthConfig{
-		Type:         "oidc",
-		Issuer:       c.OIDC.Issuer,
-		ClientID:     c.OIDC.ClientID,
-		ClientSecret: c.OIDC.ClientSecret,
-		Scopes:       scopes,
-	}
 }

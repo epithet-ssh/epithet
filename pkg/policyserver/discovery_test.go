@@ -13,12 +13,9 @@ import (
 func TestHandler_GETDiscovery(t *testing.T) {
 	discovery := &wire.Discovery{
 		Auth: &wire.AuthConfig{
-			Type:     "oidc",
 			Issuer:   "https://accounts.google.com",
 			ClientID: "test-client-id",
-			Scopes:   []string{"openid", "profile", "email"},
 		},
-		MatchPatterns: []string{"*.example.com", "prod-*"},
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{
@@ -42,14 +39,11 @@ func TestHandler_GETDiscovery(t *testing.T) {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	if got.Auth.Type != "oidc" {
-		t.Errorf("expected auth type 'oidc', got %q", got.Auth.Type)
-	}
 	if got.Auth.Issuer != "https://accounts.google.com" {
 		t.Errorf("expected issuer 'https://accounts.google.com', got %q", got.Auth.Issuer)
 	}
-	if len(got.MatchPatterns) != 2 {
-		t.Errorf("expected 2 match patterns, got %d", len(got.MatchPatterns))
+	if got.Auth.ClientID != "test-client-id" {
+		t.Errorf("expected client_id 'test-client-id', got %q", got.Auth.ClientID)
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("expected Content-Type 'application/json', got %q", ct)

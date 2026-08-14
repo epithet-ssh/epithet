@@ -66,8 +66,8 @@ func TestClient_422_ReturnsConnectionNotHandledError(t *testing.T) {
 		Port:       22,
 	}
 	_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-		PublicKey:  &pubKey,
-		Connection: &conn,
+		PublicKey:  pubKey,
+		Connection: conn,
 	})
 
 	// Should return ConnectionNotHandledError
@@ -103,8 +103,8 @@ func TestClient_422_DoesNotTripCircuitBreaker(t *testing.T) {
 	// Make multiple requests - circuit breaker should NOT trip
 	for i := 0; i < 5; i++ {
 		_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-			PublicKey:  &pubKey,
-			Connection: &conn,
+			PublicKey:  pubKey,
+			Connection: conn,
 		})
 		require.Error(t, err)
 
@@ -178,8 +178,8 @@ func TestClient_StatusCodes(t *testing.T) {
 				Port:       22,
 			}
 			_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-				PublicKey:  &pubKey,
-				Connection: &conn,
+				PublicKey:  pubKey,
+				Connection: conn,
 			})
 
 			require.Error(t, err)
@@ -214,7 +214,7 @@ func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
 		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"matchPatterns": ["*.example.com", "*.test.local"]}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -234,7 +234,7 @@ func TestGetDiscovery_WithDiscoveryURL(t *testing.T) {
 	discovery, err := client.GetDiscovery(context.Background(), "test-token")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
-	assert.Equal(t, []string{"*.example.com", "*.test.local"}, discovery.MatchPatterns)
+	assert.Equal(t, "https://idp.example.com", discovery.Auth.Issuer)
 }
 
 func TestGetDiscovery_Unauthorized(t *testing.T) {
@@ -330,8 +330,8 @@ func TestGetCert_WithDiscoveryURL(t *testing.T) {
 		Port:       22,
 	}
 	resp, err := client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-		PublicKey:  &pubKey,
-		Connection: &conn,
+		PublicKey:  pubKey,
+		Connection: conn,
 	})
 
 	require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestGetDiscovery_HTTPCaching(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "max-age=300") // Cache for 5 minutes
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -378,7 +378,7 @@ func TestGetDiscovery_HTTPCaching(t *testing.T) {
 	assert.Equal(t, 1, discoveryCallCount, "second request should use HTTP cache")
 
 	// Results should be the same
-	assert.Equal(t, discovery1.MatchPatterns, discovery2.MatchPatterns)
+	assert.Equal(t, discovery1.Auth.Issuer, discovery2.Auth.Issuer)
 }
 
 func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
@@ -390,7 +390,7 @@ func TestGetDiscovery_HTTPCaching_NoCacheHeader(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// No Cache-Control header - should not be cached
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"matchPatterns": ["*.example.com"]}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -428,7 +428,7 @@ func TestGetDiscovery_AuthenticatedRequest(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "max-age=300")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"auth":{"type":"oidc"},"matchPatterns": ["*.example.com"]}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -447,7 +447,7 @@ func TestGetDiscovery_AuthenticatedRequest(t *testing.T) {
 	discovery, err := client.GetDiscovery(context.Background(), "test-token")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
-	assert.Equal(t, []string{"*.example.com"}, discovery.MatchPatterns)
+	assert.Equal(t, "https://idp.example.com", discovery.Auth.Issuer)
 
 	// Verify Authorization header was sent.
 	assert.Equal(t, "Bearer test-token", receivedAuthHeader)
@@ -476,8 +476,8 @@ func TestGetCert_CachesDiscoveryURL(t *testing.T) {
 	pubKey := sshcert.RawPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDB")
 	conn := policy.Connection{RemoteHost: "server.example.com", RemoteUser: "alice", Port: 22}
 	resp, err := client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
-		PublicKey:  &pubKey,
-		Connection: &conn,
+		PublicKey:  pubKey,
+		Connection: conn,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "https://discovery.example.com/abc123", resp.DiscoveryURL)
@@ -567,7 +567,7 @@ func TestGetDiscovery_Unauth_Success(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"123.apps.googleusercontent.com","scopes":["openid","profile","email"]}}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://accounts.google.com","client_id":"123.apps.googleusercontent.com"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -588,39 +588,8 @@ func TestGetDiscovery_Unauth_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
-	assert.Equal(t, "oidc", discovery.Auth.Type)
 	assert.Equal(t, "https://accounts.google.com", discovery.Auth.Issuer)
 	assert.Equal(t, "123.apps.googleusercontent.com", discovery.Auth.ClientID)
-	assert.Equal(t, []string{"openid", "profile", "email"}, discovery.Auth.Scopes)
-}
-
-func TestGetDiscovery_Unauth_CommandType(t *testing.T) {
-	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"auth":{"type":"command","command":"/usr/local/bin/custom-sso --tenant prod"}}`))
-	}))
-	defer discoveryServer.Close()
-
-	// CA server (needed for client creation)
-	caServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer caServer.Close()
-
-	endpoints := []caclient.CAEndpoint{{URL: caServer.URL, Priority: caclient.DefaultPriority}}
-	client, err := caclient.New(endpoints)
-	require.NoError(t, err)
-
-	client.SetDiscoveryURL(discoveryServer.URL)
-
-	// Get discovery config without auth token
-	discovery, err := client.GetDiscovery(context.Background(), "")
-	require.NoError(t, err)
-	require.NotNil(t, discovery)
-
-	assert.Equal(t, "command", discovery.Auth.Type)
-	assert.Equal(t, "/usr/local/bin/custom-sso --tenant prod", discovery.Auth.Command)
 }
 
 func TestGetDiscovery_Unauth_NoDiscoveryURL(t *testing.T) {
@@ -650,7 +619,7 @@ func TestGetDiscovery_Unauth_DirectServing(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "max-age=300")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://example.com","client_id":"test"}}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://example.com","client_id":"test"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -670,7 +639,7 @@ func TestGetDiscovery_Unauth_DirectServing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
-	assert.Equal(t, "oidc", discovery.Auth.Type)
+	assert.Equal(t, "https://example.com", discovery.Auth.Issuer)
 	assert.Equal(t, 1, callCount, "discovery endpoint should be hit directly")
 }
 
@@ -682,7 +651,7 @@ func TestGetDiscovery_Unauth_HTTPCaching(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://example.com","client_id":"test"}}`))
+		w.Write([]byte(`{"auth":{"issuer":"https://example.com","client_id":"test"}}`))
 	}))
 	defer discoveryServer.Close()
 
@@ -716,36 +685,27 @@ func TestIntegration_UnifiedDiscovery(t *testing.T) {
 	// 2. Client calls GetDiscovery(ctx, "") → gets auth config (no auth)
 	// 3. Client uses auth config to authenticate (simulated)
 	// 4. Client calls Hello() with token → learns discovery URL
-	// 5. Client calls GetDiscovery(ctx, token) → gets auth config + match patterns
+	// 5. Client calls GetDiscovery(ctx, token) → gets auth config again
+	//
+	// Discovery itself no longer varies by auth (Task 8 made it anonymous
+	// pass-through), but the CA client's Hello/cached-URL mechanics are
+	// still exercised here since that's untouched until Task 14.
 
 	caRootCalls := 0
 	helloCalls := 0
 	discoveryCalls := 0
 
-	// Policy server handles discovery with Vary: Authorization.
+	// Policy server handles discovery.
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/discovery" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		discoveryCalls++
-		w.Header().Set("Vary", "Authorization")
 		w.Header().Set("Cache-Control", "max-age=300")
 		w.Header().Set("Content-Type", "application/json")
-
-		auth := r.Header.Get("Authorization")
-		if auth == "" {
-			// Unauthenticated: auth config only.
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client","scopes":["openid","profile"]}}`))
-		} else if auth == "Bearer test-token" {
-			// Authenticated: auth config + match patterns.
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"auth":{"type":"oidc","issuer":"https://accounts.google.com","client_id":"test-client","scopes":["openid","profile"]},"matchPatterns":["*.example.com","prod-*"]}`))
-		} else {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("unauthorized"))
-		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"auth":{"issuer":"https://accounts.google.com","client_id":"test-client"}}`))
 	}))
 	defer policyServer.Close()
 
@@ -795,10 +755,8 @@ func TestIntegration_UnifiedDiscovery(t *testing.T) {
 	discovery, err := client.GetDiscovery(ctx, "")
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
-	assert.Equal(t, "oidc", discovery.Auth.Type)
 	assert.Equal(t, "https://accounts.google.com", discovery.Auth.Issuer)
 	assert.Equal(t, "test-client", discovery.Auth.ClientID)
-	assert.Equal(t, []string{"openid", "profile"}, discovery.Auth.Scopes)
 
 	// Step 3: Client uses auth config to authenticate (simulated).
 	token := "test-token"
@@ -808,10 +766,9 @@ func TestIntegration_UnifiedDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, helloCalls)
 
-	// Step 5: Get discovery with auth → auth config + match patterns.
+	// Step 5: Get discovery with auth → same anonymous auth config.
 	discovery, err = client.GetDiscovery(ctx, token)
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
-	assert.Equal(t, "oidc", discovery.Auth.Type)
-	assert.Equal(t, []string{"*.example.com", "prod-*"}, discovery.MatchPatterns)
+	assert.Equal(t, "https://accounts.google.com", discovery.Auth.Issuer)
 }

@@ -7,13 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cbroglie/mustache"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // MaxStateBlobSize is the maximum size of the state blob (10 MiB).
@@ -322,56 +320,4 @@ func execute(ctx context.Context, cmdLine string, state []byte, userOutput io.Wr
 
 	// Return the token verbatim from the auth source.
 	return string(token), newState, nil
-}
-
-// AuthConfigToCommand converts a bootstrap auth config to an executable command string.
-// For type="oidc": constructs "<executable> auth oidc --issuer X --client-id Y --scopes Z"
-// For type="command": returns the command as-is (substituting "epithet" with os.Executable())
-// Returns an error if the auth type is unknown or if os.Executable() fails.
-func AuthConfigToCommand(auth wire.AuthConfig) (string, error) {
-	switch auth.Type {
-	case "oidc":
-		// Construct the OIDC auth command
-		executable, err := os.Executable()
-		if err != nil {
-			return "", fmt.Errorf("failed to get executable path: %w", err)
-		}
-
-		// Build command: <executable> auth oidc --issuer X --client-id Y [--client-secret Z] --scopes A,B,C
-		parts := []string{
-			executable,
-			"auth", "oidc",
-			"--issuer", auth.Issuer,
-			"--client-id", auth.ClientID,
-		}
-
-		if auth.ClientSecret != "" {
-			parts = append(parts, "--client-secret", auth.ClientSecret)
-		}
-
-		if len(auth.Scopes) > 0 {
-			parts = append(parts, "--scopes", strings.Join(auth.Scopes, ","))
-		}
-
-		return strings.Join(parts, " "), nil
-
-	case "command":
-		// Use the command as-is, substituting "epithet" with the current executable
-		if auth.Command == "" {
-			return "", fmt.Errorf("command auth type requires non-empty command")
-		}
-
-		executable, err := os.Executable()
-		if err != nil {
-			return "", fmt.Errorf("failed to get executable path: %w", err)
-		}
-
-		// Replace "epithet" with the actual executable path
-		// This allows bootstrap configs to use "epithet" as a placeholder
-		cmd := strings.ReplaceAll(auth.Command, "epithet", executable)
-		return cmd, nil
-
-	default:
-		return "", fmt.Errorf("unknown auth type: %s", auth.Type)
-	}
 }

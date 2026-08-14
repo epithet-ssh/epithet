@@ -35,15 +35,21 @@ func testCAClient(t *testing.T, url string) *caclient.Client {
 	return client
 }
 
-// testCAClientWithDiscovery creates a CA client with a mock discovery endpoint.
-// The discovery patterns are returned by the mock CA's Hello endpoint.
+// testCAClientWithDiscovery creates a CA client with a mock discovery
+// endpoint that returns a non-nil (but otherwise empty) discovery document.
+//
+// patterns is unused: server-advertised match patterns were removed from
+// the wire format in Task 8, and shouldHandle no longer consults them
+// (TEMPORARY handle-everything, see broker.go). The parameter stays so
+// existing callers — several of which are skipped pending Task 14's
+// gating rewrite — don't all need their call sites rewritten twice.
 func testCAClientWithDiscovery(t *testing.T, patterns []string) *caclient.Client {
 	t.Helper()
 
 	// Create a discovery server.
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(wire.Discovery{MatchPatterns: patterns})
+		json.NewEncoder(w).Encode(wire.Discovery{})
 	}))
 	t.Cleanup(discoveryServer.Close)
 
@@ -184,6 +190,11 @@ printf '%s' "test-token"
 }
 
 func Test_ShouldHandle(t *testing.T) {
+	// shouldHandle no longer matches hostnames against discovery patterns
+	// (server-advertised patterns were removed from the wire format in
+	// Task 8; shouldHandle TEMPORARILY treats any fetched discovery as
+	// "handle everything" — see broker.go). Rewired in Task 14.
+	t.Skip("pattern matching removed pending Task 14 gating rewrite")
 	t.Parallel()
 	tests := []struct {
 		name     string
@@ -267,6 +278,10 @@ printf '%s' "test-token"
 }
 
 func Test_MatchWithPatternFiltering(t *testing.T) {
+	// See Test_ShouldHandle: pattern-based filtering is TEMPORARILY gone
+	// (Task 8); everything with fetched discovery is handled. Rewired in
+	// Task 14.
+	t.Skip("pattern matching removed pending Task 14 gating rewrite")
 	t.Parallel()
 	ctx := t.Context()
 	authCommand := writeTestScript(t, `#!/bin/sh
@@ -350,6 +365,9 @@ func shortTempDir(t *testing.T) string {
 }
 
 func Test_ShouldHandle_UsesDiscoveryPatterns(t *testing.T) {
+	// See Test_ShouldHandle: pattern-based filtering is TEMPORARILY gone
+	// (Task 8). Rewired in Task 14.
+	t.Skip("pattern matching removed pending Task 14 gating rewrite")
 	t.Parallel()
 	// Start a discovery server that returns specific patterns.
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -558,7 +576,7 @@ func Test_DiscoveryReauthOnExpiredToken(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// No caching so each call hits the server.
 		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(wire.Discovery{MatchPatterns: []string{"*.example.com"}})
+		json.NewEncoder(w).Encode(wire.Discovery{})
 	}))
 	defer discoveryServer.Close()
 

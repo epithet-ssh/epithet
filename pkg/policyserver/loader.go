@@ -49,15 +49,6 @@ func (c *PolicyConfig) Validate() error {
 	return nil
 }
 
-// HostPatterns returns the list of host patterns defined in the policy.
-func (c *PolicyConfig) HostPatterns() []string {
-	patterns := make([]string, 0, len(c.Hosts))
-	for pattern := range c.Hosts {
-		patterns = append(patterns, pattern)
-	}
-	return patterns
-}
-
 // PolicyLoader loads policy configuration from a URL (file or HTTP).
 // It handles caching for both HTTP (via Cache-Control headers) and file sources (via mtime).
 type PolicyLoader struct {

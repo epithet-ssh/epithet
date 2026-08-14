@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	pb "github.com/epithet-ssh/epithet/pkg/brokerv1"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
@@ -295,8 +294,8 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 
 		// Request certificate from CA.
 		certResp, err = b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
-			PublicKey:  &publicKey,
-			Connection: &conn,
+			PublicKey:  publicKey,
+			Connection: conn,
 		})
 
 		if err == nil {
@@ -464,37 +463,20 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	return nil
 }
 
-// shouldHandle checks if the given hostname matches discovery patterns.
-// Always fetches discovery patterns, authenticating if needed.
-// Returns true if epithet should handle this connection, false otherwise.
+// shouldHandle reports whether epithet should handle this connection.
+//
+// TEMPORARY until Task 14: server-advertised match patterns are gone from
+// the wire format (Task 8), but the gating call site here hasn't been
+// removed yet. Until then, treat a successfully fetched discovery document
+// as "handle everything" — the hostname is no longer consulted.
 func (b *Broker) shouldHandle(ctx context.Context, hostname string, userOutput io.Writer) bool {
-	// Always fetch discovery patterns (auth + Hello if needed).
 	discovery, err := b.getDiscoveryPatterns(ctx, userOutput)
 	if err != nil {
-		b.log.Error("failed to get discovery patterns", "error", err)
+		b.log.Error("failed to get discovery", "error", err)
 		return false // Can't determine - don't handle
 	}
 
-	if discovery == nil || len(discovery.MatchPatterns) == 0 {
-		b.log.Debug("no discovery patterns available")
-		return false // No patterns = don't handle anything
-	}
-
-	// Check if hostname matches any discovery pattern
-	for _, pattern := range discovery.MatchPatterns {
-		matched, err := doublestar.Match(pattern, hostname)
-		if err != nil {
-			b.log.Warn("invalid match pattern", "pattern", pattern, "error", err)
-			continue
-		}
-		if matched {
-			b.log.Debug("host matches discovery pattern", "host", hostname, "pattern", pattern)
-			return true
-		}
-	}
-
-	b.log.Debug("host does not match any discovery pattern", "host", hostname, "patterns", discovery.MatchPatterns)
-	return false
+	return discovery != nil
 }
 
 // getDiscoveryPatterns fetches discovery patterns, authenticating and calling Hello if needed.
@@ -694,13 +676,10 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 	output.SocketPath = b.brokerSocketPath
 	output.AgentSocketDir = b.agentSocketDir
 
-	// Fetch discovery patterns (HTTP cached)
-	if token := b.auth.Token(); token != "" {
-		discovery, err := b.caClient.GetDiscovery(context.Background(), token)
-		if err == nil && discovery != nil {
-			output.DiscoveryPatterns = discovery.MatchPatterns
-		}
-	}
+	// output.DiscoveryPatterns is left empty: server-advertised match
+	// patterns were removed from the wire format in Task 8. The field
+	// itself is still defined on the (generated) proto message; it goes
+	// away when the RPC gating is rewired in Task 14.
 
 	// Get agent info
 	output.Agents = make([]AgentInfo, 0, len(b.agents))

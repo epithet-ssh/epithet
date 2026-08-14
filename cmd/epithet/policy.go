@@ -120,19 +120,10 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		policyProvider = policyserver.NewStaticProvider(cfg.ExtractPolicyConfig())
 	}
 
-	initialPolicy, err := policyProvider.GetPolicy(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get initial policy: %w", err)
-	}
-
 	authConfig := serverCfg.BootstrapAuth()
-	matchPatterns := initialPolicy.HostPatterns()
 
 	// Build discovery response that the CA will fetch via GET /.
-	discovery := &wire.Discovery{
-		Auth:          &authConfig,
-		MatchPatterns: matchPatterns,
-	}
+	discovery := &wire.Discovery{Auth: &authConfig}
 
 	handler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: sshcert.RawPublicKey(caPubkey),
@@ -157,7 +148,6 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	logger.Info("starting policy server",
 		"listen", c.Listen,
 		"ca_pubkey_length", len(caPubkey),
-		"match_patterns", matchPatterns,
 		"dynamic_policy", c.PolicySource != "")
 
 	return listenAndServe(c.Listen, r)

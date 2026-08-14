@@ -112,32 +112,28 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	}
 
 	// Resolve auth command: use --auth if provided, otherwise discover from CA.
+	//
+	// TEMPORARY until Task 11: build the oidc exec command inline. Discovery
+	// only ever advertises OIDC now, so there is no auth-type dispatch left;
+	// this whole path is rewritten properly once the client is redone.
 	authCommand := parent.Auth
 	if authCommand == "" {
 		logger.Debug("no --auth provided, discovering from CA")
 
-		// Fetch public key (also caches discovery URL).
-		_, err := caClient.GetPublicKey(context.Background())
-		if err != nil {
-			return fmt.Errorf("failed to get CA public key: %w", err)
-		}
-
-		// Fetch unauthenticated discovery (auth config only, no token needed).
 		discovery, err := caClient.GetDiscovery(context.Background(), "")
-		if err != nil {
-			return fmt.Errorf("failed to get discovery config (try --auth to specify manually): %w", err)
+		if err != nil || discovery == nil || discovery.Auth == nil {
+			return fmt.Errorf("failed to get discovery config: %w", err)
 		}
-		if discovery == nil || discovery.Auth == nil {
-			return fmt.Errorf("CA did not return auth config in discovery (try --auth to specify manually)")
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		authCommand = fmt.Sprintf("%s auth oidc --issuer %s --client-id %s", exe, discovery.Auth.Issuer, discovery.Auth.ClientID)
+		if discovery.Auth.ClientSecret != "" {
+			authCommand += " --client-secret " + discovery.Auth.ClientSecret
 		}
 
-		// Convert auth config to command.
-		authCommand, err = broker.AuthConfigToCommand(*discovery.Auth)
-		if err != nil {
-			return fmt.Errorf("failed to convert discovery auth config: %w", err)
-		}
-
-		logger.Info("discovered auth config from CA", "type", discovery.Auth.Type, "issuer", discovery.Auth.Issuer)
+		logger.Info("discovered auth config from CA", "issuer", discovery.Auth.Issuer)
 	}
 
 	// Create broker

@@ -131,55 +131,24 @@ func TestValidateDuration(t *testing.T) {
 	}
 }
 
-func TestBootstrapAuth_WithOIDC(t *testing.T) {
-	cfg := policyserver.PolicyRulesConfig{
+func TestServerConfig_BootstrapAuth(t *testing.T) {
+	cfg := policyserver.ServerConfig{
 		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "test-client-id.apps.googleusercontent.com",
+			Issuer:       "https://accounts.google.com",
+			ClientID:     "test-client-id.apps.googleusercontent.com",
+			ClientSecret: "shh",
 		},
 	}
 
 	auth := cfg.BootstrapAuth()
 
-	if auth.Type != "oidc" {
-		t.Errorf("expected type 'oidc', got %q", auth.Type)
-	}
 	if auth.Issuer != "https://accounts.google.com" {
 		t.Errorf("expected issuer 'https://accounts.google.com', got %q", auth.Issuer)
 	}
 	if auth.ClientID != "test-client-id.apps.googleusercontent.com" {
 		t.Errorf("expected client_id 'test-client-id.apps.googleusercontent.com', got %q", auth.ClientID)
 	}
-	// Should have default scopes
-	expectedScopes := []string{"openid", "profile", "email"}
-	if len(auth.Scopes) != len(expectedScopes) {
-		t.Errorf("expected %d scopes, got %d", len(expectedScopes), len(auth.Scopes))
-	}
-	for i, scope := range expectedScopes {
-		if auth.Scopes[i] != scope {
-			t.Errorf("expected scope[%d]=%q, got %q", i, scope, auth.Scopes[i])
-		}
-	}
-}
-
-func TestBootstrapAuth_WithCustomScopes(t *testing.T) {
-	cfg := policyserver.PolicyRulesConfig{
-		OIDC: policyserver.OIDCConfig{
-			Issuer:   "https://accounts.google.com",
-			ClientID: "test-client-id",
-			Scopes:   []string{"openid", "custom-scope"},
-		},
-	}
-
-	auth := cfg.BootstrapAuth()
-
-	expectedScopes := []string{"openid", "custom-scope"}
-	if len(auth.Scopes) != len(expectedScopes) {
-		t.Errorf("expected %d scopes, got %d", len(expectedScopes), len(auth.Scopes))
-	}
-	for i, scope := range expectedScopes {
-		if auth.Scopes[i] != scope {
-			t.Errorf("expected scope[%d]=%q, got %q", i, scope, auth.Scopes[i])
-		}
+	if auth.ClientSecret != "shh" {
+		t.Errorf("expected client_secret 'shh', got %q", auth.ClientSecret)
 	}
 }

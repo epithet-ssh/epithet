@@ -260,23 +260,6 @@ func TestPolicyLoader_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestPolicyConfig_HostPatterns(t *testing.T) {
-	policy := &policyserver.PolicyConfig{
-		Users: map[string][]string{
-			"alice@example.com": {"admin"},
-		},
-		Hosts: map[string]*policyserver.Rules{
-			"*.example.com": {},
-			"prod-*":        {},
-		},
-	}
-
-	patterns := policy.HostPatterns()
-	if len(patterns) != 2 {
-		t.Errorf("expected 2 patterns, got %d", len(patterns))
-	}
-}
-
 func TestStaticProvider(t *testing.T) {
 	policy := &policyserver.PolicyConfig{
 		Users: map[string][]string{

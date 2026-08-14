@@ -1,7 +1,9 @@
 package server_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // TestServerEndToEnd verifies the combined server command starts CA and policy
@@ -130,7 +133,9 @@ policy:
 		}
 	})
 
-	// GET /discovery (no auth) → 200 with auth config.
+	// GET /discovery (no auth) → 200 with auth config. Discovery is a
+	// plain anonymous pass-through now (Task 8): no Vary header, since
+	// there's no authenticated variant to distinguish from.
 	t.Run("discovery_unauth", func(t *testing.T) {
 		resp, err := http.Get(baseURL + "/discovery")
 		if err != nil {
@@ -142,8 +147,20 @@ policy:
 			t.Fatalf("GET /discovery status = %d, want 200", resp.StatusCode)
 		}
 
-		if vary := resp.Header.Get("Vary"); vary != "Authorization" {
-			t.Errorf("Vary = %q, want 'Authorization'", vary)
+		if vary := resp.Header.Get("Vary"); vary != "" {
+			t.Errorf("Vary = %q, want empty", vary)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("failed to read discovery body: %v", err)
+		}
+		var d wire.Discovery
+		if err := json.Unmarshal(body, &d); err != nil {
+			t.Fatalf("failed to parse discovery body: %v", err)
+		}
+		if d.Auth == nil || d.Auth.Issuer == "" || d.Auth.ClientID == "" {
+			t.Errorf("discovery auth config incomplete: %+v", d.Auth)
 		}
 	})
 
