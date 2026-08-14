@@ -148,7 +148,7 @@ printf '%s' "fresh-token"
 `)
 	token, err := auth.Run(context.Background(), nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, "ZnJlc2gtdG9rZW4", token) // "fresh-token" base64url encoded
+	require.Equal(t, "fresh-token", token)
 }
 
 func TestAuth_Run_JoinerKeepsFlightAliveAfterLeaderCancels(t *testing.T) {
@@ -187,7 +187,7 @@ func TestAuth_Run_JoinerKeepsFlightAliveAfterLeaderCancels(t *testing.T) {
 	select {
 	case token := <-joinerResult:
 		require.NoError(t, <-joinerErrCh)
-		require.Equal(t, "Z2F0ZWQtdG9rZW4", token) // "gated-token" base64url encoded
+		require.Equal(t, "gated-token", token)
 	case <-time.After(5 * time.Second):
 		t.Fatal("joiner Run did not complete")
 	}

@@ -2,7 +2,6 @@ package policyserver
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -176,16 +175,8 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decode the base64url-encoded token.
-	// Tokens are always base64url encoded by the broker to preserve arbitrary bytes.
-	decodedToken, err := base64.RawURLEncoding.DecodeString(req.Token)
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid token encoding: %v", err))
-		return
-	}
-
 	// Validate token and extract identity (authentication).
-	identity, err := h.config.Validator.ValidateAndExtractIdentity(string(decodedToken))
+	identity, err := h.config.Validator.ValidateAndExtractIdentity(req.Token)
 	if err != nil {
 		h.writeError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid token: %v", err))
 		return

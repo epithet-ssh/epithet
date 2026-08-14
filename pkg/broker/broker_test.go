@@ -567,8 +567,8 @@ func Test_DiscoveryReauthOnExpiredToken(t *testing.T) {
 		expired := tokenExpired
 		rejectToken.Unlock()
 
-		if expired && r.Header.Get("Authorization") == "Bearer dG9rZW4tMQ" {
-			// First token ("token-1" base64url) is expired — return 401.
+		if expired && r.Header.Get("Authorization") == "Bearer token-1" {
+			// First token is expired — return 401.
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte("token expired"))
 			return

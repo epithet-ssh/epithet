@@ -3,7 +3,6 @@ package broker
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -321,8 +320,8 @@ func execute(ctx context.Context, cmdLine string, state []byte, userOutput io.Wr
 		return "", nil, fmt.Errorf("auth command returned empty token")
 	}
 
-	// Return the token (base64url encoded to preserve arbitrary bytes).
-	return base64.RawURLEncoding.EncodeToString(token), newState, nil
+	// Return the token verbatim from the auth source.
+	return string(token), newState, nil
 }
 
 // AuthConfigToCommand converts a bootstrap auth config to an executable command string.

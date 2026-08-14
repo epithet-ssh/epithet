@@ -3,7 +3,6 @@ package policyserver_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,11 +43,6 @@ func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, conn poli
 	return m.response, nil
 }
 
-// encodeToken base64url encodes a token as the broker would.
-func encodeToken(token string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(token))
-}
-
 func TestHandler_Success(t *testing.T) {
 	evaluator := &mockEvaluator{
 		response: &wire.PolicyResponse{
@@ -74,7 +68,7 @@ func TestHandler_Success(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Token: encodeToken("test-token"),
+		Token: "test-token",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -113,7 +107,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Token: encodeToken("invalid-token"),
+		Token: "invalid-token",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -143,7 +137,7 @@ func TestHandler_Forbidden(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Token: encodeToken("valid-token"),
+		Token: "valid-token",
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
@@ -173,7 +167,7 @@ func TestHandler_NotHandled(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Token: encodeToken("valid-token"),
+		Token: "valid-token",
 		Connection: policy.Connection{
 			RemoteHost: "unknown.example.com",
 			RemoteUser: "testuser",
@@ -208,31 +202,37 @@ func TestHandler_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandler_InvalidTokenEncoding(t *testing.T) {
-	handler := policyserver.NewHandler(policyserver.Config{
-		Validator: &mockValidator{},
-		Evaluator: &mockEvaluator{},
-	})
-
-	req := wire.PolicyRequest{
-		Token: "!!!not-valid-base64!!!",
-		Connection: policy.Connection{
-			RemoteHost: "server.example.com",
-			RemoteUser: "testuser",
-			Port:       22,
+func TestHandlerAcceptsBareToken(t *testing.T) {
+	evaluator := &mockEvaluator{
+		response: &wire.PolicyResponse{
+			CertParams: wire.CertParams{
+				Identity:   "alice@example.com",
+				Names:      []string{"alice"},
+				Expiration: 5 * time.Minute,
+				Extensions: map[string]string{
+					"permit-pty": "",
+				},
+			},
+			Policy: policy.Policy{
+				HostUsers: map[string][]string{
+					"*": {"alice"},
+				},
+			},
 		},
 	}
-	body, _ := json.Marshal(req)
 
-	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	w := httptest.NewRecorder()
+	handler := policyserver.NewHandler(policyserver.Config{
+		Validator: &mockValidator{identity: "alice@example.com"},
+		Evaluator: evaluator,
+	})
 
-	handler.ServeHTTP(w, httpReq)
+	body, _ := json.Marshal(wire.PolicyRequest{Token: "raw.jwt.token"})
+	req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
-	}
-	if !bytes.Contains(w.Body.Bytes(), []byte("Invalid token encoding")) {
-		t.Errorf("expected 'Invalid token encoding' in response, got %s", w.Body.String())
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
