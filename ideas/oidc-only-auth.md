@@ -10,7 +10,12 @@ hard invariant: **the auth token is always a JWT, end to end**. Cascade the
 simplifications that invariant unlocks — delete the base64 token wrapping, refresh
 proactively from JWT `exp`, clamp cert TTL to token expiry, move host gating into
 the user's ssh config and shrink discovery to an anonymous bootstrap endpoint, and
-replace RFC 9421 service signing with CA-minted JWTs. SAML support, when it arrives, must terminate in a JWT (token exchange
+replace RFC 9421 service signing with CA-minted JWTs. A second round of
+assumption-hunting added three more: certificates are minted per connection (the
+client cert cache is deleted and certs narrow to the requested principal), the
+broker's local IPC drops gRPC/protobuf for newline-framed JSON over the unix
+socket, and dynamic policy loading is removed (restart-to-reload; epithet-aws is
+reworked separately). SAML support, when it arrives, must terminate in a JWT (token exchange
 or an OIDC-fronting IdP); it is purely a client-side acquisition concern and never
 reopens the transport contract.
 
@@ -28,6 +33,10 @@ reopens the transport contract.
 | Host gating | User ssh config via `Tag`/`Match tagged` (OpenSSH 9.4+); generated per-profile files keep the arcane exec; server-advertised match patterns removed |
 | OIDC scopes | Not configurable; client hardcodes `openid profile email` |
 | Config parsing rework | Separate change; direction recorded in §7 |
+| Client cert cache | Deleted; certificates are minted per connection and carry only the requested principal (§11) |
+| Broker IPC | Newline-framed JSON over the unix socket; gRPC/protobuf/buf deleted (§8) |
+| Dynamic policy loading | Deleted (`--policy-source`, loader, providers); epithet-aws reworked separately to fetch-at-start + restart on config version change (§12) |
+| Multi-CA failover (breakerpool) | Kept for now; yatl task to re-evaluate — failover must live somewhere and a smart client is the easy path if designed in from the start. Its double-request-after-trip bug is documented in that task |
 | Combined `epithet server` mode | Untouched. The CA/policy process boundary is deliberate; combined mode will likely be deleted in a separate change |
 
 ## 1. The token contract
@@ -280,11 +289,100 @@ Still in this effort, because it is entangled with the JWT work:
   `ca.go:237,298`). Real ID tokens with group claims run 4–8 KiB; truncation must
   report "too large", not "unexpected end of JSON input".
 
-## 8. Wire compatibility
+## 8. Broker IPC: JSON over the unix socket
 
-No proto changes. `MatchEvent.user_output` keeps its field; its meaning narrows from
-"arbitrary plugin fd4 bytes" to "broker auth progress messages". Comment updates
-only — no regeneration, no gRPC compatibility concerns.
+gRPC and protobuf are removed from the broker socket. Both peers are the same
+binary (the generated ssh config embeds `os.Executable()`), the socket is 0700 in
+the profile rundir, and the exec line is regenerated on every agent start — there
+is no cross-version or cross-language contract to protect, yet the current setup
+carries ~950 generated lines, a `buf` toolchain with remote codegen plugins, and
+96 of the binary's 420 packages (grpc drags otel, genproto, x/net).
+
+Replacement: newline-framed JSON over the same unix socket.
+
+- `epithet match` writes one request line: `{"match": {connection...}}`; the
+  broker streams event lines: zero or more `{"output": "<text>"}` (auth progress,
+  written to the user's stderr) followed by exactly one terminal
+  `{"result": {"allow": bool, "error": "..."}}`.
+- `epithet agent inspect` writes `{"inspect": {}}` and receives one JSON response
+  — a single struct, ending the triple representation (broker structs → proto →
+  CLI JSON with two hand-written converters).
+
+Deleted: `proto/`, `pkg/brokerv1/`, `pkg/broker/grpc_server.go`, `buf.yaml`,
+`buf.gen.yaml`, `make generate`, the never-edit-generated-files rule, and the
+`grpc`/`protobuf` dependency trees. The `MatchResult.error`-vs-exit-code
+redundancy is resolved in the new protocol's design rather than deferred: `error`
+is a user-facing message, `allow` alone drives the exit code.
+
+## 11. Certificates are minted per connection
+
+The client-side certificate cache is deleted. The evidence that it was not
+earning its keep: the agents map already short-circuits repeated connections to
+the same host before the cache is consulted, so the cache only helped when a
+*different* connection tuple shared a policy — a case no test exercises — and it
+forced two designs that exist only to serve it:
+
+- **Certs had to be maximally broad.** The evaluator put the union of every
+  principal the user could reach anywhere into every cert, because the cert had
+  to be reusable against unknown future hosts. Per-connection certs carry
+  **only the requested principal** (`Names = [conn.RemoteUser]`).
+- **The authorization map shipped to clients.** `Policy.HostUsers` existed on
+  the wire solely for client-side cache matching. It leaves the wire entirely:
+  `wire.PolicyResponse` becomes `{certParams}`, `CreateCertResponse` becomes
+  `{certificate}`, and the `policy.Policy` type and its client-side glob matcher
+  are deleted. Nothing the policy server knows leaves the policy server.
+
+This also makes the product claim literally true: every new connection is a fresh
+policy decision. Today a revoked user keeps reaching *new* hosts until cert TTL
+via the cache.
+
+Deleted: `pkg/broker/certs.go` and its tests, `PolicyCert`, `policy.Policy` +
+`Matches`, the second expiry state machine, the cert-store steps in the match
+path, and cert/policy display plumbing in inspect. Cost, accepted: fan-out to N
+new hosts pays N CA round trips (one mint each), and CA availability is
+load-bearing per new connection — which is the failover-somewhere argument for
+keeping breakerpool (decisions table).
+
+## 12. Dynamic policy loading is removed
+
+`--policy-source`, `PolicyLoader`, and the provider indirection (four provider
+types, four evaluator constructors, the two-armed setup in `cmd/epithet/policy.go`)
+are deleted. Policy rules come from config at startup; reload is process restart
+(systemd/rc.d units already exist). This takes `gregjones/httpcache`'s last user
+with it.
+
+**epithet-aws depends on `--policy-source` today** (its launcher passes an AWS
+AppConfig URL). It is reworked as a separate change in that repo: the launcher
+fetches the AppConfig document to a local file at container start and restarts
+the policy server on config version change. File the task; do not block on it.
+
+## 13. Folded-in smaller simplifications
+
+- **Read-only one-credential agent.** `pkg/agent` currently serves the full
+  mutable ssh-agent protocol (`Add`/`Remove`/`Lock`/…) from
+  `agent.NewKeyring()` — anything reached via `ForwardAgent` could inject keys
+  into or lock an epithet agent. Replace with a wrapper serving only
+  `List`/`Sign`. Also: drop the unused per-agent keypair generation, the always-
+  nil `caClient` parameter, and the list-add-remove-old credential dance (a
+  fresh keyring is swapped in atomically; the `Close()`-on-transient-error paths
+  go away).
+- **Rundir lifecycle machinery deleted.** With named profiles the agent owns
+  `~/.epithet/run/<name>/`: truncate-and-rewrite at startup. Delete
+  `cleanupStaleRunDirs`, the PID file, and the `Signal(0)` liveness probe
+  (~70 lines, including a recycled-PID race). A stale profile dir is benign:
+  dead socket → `epithet match` exits non-zero → ssh falls back.
+- **Dependency swaps:** `doublestar` → stdlib `path.Match` (hostname globs only,
+  after the client-side matcher dies); `mikesmitty/edkey` (unmaintained since
+  2017) → `ssh.MarshalPrivateKey`; `go-chi/chi` → `http.ServeMux` plus an
+  `http.Server` with real timeouts (the policy server registers exactly one
+  route; chi's Timeout middleware never covered slowloris anyway);
+  `gotest.tools` leaves with the deleted `TestURLStuff`. With §8 and §12, direct
+  dependencies drop from 20 to roughly 9.
+- **Footguns and duplication:** delete the binary-name command inference in
+  `main.go:52-58` (`epithet-linux-amd64 agent` mis-parses); unify the four
+  disagreeing 30s/15s timeout constants on one; drop `Connection.LocalHost`
+  (transmitted but never read anywhere, not even logs — `Port`/`ProxyJump` stay
+  for the CA audit log).
 
 ## 9. Docs
 
@@ -317,8 +415,13 @@ test scaffolding in `pkg/broker/auth_test.go`, `auth_singleflight_test.go`, and 
 integration tests become in-process fakes. New coverage needed: proactive refresh
 timing, TTL clamp (including `NotAfter` in the past → reject), anonymous discovery,
 tag-gated ssh config (the sshd integration test drives a real `Tag`/`Match tagged`
-config end to end, including a non-tagged host that must bypass epithet), and
-service-JWT verification (expired, wrong `aud`, body-hash mismatch, wrong key).
+config end to end, including a non-tagged host that must bypass epithet),
+service-JWT verification (expired, wrong `aud`, body-hash mismatch, wrong key),
+the JSON broker protocol (streamed output lines then exactly one result; malformed
+request lines), per-connection minting (cert principals equal exactly the
+requested user; two hosts sharing a policy still mint two certs), and the
+failure modes the deletions change: a multi-host fan-out match sequence and a
+CA-down case asserting the error text users actually see.
 
 ## Dead code inventory (delete in this effort)
 
@@ -345,21 +448,23 @@ paths).
 ## Explicitly out of scope (file as yatl tasks)
 
 - Combined `epithet server` rework or deletion — separate change, user decision
-  pending.
+  pending. **Sequencing note:** `contrib/freebsd` packaging and open task
+  `y4fsaskj` (high priority) are built around `epithet server`; decide its fate
+  before that packaging work proceeds.
 - Policy server config parsing rework — separate change; direction recorded in §7.
+- Breakerpool re-evaluation — kept in this effort; failover must live somewhere
+  and a smart client is the easy path if designed in from the start. The re-eval
+  task must cover its current double-request-after-trip bug (single CA + slow
+  success = two minted certs per request via the all-breakers-open bypass loop).
+- epithet-aws rework for the `--policy-source` deletion (§12) — separate change
+  in that repo.
 - Agent socket `Listen()`/`Serve()` split (socket may not exist when `Match`
   returns allow; listener failure only logged).
-- Unified cert/token expiry tracking (two parallel expiry state machines; cert
-  expiry parsed three times per match).
 - `Broker.Inspect` holds the broker lock across a network call and uses
-  `context.Background()`.
-- Inspect triple-representation collapse (Go structs / proto / CLI JSON with two
-  hand-written converters).
+  `context.Background()` (the discovery fetch under the lock is deleted by §4;
+  the snapshot discipline remains a follow-up).
 - `sshcert.Parse` wraps a nil error; caserver re-implements `sshcert.Parse` and
   fingerprinting.
-- `tlsconfig.ValidateURL` case-sensitive scheme check.
-- Match gRPC `MatchResult.error` vs exit-code redundancy; log-only `Connection`
-  fields (`local_host`, `port`, `proxy_jump`).
 
 ## Open yatl tasks this effort resolves
 
@@ -367,3 +472,5 @@ paths).
 - `1g8ka9wq` — audience check silently skipped when `client_id` empty: now required.
 - `mrrf0wa8` — connection details in mustache templates: templating removed.
 - `6jm8vvtv` — SSH-session detection env var for plugins: plugins removed.
+- `0wxy5vnz` — remove direct CUE dependency: already done; close as complete.
+- `4pytxtsz` — refactor `Hello` to use breakerpool: moot; `Hello` is deleted.

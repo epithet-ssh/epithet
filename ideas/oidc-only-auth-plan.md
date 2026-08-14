@@ -17,7 +17,8 @@ CA-minted JWT; wire types consolidate into `pkg/wire`.
 
 **Tech Stack:** Go 1.25, `coreos/go-oidc/v3`, `golang.org/x/oauth2`,
 `go-jose/go-jose/v4` (JWT mint/verify — already in the module graph via go-oidc),
-kong CLI, gRPC (unchanged), jj for VCS.
+kong CLI, jj for VCS. gRPC/protobuf are **removed** in Task 12b (broker IPC
+becomes newline-framed JSON over the unix socket).
 
 ## Global constraints
 
@@ -29,8 +30,8 @@ kong CLI, gRPC (unchanged), jj for VCS.
 - Version control is **jj**, not git. Never run `git commit`.
 - Build/test: `make build`, `make test`. Broker concurrency changes: also
   `go test -race ./pkg/broker`.
-- Never edit generated files in `pkg/brokerv1`. No proto changes are needed in
-  this plan (comment-only proto edits are deferred to the docs task).
+- Never edit generated files in `pkg/brokerv1` while they exist; Task 12b
+  deletes `proto/`, `pkg/brokerv1`, and the buf toolchain entirely.
 - OpenSSH **9.4+** is the floor for the generated ssh config (`Tag`/`Match tagged`).
 - OIDC scopes are **not configurable**: the fixed list is `openid profile email`.
 - Docs style: sentence-case headings; periods at the end of code comments;
@@ -1110,6 +1111,45 @@ Expected: PASS (with the possible documented skip).
 
 ---
 
+### Task 8b: Delete dynamic policy loading
+
+Per spec §12: `--policy-source`, the loader, and the provider indirection go.
+epithet-aws is reworked separately (Task 16 files the yatl task).
+
+**Files:**
+- Delete: `pkg/policyserver/loader.go`, `pkg/policyserver/loader_test.go`
+- Modify: `pkg/policyserver/policyserver.go` (delete `PolicyProvider`, `LoaderProvider`, `StaticProvider` if defined there — grep `NewStaticProvider\|NewLoaderProvider\|PolicyProvider` for the actual homes)
+- Modify: `pkg/policyserver/evaluator/evaluator.go` (one constructor path)
+- Modify: `cmd/epithet/policy.go` (single-arm setup; delete `--policy-source`)
+- Modify: `pkg/policyserver/evaluator/evaluator_test.go` (constructor renames)
+
+**Interfaces:**
+- `evaluator.Evaluator` holds a `*policyserver.PolicyConfig` directly (no
+  provider). Constructors collapse to:
+
+```go
+// New creates the evaluator and its OIDC validator.
+func New(ctx context.Context, serverCfg *policyserver.ServerConfig, policyCfg *policyserver.PolicyConfig, tlsCfg tlsconfig.Config) (*Evaluator, *oidc.Validator, error)
+
+// NewForTesting creates an evaluator without a validator.
+func NewForTesting(policyCfg *policyserver.PolicyConfig) *Evaluator
+```
+
+  Delete `NewWithProvider`, `NewForTestingWithProvider`, `getPolicy` (the config
+  is a field read), and the `staticPolicy`/`policyProvider` field pair.
+
+- [ ] **Step 1: Delete `loader.go`/`loader_test.go`** and the provider types;
+chase compile errors: `cmd/epithet/policy.go` loses the `if c.PolicySource != ""`
+arm entirely — `Run` becomes: build `ServerConfig` → `loadInlinePolicy` →
+validate → `evaluator.New(ctx, serverCfg, cfg.ExtractPolicyConfig(), tlsCfg)` →
+handler → serve. Delete the `PolicySource` CLI field and `ServerConfig.PolicyURL`.
+- [ ] **Step 2: Update evaluator tests** for the new constructor names (the
+Task 5 helper `evaluatorForConfig` becomes a thin call to `NewForTesting`).
+- [ ] **Step 3: Run** — `make build && make test` — Expected: PASS.
+- [ ] **Step 4: Checkpoint** — report; stop for review.
+
+---
+
 ### Task 9: caclient — one HTTP client, direct `/discovery`, delete Hello
 
 **Files:**
@@ -1574,6 +1614,69 @@ b, err := broker.New(*logger, brokerSock, tokenFn, caClient, agentDir)
 
 ---
 
+### Task 11b: Per-connection certificates — delete the cert cache; narrow principals
+
+Per spec §11. A vertical slice: evaluator, wire, caserver, caclient, broker, and
+inspect change together so the tree stays green.
+
+**Files:**
+- Delete: `pkg/broker/certs.go`, `pkg/broker/certs_test.go`
+- Modify: `pkg/policyserver/evaluator/evaluator.go` (+ its test)
+- Modify: `pkg/wire/wire.go` (`PolicyResponse` loses `Policy`)
+- Modify: `pkg/policy/policy.go` (delete `Policy` + `Matches`; keep `Connection`/`ConnectionHash`)
+- Modify: `pkg/caserver/caserver.go` (`CreateCertResponse` loses `Policy`; audit logging keeps using the server-side `policyResp.CertParams`)
+- Modify: `pkg/caclient/caclient.go` (`CertResponse` loses `Policy`)
+- Modify: `pkg/broker/broker.go` (match path: agents fast path → mint → ensureAgent), `pkg/broker/grpc_server.go` + `cmd/epithet/inspect.go` (drop certificate-list display)
+
+**Interfaces:**
+- `wire.PolicyResponse` = `{CertParams CertParams}`.
+- `caserver.CreateCertResponse` = `{Certificate sshcert.RawCertificate}`.
+- Evaluator: certs carry **only the requested principal** —
+  `CertParams.Names = []string{conn.RemoteUser}` when authorized. Delete
+  `computeAuthorizedPrincipals`, `computeHostUsers`,
+  `buildResponseWithHostUsers`'s hostUsers plumbing, and the
+  `policy.Policy{HostUsers: ...}` construction. Authorization is the single-pass
+  matched-rules check from Task 5: does any matching host rule (or defaults)
+  allow `conn.RemoteUser` for one of the identity's tags?
+
+- [ ] **Step 1: Write the failing evaluator test**
+
+```go
+func TestCertCarriesOnlyRequestedPrincipal(t *testing.T) {
+	cfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{"alice@example.com": {"admin"}},
+		Defaults: &policyserver.Rules{
+			Allow: map[string][]string{"root": {"admin"}, "deploy": {"admin"}},
+		},
+		Hosts: map[string]*policyserver.Rules{"*.example.com": {}},
+	}
+	e := NewForTesting(cfg)
+	resp, err := e.Evaluate(context.Background(), "alice@example.com",
+		time.Now().Add(5*time.Minute),
+		policy.Connection{RemoteHost: "web.example.com", RemoteUser: "root"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"root"}, resp.CertParams.Names,
+		"cert must not carry the union of all authorized principals")
+}
+```
+
+- [ ] **Step 2: Run** — Expected: FAIL (Names is the union today).
+- [ ] **Step 3: Implement the evaluator narrowing** per the Interfaces block,
+then delete `Policy` from `wire.PolicyResponse`, `CreateCertResponse`, and
+`caclient.CertResponse`, and delete `policy.Policy`/`Matches`. In `broker.go`:
+delete the `certStore` field, `NewCertificateStore`, the Step-3/4 lookup block
+and the `certStore.Store` call — the match path after the agents fast path is
+exactly: generate keypair → `b.auth.Token` → `GetCert` (with the single 401
+retry from Task 11) → `ensureAgent`. Move the `expiryBuffer` constant from
+`certs.go` into `broker.go` before deleting the file. Drop
+`InspectResponse.Certificates`, its proto conversion, and the inspect display
+block. Keep the `caserver` audit log intact — it reads the policy response
+server-side and never depended on the client-bound field.
+- [ ] **Step 4: Run tests** — `make build && make test && go test -race ./pkg/broker` — Expected: PASS (certs_test.go deleted with the store).
+- [ ] **Step 5: Checkpoint** — report; stop for review.
+
+---
+
 ### Task 12: Named profiles + Tag-gated ssh config generation
 
 **Files:**
@@ -1660,9 +1763,129 @@ replace the `hashString(fmt.Sprintf("%v", parent.CaURL))` derivation with the
 profile name (inspect inherits `parent.Name`). In `match.go`, `Broker` becomes
 `required:""` (generated config always passes it).
 
+- [ ] **Step 3b: Delete the rundir lifecycle machinery** (spec §13): with a
+named, stable rundir the agent owns its directory — `MkdirAll` +
+truncate-and-rewrite of the socket and config at startup replaces GC. Delete
+`cleanupStaleRunDirs` (`agent.go:287-344`), the PID-file write (`:87-91`), the
+`Signal(0)` liveness probe, and the `defer os.RemoveAll(tempDir)` (leaving the
+generated config in place is harmless and inspectable; the socket is removed and
+recreated by `startBrokerListener`). A stale profile's dead socket is benign:
+`epithet match` exits non-zero and ssh falls back.
+
 - [ ] **Step 4: Run tests** — `make build && make test` — Expected: PASS.
 
 - [ ] **Step 5: Checkpoint** — report; stop for review.
+
+---
+
+### Task 12b: Broker IPC — newline-framed JSON replaces gRPC
+
+Per spec §8. Both peers are the same binary; the socket is 0700 in the profile
+rundir; the exec line is regenerated every agent start. No compatibility
+contract exists, so this is a clean swap.
+
+**Files:**
+- Create: `pkg/broker/protocol.go` (request/event types + server loop)
+- Delete: `pkg/broker/grpc_server.go`, `pkg/brokerv1/` (whole dir), `proto/` (whole dir), `buf.yaml`, `buf.gen.yaml`
+- Modify: `pkg/broker/broker.go` (`serve()` uses the JSON server; delete grpc imports)
+- Modify: `cmd/epithet/match.go`, `cmd/epithet/inspect.go` (JSON client)
+- Modify: `Makefile` (delete the `generate` target), `AGENTS.md` (drop the buf/generated-files rules — flag this edit to Brian at checkpoint since it is agent instructions)
+- Test: `pkg/broker/protocol_test.go`
+- Modify: `go.mod` (`go mod tidy` drops `grpc` and `protobuf`)
+
+**Interfaces:**
+
+```go
+// pkg/broker/protocol.go — the whole wire contract:
+
+// Request is one line of JSON from the client. Exactly one field is set.
+type Request struct {
+	Match   *policy.Connection `json:"match,omitempty"`
+	Inspect *struct{}          `json:"inspect,omitempty"`
+}
+
+// Event is one line of JSON from the broker. For match: zero or more Output
+// events then exactly one Result. For inspect: exactly one Inspect event.
+type Event struct {
+	Output  string           `json:"output,omitempty"`
+	Result  *MatchResponse   `json:"result,omitempty"`
+	Inspect *InspectResponse `json:"inspect,omitempty"`
+}
+
+// Serve accepts connections on l and handles one Request per connection.
+func (b *Broker) serveProtocol(ctx context.Context, l net.Listener)
+```
+
+Client side (`match.go`): `net.Dial("unix", brokerSock)`, write the request line,
+`bufio.Scanner` over response lines (`scanner.Buffer` sized to 1 MiB for large
+inspect payloads), print `Output` to stderr as it arrives, act on `Result`
+exactly as today (`error` is a message; `!allow` → exit 1). `InspectResponse`
+marshals directly for `--json` — the triple representation is gone.
+
+- [ ] **Step 1: Write failing protocol tests**
+
+```go
+// pkg/broker/protocol_test.go
+func TestMatchStreamsOutputThenResult(t *testing.T) {
+	b := newTestBroker(t, func(ctx context.Context, out io.Writer) (string, error) {
+		fmt.Fprintln(out, "visit: https://example/auth")
+		return mintValid(t, testIdP(t), time.Hour), nil
+	}) // reuse Task 11's broker test fixtures; CA stubbed as in broker_test.go
+	client := dialBroker(t, b) // net.Dial + helper
+
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &policy.Connection{
+		RemoteHost: "h", RemoteUser: "u", Hash: "abc",
+	}}))
+
+	var sawOutput bool
+	sc := bufio.NewScanner(client)
+	for sc.Scan() {
+		var ev Event
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &ev))
+		if ev.Output != "" {
+			sawOutput = true
+		}
+		if ev.Result != nil {
+			require.True(t, sawOutput, "output must precede result")
+			return
+		}
+	}
+	t.Fatal("no result event received")
+}
+
+func TestMalformedRequestGetsErrorResult(t *testing.T) {
+	b := newTestBroker(t, nil)
+	client := dialBroker(t, b)
+	fmt.Fprintln(client, "{not json")
+	sc := bufio.NewScanner(client)
+	require.True(t, sc.Scan())
+	var ev Event
+	require.NoError(t, json.Unmarshal(sc.Bytes(), &ev))
+	require.NotNil(t, ev.Result)
+	require.False(t, ev.Result.Allow)
+	require.NotEmpty(t, ev.Result.Error)
+}
+```
+
+- [ ] **Step 2: Run** — Expected: FAIL (types undefined).
+- [ ] **Step 3: Implement the server.** `serveProtocol` accepts, reads one line
+(`bufio.Reader.ReadBytes('\n')`, cap the line at `wire.MaxBodySize`), dispatches:
+`Match` → `MatchWithUserOutput(connCtx, *req.Match, eventWriter)` where
+`eventWriter`'s `Write` emits `Event{Output: string(p)}` lines (guard concurrent
+writes with a mutex — auth output and the result must not interleave mid-line);
+then the terminal `Event{Result: &resp}`. Connection close cancels `connCtx`
+(preserving today's "ssh gave up → abandon the match" semantics: wrap the conn
+read side — when the peer closes, cancel). `Inspect` → `Event{Inspect: ...}`.
+Replace `broker.serve()`'s grpc server with `serveProtocol`; delete
+`grpc_server.go`.
+- [ ] **Step 4: Rewrite the clients** (`match.go`, `inspect.go`) per the
+Interfaces block; delete the proto→JSON converters in `inspect.go`.
+- [ ] **Step 5: Delete** `pkg/brokerv1/`, `proto/`, `buf.yaml`, `buf.gen.yaml`,
+the `generate` Makefile target; `go mod tidy` (grpc + protobuf leave, and with
+them the otel/genproto indirects). Update `AGENTS.md`'s "Regenerate protobufs"
+paragraph — flag at checkpoint.
+- [ ] **Step 6: Run tests** — `make build && make test && go test -race ./pkg/broker` — Expected: PASS, including the ported user-output streaming test (`Test_MatchStreamsUserOutput` semantics move here from broker_test.go).
+- [ ] **Step 7: Checkpoint** — report; stop for review.
 
 ---
 
@@ -1757,15 +1980,23 @@ running OIDC provider" skips (lines ~54-56, ~131) die: use `oidctest`, mint real
 tokens, exercise the real validation path — valid token → 200 with certParams
 (assert `notAfter` equals the token expiry), expired token → 401, wrong audience
 → 401, unknown user → 403.
-- [ ] **Step 4: Run** — `make test` (integration tests included) — Expected: PASS, no skips other than the OpenSSH-version gate.
-- [ ] **Step 5: Checkpoint** — report; stop for review.
+- [ ] **Step 4: Add the deletion-risk coverage** (spec §10): in `test/sshd` or
+`pkg/broker/broker_test.go` as fits: (a) **fan-out** — match three distinct
+hosts sharing one policy; assert three certs are minted (three CA hits — count
+requests in the stub/real CA handler) and each cert's principals equal exactly
+the requested user; (b) **CA down** — point the broker at a closed port; assert
+the match result is `Allow: false` with a non-empty, human-legible error
+mentioning the CA (this is the error text users actually see via ssh).
+- [ ] **Step 5: Run** — `make test` (integration tests included) — Expected: PASS, no skips other than the OpenSSH-version gate.
+- [ ] **Step 6: Checkpoint** — report; stop for review.
 
 ---
 
-### Task 15: Dead code sweep
+### Task 15: Dead code and small-wins sweep
 
-Every item verified-dead by the design exploration. For each: delete, then
-`make build && make test` before moving to the next group.
+Every item verified-dead by the design exploration, plus the spec §13 folded-in
+simplifications. For each group: change, then `make build && make test` before
+moving to the next.
 
 **Files & items:**
 
@@ -1783,13 +2014,19 @@ that production uses), `parseCert`/`generateFingerprint`/`sha256Sum` replaced by
 `pkg/policyserver/discovery.go` (tombstone file) and `discovery_test.go` if it
 only tests the tombstone, `PolicyRulesConfig.BootstrapAuth` if not already gone
 (Task 8), `TestURLStuff` (`caserver_test.go:21-31`).
-- [ ] **Step 3: `pkg/broker`/`pkg/agent`:** `Broker.BrokerSocketPath`,
-`Broker.LookupCertificate`, `Broker.StoreCertificate`,
-`BrokerServer.agentSocketPathForHash` (`grpc_server.go:128-131`),
-`agent.IsAgentStopped`; in `pkg/agent/agent.go` drop the generated
-keypair (`publicKey`/`privateKey` fields), the `caClient` field and parameter —
-`agent.New(logger *slog.Logger, socketPath string)` — update the single call
-site `broker.go:428` and agent tests.
+- [ ] **Step 3: `pkg/broker`/`pkg/agent` — read-only one-credential agent
+(spec §13):** delete `Broker.BrokerSocketPath`, `Broker.LookupCertificate`,
+`Broker.StoreCertificate` (if not already gone with 11b), `agent.IsAgentStopped`
++ `errAgentStopped`. Rewrite `pkg/agent/agent.go`: drop the generated keypair
+and the `caClient` field/parameter — `agent.New(logger *slog.Logger, socketPath string) *Agent`
+(no error) — and replace the mutable `agent.NewKeyring()` with a read-only
+wrapper implementing `agent.ExtendedAgent`: `List` and `Sign`/`SignWithFlags`
+delegate to an atomically-swapped inner keyring; `Add`/`Remove`/`RemoveAll`/
+`Lock`/`Unlock` return `fmt.Errorf("epithet agent is read-only")`.
+`UseCredential` builds a fresh keyring, adds the one credential, and swaps it in
+(`atomic.Pointer` or mutex) — the list-add-remove-old dance and its three
+`Close()`-on-error paths go away. Update the call site (`broker.go` ensureAgent)
+and agent tests; add a test asserting `Add` from a client connection is refused.
 - [ ] **Step 4: `pkg/caclient`/`pkg/breakerpool`:** anything Task 9 left:
 `WithHTTPClient` if still present; `breakerpool` test-only exports
 (`AllUnavailable`, `Len`, `Entry.Settings`) — delete only if their *only*
@@ -1797,10 +2034,34 @@ callers are their own package tests asserting them; keep what breakerpool's own
 unit tests legitimately exercise.
 - [ ] **Step 5: `cmd/epithet`:** `var _ *ssh.Certificate` (`inspect.go:299`),
 `configFilePaths` double-glob (leave the function; it is used by `policy.go` —
-just delete it if Task 8 removed the last caller), the `ServerConfig.PolicyURL`
-dead field (`policy_config.go:25` + write site `policy.go:53`).
-- [ ] **Step 6: Run** — `make build && make test` — Expected: PASS.
-- [ ] **Step 7: Checkpoint** — report; stop for review.
+just delete it if Tasks 8/8b removed the last caller), the binary-name command
+inference (`main.go:52-58` — `epithet-linux-amd64 agent` mis-parses; nothing in
+contrib/goreleaser uses hyphenated invocation).
+- [ ] **Step 6: Dependency swaps (spec §13):**
+  - `doublestar` → stdlib `path.Match` in
+    `pkg/policyserver/evaluator/evaluator.go` (hostname globs only; `path.Match`
+    is behaviourally equivalent for `*.example.com` patterns — add an evaluator
+    test pinning `*.example.com` matches `a.example.com` but not
+    `a.b.example.com`, documenting the single-label semantics).
+  - `mikesmitty/edkey` → `ssh.MarshalPrivateKey` in `pkg/sshcert/cert.go`
+    (`GenerateKeys` keeps its signature; round-trip test: generated key parses
+    with `ssh.ParsePrivateKey`).
+  - `go-chi/chi` → `http.NewServeMux` in `cmd/epithet/ca.go` and
+    `cmd/epithet/policy.go`; replace `listen.go`'s bare
+    `http.ListenAndServe`/`http.Serve` with a configured `http.Server`
+    (`ReadHeaderTimeout: 10s`, `ReadTimeout: 30s`, `WriteTimeout: 30s`,
+    `IdleTimeout: 60s`) — the internet-facing CA currently has no slowloris
+    protection. Request logging, if kept, is a ~10-line handler wrapper.
+  - Unify the four timeout constants (`tlsconfig.DefaultTimeout`,
+    `caclient.DefaultTimeout`, and the hardcoded `30 * time.Second` in
+    `ca.go`/`caserver.go`) on one shared constant.
+  - Drop `Connection.LocalHost` (transmitted, never read anywhere) and the
+    `os.Hostname()` call in `match.go`; `Port`/`ProxyJump` stay for the audit
+    log.
+  - `go mod tidy`; confirm `doublestar`, `edkey`, `chi`, `gotest.tools` are gone
+    from `go.mod`.
+- [ ] **Step 7: Run** — `make build && make test` — Expected: PASS.
+- [ ] **Step 8: Checkpoint** — report; stop for review.
 
 ---
 
@@ -1824,9 +2085,13 @@ spec, the Bash and Python plugin examples, and all fd-3/fd-4 references.
     a string — decide with Brian at review; default: document reality);
     document `GET /` discovery shape `{"auth":{...}}`; delete `hostPattern` and
     `matchPatterns` references.
-  - `proto/brokerv1/broker.proto`: comment-only update for `user_output`
-    ("broker auth progress messages") — regenerate with `make generate` since
-    comments land in generated code, and do not hand-edit `pkg/brokerv1`.
+  - Delete `docs/design-discovery-protocol.md` — it documents the Link-header/
+    authenticated-patterns/RFC 9421 protocol this effort replaces; leaving it
+    creates a second, contradictory source of truth.
+  - Purge the "host patterns are obtained dynamically from CA discovery" claims
+    from `docs/architecture.md` (lines ~9, 48, 127-133, 161-162, 177, 187,
+    213-215, 291-293) and `contrib/macos/README.md`; document the JSON broker
+    protocol where architecture.md described gRPC.
 - [ ] **Step 3: Clean examples.** Delete `examples/bash_auth_example.bash` and
 `examples/client/.epithet/test-auth-plugin.sh`; update `examples/README.md`,
 `examples/epithet.config.example` (drop `agent.auth`, add `agent.name`), and
@@ -1838,22 +2103,28 @@ yatl close t761tcz9 --reason "sh -c auth plugin execution removed; vector no lon
 yatl close 1g8ka9wq --reason "client_id now required; audience check can no longer be skipped"
 yatl close mrrf0wa8 --reason "mustache templating removed with subprocess auth"
 yatl close 6jm8vvtv --reason "auth plugins removed; no plugin env contract to extend"
+yatl close 0wxy5vnz --reason "already done; no CUE dependency remains in the tree"
+yatl close 4pytxtsz --reason "moot: Hello already used breakerpool, and Hello is now deleted"
+yatl new "Re-evaluate breakerpool: failover must live somewhere and a smart client is the easy path if designed in from the start. Fix or fold in: double-request-after-trip bug (single CA + ConsecutiveFailures>=1 => the all-breakers-open bypass re-issues the request; a slow-but-successful CA mints two certs per ssh connection)"
+yatl new "epithet-aws: rework for --policy-source removal — launcher fetches AppConfig doc to a local file at container start and restarts the policy server on config version change"
 yatl new "Policy server config parsing rework (direction recorded in ideas/oidc-only-auth.md §7)"
-yatl new "Decide fate of combined 'epithet server' mode (likely delete; keep CA/policy process boundary)"
+yatl new "Decide fate of combined 'epithet server' mode (likely delete; keep CA/policy process boundary). Blocks FreeBSD packaging task y4fsaskj, which assumes epithet server"
 yatl new "Agent socket: split Listen() from Serve() so match can't return before the socket exists"
-yatl new "Unify cert/token expiry tracking (two parallel expiry state machines in broker)"
-yatl new "Broker.Inspect: snapshot under lock, drop context.Background(); collapse inspect triple representation"
+yatl new "Broker.Inspect: snapshot agents map under lock instead of holding the lock through the response build"
 yatl new "sshcert.Parse wraps nil error; caserver duplicates sshcert.Parse+fingerprinting"
-yatl new "tlsconfig.ValidateURL case-sensitive scheme check"
-yatl new "MatchResult.error vs exit-code redundancy; log-only Connection fields"
+yatl new "tlsconfig.ValidateURL case-sensitive scheme check; unify with caclient validateCAURL"
+yatl new "Restate or close gszy91dg (tunnel auth to remote agent) against in-process OIDC design"
+yatl new "hv3622e5: consider dropping client_secret entirely (pure PKCE); BootstrapAuth would shrink to {issuer, client_id}"
 ```
 
 - [ ] **Step 5: Run** — `make build && make test` — Expected: PASS.
-- [ ] **Step 6: Final checkpoint** — full-repo review: `jj diff --stat`, verify
+- [ ] **Step 6: Final checkpoint** — full-repo review: `jj diff --stat`; verify
 `go.mod` no longer lists `cbroglie/mustache`, `yaronf/httpsign`,
-`gregjones/httpcache`, `bmatcuk/doublestar` (doublestar survives only if
-`pkg/policy.Matches` and the evaluator still use it — they do; keep it), and
-`grep -rn "auth plugin\|fd 3\|fd 4\|base64" docs/ pkg/ --include='*.go' --include='*.md'`
+`gregjones/httpcache`, `bmatcuk/doublestar`, `mikesmitty/edkey`,
+`go-chi/chi`, `gotest.tools`, `google.golang.org/grpc`, or
+`google.golang.org/protobuf` (direct deps should be roughly 9; `gobreaker`
+stays — breakerpool was deliberately kept); and
+`grep -rn "auth plugin\|fd 3\|fd 4\|base64\|matchPatterns\|grpc" docs/ pkg/ cmd/ --include='*.go' --include='*.md'`
 returns nothing stale. Report; stop.
 
 ---
@@ -1871,4 +2142,12 @@ returns nothing stale. Report; stop.
   `oidc.Authenticate(ctx, cfg, prev, out)` (Tasks 10, 11).
 - Spec sections → tasks: §1→3, §2→10+11, §3→11, §4→8+9+12, §5→4+5+6, §6→7,
   §7→2+8+13 (config parsing rework deliberately absent — separate change),
-  §8→16 (comment-only), §9→16, §10→1+14, dead-code inventory→15, yatl→16.
+  §8 (JSON IPC)→12b, §9 (docs)→16, §10→1+14, §11 (per-connection certs)→11b,
+  §12 (dynamic policy deletion)→8b, §13 (folded-in smaller wins)→12 Step 3b + 15,
+  dead-code inventory→15, yatl→16.
+- Additional anchors from the second assumption round:
+  `wire.PolicyResponse{CertParams}` and `CreateCertResponse{Certificate}`
+  (Tasks 11b, 14), `broker.Request`/`broker.Event` JSON protocol (Tasks 12b, 14),
+  `evaluator.New(ctx, serverCfg, policyCfg, tlsCfg)` (Tasks 8b, 14). Task 12b
+  runs after 11b so the protocol never serializes the deleted certificate-list
+  inspect data.
