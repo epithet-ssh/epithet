@@ -57,12 +57,12 @@ auto-generated config *after* those Tag lines, in `~/.ssh/config`
 
 ```
 Host *.corp.example.com
-    Tag epithet-default
+    Tag epithet
 Include ~/.epithet/run/*/ssh-config.conf
 ```
 
 When you start `epithet agent`, it (re)generates a per-profile SSH config
-gated by `Match tagged epithet-default`. Only hosts you tagged trigger
+gated by `Match tagged epithet`. Only hosts you tagged trigger
 `epithet match`; everything else is untouched by epithet.
 
 ### 5. Start the broker

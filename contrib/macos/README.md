@@ -24,7 +24,7 @@ This directory contains a launchd plist for running `epithet agent` as a backgro
    tagged`; the `Include` line must come after your `Tag` lines):
    ```
    Host *.example.com
-       Tag epithet-default
+       Tag epithet
    Include ~/.epithet/run/*/ssh-config.conf
    ```
 

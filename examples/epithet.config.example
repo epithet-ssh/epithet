@@ -18,7 +18,7 @@
 # ~/.ssh/config via Tag/Include, not in this file.
 agent:
   ca-url: https://ca.example.com
-  name: default   # profile name; determines the rundir and ssh Tag (epithet-<name>)
+  name: default   # profile name; determines the rundir and ssh Tag (epithet-<name>; just "epithet" for the default profile)
 
 # CA server configuration (epithet ca)
 # ca:

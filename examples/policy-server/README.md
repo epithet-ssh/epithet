@@ -70,7 +70,7 @@ for `Tag`/`Match tagged`):
 
 ```
 Host *.example.com
-    Tag epithet-default
+    Tag epithet
 Include ~/.epithet/run/*/ssh-config.conf
 ```
 

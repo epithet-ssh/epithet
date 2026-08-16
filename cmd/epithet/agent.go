@@ -26,7 +26,7 @@ import (
 var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // validateProfileName rejects profile names that would be unsafe to embed in
-// a rundir path or an ssh_config "Tag epithet-<name>" token.
+// a rundir path or an ssh_config Tag token.
 func validateProfileName(name string) error {
 	if !profileNamePattern.MatchString(name) {
 		return fmt.Errorf("invalid profile name %q: must match %s", name, profileNamePattern.String())
@@ -65,7 +65,7 @@ func acquireProfileLock(runDir, name string) (*os.File, error) {
 // AgentCLI is the parent command for agent-related subcommands.
 // Shared flags are defined here and inherited by subcommands.
 type AgentCLI struct {
-	Name       string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>)" default:"default"`
+	Name       string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>, or just epithet for the default profile)" default:"default"`
 	CaURL      []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
 	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
@@ -234,6 +234,17 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	return nil
 }
 
+// profileTag returns the ssh Tag token for a profile. The default profile
+// gets the bare "epithet" tag for ergonomics; named profiles get
+// "epithet-<name>". Match tagged does exact-string matching, so the bare tag
+// cannot collide with any suffixed one.
+func profileTag(name string) string {
+	if name == "default" {
+		return "epithet"
+	}
+	return "epithet-" + name
+}
+
 // generateSSHConfig writes an SSH config file for this profile. The block is
 // gated by "Match tagged epithet-<name>" rather than a bare Match exec so
 // that multiple profiles' generated configs can coexist: ssh only evaluates
@@ -248,7 +259,7 @@ func (a *AgentCLI) generateSSHConfig(path, agentDir, brokerSock, homeDir string)
 
 	// Full home directory in the include pattern since ssh_config doesn't expand ~.
 	includePattern := filepath.Join(homeDir, ".epithet", "run", "*", "ssh-config.conf")
-	tag := "epithet-" + a.Name
+	tag := profileTag(a.Name)
 
 	// We only set IdentityAgent to point to the per-connection agent. This allows normal
 	// fallback to ~/.ssh/id_* keys and password auth if epithet certificates aren't available,
@@ -355,7 +366,7 @@ func checkSSHConfigInclude(homeDir, includePattern, name string, logger *slog.Lo
 		// The Include is present but the user never wrote a Tag line at all —
 		// the single most likely real-world misconfiguration, and one that
 		// otherwise fails completely silently (epithet just never activates).
-		logger.Warn(fmt.Sprintf("no 'Tag epithet-%s' lines found in ~/.ssh/config — epithet will never activate; tag the Host blocks it should handle", name))
+		logger.Warn(fmt.Sprintf("no 'Tag %s' lines found in ~/.ssh/config — epithet will never activate; tag the Host blocks it should handle", profileTag(name)))
 	case includeLineNum < firstTagLineNum:
 		logger.Warn("Include must come after Tag lines or epithet will never activate")
 	}

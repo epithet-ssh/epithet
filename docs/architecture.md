@@ -102,7 +102,7 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 
 - Starts the broker daemon, listening on `~/.epithet/run/<name>/broker.sock`
 - `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
-- `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>`. A flock on the rundir prevents two agent processes from sharing the same profile.
+- `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
 - Fetches OIDC issuer/client ID from the CA's `/discovery` endpoint once at startup — no local auth configuration
 - Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`, gated by `Match tagged epithet-<name>`
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token

@@ -87,3 +87,22 @@ func TestCheckSSHConfigIncludeOrdering(t *testing.T) {
 		require.Contains(t, out, "no 'Tag epithet-work' lines found in ~/.ssh/config — epithet will never activate; tag the Host blocks it should handle")
 	})
 }
+
+func TestProfileTagDefaultIsBareEpithet(t *testing.T) {
+	// The default profile drops the "-default" suffix for ergonomics; Match
+	// tagged is exact-match, so the bare tag cannot collide with named ones.
+	require.Equal(t, "epithet", profileTag("default"))
+	require.Equal(t, "epithet-work", profileTag("work"))
+}
+
+func TestGenerateSSHConfigDefaultProfileUsesBareTag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ssh-config.conf")
+	a := &AgentCLI{Name: "default"}
+	require.NoError(t, a.generateSSHConfig(path, "/run/agent", "/run/broker.sock", "/home/u"))
+
+	out, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "Match tagged epithet exec")
+	require.NotContains(t, string(out), "epithet-default")
+}
