@@ -1,12 +1,6 @@
 # Epithet makes SSH certificates easy
 
-[![Actions Status](https://github.com/epithet-ssh/epithet/workflows/build/badge.svg)](https://github.com/epithet-ssh/epithet/actions) [![Go Reportcard](https://goreportcard.com/badge/github.com/epithet-ssh/epithet)](https://goreportcard.com/report/github.com/epithet-ssh/epithet)
-
-Epithet is an SSH certificate authority that replaces static authorized_keys with short-lived certificates (2-10 minutes). It creates on-demand SSH agents for each outbound connection, enabling real-time policy enforcement without touching your target hosts.
-
-Authentication is OIDC only, handled in-process by the broker — no plugins, no subprocess auth commands.
-
-**Requires OpenSSH 9.4+** on the client (for `Tag`/`Match tagged`; see below).
+Epithet is an SSH certificate authority that replaces static authorized_keys with short-lived certificates (2-10 minutes) and authentication over OIDC. It creates on-demand SSH agents for each outbound connection, enabling real-time policy enforcement without touching your target hosts.
 
 ## Quick start
 
@@ -19,7 +13,7 @@ make build
 
 **2. Start the agent:**
 ```bash
-epithet agent --ca-url https://your-ca.example.com --name work
+epithet agent --ca-url https://your-ca.example.com
 ```
 
 The agent fetches its OIDC issuer and client ID from the CA's `/discovery`
@@ -28,7 +22,8 @@ endpoint — nothing to configure locally.
 **3. Tag the hosts this profile should handle, then include the generated config** (`~/.ssh/config`):
 ```ssh_config
 Host *.example.com
-    Tag epithet-work
+    Tag epithet
+
 Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
 ```
 
@@ -37,7 +32,7 @@ Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
 ssh server.example.com
 ```
 
-First connection opens your browser for authentication (~2-5 seconds). Subsequent connections reuse the refreshed token (~100-200ms).
+First connection opens your browser for authentication (~2-5 seconds). Subsequent connections reuse the refreshed token.
 
 ## How it works
 
@@ -78,6 +73,7 @@ make clean    # Clean build artifacts
 ```
 
 Requirements: Go 1.25+
+**Requires OpenSSH 9.4+** on the client (for `Tag`/`Match tagged`; see below).
 
 ## License
 
