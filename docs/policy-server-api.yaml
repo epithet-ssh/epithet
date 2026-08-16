@@ -27,8 +27,8 @@ info:
     name: Epithet Project
     url: https://github.com/epithet-ssh/epithet
   license:
-    name: MIT
-    url: https://opensource.org/licenses/MIT
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
 
 servers:
   - url: https://policy.example.com

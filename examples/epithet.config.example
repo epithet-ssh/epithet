@@ -54,9 +54,10 @@ agent:
 #       permit-pty: ""
 #       permit-agent-forwarding: ""
 #
-#   # Per-host policy overrides (host patterns use path.Match semantics;
-#   # "*" crosses dots, so "*.prod.example.com" also matches
-#   # "a.b.prod.example.com")
+#   # Per-host policy overrides. Host patterns use doublestar glob
+#   # semantics: "*" crosses dots, so "*.prod.example.com" also matches
+#   # "a.b.prod.example.com", and brace alternation works
+#   # ("web{1,2}.example.com", "host{,.example.com}").
 #   hosts:
 #     "*.prod.example.com":
 #       expiration: "2m"       # shorter expiration for production

@@ -52,7 +52,7 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 | `epithet agent` | Start the broker daemon that manages certificates and agents |
 | `epithet agent inspect` | Query a running broker's state |
 | `epithet server` | Run the CA and policy server as supervised subprocesses behind one port |
-| `epithet match` | Called by SSH `Match exec` to trigger certificate flow |
+| `epithet match` | Called by SSH `Match tagged ... exec` to trigger certificate flow |
 | `epithet ca` | Run the certificate authority server |
 | `epithet policy` | Run the policy server with OIDC-based authorization |
 

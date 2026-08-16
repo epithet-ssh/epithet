@@ -6,4 +6,3 @@
 # ~/.ssh/config via Tag/Include, not in this file.
 agent:
   ca-url: https://ca.example.com/
-  name: default

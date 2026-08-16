@@ -91,20 +91,19 @@ Subsequent connections within the refresh token lifetime (~hours) will be fast (
 ## Files in this example
 
 - **`policy.example.yaml`**: Template policy configuration
-- **`systemd/`**: systemd service units for production deployment
-- **`docker/`**: Docker Compose setup for containerized deployment
 - **`README.md`**: This file
 
 See the [policy server guide](../../docs/policy-server.md) for detailed configuration and authorization documentation.
 
 ## Production deployment
 
-### Option 1: systemd services
-
-See `systemd/` directory for service unit files.
+`epithet` is a single static binary that runs in the foreground and logs to
+stderr, so it drops into whatever supervisor you already use — systemd,
+runit, rc.d, a container runtime. Install the binary and its config, then
+supervise it:
 
 ```bash
-# Install binaries
+# Install the binary
 sudo cp epithet /usr/local/bin/
 
 # Install configuration
@@ -113,28 +112,22 @@ sudo cp ca_key /etc/epithet/
 sudo cp policy.yaml /etc/epithet/
 sudo chmod 600 /etc/epithet/ca_key
 sudo chmod 640 /etc/epithet/policy.yaml
-
-# Install and start services
-sudo cp systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable epithet-ca epithet-policy
-sudo systemctl start epithet-ca epithet-policy
-
-# Check status
-sudo systemctl status epithet-ca epithet-policy
 ```
 
-### Option 2: Docker Compose
-
-See `docker/` directory for containerized deployment.
+Two processes need supervising, and the CA depends on the policy server:
 
 ```bash
-cd docker
-docker-compose up -d
-
-# Check logs
-docker-compose logs -f
+epithet policy --config /etc/epithet/policy.yaml
+epithet ca --key /etc/epithet/ca_key --policy http://localhost:9999 --listen :8080
 ```
+
+Put `ca-pubkey` in the policy config file rather than passing it as a flag —
+most supervisors run `ExecStart`-style command lines without a shell, so a
+`$(cat ca_key.pub)` substitution would be passed through literally.
+
+For a single-process alternative that supervises both itself, see `epithet
+server` in the [architecture guide](../../docs/architecture.md#epithet-server).
+FreeBSD users have a packaged rc.d service in [`contrib/freebsd`](../../contrib/freebsd/).
 
 ## Configuring target hosts
 

@@ -151,7 +151,10 @@ server (dynamic reload from a URL was removed - config is the only source).
 
 All fields go under the `policy:` section in `~/.epithet/*.yaml`:
 
-- **`listen`** (optional): Address to listen on (default: `0.0.0.0:9999`)
+- **`listen`** (optional): Address to listen on (default: `0.0.0.0:9999`).
+  A `unix:///path/to/policy.sock` value listens on a Unix domain socket
+  instead of TCP; the CA's `--policy` accepts the same form. This is how
+  `epithet server` wires its two subprocesses together.
 - **`ca-pubkey`** (required): SSH public key of the CA, used to verify the CA's service JWT
 - **`oidc`** (required): OIDC configuration object with `issuer` and `client-id` fields (config-file keys are kebab-case, derived from the CLI flag names — see the note below) — `client-id` is required so audience checking can never be silently skipped
 - **`users`** (required): Map of user identities to tags
@@ -169,7 +172,7 @@ All fields go under the `policy:` section in `~/.epithet/*.yaml`:
 > multi-word keys today so the casing question doesn't currently bite there.
 > This split-brain config loading (two different resolvers reading the same
 > file) is tracked for cleanup in the policy-server config parsing rework
-> task (see `ideas/oidc-only-auth.md` §7).
+> task (`yatl show kk`).
 
 #### Users section
 
