@@ -3,7 +3,7 @@ yatl_version: 1
 title: 'Security hardening: signature replay window, --insecure scope, plain-HTTP policy fetch'
 id: kwxdbey2
 created: 2026-06-23T16:52:29.964019493Z
-updated: 2026-06-23T16:52:29.964019493Z
+updated: 2026-08-16T08:18:27.755350Z
 author: Brian McCallister
 priority: low
 tags:
@@ -29,3 +29,8 @@ Hardening: defense-in-depth items from the security review. Low severity, groupe
 # Log: 2026-06-23T16:52:29Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-08-16T08:18:27Z Brian McCallister
+
+Slimmed post-refactor: item 1 (signature replay window) is overtaken - RFC 9421 signing was replaced by 60s request-bound service JWTs (aud, exp, jti minted, body-hash, htm/htu method+target binding), leaving only jti-uniqueness tracking as a possible future hardening (needs CA<->policy MITM to exploit). Remaining live scope: --insecure is one global switch covering CA, JWKS, and policy fetch; plain-HTTP policy fetch guard.

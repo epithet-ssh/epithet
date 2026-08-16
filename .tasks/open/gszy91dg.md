@@ -1,8 +1,9 @@
 ---
+yatl_version: 0
 title: mechanism to tunnel auth to remote agent
 id: gszy91dg
 created: 2025-12-01T18:36:44.286521Z
-updated: 2025-12-02T01:19:12.682892Z
+updated: 2026-08-16T08:18:27.736147Z
 author: Brian McCallister
 priority: medium
 ---
@@ -520,3 +521,8 @@ The design is validated. Model C (Token Relay) with local-owned auth config is t
 - Preserves existing auth plugin contract
 - Natural multi-hop support
 - Clean separation of concerns
+
+---
+# Log: 2026-08-16T08:18:27Z Brian McCallister
+
+Restated against the OIDC-only design (was written in auth-plugin terms): the broker now acquires tokens in-process via a TokenFunc closure. Tunneling auth to a remote agent means running the browser flow on the local machine while the broker runs remotely - the seam is the TokenFunc/user-output writer pair, which already streams 'visit this URL' messages over the broker socket to the requesting ssh session. A remote broker would need the callback redirect to land somewhere the local browser can reach (device-code flow, or a forwarded callback port).
