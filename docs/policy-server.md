@@ -230,11 +230,15 @@ hosts:
 ```
 
 **Host pattern matching:** patterns are matched against `remoteHost` using
-Go's `path.Match` semantics (the same glob syntax as `doublestar`/shell
-globs, since `path.Match`'s `*` only refuses to cross `/`, which never
-appears in a hostname). This means **`*` crosses dot boundaries**:
-`*.example.com` matches `a.b.example.com`, not just single-label hosts like
-`a.example.com`. Only `/` is a boundary character for `*`.
+`doublestar` glob semantics. Two things to know:
+
+- **`*` crosses dot boundaries**: `*.example.com` matches `a.b.example.com`,
+  not just single-label hosts like `a.example.com`. Only `/` is a boundary
+  character for `*`, and `/` never appears in a hostname.
+- **Brace alternation is supported**: `hati{,.brianm.dev}` matches both
+  `hati` and `hati.brianm.dev`; `web{1,2,3}.example.com` matches the three
+  numbered hosts. An empty alternative (`{,suffix}`) makes the suffix
+  optional.
 
 Since YAML maps don't preserve key order, patterns are evaluated
 **longest-pattern-first** (ties broken lexicographically) — a deterministic,

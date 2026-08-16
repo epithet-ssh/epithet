@@ -3,7 +3,7 @@ package evaluator
 import (
 	"context"
 	"fmt"
-	"path"
+	"github.com/bmatcuk/doublestar/v4"
 	"slices"
 	"strings"
 	"time"
@@ -140,11 +140,11 @@ func (e *Evaluator) evaluateHosts(cfg *policyserver.PolicyConfig, userTags []str
 			continue
 		}
 
-		// path.Match's "*" only refuses to cross "/", which never appears in a
-		// hostname, so it matches doublestar.Match on every pattern shape this
-		// evaluator sees ("*.example.com" still spans multiple labels, e.g.
-		// matching "a.b.example.com" - see TestHostPatternWildcardSpansLabels).
-		matched, err := path.Match(pattern, conn.RemoteHost)
+		// doublestar, not stdlib path.Match: real configs rely on brace
+		// alternation ("hati{,.brianm.dev}"), which path.Match lacks. "*"
+		// still spans labels ("*.example.com" matches "a.b.example.com" -
+		// see TestHostPatternWildcardSpansLabels).
+		matched, err := doublestar.Match(pattern, conn.RemoteHost)
 		if err != nil || !matched {
 			continue
 		}

@@ -378,13 +378,11 @@ func TestHostMustMatchPattern_RejectsUnmatchedHost(t *testing.T) {
 	}
 }
 
-// TestHostPatternWildcardSpansLabels pins the host-pattern glob semantics
-// after the doublestar -> stdlib path.Match swap (spec §13): "*" is refused
-// only by "/", which never appears in a hostname, so "*.example.com" matches
-// both a single subdomain label and a multi-label chain - it is not anchored
-// to one dot-separated segment the way shell/DNS wildcard intuition might
-// suggest. This matches doublestar's prior behavior exactly (verified before
-// the swap), so the switch changes zero real evaluator outcomes.
+// TestHostPatternWildcardSpansLabels pins the host-pattern glob semantics:
+// "*" is refused only by "/", which never appears in a hostname, so
+// "*.example.com" matches both a single subdomain label and a multi-label
+// chain - it is not anchored to one dot-separated segment the way shell/DNS
+// wildcard intuition might suggest.
 func TestHostPatternWildcardSpansLabels(t *testing.T) {
 	cfg := &policyserver.PolicyConfig{
 		Users: map[string][]string{
@@ -671,4 +669,46 @@ func ExampleEvaluator() {
 	}
 
 	_, _ = eval.Evaluate(ctx, "oidc-token-from-auth-command", time.Time{}, conn)
+}
+
+// TestHostPatternBraceAlternation pins doublestar's brace-alternation support,
+// which real configs rely on (e.g. "hati{,.brianm.dev}" naming a host and its
+// FQDN in one pattern). Stdlib path.Match lacks braces entirely - swapping it
+// in once silently broke every brace pattern, so this test guards the dep.
+func TestHostPatternBraceAlternation(t *testing.T) {
+	cfg := &policyserver.PolicyConfig{
+		Users: map[string][]string{
+			"brianm@skife.org": {"wheel"},
+		},
+		Defaults: &policyserver.Rules{
+			Allow: map[string][]string{
+				"brianm": {"wheel"},
+			},
+		},
+		Hosts: map[string]*policyserver.Rules{
+			"hati{,.brianm.dev}": {},
+			"v*{,.home}":         {},
+		},
+	}
+
+	eval := evaluator.NewForTesting(cfg)
+
+	for _, host := range []string{"hati", "hati.brianm.dev", "vps1", "vps1.home"} {
+		_, err := eval.Evaluate(context.Background(), "brianm@skife.org", time.Time{}, policy.Connection{
+			RemoteHost: host,
+			RemoteUser: "brianm",
+		})
+		if err != nil {
+			t.Errorf("brace pattern should authorize brianm@%s, got: %v", host, err)
+		}
+	}
+
+	// A host outside every alternative must still be refused.
+	_, err := eval.Evaluate(context.Background(), "brianm@skife.org", time.Time{}, policy.Connection{
+		RemoteHost: "hatix",
+		RemoteUser: "brianm",
+	})
+	if err == nil {
+		t.Error("hatix must not match hati{,.brianm.dev}")
+	}
 }
