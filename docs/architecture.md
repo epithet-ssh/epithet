@@ -23,7 +23,9 @@ sequenceDiagram
 
     user ->> user: Validate CA URLs
     user ->> fs: Create profile rundir ~/.epithet/run/<name>/, take flock
-    user ->> ca: GET /discovery (anonymous)
+    user ->> ca: GET / (anonymous)
+    ca -->> user: Link: <discovery>; rel="https://epithet.dev/rel/auth"
+    user ->> ca: GET discovery (resolved from Link header)
     ca -->> user: {"auth": {"issuer", "client_id"}}
     user ->> fs: Generate ssh-config.conf (Match tagged epithet-<name> ...)
     user ->> sock: Start broker socket listener
@@ -103,7 +105,7 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 - Starts the broker daemon, listening on `~/.epithet/run/<name>/broker.sock`
 - `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
 - `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
-- Fetches OIDC issuer/client ID from the CA's `/discovery` endpoint once at startup — no local auth configuration
+- Fetches OIDC issuer/client ID from the CA's auth config once at startup (discovered via Link header on `GET /`) — no local auth configuration
 - Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`, gated by `Match tagged epithet-<name>`
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
 - Creates in-process SSH agent instances for each unique connection
@@ -118,7 +120,8 @@ epithet ca --policy <url> --key <path> --listen <addr>
 - Runs the CA server as a standalone HTTP service
 - Listens on specified address (default `0.0.0.0:8080`)
 - Reads CA private key from file
-- `GET /` returns the CA's public key; `POST /` signs a certificate
+- `GET /` returns the CA's public key and advertises the auth config via a
+  relative `Link` header; `POST /` signs a certificate
 - `GET /discovery` is an anonymous pass-through of the policy server's own discovery response
 - The CA never validates the user's JWT itself — it forwards it to the policy server and signs whatever `CertParams` comes back
 

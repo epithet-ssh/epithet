@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
@@ -134,10 +135,17 @@ func TestGetCert_ReturnsCertificate(t *testing.T) {
 // Discovery flow tests
 
 func TestGetDiscoveryHitsDiscoveryPathUnauthenticated(t *testing.T) {
-	var gotPath, gotAuth string
+	var gotPaths []string
+	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
+		gotPaths = append(gotPaths, r.URL.Path)
 		gotAuth = r.Header.Get("Authorization")
+		if r.URL.Path == "/" {
+			w.Header().Set("Link", `<discovery>; rel="https://epithet.dev/rel/auth"`)
+			w.Header().Set("Content-type", "text/plain")
+			w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"auth":{"issuer":"https://idp","client_id":"cid"}}`)
 	}))
@@ -148,9 +156,245 @@ func TestGetDiscoveryHitsDiscoveryPathUnauthenticated(t *testing.T) {
 
 	d, err := c.GetDiscovery(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, "/discovery", gotPath)
+	require.Equal(t, []string{"/", "/discovery"}, gotPaths)
 	require.Empty(t, gotAuth, "discovery must be anonymous")
 	require.Equal(t, "https://idp", d.Auth.Issuer)
+}
+
+// newLinkCAServer serves a CA root that advertises discovery at the given
+// relative target, plus the discovery document itself at discoveryPath.
+func newLinkCAServer(t *testing.T, linkHeader string, discoveryPath string) *httptest.Server {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if linkHeader != "" {
+			w.Header().Set("Link", linkHeader)
+		}
+		w.Header().Set("Content-type", "text/plain")
+		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"))
+	})
+	mux.HandleFunc(discoveryPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestGetDiscovery_FollowsLink(t *testing.T) {
+	srv := newLinkCAServer(t,
+		`<discovery>; rel="https://epithet.dev/rel/auth"`, "/discovery")
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL, Priority: 0}})
+	require.NoError(t, err)
+
+	d, err := c.GetDiscovery(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, d.Auth)
+	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+	require.Equal(t, "cid", d.Auth.ClientID)
+}
+
+// TestGetDiscovery_SlashlessCAURL is the RFC 3986 section 5 trap: a ca-url
+// with no trailing slash must still resolve under itself. httptest's srv.URL
+// is already slashless, so this is the direct form of the case.
+func TestGetDiscovery_SlashlessCAURL(t *testing.T) {
+	srv := newLinkCAServer(t,
+		`<discovery>; rel="https://epithet.dev/rel/auth"`, "/discovery")
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL, Priority: 0}})
+	require.NoError(t, err)
+
+	d, err := c.GetDiscovery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+}
+
+// TestGetDiscovery_SlashTerminatedCAURL is the companion to
+// TestGetDiscovery_SlashlessCAURL: an explicitly slash-terminated ca-url must
+// resolve to the same discovery document as the slashless form.
+func TestGetDiscovery_SlashTerminatedCAURL(t *testing.T) {
+	srv := newLinkCAServer(t,
+		`<discovery>; rel="https://epithet.dev/rel/auth"`, "/discovery")
+
+	caURL := srv.URL + "/"
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: caURL, Priority: 0}})
+	require.NoError(t, err)
+
+	d, err := c.GetDiscovery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+	require.Equal(t, "cid", d.Auth.ClientID)
+}
+
+// TestGetDiscovery_NoLink is the version-skew case: an old CA emits no Link.
+func TestGetDiscovery_NoLink(t *testing.T) {
+	srv := newLinkCAServer(t, "", "/discovery")
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL, Priority: 0}})
+	require.NoError(t, err)
+
+	_, err = c.GetDiscovery(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "did not advertise")
+	require.Contains(t, err.Error(), srv.URL)
+}
+
+func TestGetDiscovery_RejectsCrossOriginLink(t *testing.T) {
+	srv := newLinkCAServer(t,
+		`<https://evil.example.com/d>; rel="https://epithet.dev/rel/auth"`, "/discovery")
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL, Priority: 0}})
+	require.NoError(t, err)
+
+	_, err = c.GetDiscovery(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different origin")
+}
+
+// TestGetDiscovery_LeavesCAURLUnchanged guards the "no requirement on the
+// user" property: normalization is internal and must never be written back.
+func TestGetDiscovery_LeavesCAURLUnchanged(t *testing.T) {
+	srv := newLinkCAServer(t,
+		`<discovery>; rel="https://epithet.dev/rel/auth"`, "/discovery")
+
+	caURL := strings.TrimSuffix(srv.URL, "/")
+	endpoints := []caclient.CAEndpoint{{URL: caURL, Priority: 0}}
+
+	c, err := caclient.New(endpoints)
+	require.NoError(t, err)
+
+	_, err = c.GetDiscovery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, caURL, endpoints[0].URL)
+}
+
+// TestGetDiscovery_PrefixMountedCA is the central deployment case: the CA is
+// mounted under a prefix that a proxy strips, so the CA itself only ever sees
+// "/" and cannot know where it lives. The relative target still resolves.
+// Note: ServeMux 301s "/epithet/ca" to "/epithet/ca/", so this test's value
+// is the prefix-stripping coverage, not the slash-forcing rule — the redirect
+// makes the slash path incidental here. See TestGetDiscovery_SlashlessCAURL
+// and TestGetDiscovery_SlashTerminatedCAURL for that.
+func TestGetDiscovery_PrefixMountedCA(t *testing.T) {
+	inner := http.NewServeMux()
+	inner.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<discovery>; rel="https://epithet.dev/rel/auth"`)
+		w.Header().Set("Content-type", "text/plain")
+		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"))
+	})
+	inner.HandleFunc("/discovery", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`)
+	})
+
+	outer := http.NewServeMux()
+	outer.Handle("/epithet/ca/", http.StripPrefix("/epithet/ca", inner))
+	srv := httptest.NewServer(outer)
+	defer srv.Close()
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL + "/epithet/ca", Priority: 0}})
+	require.NoError(t, err)
+
+	d, err := c.GetDiscovery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+}
+
+// TestGetDiscovery_ResolvesAgainstFinalURLAfterRedirect proves the base is the
+// URL the response came from, not the one configured. If the configured /old
+// were used as the base, the target would resolve to /discovery and 404.
+func TestGetDiscovery_ResolvesAgainstFinalURLAfterRedirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/old", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/new/", http.StatusMovedPermanently)
+	})
+	mux.HandleFunc("/new/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<discovery>; rel="https://epithet.dev/rel/auth"`)
+		w.Header().Set("Content-type", "text/plain")
+		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"))
+	})
+	mux.HandleFunc("/new/discovery", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL + "/old", Priority: 0}})
+	require.NoError(t, err)
+
+	d, err := c.GetDiscovery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+}
+
+// TestGetDiscovery_RedirectToDifferentOriginRejected proves the same-origin
+// check is anchored to the configured ca-url, not to wherever the root GET
+// ends up. Server A (the configured CA) redirects the root GET to Server B,
+// a different origin, which serves a relative Link target. If the check
+// compared against the final (post-redirect) URL, the relative target would
+// resolve under Server B and pass same-origin against itself, defeating the
+// control in exactly the case it exists for.
+func TestGetDiscovery_RedirectToDifferentOriginRejected(t *testing.T) {
+	muxB := http.NewServeMux()
+	muxB.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<discovery>; rel="https://epithet.dev/rel/auth"`)
+		w.Header().Set("Content-type", "text/plain")
+		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"))
+	})
+	muxB.HandleFunc("/discovery", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`)
+	})
+	srvB := httptest.NewServer(muxB)
+	defer srvB.Close()
+
+	muxA := http.NewServeMux()
+	muxA.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srvB.URL+"/", http.StatusFound)
+	})
+	srvA := httptest.NewServer(muxA)
+	defer srvA.Close()
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srvA.URL, Priority: 0}})
+	require.NoError(t, err)
+
+	_, err = c.GetDiscovery(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different origin")
+}
+
+// TestGetDiscovery_ResolvedTargetServerError_ReturnsCAUnavailableError covers
+// fetchDiscoveryDoc's status mapping, which TestGetDiscovery_ServerError_
+// ReturnsCAUnavailableError no longer exercises now that the root GET is a
+// separate request: here the root GET succeeds with a valid Link, and the
+// resolved target itself returns 500.
+func TestGetDiscovery_ResolvedTargetServerError_ReturnsCAUnavailableError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<discovery>; rel="https://epithet.dev/rel/auth"`)
+		w.Header().Set("Content-type", "text/plain")
+		w.Write([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"))
+	})
+	mux.HandleFunc("/discovery", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, err := caclient.New([]caclient.CAEndpoint{{URL: srv.URL, Priority: caclient.DefaultPriority}})
+	require.NoError(t, err)
+
+	_, err = c.GetDiscovery(context.Background())
+	require.Error(t, err)
+	var allUnavail *caclient.AllCAsUnavailableError
+	require.True(t, errors.As(err, &allUnavail), "expected AllCAsUnavailableError, got %T: %v", err, err)
+	assert.Contains(t, allUnavail.Message, "CA unavailable")
 }
 
 func TestGetDiscovery_ServerError_ReturnsCAUnavailableError(t *testing.T) {

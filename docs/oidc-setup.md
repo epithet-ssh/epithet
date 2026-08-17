@@ -4,7 +4,7 @@ This guide walks through setting up OAuth2/OIDC authentication with popular iden
 
 ## Overview
 
-Epithet's OIDC config lives on the **policy server**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the policy server with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA passes this configuration through to clients anonymously via `GET /discovery`, so `epithet agent` needs no OIDC configuration of its own — just `--ca-url`.
+Epithet's OIDC config lives on the **policy server**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the policy server with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA advertises this configuration to clients via a `Link` header on its root response, so `epithet agent` needs no OIDC configuration of its own — just `--ca-url`.
 
 **Important**: Epithet uses PKCE (Proof Key for Code Exchange), so the client secret is optional for most providers. Where a provider requires one anyway, it goes in the policy server's config, not on the client — the secret never appears in a broker or ssh config.
 
@@ -73,7 +73,7 @@ epithet policy \
   --oidc-client-id YOUR_CLIENT_ID.apps.googleusercontent.com
 ```
 
-Clients need nothing beyond `--ca-url` — they learn the issuer and client ID from `GET /discovery` on first start.
+Clients need nothing beyond `--ca-url` — the broker discovers the issuer and client ID from the CA's root response at startup.
 
 ### Step 5: first authentication
 

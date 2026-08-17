@@ -46,8 +46,8 @@ agent:
   name: default
 ```
 
-The agent fetches the issuer and client ID from the CA's `/discovery`
-endpoint at startup - there's no OIDC configuration on the client at all.
+The agent discovers the issuer and client ID from the CA's Link header at
+startup — there's no OIDC configuration on the client at all.
 
 ### 4. Configure SSH
 

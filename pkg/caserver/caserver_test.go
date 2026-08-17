@@ -108,6 +108,24 @@ func TestDiscoveryHandler_FallbackCacheControl(t *testing.T) {
 	require.Equal(t, "max-age=300", rec.Header().Get("Cache-Control"))
 }
 
+// TestGetPubKeyAdvertisesAuthLink verifies the CA points at its auth config
+// with a relative Link target, so no client has to construct the path.
+func TestGetPubKeyAdvertisesAuthLink(t *testing.T) {
+	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+	caHTTPServer, cleanup := newTestCAServer(t, policyHandler)
+	defer cleanup()
+
+	resp, err := http.Get(caHTTPServer.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t,
+		`<discovery>; rel="https://epithet.dev/rel/auth"`,
+		resp.Header.Get("Link"))
+}
+
 func TestGetPubKey(t *testing.T) {
 	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
@@ -119,9 +137,9 @@ func TestGetPubKey(t *testing.T) {
 	defer resp.Body.Close()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	// The Link header (and the /discovery it pointed to) is gone; clients
-	// know the discovery path statically now.
-	require.Empty(t, resp.Header.Get("Link"))
+	// The CA advertises its auth config with a relative Link target; clients
+	// resolve it rather than knowing the path statically.
+	require.Contains(t, resp.Header.Get("Link"), "https://epithet.dev/rel/auth")
 }
 
 func TestCreateCert_Success(t *testing.T) {

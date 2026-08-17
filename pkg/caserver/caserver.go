@@ -18,6 +18,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// relAuth is the extension relation type advertising the CA's auth config
+// document. Duplicated rather than shared with pkg/caclient: the wire value is
+// the contract between them, and importing one from the other would couple the
+// server to the client package.
+const relAuth = "https://epithet.dev/rel/auth"
+
 type caServer struct {
 	c          *ca.CA
 	log        *slog.Logger
@@ -210,6 +216,10 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
+	// Advertise the auth config with a relative target so the CA needs no
+	// knowledge of its own external URL: the client resolves it against the
+	// ca-url it already has. See ideas/link-header-auth-discovery.md.
+	w.Header().Set("Link", `<discovery>; rel="`+relAuth+`"`)
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))

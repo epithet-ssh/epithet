@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,6 +145,53 @@ policy:
 		}
 		if d.Auth == nil || d.Auth.Issuer == "" || d.Auth.ClientID == "" {
 			t.Errorf("discovery auth config incomplete: %+v", d.Auth)
+		}
+	})
+
+	// GET / advertises discovery via a relative Link target, and following it
+	// reaches the same document. This crosses the combined server's reverse
+	// proxy, which must not strip the header.
+	t.Run("discovery_via_link", func(t *testing.T) {
+		resp, err := http.Get(baseURL)
+		if err != nil {
+			t.Fatalf("GET / failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		link := resp.Header.Get("Link")
+		if !strings.Contains(link, "https://epithet.dev/rel/auth") {
+			t.Fatalf("Link = %q, want it to advertise the auth relation", link)
+		}
+
+		base, err := url.Parse(baseURL)
+		if err != nil {
+			t.Fatalf("bad baseURL: %v", err)
+		}
+		if !strings.HasSuffix(base.Path, "/") {
+			base.Path += "/"
+		}
+		ref, err := url.Parse("discovery")
+		if err != nil {
+			t.Fatalf("bad reference: %v", err)
+		}
+		target := base.ResolveReference(ref)
+
+		dresp, err := http.Get(target.String())
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", target, err)
+		}
+		defer dresp.Body.Close()
+
+		if dresp.StatusCode != 200 {
+			t.Fatalf("GET %s status = %d, want 200", target, dresp.StatusCode)
+		}
+
+		var d wire.Discovery
+		if err := json.NewDecoder(dresp.Body).Decode(&d); err != nil {
+			t.Fatalf("failed to decode discovery: %v", err)
+		}
+		if d.Auth == nil || d.Auth.Issuer == "" {
+			t.Errorf("discovery auth = %+v, want a populated issuer", d.Auth)
 		}
 	})
 

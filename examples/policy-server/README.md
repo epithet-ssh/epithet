@@ -46,9 +46,8 @@ Update:
 
 ### 4. Configure epithet agent
 
-Create `~/.epithet/config.yaml`. OIDC issuer/client-id are fetched from the
-CA's `/discovery` endpoint at startup - the client needs no auth config of
-its own:
+Create `~/.epithet/config.yaml`. OIDC issuer/client-id are discovered from the
+CA's Link header at startup — the client needs no auth config of its own:
 
 ```yaml
 agent:

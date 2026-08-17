@@ -13,9 +13,9 @@
 # tls-ca-cert: /path/to/ca.crt
 
 # Agent configuration (epithet agent)
-# OIDC issuer/client-id are fetched from the CA's /discovery endpoint at
-# startup - nothing to configure here. Host gating lives in your own
-# ~/.ssh/config via Tag/Include, not in this file.
+# OIDC issuer/client-id are discovered from the CA URL via its Link header.
+# Nothing to configure here. Host gating lives in your own ~/.ssh/config via
+# Tag/Include, not in this file.
 agent:
   ca-url: https://ca.example.com
   name: default   # profile name; determines the rundir and ssh Tag (epithet-<name>; just "epithet" for the default profile)

@@ -16,8 +16,8 @@ make build
 epithet agent --ca-url https://your-ca.example.com
 ```
 
-The agent fetches its OIDC issuer and client ID from the CA's `/discovery`
-endpoint — nothing to configure locally.
+The agent discovers its OIDC issuer and client ID from the CA's Link header
+on the root response — nothing to configure locally.
 
 **3. Tag the hosts this profile should handle, then include the generated config** (`~/.ssh/config`):
 ```ssh_config

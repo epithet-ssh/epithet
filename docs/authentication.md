@@ -23,12 +23,30 @@ between acquisition and use — a JWT is already base64url-segmented ASCII.
 
 ## Discovery
 
-Before the broker can authenticate anyone, it needs to know which OIDC
-issuer and client ID to use. It fetches this once at startup from the CA's
-anonymous bootstrap endpoint:
+Before the broker can authenticate anyone, it needs to know which OIDC issuer
+and client ID to use. It learns both from the CA URL alone — no path is
+compiled into the client.
+
+At startup the broker fetches the CA URL. The response is the CA public key,
+and it carries a `Link` header pointing at the auth config:
 
 ```
-GET /discovery
+GET / HTTP/1.1
+
+HTTP/1.1 200 OK
+Content-type: text/plain
+Link: <discovery>; rel="https://epithet.dev/rel/auth"
+
+ssh-ed25519 AAAAC3Nza...
+```
+
+The target is a *relative* reference, so the CA needs no knowledge of its own
+external URL and works unchanged behind any proxy or path prefix. The broker
+resolves it against the CA URL it used:
+
+```
+ca-url  https://whee.example.com/epithet/ca
+        → https://whee.example.com/epithet/ca/discovery
 ```
 
 ```json
@@ -40,11 +58,18 @@ GET /discovery
 }
 ```
 
-This endpoint requires no token — a fresh client has none yet — and the CA
-serves it as a pass-through of the policy server's own `GET /` discovery
-response. There are no server-advertised host-match patterns in this
-document; which hosts epithet handles is decided entirely by the user's own
-ssh config (see [architecture.md](architecture.md)).
+Both requests are anonymous — a fresh client has no token — and the CA serves
+the second as a pass-through of the policy server's own `GET /` discovery
+response. There are no server-advertised host-match patterns in this document;
+which hosts epithet handles is decided entirely by the user's own ssh config
+(see [architecture.md](architecture.md)).
+
+A trailing slash on `ca-url` is not required and makes no difference: the
+broker normalizes internally for reference resolution and never rewrites the
+configured value.
+
+**"CA did not advertise its auth config"** means the CA predates Link-based
+discovery. Upgrade the CA; there is no fallback.
 
 ## In-process OIDC flow
 

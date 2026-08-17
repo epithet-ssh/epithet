@@ -1,8 +1,8 @@
 # Example epithet client configuration
 # Place in ~/.epithet/ as config.yaml or config.json
 
-# OIDC issuer/client-id are fetched from the CA's /discovery endpoint at
-# startup - nothing to configure here. Host gating lives in your own
-# ~/.ssh/config via Tag/Include, not in this file.
+# OIDC issuer/client-id are discovered from the CA URL via its Link header.
+# Nothing to configure here. Host gating lives in your own ~/.ssh/config via
+# Tag/Include, not in this file.
 agent:
   ca-url: https://ca.example.com/

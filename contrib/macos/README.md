@@ -11,8 +11,8 @@ This directory contains a launchd plist for running `epithet agent` as a backgro
      name: default
    ```
 
-   The agent fetches its OIDC issuer/client ID from the CA's `/discovery`
-   endpoint at startup - there's nothing auth-related to configure here.
+   The agent discovers its OIDC issuer/client ID from the CA's Link header
+   at startup - there's nothing auth-related to configure here.
 
 2. Create the log directory:
    ```bash
