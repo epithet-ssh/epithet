@@ -15,4 +15,7 @@ policy:
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "YOUR_CLIENT_ID"
+  policy-file: "/usr/local/etc/epithet/policy.writ"
+  inventory:
+    - "/usr/local/etc/epithet/inventory.yaml"
   default-expiration: "5m"

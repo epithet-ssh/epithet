@@ -128,12 +128,12 @@ epithet ca --policy <url> --key <path> --listen <addr>
 ### epithet policy
 
 ```
-epithet policy --ca-pubkey <key> --oidc-issuer <url> --oidc-client-id <id> --listen <addr>
+epithet policy --policy-file <policy.writ> --inventory <inventory.yaml> --ca-pubkey <key> --oidc-issuer <url> --oidc-client-id <id> --listen <addr>
 ```
 
-- Runs the policy server: validates OIDC tokens and makes authorization decisions
-- Config (users/hosts/defaults) is loaded once at startup; reload is a process restart
-- See [policy-server.md](policy-server.md) for the full configuration and HTTP API
+- Runs the policy server: validates OIDC tokens and evaluates a writ policy against a user/host inventory
+- Policy and inventory are loaded once at startup; reload is a process restart (`--check` validates without serving)
+- See [policy-server.md](policy-server.md) for the policy language, inventory format, and HTTP API
 
 ### epithet server
 

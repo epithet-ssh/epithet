@@ -1,0 +1,31 @@
+# Example writ policy for a small team.
+#
+# Rules read: allow <users> -> <account>@<hosts>, <clauses...>
+# Evaluation is order-independent, and deny always wins.
+# Validate with:
+#   epithet policy --check --policy-file policy.writ --inventory inventory.yaml
+
+# ── vocabulary ──────────────────────────────────────────
+user admins = group:Admins
+user devs   = group:Developers
+user ops    = group:Operations
+
+host prod = {env=prod}
+host dev  = {env=dev}
+
+# ── rules ───────────────────────────────────────────────
+
+# Admins may be root anywhere, on a short leash.
+allow $admins -> root@*, ttl 2m, label "admin-root"
+
+# Developers and operations get the service account on prod hosts.
+allow [$devs, $ops] -> ubuntu@$prod
+
+# Developers get any account on dev hosts.
+allow $devs -> *@$dev
+
+# Operations get the deploy account everywhere.
+allow $ops -> deploy@*
+
+# Contractors never reach prod, whatever else says otherwise.
+deny type:contractor -> *@$prod, label "no-contractors-in-prod"

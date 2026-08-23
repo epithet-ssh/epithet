@@ -1,0 +1,37 @@
+# Example static inventory: SCIM-shaped users, labeled hosts.
+#
+# The OIDC identity (email claim, falling back to sub) is compared
+# byte-for-byte against userName. A user absent from this file, or with
+# active: false, is denied structurally - no policy rule can grant it
+# anything. Field names follow SCIM (RFC 7643).
+
+users:
+  - userName: alice@example.com
+    groups: [Admins, Developers]
+    userType: employee
+  - userName: bob@example.com
+    groups: [Developers]
+    userType: employee
+  - userName: carol@example.com
+    groups: [Operations]
+    userType: employee
+  - userName: dave@contractor.example.com
+    groups: [Developers]
+    userType: contractor
+
+hosts:
+  # Exact entries: one host each. Names are matched case-insensitively.
+  - name: prod-web-1.example.com
+    labels: {env: prod, role: web}
+  - name: prod-db-1.example.com
+    labels: {env: prod, role: db}
+    # Optional account grounding: certs are only issuable for accounts
+    # listed here, no matter what the policy says. Omit the key to let
+    # rules match the requested account directly.
+    accounts: [root, postgres, ubuntu]
+
+  # Pattern entries synthesize a host for any matching name - useful
+  # for short-lived fleets that follow a naming convention. Globs are
+  # writ globs (* and ? only; * crosses dots).
+  - pattern: "dev-*.example.com"
+    labels: {env: dev}

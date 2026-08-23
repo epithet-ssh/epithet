@@ -4,19 +4,18 @@ This guide explains how to set up and use epithet's built-in policy server with 
 
 ## Overview
 
-The epithet policy server validates OIDC tokens and makes authorization decisions based on a configuration file that maps users to tags, and tags to principals. This enables small teams to deploy epithet quickly without building custom policy infrastructure.
+The epithet policy server validates OIDC tokens and makes authorization decisions by evaluating a **writ policy file** against an **inventory** of users and hosts. Policy rules say who may reach which account on which hosts; the inventory says who the users are (SCIM-shaped records) and what the hosts are (names plus labels).
 
-**Key Features:**
+**Key features:**
 - OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
-- Tag-based authorization for flexible access control
-- Per-host policy overrides, matched longest-pattern-first
+- A readable, order-independent policy language (`.writ`) with explicit `allow`/`deny` rules — deny always wins
+- SCIM-modeled user inventory (groups, type, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
 - Certificates minted per connection, carrying only the requested principal
 - Certificate validity clamped to the auth token's remaining lifetime
-- YAML config files (`.json` also works, since JSON is valid YAML - see
-  "Configuration format" below)
+- `epithet policy --check` validates policy + inventory without starting a server
 - Built-in to the epithet binary (no separate deployment needed)
 
-**Security Note:** SSH certificates issued by epithet can be used on any host that trusts the CA, regardless of host-specific policies in the configuration. Host restrictions are enforced at **certificate issuance time**, not validation time. For tighter security, consider using SSH's `AuthorizedPrincipalsCommand` on target hosts to enforce additional checks.
+**Security note:** SSH certificates issued by epithet can be used on any host that trusts the CA, regardless of host-specific policies. Host restrictions are enforced at **certificate issuance time**, not validation time. For tighter security, consider using SSH's `AuthorizedPrincipalsCommand` on target hosts to enforce additional checks.
 
 ## Quick start
 
@@ -32,77 +31,69 @@ curl http://localhost:8080/
 cat ~/.epithet/ca_key.pub
 ```
 
-### 2. Create a policy configuration file
+### 2. Write a policy file
 
-Create `~/.epithet/policy.yaml` (the policy server loads config from `~/.epithet/*.yaml`):
+Create `~/.epithet/policy.writ`:
 
-```yaml
-# Inline format: requires "policy:" wrapper
-policy:
-  # Address to listen on
-  listen: "0.0.0.0:9999"
+```
+# ── vocabulary ──────────────────────────────────────────
+user sre = group:SRE
+user eng = group:Engineering
 
-  # CA public key, used to verify the CA's service JWT on every request
-  ca-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdE..."
+host prod = {env=prod}
+host dev  = {env=dev}
 
-  # OIDC configuration for token validation
-  oidc:
-    issuer: "https://accounts.google.com"
-    client-id: "your-client-id"
-
-  # Map users (by email/identity) to tags
-  users:
-    alice@example.com: [admin, dev]
-    bob@example.com: [dev]
-    charlie@example.com: [ops]
-
-  # Global defaults for all hosts
-  defaults:
-    # Map principals to allowed tags
-    allow:
-      root: [admin]           # Users with 'admin' tag can log in as root
-      ubuntu: [dev, ops]      # Users with 'dev' or 'ops' tag can log in as ubuntu
-      deploy: [ops]           # Users with 'ops' tag can log in as deploy
-
-    # Default certificate expiration
-    expiration: "5m"
-
-    # Default SSH certificate extensions
-    extensions:
-      permit-pty: ""
-      permit-agent-forwarding: ""
-      permit-user-rc: ""
-
-  # Per-host policy overrides (optional)
-  hosts:
-    prod-db-01:
-      allow:
-        postgres: [admin]     # Only admins may log in as postgres on prod-db
-      expiration: "2m"        # Shorter expiration for production database
-
-    dev-server:
-      allow:
-        builder: [dev]        # 'dev'-tagged users may log in as builder
-      expiration: "10m"       # Longer expiration for dev environment
+# ── rules ───────────────────────────────────────────────
+allow $sre -> ubuntu@$prod
+allow $sre -> root@$prod, ttl 2m, label "sre-prod-root"
+allow $eng -> *@$dev
+deny  type:contractor -> *@$prod, label "no-contractors-in-prod"
 ```
 
-**Important:** Each issued certificate carries **only the principal actually requested** for that connection (`ssh <principal>@<host>`), never the union of everything the user's tags could reach elsewhere. A certificate is minted fresh for every connection past the broker's local cache of still-valid agents — there is no cross-connection certificate cache and nothing the policy server decides ever leaves the policy server on the wire.
+### 3. Write an inventory file
 
-### 3. Start the policy server
+Create `~/.epithet/inventory.yaml`:
+
+```yaml
+users:
+  - userName: alice@example.com     # matched against the OIDC identity
+    groups: [SRE]
+    userType: employee
+  - userName: bob@example.com
+    groups: [Engineering]
+    userType: contractor
+
+hosts:
+  - name: prod-db-1
+    labels: {env: prod, role: db}
+    accounts: [root, postgres, ubuntu]   # optional: restricts issuable accounts
+  - name: dev-box
+    labels: {env: dev}
+  - pattern: "ci-runner-*"               # synthesizes a host for any matching name
+    labels: {env: dev, ephemeral: "true"}
+```
+
+### 4. Check and start the policy server
 
 ```bash
-# Config is loaded from ~/.epithet/policy.yaml
-epithet policy
+# Validate without starting a server
+epithet policy --check \
+  --policy-file ~/.epithet/policy.writ \
+  --inventory ~/.epithet/inventory.yaml
 
-# Or override with CLI flags
+# Start (flags may instead come from the policy: config section)
 epithet policy \
+  --policy-file ~/.epithet/policy.writ \
+  --inventory ~/.epithet/inventory.yaml \
   --ca-pubkey "$(curl -s http://localhost:8080/)" \
+  --oidc-issuer https://accounts.google.com \
+  --oidc-client-id your-client-id \
   --listen 0.0.0.0:9999
 ```
 
-### 4. Configure the CA to use the policy server
+**Important:** Each issued certificate carries **only the principal actually requested** for that connection (`ssh <account>@<host>`), never the union of everything the user could reach. A certificate is minted fresh for every connection past the broker's local cache of still-valid agents.
 
-When starting the CA:
+### 5. Configure the CA to use the policy server
 
 ```bash
 epithet ca \
@@ -111,171 +102,143 @@ epithet ca \
   --listen :8080
 ```
 
-## Configuration format
+## The writ policy language
 
-### File formats
+A policy file is a sequence of macro definitions and rules. A rule has a punctuation **head** — who `->` account `@` where — and an optional keyword **tail** of comma-separated clauses:
 
-Config files are parsed as YAML. The default search paths match `*.yaml`,
-`*.yml`, and `*.json` under `/etc/epithet/` and `~/.epithet/` (see
-`defaultConfigPatterns` in `cmd/epithet/main.go`), so a `.json` file is
-picked up too - not because its format is detected, but because JSON is a
-syntactic subset of YAML and the same YAML parser (`gopkg.in/yaml.v3`)
-accepts it directly.
-
-There is no per-file content-type or extension sniffing - every matched file
-goes through the same YAML unmarshal call.
-
-### Configuration mode
-
-Policy is defined inside your main config file under a `policy:` section:
-
-```yaml
-policy:
-  ca-pubkey: "ssh-ed25519 ..."
-  oidc:
-    issuer: "https://accounts.google.com"
-    client-id: "your-client-id"
-  users:
-    alice@example.com: [admin]
-  defaults:
-    allow:
-      wheel: [admin]
+```
+allow <users> -> <accounts>@<hosts>, <clauses...>
+deny  <users> -> <accounts>@<hosts>, <clauses...>
 ```
 
-Policy is read once at startup; picking up changes requires restarting the
-server (dynamic reload from a URL was removed - config is the only source).
+Evaluation is **order-independent**: file order never matters, and any matching `deny` always wins over any `allow`.
 
-### Configuration structure
+### Matchers
 
-#### Top-level fields
+| Position | Matchers |
+|---|---|
+| users | `id:"alice@example.com"`, `group:SRE`, `type:employee`, `dept:Platform`, `org:Acme`, `*` |
+| accounts | a name (`root`), a glob (`deploy-*`), `*` |
+| hosts | a name (`prod-db-1`), a glob (`*.example.com`), a label selector (`{env=prod, role=db}`), `*` |
 
-All fields go under the `policy:` section in `~/.epithet/*.yaml`:
+- `[]` makes a union: `allow [$sre, $dba] -> [ubuntu, deploy]@$prod`.
+- `{}` entries AND: `{env=prod, role=db}` requires both labels.
+- Globs (`*` and `?` only) match **names, never attribute values** — `group:SRE*` is an error; quote a value containing glob characters (`group:"weird*name"`) to match it literally. `*` crosses dots: `*.example.com` matches `a.b.example.com`.
+- Host names compare ASCII-case-insensitively (they are lowercased at every boundary); account names, tag values, and labels are byte-exact.
 
-- **`listen`** (optional): Address to listen on (default: `0.0.0.0:9999`).
-  A `unix:///path/to/policy.sock` value listens on a Unix domain socket
-  instead of TCP; the CA's `--policy` accepts the same form. This is how
-  `epithet server` wires its two subprocesses together.
-- **`ca-pubkey`** (required): SSH public key of the CA, used to verify the CA's service JWT
-- **`oidc`** (required): OIDC configuration object with `issuer` and `client-id` fields (config-file keys are kebab-case, derived from the CLI flag names — see the note below) — `client-id` is required so audience checking can never be silently skipped
-- **`users`** (required): Map of user identities to tags
-- **`defaults`** (optional): Global policy defaults
-- **`hosts`** (optional): Per-host policy overrides
+### Macros
 
-> **Key casing note:** `listen`, `ca-pubkey`, `oidc.issuer`, `oidc.client-id`,
-> `oidc.client-secret`, and `default-expiration` are resolved by Kong from
-> the CLI flag names, so their config-file keys are **kebab-case** (e.g.
-> `client-id`, not `client_id`) — using the underscored spelling silently
-> fails to populate the value and surfaces later as "oidc.client_id is
-> required". `users`, `defaults`, and `hosts` (and the fields inside
-> `Rules`: `allow`, `expiration`, `extensions`) are decoded separately by a
-> plain YAML unmarshal against Go struct tags, which happen to have no
-> multi-word keys today so the casing question doesn't currently bite there.
-> This split-brain config loading (two different resolvers reading the same
-> file) is tracked for cleanup in the policy-server config parsing rework
-> task (`yatl show kk`).
+Macros bind a name to a match expression of a declared kind, must be defined before use, and compose by union only:
 
-#### Users section
+```
+user  sre        = group:SRE
+host  staging_db = {env=staging, role=db}
+account admin    = [root, postgres]
 
-Maps user identities (typically email addresses from OIDC claims) to tags:
+allow $sre -> $admin@$staging_db
+```
+
+### Negation
+
+`!` exists only in `deny` heads, applies to a whole position, and is legal in each of the three positions independently:
+
+```
+deny !$infra -> *@{env=prod}, label "only-infra-in-prod"
+```
+
+`![$a, $b]` means "in neither". A negated allow is a syntax error by design: a negated set grows as the world grows, which is fail-safe on a deny and fail-open on an allow.
+
+### Clauses
+
+| Clause | On | Meaning |
+|---|---|---|
+| `ttl 2m` | allow | Overrides the default cert TTL for this rule; when several satisfied allows set one, the **minimum** governs |
+| `until "2026-08-31T22:00Z"` | allow | Rule stops matching at the given instant (RFC 3339, offset mandatory) |
+| `label "name"` | both | Human-readable alias for the rule; cosmetic, shows up in logs and denials |
+| `require [oncall, approval]` | allow | Named async facts that must be satisfied |
+| `when freeze` | both | Named flags that must currently hold |
+| `notify "target"` | both | Fire-and-forget notification |
+
+`require`, `when`, and `notify` name **registered plugins**. The static policy server currently registers none, so a policy using any of them fails at startup with an error naming the unknown reference — the seams exist and the plugin mechanism (subprocess handlers) is planned. `ttl`, `until`, and `label` are fully supported.
+
+Cert **extensions** are deliberately not in the language: they are deployment configuration, set with the repeatable `--extension name=value` flag (default: `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`).
+
+## The inventory
+
+The inventory answers two questions at evaluation time: who is this identity, and what is this host? It is pluggable by design (databases are the expected future); the built-in implementation is one or more static YAML files given via `--inventory` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
+
+### Users
+
+User records follow the SCIM (RFC 7643) shape and field names:
 
 ```yaml
 users:
-  alice@example.com: [admin, dev]
-  bob@example.com: [dev]
-  charlie@example.com: [ops, security]
+  - userName: alice@example.com   # the identity key
+    active: true                  # default true; false matches nothing, ever
+    groups: [SRE, Engineering]    # matched by group:
+    userType: employee            # matched by type:
+    department: Platform          # matched by dept:
+    organization: Acme            # matched by org:
 ```
 
-**Identity matching:**
-- Identity is extracted from the OIDC token's `email` claim (preferred)
-- Falls back to `sub` claim if `email` is not present
-- Must match exactly (case-sensitive)
+The OIDC token's identity (the `email` claim, falling back to `sub`) is compared **byte-for-byte** against `userName`. An identity with no inventory record, or with `active: false`, is denied structurally — no policy rule can grant it anything.
 
-#### Defaults section
-
-Defines global rules that apply to all hosts unless overridden:
-
-```yaml
-defaults:
-  allow:
-    root: [admin]         # Principal → allowed tags
-    ubuntu: [dev, ops]
-  expiration: "5m"        # Certificate lifetime
-  extensions:              # SSH certificate extensions
-    permit-pty: ""
-    permit-agent-forwarding: ""
-```
-
-**Fields:**
-- **`allow`** (optional): Map of principals to allowed tags
-  - Key: SSH principal (username on target host)
-  - Value: List of tags that grant access to this principal
-  - User needs **at least one** matching tag to be authorized for the requested principal
-- **`expiration`** (optional): Certificate lifetime (e.g., `5m`, `1h`, `2h30m`)
-  - Default: `5m` (5 minutes)
-  - Always further clamped to the auth token's remaining lifetime (`NotAfter`) — a certificate never outlives the session that requested it
-- **`extensions`** (optional): SSH certificate extensions
-  - Default: `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`
-
-#### Hosts section
-
-Per-host policy overrides, keyed by a host pattern:
+### Hosts
 
 ```yaml
 hosts:
-  prod-db-01:
-    allow:
-      postgres: [dba]      # Override: only dba tag can access postgres
-    expiration: "2m"       # Override: shorter expiration
-    extensions:            # Override: restricted extensions
-      permit-pty: ""
-
-  "*.dev.example.com": {}  # Empty: use defaults for these hosts
+  - name: prod-db-1               # exact entry (name is lowercased at load)
+    labels: {env: prod, role: db}
+    accounts: [root, postgres]    # optional account grounding — see below
+  - pattern: "ci-runner-*"        # pattern entry: writ glob
+    labels: {env: ci}
 ```
 
-**Host pattern matching:** patterns are matched against `remoteHost` using
-`doublestar` glob semantics. Two things to know:
+A connection's host must resolve in the inventory or the request is denied — this is what makes label selectors trustworthy. Two entry forms:
 
-- **`*` crosses dot boundaries**: `*.example.com` matches `a.b.example.com`,
-  not just single-label hosts like `a.example.com`. Only `/` is a boundary
-  character for `*`, and `/` never appears in a hostname.
-- **Brace alternation is supported**: `hati{,.brianm.dev}` matches both
-  `hati` and `hati.brianm.dev`; `web{1,2,3}.example.com` matches the three
-  numbered hosts. An empty alternative (`{,suffix}`) makes the suffix
-  optional.
+- **Exact entries** (`name:`) are individual hosts, looked up first.
+- **Pattern entries** (`pattern:`) synthesize a host for any requested name they match, adopting the requested name and carrying the entry's labels. This is the escape hatch for short-lived fleets (VM pools, CI runners) that follow a naming pattern but cannot be enumerated. Patterns match in file order; first match wins.
 
-Since YAML maps don't preserve key order, patterns are evaluated
-**longest-pattern-first** (ties broken lexicographically) — a deterministic,
-config-order-independent way to prefer the most specific match. The first
-pattern that matches the connection's host contributes its `expiration` and
-`extensions` overrides (falling back to `defaults` for anything it doesn't
-set); `allow` rules from the matching host pattern and from `defaults` are
-merged when deciding whether the requested principal is authorized.
+**Account grounding:** if a host entry lists `accounts`, certificates are only issuable for accounts in that list — even a policy `*` cannot reach an unlisted account. If the entry has no `accounts` key, account matching is ungrounded and rules match against the requested account name directly.
 
-> **Important:** SSH certificates are validated by the target host based only on CA trust and principal matching. Host restrictions in policy config only apply at certificate issuance time. Use `AuthorizedPrincipalsCommand` on target hosts for additional enforcement.
+## Configuration
+
+All policy-server settings can live under the `policy:` section of `/etc/epithet/*.yaml` or `~/.epithet/*.yaml` (or a file given with `--config`). Keys use the CLI flag names verbatim (kebab-case):
+
+```yaml
+policy:
+  listen: "0.0.0.0:9999"
+  ca-pubkey: "ssh-ed25519 AAAA..."
+  oidc:
+    issuer: "https://accounts.google.com"
+    client-id: "your-client-id"
+  policy-file: /etc/epithet/policy.writ
+  inventory:
+    - /etc/epithet/inventory.yaml
+  default-expiration: 5m
+```
+
+- **`listen`** (optional): address to listen on (default `0.0.0.0:9999`). A `unix:///path/to/policy.sock` value listens on a Unix domain socket; this is how `epithet server` wires its subprocesses together.
+- **`ca-pubkey`** (required): the CA's SSH public key (URL, file path, or literal), used to verify the CA's service JWT.
+- **`oidc`** (required): `issuer` and `client-id` — `client-id` is required so audience checking can never be silently skipped.
+- **`policy-file`** (required): the writ policy file.
+- **`inventory`** (required): inventory file paths or globs.
+- **`default-expiration`** (optional): cert TTL when no satisfied rule sets a `ttl` (default `5m`). Always further clamped to the auth token's remaining lifetime.
+- **`extension`** (flag only): repeatable `name=value` cert extensions.
+
+Policy and inventory are read once at startup; picking up changes is a process restart. `epithet policy --check` validates the pair (parse and compile errors with positions, unknown require/when/notify references, warnings such as unused macros or already-expired `until` rules) and exits non-zero on errors.
 
 ## Authorization logic
 
-When a user requests access, the policy server (`pkg/policyserver/evaluator`):
+For each request `(identity, account@host)` the evaluator (`pkg/policyserver/writpolicy` over `pkg/writ/eval`):
 
-1. **Validates the OIDC token**
-   - Verifies JWT signature against OIDC provider's JWKS
-   - Checks token expiration, issuer, and audience (`client_id`)
-   - Extracts user identity and the token's expiry from claims
+1. **Validates the OIDC token** — signature against the provider's JWKS, expiry, issuer, audience — and extracts the identity and token expiry.
+2. **Structural gates** — the identity must resolve to an `active` inventory user; the host must resolve in the inventory; if the host lists accounts, the requested account must be among them. Any failure → 403, regardless of policy text.
+3. **Collects matching rules** — a rule matches when its user, account, and host expressions all match.
+4. **Deny wins** — any matching deny → 403, always; no allow can override. The denial names the rule's label (or content id).
+5. **Issues** if any allow survives: `principals` is exactly `[requestedAccount]`, `expiration` is the minimum `ttl` among satisfied allows (else the default), `notAfter` is the token's expiry, `extensions` are the deployment set.
 
-2. **Looks up the user's tags**
-   - If user not in `users` map → deny (403)
-   - Otherwise, get their tag list
-
-3. **Checks the one requested principal**
-   - The merged `allow` rules (matching host pattern + defaults) for the requested principal must include at least one of the user's tags
-   - If not authorized → deny (403)
-
-4. **Issues a certificate naming only that principal**
-   - `principals`: exactly `[requestedPrincipal]` — never a union of everything the user could reach
-   - `identity`: user's email/identity from the token, for audit logs
-   - `expiration`: from the matching host pattern or defaults
-   - `notAfter`: the token's expiry — an absolute ceiling the CA clamps against
-   - `extensions`: from the matching host pattern or defaults
+Evaluator or inventory failures fail **closed** (500), never "treat as no match".
 
 ## Target host configuration
 
@@ -292,22 +255,13 @@ TrustedUserCAKeys /etc/ssh/ca/epithet.pub
 
 That's it. With only `TrustedUserCAKeys` set, sshd's default behavior is to
 accept a certificate for login as user `X` when the certificate names `X` as
-a principal - which is exactly what the policy server issues, since the
-`allow` map's keys (see "Defaults section" and "Hosts section" above) are
-themselves the real login usernames.
+a principal - which is exactly what the policy server issues, since account
+expressions in rules match the real login usernames.
 
 `AuthorizedPrincipalsFile`/`AuthorizedPrincipalsCommand` are optional beyond
 this: use them only if you need a *different* mapping, such as one
 certificate principal authorizing several distinct local accounts. Most
 deployments don't need them.
-
-### How it works
-
-When a user with a certificate attempts SSH:
-
-1. **sshd validates certificate**: Is it signed by trusted CA? (checks `TrustedUserCAKeys`)
-2. **sshd checks principals**: Does the certificate's single principal match the requested login username?
-3. **Access granted** if the certificate's principal matches
 
 See [OIDC setup guide](./oidc-setup.md) for provider-specific configuration (Google, Okta, Azure AD).
 
@@ -327,7 +281,7 @@ After=network.target
 Type=simple
 User=epithet
 Group=epithet
-# Config is loaded from ~/.epithet/policy.yaml (or specify --config for another location)
+# Config is loaded from /etc/epithet/*.yaml (or specify --config)
 ExecStart=/usr/local/bin/epithet policy
 Restart=on-failure
 RestartSec=5s
@@ -342,25 +296,35 @@ sudo systemctl enable epithet-policy
 sudo systemctl start epithet-policy
 ```
 
+Validate config changes before restarting:
+```bash
+epithet policy --check --policy-file /etc/epithet/policy.writ --inventory /etc/epithet/inventory.yaml
+```
+
 ## Troubleshooting
 
 ### Common errors
 
-**"User not in users list" (403)**
-- The OIDC token's email/sub claim doesn't match any entry in the `users` map
-- Check that the email in the token matches exactly (case-sensitive)
+**"user does not resolve to an active inventory user" (403)**
+- The OIDC token's email/sub claim doesn't match any inventory `userName` (byte-for-byte, case-sensitive), or the record has `active: false`
 - Verify the OIDC provider is sending the expected claim
 
-**"Invalid token" (401)**
-- User JWT signature verification failed
-- Token is expired
-- Token issuer or audience doesn't match the OIDC configuration
-- Check system clock synchronization
+**"host is not in inventory" (403)**
+- The connection's host name matches no exact inventory entry and no pattern entry
+- Remember host names are lowercased; patterns use writ globs (`*`, `?`)
 
-**"Not authorized for" (403)**
-- User doesn't have a tag matching the requested principal's `allow` rules
-- Check the user's tags in the configuration
-- Verify the principal's allowed tags in `defaults.allow` or the matching `hosts[].allow`
+**"denied by rule ..." (403)**
+- A `deny` rule matched; the message names its label or content id
+
+**"no policy rule allows this access" (403)**
+- No `allow` rule matched the (user, account, host) tuple
+
+**"policy references unknown requirement/flag/notify target" (at startup)**
+- The policy uses `require`, `when`, or `notify` but no plugin with that name is registered — the static server currently registers none
+
+**"Invalid token" (401)**
+- User JWT signature verification failed, token expired, or issuer/audience mismatch
+- Check system clock synchronization
 
 **"request verification failed" (401)**
 - The CA's service JWT failed verification: expired (>60s old), wrong `aud`, body-hash mismatch, method/target mismatch, or the wrong signing key
@@ -373,12 +337,6 @@ Enable verbose logging:
 ```bash
 epithet -vv policy
 ```
-
-Check policy server logs for:
-- Token validation results
-- User tag lookups
-- Authorization decisions
-- Configuration loading errors
 
 ## Policy server HTTP API
 
@@ -483,7 +441,7 @@ itself, with `Content-Type: text/plain` (see `writeError` in
 `pkg/policyserver/policyserver.go`):
 
 ```
-User alice not authorized for deploy@prod-web-01.example.com
+alice@example.com is not authorized for deploy@prod-web-01.example.com: no policy rule allows this access
 ```
 
 Return any non-200 status code with a plain-text body to deny the

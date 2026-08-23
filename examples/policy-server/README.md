@@ -14,19 +14,37 @@ This creates:
 - `ca_key` - Private key (keep secret!)
 - `ca_key.pub` - Public key (distribute to target hosts)
 
-### 2. Create policy configuration
+### 2. Create policy and inventory files
 
-Copy `policy.example.yaml` to `policy.yaml` and edit:
+Copy the examples and edit:
 
 ```bash
-cp policy.example.yaml policy.yaml
-editor policy.yaml
+cp policy.example.writ policy.writ
+cp inventory.example.yaml inventory.yaml
+editor policy.writ inventory.yaml
 ```
 
 Update:
-- `ca-pubkey`: Paste contents of `ca_key.pub`
-- `oidc`: Your OIDC provider URL
-- `users`: Add your team members
+- `policy.writ`: the access rules (who reaches which account on which hosts)
+- `inventory.yaml`: your team members (SCIM-shaped) and your hosts (names/patterns + labels)
+
+Then validate the pair:
+
+```bash
+./epithet policy --check --policy-file policy.writ --inventory inventory.yaml
+```
+
+You also need a small config file (`policy.yaml`) for the server settings:
+
+```yaml
+policy:
+  oidc:
+    issuer: "https://accounts.google.com"
+    client-id: "your-client-id"
+  policy-file: ./policy.writ
+  inventory:
+    - ./inventory.yaml
+```
 
 ### 3. Start the services
 
@@ -89,7 +107,8 @@ Subsequent connections within the refresh token lifetime (~hours) will be fast (
 
 ## Files in this example
 
-- **`policy.example.yaml`**: Template policy configuration
+- **`policy.example.writ`**: Template writ policy (the access rules)
+- **`inventory.example.yaml`**: Template static inventory (users and hosts)
 - **`README.md`**: This file
 
 See the [policy server guide](../../docs/policy-server.md) for detailed configuration and authorization documentation.
@@ -108,9 +127,9 @@ sudo cp epithet /usr/local/bin/
 # Install configuration
 sudo mkdir -p /etc/epithet
 sudo cp ca_key /etc/epithet/
-sudo cp policy.yaml /etc/epithet/
+sudo cp policy.yaml policy.writ inventory.yaml /etc/epithet/
 sudo chmod 600 /etc/epithet/ca_key
-sudo chmod 640 /etc/epithet/policy.yaml
+sudo chmod 640 /etc/epithet/policy.yaml /etc/epithet/policy.writ /etc/epithet/inventory.yaml
 ```
 
 Two processes need supervising, and the CA depends on the policy server:
