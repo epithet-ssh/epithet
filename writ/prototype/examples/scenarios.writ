@@ -1,0 +1,49 @@
+# ── vocabulary ──────────────────────────────────────────
+user  sre   = group:SRE
+user  eng   = group:Engineering
+user  dba   = group:DBA
+user  sec   = group:"Security Oncall"
+user  infra = group:Infrastructure
+
+host  prod       = {env=prod}
+host  dev        = {env=dev}
+host  staging_db = {env=staging, role=db}
+
+# ── rules ───────────────────────────────────────────────
+
+# S1 — baseline
+allow $sre -> ubuntu@$prod
+
+# S2 — elevated
+allow $sre -> root@$prod, require [oncall, approval], label "sre-prod-root"
+
+# S3 — authored form (the grants CLI is the preferred path)
+allow id:"carol@example.com" -> postgres@prod-db-1,
+    require approval,
+    until "2026-08-31T22:00Z",
+    label "carol-pgdb-incident-1234"
+
+# S4 — attribute guard
+deny type:contractor -> *@$prod, label "no-contractors-in-prod"
+
+# S5 — dev wildcard
+allow $eng -> *@$dev
+
+# S6 — breakglass
+allow $sec -> root@*, require mfa, notify "security-alerts", label "breakglass-root"
+
+# S7 — compound selector
+allow $dba -> postgres@$staging_db
+
+# S8 — freeze
+deny !$infra -> *@$prod, when freeze, label "prod-freeze"
+
+# stress test — worst-case clause pileup
+allow $sre -> root@{env=prod, role=db},
+    require [oncall, approval, mfa],
+    ttl 2m,
+    notify "security-alerts",
+    label "db-root-breakglass"
+
+# unions, same sigil, same meaning
+allow [$sre, $dba] -> [ubuntu, deploy]@$prod

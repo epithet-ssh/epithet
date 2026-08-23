@@ -1,0 +1,125 @@
+// Writ policy language — C′ grammar per ideas/6.md, with the ideas/7.md
+// amendments (statement termination, trailing commas, `$` + ident, and
+// timestamps/durations as ordinary tokens validated after parsing), and
+// one post-7.md change: allow rules take an explicit `allow` keyword, so
+// every statement leads with one of user/host/account/allow/deny.
+//
+// Newline discipline: `\n` is NOT whitespace. A statement ends at a
+// newline unless bracket depth is > 0 (lists/selectors admit explicit
+// NEWLINEs) or the line ends in a comma (`clause_sep`/`comma_nl` swallow
+// the newlines that follow a comma). EOF terminates the last statement.
+//
+// Rules named `bad_*`, `*_bang`, `user_bare`, and `deny_illegal_c` are
+// diagnostic ("poison") productions: they parse forms the language
+// forbids so the lowering pass can reject them with a pointed message
+// instead of pest's generic expectation list.
+
+WHITESPACE = _{ " " | "\t" }
+COMMENT    = _{ "#" ~ (!NEWLINE ~ ANY)* }
+
+file = { SOI ~ NEWLINE* ~ (item ~ (NEWLINE+ ~ item)*)? ~ NEWLINE* ~ EOI }
+item = _{ macro_def | deny_rule | allow_rule | bad_neg_stmt | bad_headless_rule }
+
+// A negated allow head; rejected in lowering with a pointed message.
+bad_neg_stmt = { "!" ~ (!NEWLINE ~ ANY)* }
+
+// A rule head with no `allow`/`deny` keyword (the pre-amendment inferred
+// form); rejected in lowering with a migration message.
+bad_headless_rule = { (user_list | macro_ref | tag_matcher | "*") ~ (!NEWLINE ~ ANY)* }
+
+// ── macro definitions ───────────────────────────────────────────────
+
+macro_def  = _{ user_macro | host_macro | acct_macro }
+user_macro = { kw_user ~ ident ~ "=" ~ user_expr }
+host_macro = { kw_host ~ ident ~ "=" ~ host_expr }
+acct_macro = { kw_account ~ ident ~ "=" ~ acct_expr }
+
+// ── rules ───────────────────────────────────────────────────────────
+
+allow_rule = { kw_allow ~ user_expr ~ "->" ~ acct_expr ~ "@" ~ host_expr ~ (clause_sep ~ allow_clause)* }
+deny_rule  = { kw_deny ~ bang? ~ user_expr ~ "->" ~ bang? ~ acct_expr ~ "@" ~ bang? ~ host_expr ~ (clause_sep ~ deny_clause)* }
+bang       = { "!" }
+
+clause_sep = _{ "," ~ NEWLINE* }
+
+allow_clause = _{ require_c | when_c | until_c | ttl_c | notify_c | label_c }
+deny_clause  = _{ when_c | notify_c | label_c | deny_illegal_c }
+
+require_c = { kw_require ~ name_list }
+when_c    = { kw_when ~ name_list }
+until_c   = { kw_until ~ string }
+ttl_c     = { kw_ttl ~ bare }
+notify_c  = { kw_notify ~ string_list }
+label_c   = { kw_label ~ string }
+
+// Allow-only clauses appearing on a deny; rejected in lowering.
+deny_illegal_c = { kw_require ~ name_list | kw_until ~ string | kw_ttl ~ bare }
+
+// ── match expressions ───────────────────────────────────────────────
+
+user_expr = { user_list | user_atom }
+user_list = { "[" ~ NEWLINE* ~ user_atom ~ (comma_nl ~ user_atom)* ~ comma_nl? ~ NEWLINE* ~ "]" }
+user_atom = _{ user_bang | macro_ref | tag_matcher | user_bare }
+user_bang = { "!" ~ user_atom }
+user_bare = { bare | string }
+
+acct_expr = { acct_list | acct_atom }
+acct_list = { "[" ~ NEWLINE* ~ acct_atom ~ (comma_nl ~ acct_atom)* ~ comma_nl? ~ NEWLINE* ~ "]" }
+acct_atom = _{ acct_bang | macro_ref | acct_name }
+acct_bang = { "!" ~ acct_atom }
+acct_name = { bare | string }
+
+host_expr = { host_list | host_atom }
+host_list = { "[" ~ NEWLINE* ~ host_atom ~ (comma_nl ~ host_atom)* ~ comma_nl? ~ NEWLINE* ~ "]" }
+host_atom = _{ host_bang | macro_ref | label_sel | host_name }
+host_bang = { "!" ~ host_atom }
+host_name = { bare | string }
+
+label_sel = { "{" ~ NEWLINE* ~ label_eq ~ (comma_nl ~ label_eq)* ~ comma_nl? ~ NEWLINE* ~ "}" }
+label_eq  = { lterm ~ "=" ~ lterm }
+lterm     = _{ bare | string }
+
+// ── clause value lists ──────────────────────────────────────────────
+
+name_list    = _{ name_bracket | name_item }
+name_bracket = _{ "[" ~ NEWLINE* ~ name_item ~ (comma_nl ~ name_item)* ~ comma_nl? ~ NEWLINE* ~ "]" }
+name_item    = { bare | string }
+
+string_list    = _{ string_bracket | string }
+string_bracket = _{ "[" ~ NEWLINE* ~ string ~ (comma_nl ~ string)* ~ comma_nl? ~ NEWLINE* ~ "]" }
+
+comma_nl = _{ NEWLINE* ~ "," ~ NEWLINE* }
+
+// ── terminals ───────────────────────────────────────────────────────
+
+macro_ref   = ${ "$" ~ ident }
+tag_matcher = ${ tag ~ ":" ~ tag_value }
+tag         = @{ ("id" | "group" | "type" | "dept" | "org") ~ !bare_char }
+tag_value   = _{ bare | string }
+
+kw_user    = @{ "user" ~ !bare_char }
+kw_host    = @{ "host" ~ !bare_char }
+kw_account = @{ "account" ~ !bare_char }
+kw_allow   = @{ "allow" ~ !bare_char }
+kw_deny    = @{ "deny" ~ !bare_char }
+kw_require = @{ "require" ~ !bare_char }
+kw_when    = @{ "when" ~ !bare_char }
+kw_until   = @{ "until" ~ !bare_char }
+kw_ttl     = @{ "ttl" ~ !bare_char }
+kw_notify  = @{ "notify" ~ !bare_char }
+kw_label   = @{ "label" ~ !bare_char }
+
+// Macro identifiers: [A-Za-z_][A-Za-z0-9_-]*, not ending in `-`.
+ident    = @{ (ASCII_ALPHA | "_") ~ ident_ch* ~ ("-"+ ~ ident_ch+)* }
+ident_ch = _{ ASCII_ALPHANUMERIC | "_" }
+
+// Bare words: the 6.md charset (plus `/` for label keys), structured so a
+// word can contain but never end with `-` — which is what lets
+// `$sre->root` parse without whitespace.
+bare      = @{ bch+ ~ ("-"+ ~ bch+)* }
+bch       = _{ ASCII_ALPHANUMERIC | "_" | "." | "*" | "?" | "/" }
+bare_char = _{ bch | "-" }
+
+// Strings: double-quoted, `\"` and `\\` escapes only, no newlines.
+string    = ${ "\"" ~ str_inner ~ "\"" }
+str_inner = @{ ("\\" ~ ("\"" | "\\") | !("\"" | "\\" | NEWLINE) ~ ANY)* }

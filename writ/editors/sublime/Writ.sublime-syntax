@@ -1,0 +1,85 @@
+%YAML 1.2
+---
+# Syntax highlighting for the writ policy language (ideas/6.md C' grammar,
+# 7.md amendments, explicit `allow`). Regex approximation of the real
+# grammar in prototype/src/grammar.pest — statement keywords anchor at line
+# start, clause keywords after a comma or continuation indent.
+name: Writ Policy
+file_extensions:
+  - writ
+scope: source.writ
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_-]*'
+
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.writ
+    - match: '^\s*(user|host|account)\s+({{ident}})'
+      captures:
+        1: storage.type.macro.writ
+        2: entity.name.constant.writ
+    - match: '^\s*(allow|deny)\b'
+      captures:
+        1: keyword.control.writ
+    - match: '(?:^|,)\s*(require|when|until|ttl|notify|label)\b'
+      captures:
+        1: keyword.other.clause.writ
+    - match: '\b(id|group|type|dept|org)(:)'
+      captures:
+        1: support.type.tag.writ
+        2: punctuation.separator.key-value.writ
+    - match: '\${{ident}}'
+      scope: variable.other.macro.writ
+    - match: '"'
+      scope: punctuation.definition.string.begin.writ
+      push: string
+    - match: '->'
+      scope: keyword.operator.arrow.writ
+    - match: '@'
+      scope: keyword.operator.at.writ
+    - match: '!'
+      scope: keyword.operator.logical.writ
+    - match: '\b(?:\d+[smh])+\b'
+      scope: constant.numeric.duration.writ
+    - match: '\{'
+      scope: punctuation.section.braces.begin.writ
+      push: selector
+    - match: '[*?]'
+      scope: constant.language.wildcard.writ
+    - match: '='
+      scope: keyword.operator.assignment.writ
+    - match: '[\[\]]'
+      scope: punctuation.section.brackets.writ
+    - match: ','
+      scope: punctuation.separator.writ
+
+  # {key=value, ...} label selectors: keys get attribute-name scope.
+  selector:
+    - match: '\}'
+      scope: punctuation.section.braces.end.writ
+      pop: true
+    - match: '#.*$'
+      scope: comment.line.number-sign.writ
+    - match: '([A-Za-z0-9_./-]+|"[^"]*")\s*(=)'
+      captures:
+        1: entity.other.attribute-name.writ
+        2: keyword.operator.assignment.writ
+    - match: '"'
+      scope: punctuation.definition.string.begin.writ
+      push: string
+    - match: ','
+      scope: punctuation.separator.writ
+
+  string:
+    - meta_scope: string.quoted.double.writ
+    - match: '\\[\\"]'
+      scope: constant.character.escape.writ
+    - match: '\\.'
+      scope: invalid.illegal.escape.writ
+    - match: '"'
+      scope: punctuation.definition.string.end.writ
+      pop: true
+    - match: '$'
+      pop: true

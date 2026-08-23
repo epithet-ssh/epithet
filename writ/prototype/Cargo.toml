@@ -1,0 +1,9 @@
+[package]
+name = "writ-policy"
+version = "0.1.0"
+edition = "2021"
+description = "Prototype parser for the writ policy language (ideas/6.md grammar + ideas/7.md amendments)"
+
+[dependencies]
+pest = "2"
+pest_derive = "2"
