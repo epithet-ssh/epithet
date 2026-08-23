@@ -26,10 +26,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -69,22 +71,21 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	})
 	require.NoError(t, err)
 
-	policyCfg := &policyserver.PolicyConfig{
-		Users: map[string][]string{
-			oidctest.TokenEmail: {"member"},
-		},
-		Defaults: &policyserver.Rules{
-			Allow:      map[string][]string{currentUser.Username: {"member"}},
-			Expiration: "5m",
-			Extensions: map[string]string{"permit-pty": ""},
-		},
-		Hosts: map[string]*policyserver.Rules{"*": {}},
-	}
+	// The policy authorizes the current OS user's account on any host;
+	// the writ evaluator carries only that exact principal on the cert.
+	policySrc := fmt.Sprintf("allow id:%q -> %q@*\n", oidctest.TokenEmail, currentUser.Username)
+	pol, diags := writ.Load(policySrc)
+	require.NotNil(t, pol, "policy failed to load: %v", diags)
+	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
+	invYAML := fmt.Sprintf("users:\n  - userName: %s\nhosts:\n  - pattern: \"*\"\n", oidctest.TokenEmail)
+	require.NoError(t, os.WriteFile(invPath, []byte(invYAML), 0o600))
+	inv, err := inventory.NewStatic([]string{invPath})
+	require.NoError(t, err)
 
 	policyHandler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: caPublicKey,
 		Validator:   validator,
-		Evaluator:   evaluator.NewForTesting(policyCfg),
+		Evaluator:   writpolicy.NewForTesting(pol, inv),
 		Discovery: &wire.Discovery{Auth: &wire.AuthConfig{
 			Issuer:   idp.Issuer(),
 			ClientID: oidctest.ClientID,

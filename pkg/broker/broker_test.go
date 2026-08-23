@@ -20,9 +20,11 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 )
@@ -250,13 +252,27 @@ func countingHandler(hits *int32, h http.Handler) http.Handler {
 	})
 }
 
+// writEvaluator compiles writ policy source and a static inventory into
+// the real writpolicy evaluator - the same evaluator `epithet policy`
+// runs, not a stub.
+func writEvaluator(t *testing.T, policySrc, inventoryYAML string) policyserver.PolicyEvaluator {
+	t.Helper()
+	pol, diags := writ.Load(policySrc)
+	require.NotNil(t, pol, "policy failed to load: %v", diags)
+	invPath := t.TempDir() + "/inventory.yaml"
+	require.NoError(t, os.WriteFile(invPath, []byte(inventoryYAML), 0o600))
+	inv, err := inventory.NewStatic([]string{invPath})
+	require.NoError(t, err)
+	return writpolicy.NewForTesting(pol, inv)
+}
+
 // realCAAndPolicy wires a real ca.CA, a real policyserver.NewHandler (real
 // OIDC validator against idp + a real evaluator), and a counting wrapper
 // around the CA's HTTP handler. It returns the CA HTTP server's URL and the
 // hit counter, so callers can assert exactly how many times the CA was
 // actually asked to mint a certificate - not just that the broker's match
 // calls succeeded.
-func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, policyCfg *policyserver.PolicyConfig) (caURL string, hits *int32) {
+func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, eval policyserver.PolicyEvaluator) (caURL string, hits *int32) {
 	t.Helper()
 
 	caPub, caPriv, err := sshcert.GenerateKeys()
@@ -271,7 +287,7 @@ func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, policyCfg *policyserver.Po
 	policyHandler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: caPub,
 		Validator:   validator,
-		Evaluator:   evaluator.NewForTesting(policyCfg),
+		Evaluator:   eval,
 	})
 	require.NoError(t, err)
 	policySrv := httptest.NewServer(policyHandler)
@@ -301,15 +317,10 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	ctx := t.Context()
 	idp := oidctest.New(t)
 
-	policyCfg := &policyserver.PolicyConfig{
-		Users: map[string][]string{"test@example.com": {"member"}},
-		Defaults: &policyserver.Rules{
-			Allow:      map[string][]string{"alice": {"member"}, "bob": {"member"}, "carol": {"member"}},
-			Expiration: "5m",
-		},
-		Hosts: map[string]*policyserver.Rules{"*": {}},
-	}
-	caURL, hits := realCAAndPolicy(t, idp, policyCfg)
+	eval := writEvaluator(t,
+		"allow id:\"test@example.com\" -> [alice, bob, carol]@*\n",
+		"users:\n  - userName: test@example.com\nhosts:\n  - pattern: \"*\"\n")
+	caURL, hits := realCAAndPolicy(t, idp, eval)
 
 	tmpDir := shortTempDir(t)
 	socketPath := tmpDir + "/b.sock"

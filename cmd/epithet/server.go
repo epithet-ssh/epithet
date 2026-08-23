@@ -25,6 +25,13 @@ import (
 type ServerCLI struct {
 	Listen string `help:"Public address to listen on" short:"l" default:":8080"`
 	CAKey  string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
+
+	// Policy flags threaded through to the policy subprocess. The
+	// subprocess re-runs Kong against the same --config, so these are
+	// only needed when configuring via flags rather than a config file.
+	PolicyFile string            `help:"Path to the writ policy file" name:"policy-file"`
+	Inventory  []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
+	Extension  map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
 }
 
 func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
@@ -64,6 +71,15 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 		"--listen", "unix://"+policySock,
 		"--ca-pubkey", caPubkey,
 	)
+	if c.PolicyFile != "" {
+		policyArgs = append(policyArgs, "--policy-file", c.PolicyFile)
+	}
+	for _, inv := range c.Inventory {
+		policyArgs = append(policyArgs, "--inventory", inv)
+	}
+	for name, value := range c.Extension {
+		policyArgs = append(policyArgs, "--extension", name+"="+value)
+	}
 	policyCmd := exec.CommandContext(ctx, os.Args[0], policyArgs...)
 	policyCmd.Stdout = os.Stdout
 	policyCmd.Stderr = os.Stderr

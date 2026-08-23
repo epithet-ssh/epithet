@@ -53,7 +53,19 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("failed to write CA key: %v", err)
 	}
 
-	// Write config YAML.
+	// Write the writ policy and inventory files.
+	policyPath := filepath.Join(tmpDir, "policy.writ")
+	if err := os.WriteFile(policyPath, []byte("allow id:\"test@example.com\" -> root@*\n"), 0644); err != nil {
+		t.Fatalf("failed to write policy: %v", err)
+	}
+	inventoryPath := filepath.Join(tmpDir, "inventory.yaml")
+	inventoryContent := "users:\n  - userName: test@example.com\nhosts:\n  - pattern: \"*\"\n"
+	if err := os.WriteFile(inventoryPath, []byte(inventoryContent), 0644); err != nil {
+		t.Fatalf("failed to write inventory: %v", err)
+	}
+
+	// Write config YAML. Keys under policy: use the flag names verbatim
+	// (kebab-case), which is how Kong resolves them.
 	configPath := filepath.Join(tmpDir, "config.yaml")
 	configContent := fmt.Sprintf(`server:
   ca-key: %s
@@ -62,13 +74,10 @@ policy:
   oidc:
     issuer: "%s"
     client-id: "%s"
-  users:
-    test@example.com: [admin]
-  defaults:
-    allow:
-      root: [admin]
-    expiration: "5m"
-`, caKeyPath, strings.TrimSpace(string(caPubkey)), mockURL, oidctest.ClientID)
+  policy-file: %s
+  inventory:
+    - %s
+`, caKeyPath, strings.TrimSpace(string(caPubkey)), mockURL, oidctest.ClientID, policyPath, inventoryPath)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)

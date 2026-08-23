@@ -12,10 +12,14 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writ/diag"
 )
 
 // PolicyOIDCConfig holds OIDC configuration for the policy server.
@@ -26,9 +30,9 @@ type PolicyOIDCConfig struct {
 }
 
 // PolicyServerCLI defines the CLI flags for the policy server.
-// Scalar configuration comes from CLI flags, env vars, or config files
-// (resolved by Kong in that precedence order). Map data (users, hosts)
-// can only come from config files.
+// Configuration comes from CLI flags, env vars, or config files
+// (resolved by Kong in that precedence order); config-file keys under
+// `policy:` use the flag names verbatim (kebab-case).
 type PolicyServerCLI struct {
 	Listen string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
 
@@ -36,10 +40,28 @@ type PolicyServerCLI struct {
 
 	CAPubkey string `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
 
-	DefaultExpiration string `help:"Default certificate expiration (e.g., 5m)" name:"default-expiration"`
+	PolicyFile string `help:"Path to the writ policy file" name:"policy-file"`
+
+	Inventory []string `help:"Inventory file path or glob (repeatable)" name:"inventory"`
+
+	Extension map[string]string `help:"Certificate extension for issued certs (name=value, repeatable; default permit-pty, permit-agent-forwarding, permit-user-rc)" name:"extension"`
+
+	DefaultExpiration string `help:"Default certificate expiration when no rule sets a ttl (e.g., 5m)" name:"default-expiration"`
+
+	Check bool `help:"Validate the policy and inventory, then exit" name:"check"`
 }
 
 func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	eval, err := c.buildEvaluator(logger)
+	if err != nil {
+		return err
+	}
+
+	if c.Check {
+		fmt.Println("policy and inventory OK")
+		return nil
+	}
+
 	// Build server config from CLI/config-file resolved fields.
 	serverCfg := &policyserver.ServerConfig{
 		CAPublicKey: c.CAPubkey,
@@ -64,27 +86,13 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		return fmt.Errorf("invalid server config: %w", err)
 	}
 
-	ctx := context.Background()
-
-	// Load policy maps (users, hosts, defaults) from inline config.
-	cfg, err := c.loadInlinePolicy()
+	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
+		Issuer:    serverCfg.OIDC.Issuer,
+		ClientID:  serverCfg.OIDC.ClientID,
+		TLSConfig: tlsCfg,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to load policy config: %w", err)
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid policy config: %w", err)
-	}
-
-	logger.Info("policy configuration loaded",
-		"users", len(cfg.Users),
-		"hosts", len(cfg.Hosts),
-		"oidc_issuer", cfg.OIDC.Issuer,
-		"oidc_client_id", cfg.OIDC.ClientID)
-
-	eval, validator, err := evaluator.New(ctx, serverCfg, cfg.ExtractPolicyConfig(), tlsCfg)
-	if err != nil {
-		return fmt.Errorf("failed to create policy evaluator: %w", err)
+		return fmt.Errorf("failed to create OIDC validator: %w", err)
 	}
 
 	authConfig := serverCfg.BootstrapAuth()
@@ -111,48 +119,79 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 
 	logger.Info("starting policy server",
 		"listen", c.Listen,
+		"policy_file", c.PolicyFile,
 		"ca_pubkey_length", len(caPubkey))
 
 	return listenAndServe(c.Listen, r)
 }
 
-// loadInlinePolicy loads policy maps (users, hosts, defaults) from config files.
-// Scalar fields (ca-pubkey, oidc, etc.) are already resolved by Kong.
-func (c *PolicyServerCLI) loadInlinePolicy() (*policyserver.PolicyRulesConfig, error) {
-	cfg := &policyserver.PolicyRulesConfig{
-		CAPublicKey: c.CAPubkey,
-		OIDC: policyserver.OIDCConfig{
-			Issuer:       c.OIDC.Issuer,
-			ClientID:     c.OIDC.ClientID,
-			ClientSecret: c.OIDC.ClientSecret,
-		},
-		Users: make(map[string][]string),
+// buildEvaluator loads the writ policy and static inventory and wires
+// the evaluator with an empty plugin registry — a policy that names any
+// requirement, flag, or notify target therefore fails here, at
+// startup, naming what is missing. Shared by --check and the server
+// path; reload is a process restart.
+func (c *PolicyServerCLI) buildEvaluator(logger *slog.Logger) (*writpolicy.Evaluator, error) {
+	if c.PolicyFile == "" {
+		return nil, fmt.Errorf("policy-file is required (via --policy-file flag or policy.policy-file in config)")
+	}
+	src, err := os.ReadFile(c.PolicyFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading policy file: %w", err)
 	}
 
-	// Load map data from config files' "policy" section.
-	configPaths := configFilePaths()
-	if err := config.LoadSection(configPaths, "policy", cfg); err != nil {
+	pol, diags := writ.Load(string(src))
+	for _, d := range diag.Warnings(diags) {
+		logger.Warn("policy warning", "pos", fmt.Sprintf("%s:%s", c.PolicyFile, d.Pos), "msg", d.Msg)
+	}
+	if pol == nil {
+		errs := diag.Errors(diags)
+		for _, d := range errs {
+			fmt.Fprintf(os.Stderr, "%s:%s: error: %s\n", c.PolicyFile, d.Pos, d.Msg)
+		}
+		return nil, fmt.Errorf("policy %s has %d error(s)", c.PolicyFile, len(errs))
+	}
+
+	if len(c.Inventory) == 0 {
+		return nil, fmt.Errorf("inventory is required (via --inventory flag or policy.inventory in config)")
+	}
+	paths, err := config.ExpandGlobs(c.Inventory)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no inventory files match %s", strings.Join(c.Inventory, ", "))
+	}
+	inv, err := inventory.NewStatic(paths)
+	if err != nil {
 		return nil, err
 	}
 
-	// Re-apply CLI-resolved scalar fields over anything LoadSection decoded,
-	// since Kong's precedence (CLI > config) is authoritative for these.
-	cfg.CAPublicKey = c.CAPubkey
-	cfg.OIDC.Issuer = c.OIDC.Issuer
-	cfg.OIDC.ClientID = c.OIDC.ClientID
-	cfg.OIDC.ClientSecret = c.OIDC.ClientSecret
+	opts := writpolicy.Options{}
+	if len(c.Extension) > 0 {
+		opts.Extensions = c.Extension
+	}
 	if c.DefaultExpiration != "" {
-		if cfg.Defaults == nil {
-			cfg.Defaults = &policyserver.Rules{}
+		d, err := time.ParseDuration(c.DefaultExpiration)
+		if err != nil {
+			return nil, fmt.Errorf("invalid default-expiration: %w", err)
 		}
-		cfg.Defaults.Expiration = c.DefaultExpiration
+		opts.DefaultTTL = d
 	}
 
-	if cfg.Users == nil {
-		cfg.Users = make(map[string][]string)
+	eval, warnings, err := writpolicy.New(pol, inv, &writpolicy.Registry{}, opts)
+	if err != nil {
+		return nil, fmt.Errorf("invalid policy: %w", err)
+	}
+	for _, w := range warnings {
+		logger.Warn("policy warning", "msg", w)
 	}
 
-	return cfg, nil
+	logger.Info("policy loaded",
+		"policy_file", c.PolicyFile,
+		"allow_rules", len(pol.Allows),
+		"deny_rules", len(pol.Denies),
+		"inventory_files", len(paths))
+	return eval, nil
 }
 
 // resolveCAPubkey resolves the CA public key from a URL, file path, or literal key.

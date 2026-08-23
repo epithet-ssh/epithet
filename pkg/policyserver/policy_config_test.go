@@ -6,74 +6,42 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 )
 
-func TestPolicyRulesConfig_Validate(t *testing.T) {
+func TestServerConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     policyserver.PolicyRulesConfig
+		cfg     policyserver.ServerConfig
 		wantErr bool
 	}{
 		{
 			name: "valid config",
-			cfg: policyserver.PolicyRulesConfig{
+			cfg: policyserver.ServerConfig{
 				CAPublicKey: "ssh-ed25519 AAAA...",
 				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
-				Users:       map[string][]string{"alice": {"tag"}},
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing ca_public_key",
-			cfg: policyserver.PolicyRulesConfig{
-				OIDC:  policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
-				Users: map[string][]string{"alice": {"tag"}},
+			cfg: policyserver.ServerConfig{
+				OIDC: policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing oidc issuer",
-			cfg: policyserver.PolicyRulesConfig{
+			name: "missing issuer",
+			cfg: policyserver.ServerConfig{
 				CAPublicKey: "ssh-ed25519 AAAA...",
 				OIDC:        policyserver.OIDCConfig{ClientID: "client-id"},
-				Users:       map[string][]string{"alice": {"tag"}},
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing oidc client_id",
-			cfg: policyserver.PolicyRulesConfig{
+			name: "missing client_id",
+			cfg: policyserver.ServerConfig{
 				CAPublicKey: "ssh-ed25519 AAAA...",
 				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer"},
-				Users:       map[string][]string{"alice": {"tag"}},
 			},
 			wantErr: true,
-		},
-		{
-			name: "missing users",
-			cfg: policyserver.PolicyRulesConfig{
-				CAPublicKey: "ssh-ed25519 AAAA...",
-				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid default expiration",
-			cfg: policyserver.PolicyRulesConfig{
-				CAPublicKey: "ssh-ed25519 AAAA...",
-				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
-				Users:       map[string][]string{"alice": {"tag"}},
-				Defaults:    &policyserver.Rules{Expiration: "invalid"},
-			},
-			wantErr: true,
-		},
-		{
-			name: "valid default expiration",
-			cfg: policyserver.PolicyRulesConfig{
-				CAPublicKey: "ssh-ed25519 AAAA...",
-				OIDC:        policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client-id"},
-				Users:       map[string][]string{"alice": {"tag"}},
-				Defaults:    &policyserver.Rules{Expiration: "5m"},
-			},
-			wantErr: false,
 		},
 	}
 
@@ -104,30 +72,6 @@ func TestDefaultExpiration(t *testing.T) {
 
 	if exp != "5m" {
 		t.Errorf("expected default expiration '5m', got %s", exp)
-	}
-}
-
-func TestValidateDuration(t *testing.T) {
-	tests := []struct {
-		name    string
-		d       string
-		wantErr bool
-	}{
-		{"valid minutes", "5m", false},
-		{"valid hours", "2h", false},
-		{"valid seconds", "30s", false},
-		{"valid complex", "1h30m", false},
-		{"invalid", "invalid", true},
-		{"empty", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := policyserver.ValidateDuration(tt.d)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateDuration(%q) error = %v, wantErr %v", tt.d, err, tt.wantErr)
-			}
-		})
 	}
 }
 

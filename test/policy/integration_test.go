@@ -4,36 +4,36 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/evaluator"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
 )
 
 // newIntegrationHandler builds the real policy HTTP handler the same way the
-// `epithet policy` command does: write a YAML config file, load its "policy"
-// section (pkg/config.LoadSection - the same loader the CLI uses), build a
-// real evaluator + OIDC validator (which performs real HTTP discovery
-// against idp, exercising the actual token-validation path end to end), and
-// wire policyserver.NewHandler. Returns the handler, the IdP used to mint
-// tokens, and a sign func that service-signs requests exactly like the real
-// CA does (Config.CAPublicKey requires every request be signed).
+// `epithet policy` command does: write a .writ policy file and a static
+// inventory file, compile them with writ.Load + inventory.NewStatic, build
+// the real writpolicy evaluator + OIDC validator (which performs real HTTP
+// discovery against idp, exercising the actual token-validation path end to
+// end), and wire policyserver.NewHandler. Returns the handler, the IdP used
+// to mint tokens, and a sign func that service-signs requests exactly like
+// the real CA does (Config.CAPublicKey requires every request be signed).
 func newIntegrationHandler(t *testing.T) (http.Handler, *oidctest.IdP, func(*http.Request, []byte)) {
 	t.Helper()
 
@@ -42,41 +42,45 @@ func newIntegrationHandler(t *testing.T) (http.Handler, *oidctest.IdP, func(*htt
 	caPub, caPriv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	configYAML := fmt.Sprintf(`policy:
-  ca_pubkey: %q
-  oidc:
-    issuer: %q
-    client_id: %q
-  users:
-    alice@example.com: [admin]
-  defaults:
-    allow:
-      root: [admin]
-    expiration: 5m
-  hosts:
-    "*": {}
-`, strings.TrimSpace(string(caPub)), idp.Issuer(), oidctest.ClientID)
-
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "policy.yaml")
-	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0644))
+	policyPath := filepath.Join(tmpDir, "policy.writ")
+	require.NoError(t, os.WriteFile(policyPath,
+		[]byte("allow id:\"alice@example.com\" -> root@*\n"), 0644))
+	invPath := filepath.Join(tmpDir, "inventory.yaml")
+	require.NoError(t, os.WriteFile(invPath,
+		[]byte("users:\n  - userName: alice@example.com\nhosts:\n  - pattern: \"*\"\n"), 0644))
 
-	cfg := &policyserver.PolicyRulesConfig{Users: make(map[string][]string)}
-	require.NoError(t, config.LoadSection([]string{configPath}, "policy", cfg))
-	require.NoError(t, cfg.Validate())
+	src, err := os.ReadFile(policyPath)
+	require.NoError(t, err)
+	pol, diags := writ.Load(string(src))
+	require.NotNil(t, pol, "policy failed to load: %v", diags)
 
-	// evaluator.New performs real OIDC discovery against idp - this is the
+	inv, err := inventory.NewStatic([]string{invPath})
+	require.NoError(t, err)
+
+	// The default TTL stays at the deployment default (5m), deliberately
+	// distinct from the 2m token minted below so the NotAfter assertion
+	// discriminates (see TestPolicyIntegration_ValidToken_ReturnsCertParams).
+	eval, warnings, err := writpolicy.New(pol, inv, &writpolicy.Registry{}, writpolicy.Options{})
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+
+	// oidc.NewValidator performs real OIDC discovery against idp - the
 	// same construction path `epithet policy` uses, not a stub validator.
-	eval, validator, err := evaluator.New(context.Background(), cfg.ExtractServerConfig(), cfg.ExtractPolicyConfig(), tlsconfig.Config{})
+	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
+		Issuer:    idp.Issuer(),
+		ClientID:  oidctest.ClientID,
+		TLSConfig: tlsconfig.Config{},
+	})
 	require.NoError(t, err)
 
 	handler, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: sshcert.RawPublicKey(cfg.CAPublicKey),
+		CAPublicKey: caPub,
 		Validator:   validator,
 		Evaluator:   eval,
 		Discovery: &wire.Discovery{Auth: &wire.AuthConfig{
-			Issuer:   cfg.OIDC.Issuer,
-			ClientID: cfg.OIDC.ClientID,
+			Issuer:   idp.Issuer(),
+			ClientID: oidctest.ClientID,
 		}},
 	})
 	require.NoError(t, err)
@@ -208,6 +212,9 @@ func TestPolicyServerCommand(t *testing.T) {
 		"--oidc-client-id",
 		"--ca-pubkey",
 		"--listen",
+		"--policy-file",
+		"--inventory",
+		"--check",
 		"OIDC-based authorization",
 	}
 
