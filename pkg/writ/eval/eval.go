@@ -300,7 +300,7 @@ func accountMatcher(account string) func(il.Matcher) bool {
 		case il.MatchName:
 			return m.Value == account
 		case il.MatchGlob:
-			return globMatch(m.Value, account)
+			return GlobMatch(m.Value, account)
 		}
 		return false
 	}
@@ -314,7 +314,7 @@ func hostMatcher(h *Host) func(il.Matcher) bool {
 		case il.MatchName:
 			return m.Value == h.Name
 		case il.MatchGlob:
-			return globMatch(m.Value, h.Name)
+			return GlobMatch(m.Value, h.Name)
 		case il.MatchLabels:
 			for k, v := range m.Labels {
 				if h.Labels[k] != v {
