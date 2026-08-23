@@ -93,8 +93,11 @@ Include ~/.epithet/run/*/ssh-config.conf
 
 ### 6. Test SSH connection
 
+With the example policy and inventory, alice (group `Admins`) may reach
+`root` on any inventoried host:
+
 ```bash
-ssh alice@server.example.com
+ssh root@prod-web-1.example.com
 ```
 
 The first time:

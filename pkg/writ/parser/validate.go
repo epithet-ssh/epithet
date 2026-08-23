@@ -1,17 +1,32 @@
 package parser
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"time"
+)
 
 // Token validators, ported from the reference implementation.
 // Timestamps and durations are ordinary tokens validated after parsing,
 // not lexer modes (SPEC §3).
 
+// maxDurationSeconds bounds a writ duration to what fits in a
+// time.Duration (about 292 years), so downstream conversion to
+// nanoseconds can never overflow.
+const maxDurationSeconds = uint64(math.MaxInt64 / int64(time.Second))
+
 // ParseDuration parses a writ duration — integer plus s/m/h parts,
-// composable: 2m, 90s, 1h30m — returning whole seconds.
+// composable: 2m, 90s, 1h30m — returning whole seconds. Zero is
+// rejected: the IL uses zero as its "no ttl set" sentinel, and a
+// zero-lifetime certificate is never what an author meant.
 func ParseDuration(s string) (uint64, error) {
 	var total uint64
 	num := ""
 	any := false
+	tooLarge := func() (uint64, error) {
+		return 0, fmt.Errorf("invalid duration `%s` — too large", s)
+	}
 	for _, c := range s {
 		if c >= '0' && c <= '9' {
 			num += string(c)
@@ -31,11 +46,18 @@ func ParseDuration(s string) (uint64, error) {
 		if num == "" {
 			return 0, fmt.Errorf("invalid duration `%s` — unit `%c` has no number", s, c)
 		}
-		var n uint64
-		if _, err := fmt.Sscanf(num, "%d", &n); err != nil {
-			return 0, fmt.Errorf("invalid duration `%s`", s)
+		n, err := strconv.ParseUint(num, 10, 64)
+		if err != nil {
+			return tooLarge()
 		}
-		total += n * mult
+		if n > maxDurationSeconds/mult {
+			return tooLarge()
+		}
+		part := n * mult
+		if total > maxDurationSeconds-part {
+			return tooLarge()
+		}
+		total += part
 		num = ""
 		any = true
 	}
@@ -44,6 +66,9 @@ func ParseDuration(s string) (uint64, error) {
 	}
 	if !any {
 		return 0, fmt.Errorf("invalid duration `%s`", s)
+	}
+	if total == 0 {
+		return 0, fmt.Errorf("invalid duration `%s` — must be positive", s)
 	}
 	return total, nil
 }

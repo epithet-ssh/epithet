@@ -26,7 +26,14 @@ func Compile(file *ast.File) (*il.Policy, []diag.Diagnostic) {
 	}
 	l := &lowerer{macros: map[string][]il.Matcher{}}
 	pol := l.lower(file)
-	return pol, append(diags, l.diags...)
+	diags = append(diags, l.diags...)
+	// Lowering itself can error (e.g. a timestamp the shape validator
+	// admits but the calendar rejects); a policy with a dropped clause
+	// is broader than authored, so it must not be returned.
+	if diag.HasErrors(diags) {
+		return nil, diags
+	}
+	return pol, diags
 }
 
 // ── well-formedness ─────────────────────────────────────────────────

@@ -268,6 +268,30 @@ func TestDurations(t *testing.T) {
 		_, err := ParseDuration(in)
 		require.Error(t, err, in)
 	}
+
+	// Zero would collide with the IL's "no ttl set" sentinel.
+	for _, in := range []string{"0s", "0m", "0h0m0s"} {
+		_, err := ParseDuration(in)
+		require.ErrorContains(t, err, "positive", in)
+	}
+
+	// Values past time.Duration's range are rejected, not wrapped —
+	// including per-part multiplication overflow, summed-parts
+	// overflow, and integers strconv itself cannot hold.
+	for _, in := range []string{
+		"9223372037s",                    // maxDurationSeconds + 1
+		"9999999999999999999h",           // n * 3600 overflows
+		"9223372036s9223372036s",         // parts sum past the cap
+		"99999999999999999999999999999s", // exceeds uint64
+	} {
+		_, err := ParseDuration(in)
+		require.ErrorContains(t, err, "too large", in)
+	}
+
+	// The largest representable duration still parses.
+	got, err := ParseDuration("9223372036s")
+	require.NoError(t, err)
+	require.Equal(t, uint64(9223372036), got)
 }
 
 func TestTimestamps(t *testing.T) {

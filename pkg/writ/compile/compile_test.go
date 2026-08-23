@@ -196,6 +196,16 @@ func TestMacroRenameKeepsContentID(t *testing.T) {
 	require.Equal(t, a.Allows[0].ContentID(), b.Allows[0].ContentID())
 }
 
+// A timestamp the shape validator admits but the calendar rejects (a
+// :60 leap second) errors during lowering; the policy must be nil, not
+// a broader-than-authored rule with the until clause dropped.
+func TestLoweringErrorReturnsNilPolicy(t *testing.T) {
+	pol, errs, _ := analyze(t, "allow group:A -> a@b, until \"2026-08-31T22:00:60Z\"\n")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "invalid timestamp")
+	require.Nil(t, pol)
+}
+
 func TestDuplicateContentIDWarnsAndCollapses(t *testing.T) {
 	pol, errs, warns := analyze(t, "allow group:A -> a@b\nallow group:A -> a@b, label \"x\"\n")
 	require.Empty(t, errs)

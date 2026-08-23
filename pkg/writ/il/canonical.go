@@ -32,7 +32,10 @@ func (r *AllowRule) ContentID() string {
 	putList(proj, "when", r.When)
 	putList(proj, "notify", r.Notify)
 	if r.Until != nil {
-		proj["until"] = r.Until.UTC().Format(time.RFC3339)
+		// RFC3339Nano, not RFC3339: the parser admits fractional
+		// seconds, and dropping them here would give rules ending at
+		// .1Z and .9Z the same content id — collapsing them to one.
+		proj["until"] = r.Until.UTC().Format(time.RFC3339Nano)
 	}
 	if r.TTL != 0 {
 		proj["ttl"] = int64(r.TTL / time.Second)

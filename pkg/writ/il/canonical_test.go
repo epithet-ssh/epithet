@@ -122,6 +122,18 @@ func TestNegationIsHashed(t *testing.T) {
 	require.NotEqual(t, a.ContentID(), b.ContentID())
 }
 
+// Fractional seconds are part of the instant: untils at .1Z and .9Z
+// are different rules and must not collapse to one content id.
+func TestUntilFractionalSecondsAreHashed(t *testing.T) {
+	early := time.Date(2026, 8, 31, 22, 0, 0, 100_000_000, time.UTC)
+	late := time.Date(2026, 8, 31, 22, 0, 0, 900_000_000, time.UTC)
+	a := specAllow()
+	a.Until = &early
+	b := specAllow()
+	b.Until = &late
+	require.NotEqual(t, a.ContentID(), b.ContentID())
+}
+
 // An until in a non-UTC zone hashes identically to its UTC instant.
 func TestUntilNormalizesToUTC(t *testing.T) {
 	utc := time.Date(2026, 8, 31, 22, 0, 0, 0, time.UTC)
