@@ -120,6 +120,9 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 		return &wire.PolicyResponse{
 			CertParams: wire.CertParams{
 				Identity:   identity,
+				// Compatibility profile: this account-name principal is not
+				// destination-bound. Enterprise will derive a principal from the
+				// enrolled host identity key and requested account name.
 				Names:      []string{conn.RemoteUser},
 				Expiration: ttl,
 				Extensions: e.opts.Extensions,

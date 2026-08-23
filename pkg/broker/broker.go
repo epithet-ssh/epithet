@@ -36,6 +36,7 @@ const expiryBuffer = 5 * time.Second
 // agentEntry tracks a running agent and when its certificate expires
 type agentEntry struct {
 	agent       *agent.Agent
+	connection  policy.Connection
 	expiresAt   time.Time
 	certificate sshcert.RawCertificate
 }
@@ -179,6 +180,7 @@ type InspectRequest struct{}
 // AgentInfo contains information about a running agent
 type AgentInfo struct {
 	Hash        string                 `json:"hash"`
+	Connection  policy.Connection      `json:"connection"`
 	SocketPath  string                 `json:"socketPath"`
 	ExpiresAt   time.Time              `json:"expiresAt"`
 	Certificate sshcert.RawCertificate `json:"certificate"`
@@ -270,20 +272,21 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
 	}
-	if err := b.ensureAgent(conn.Hash, credential); err != nil {
+	if err := b.ensureAgent(conn, credential); err != nil {
 		return b.deny(fmt.Errorf("failed to create agent: %w", err))
 	}
 
 	return MatchResponse{Allow: true}
 }
 
-// ensureAgent ensures an agent exists for the given connection hash with the given credential.
+// ensureAgent ensures an agent exists for the given connection with the given credential.
 // If an agent already exists, it updates the credential. If not, it creates a new agent.
 //
 // Acquires b.lock for the duration; do not call with b.lock held.
-func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential agent.Credential) error {
+func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Credential) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	connectionHash := connection.Hash
 
 	// Check if agent already exists
 	if entry, exists := b.agents[connectionHash]; exists {
@@ -300,6 +303,7 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 		}
 		entry.expiresAt = expiresAt
 		entry.certificate = credential.Certificate
+		entry.connection = connection
 		b.agents[connectionHash] = entry
 		return nil
 	}
@@ -351,6 +355,7 @@ func (b *Broker) ensureAgent(connectionHash policy.ConnectionHash, credential ag
 	// Store the agent entry
 	b.agents[connectionHash] = agentEntry{
 		agent:       ag,
+		connection:  connection,
 		expiresAt:   expiresAt,
 		certificate: credential.Certificate,
 	}
@@ -479,6 +484,7 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 		socketPath := filepath.Join(b.agentSocketDir, string(hash))
 		output.Agents = append(output.Agents, AgentInfo{
 			Hash:        string(hash),
+			Connection:  entry.connection,
 			SocketPath:  socketPath,
 			ExpiresAt:   entry.expiresAt,
 			Certificate: entry.certificate,

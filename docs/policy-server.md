@@ -10,12 +10,30 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 - OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
 - A readable, order-independent policy language (`.writ`) with explicit `allow`/`deny` rules — deny always wins
 - SCIM-modeled user inventory (groups, type, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
-- Certificates minted per connection, carrying only the requested principal
+- Certificates minted per connection, currently carrying only the requested account-name principal
 - Certificate validity clamped to the auth token's remaining lifetime
 - `epithet policy --check` validates policy + inventory without starting a server
 - Built-in to the epithet binary (no separate deployment needed)
 
-**Security note:** SSH certificates issued by epithet can be used on any host that trusts the CA, regardless of host-specific policies. Host restrictions are enforced at **certificate issuance time**, not validation time. For tighter security, consider using SSH's `AuthorizedPrincipalsCommand` on target hosts to enforce additional checks.
+**Security boundary:** the current policy server puts the requested account
+name (for example, `root`) in the SSH certificate. It does not put the host
+identity in the credential. A certificate authorized for `root@dev-1` can
+therefore authenticate as `root` on `prod-1` while it remains valid if both
+hosts trust the same CA. Per-connection issuance and agent isolation do not
+prevent the local user who owns the agent socket from doing this. Treat host
+selectors as issuance-time conditions and the effective credential scope as
+`account@CA-trust-domain`, not `account@host`.
+
+Epithet Enterprise is planned to make issuance destination-bound by deriving
+a versioned principal from the enrolled host identity key and requested
+account name. The policy server will resolve the requested hostname to that
+key and derive the principal after authorizing the human-readable
+`account@host` tuple. An offline `AuthorizedPrincipalsCommand` on the target
+will derive the same value from its designated sshd host key and local account
+name. This requires authenticated host enrollment and carefully defined
+host-key rotation and recovery, but no per-account UUID registry, account
+inventory synchronization, or online authorization check by sshd. It is not
+implemented yet.
 
 ## Quick start
 
@@ -91,7 +109,12 @@ epithet policy \
   --listen 0.0.0.0:9999
 ```
 
-**Important:** Each issued certificate carries **only the principal actually requested** for that connection (`ssh <account>@<host>`), never the union of everything the user could reach. A certificate is minted fresh for every connection past the broker's local cache of still-valid agents.
+**Important:** Each issued certificate currently carries only the account
+name requested for that connection, never the union of every account the
+user could reach. A certificate is minted fresh for every connection past
+the broker's local cache of still-valid agents. This narrows account access,
+but it does not bind the certificate to the requested host; the security
+boundary above still applies.
 
 ### 5. Configure the CA to use the policy server
 
@@ -236,15 +259,15 @@ For each request `(identity, account@host)` the evaluator (`pkg/policyserver/wri
 2. **Structural gates** — the identity must resolve to an `active` inventory user; the host must resolve in the inventory; if the host lists accounts, the requested account must be among them. Any failure → 403, regardless of policy text.
 3. **Collects matching rules** — a rule matches when its user, account, and host expressions all match.
 4. **Deny wins** — any matching deny → 403, always; no allow can override. The denial names the rule's label (or content id).
-5. **Issues** if any allow survives: `principals` is exactly `[requestedAccount]`, `expiration` is the minimum `ttl` among satisfied allows (else the default), `notAfter` is the token's expiry, `extensions` are the deployment set.
+5. **Issues** if any allow survives: `principals` is currently exactly `[requestedAccount]`, `expiration` is the minimum `ttl` among satisfied allows (else the default), `notAfter` is the token's expiry, `extensions` are the deployment set. Consequently, the host selector is not encoded into or enforced by the credential.
 
 Evaluator or inventory failures fail **closed** (500), never "treat as no match".
 
-## Target host configuration
+## Current target host configuration
 
-Since each certificate names exactly one principal - the SSH username the
-client actually requested - sshd's **default** principal matching is enough.
-No `AuthorizedPrincipalsFile` mapping is required.
+The current compatibility profile names the SSH username the client requested
+as the certificate's sole principal. sshd's default principal matching is
+therefore enough, and no `AuthorizedPrincipalsFile` mapping is required.
 
 **Configure sshd** (`/etc/ssh/sshd_config`):
 
@@ -253,15 +276,19 @@ No `AuthorizedPrincipalsFile` mapping is required.
 TrustedUserCAKeys /etc/ssh/ca/epithet.pub
 ```
 
-That's it. With only `TrustedUserCAKeys` set, sshd's default behavior is to
+With only `TrustedUserCAKeys` set, sshd's default behavior is to
 accept a certificate for login as user `X` when the certificate names `X` as
 a principal - which is exactly what the policy server issues, since account
 expressions in rules match the real login usernames.
 
-`AuthorizedPrincipalsFile`/`AuthorizedPrincipalsCommand` are optional beyond
-this: use them only if you need a *different* mapping, such as one
-certificate principal authorizing several distinct local accounts. Most
-deployments don't need them.
+This configuration is simple but is explicitly **not destination-bound**.
+Every host in the CA trust domain that has an account named `X` may accept the
+same still-valid certificate. Put hosts with different security boundaries
+under separate CAs until Enterprise's deterministic host/account principals
+and offline `AuthorizedPrincipalsCommand` are implemented. Merely configuring
+an authorized-principals source that returns the same account-name principal
+does not fix the problem: the accepted principal must incorporate the enrolled
+host identity.
 
 See [OIDC setup guide](./oidc-setup.md) for provider-specific configuration (Google, Okta, Azure AD).
 
@@ -398,7 +425,7 @@ Content-Type: application/json
 - `token` (string): The user's ID token — always a JWT
 - `connection` (object): SSH connection parameters
   - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
-  - `remoteUser` (string): Target username on remote server (OpenSSH `%r`) — the single principal the caller is asking for
+  - `remoteUser` (string): Target account name on the remote server (OpenSSH `%r`); in the current compatibility profile this also becomes the certificate principal
   - `port` (uint): Target SSH port (OpenSSH `%p`)
   - `proxyJump` (string): ProxyJump configuration (OpenSSH `%j`), empty if not used
   - `hash` (string): OpenSSH `%C` hash - unique identifier for this connection
@@ -429,7 +456,7 @@ parse error.
 
 **Fields:**
 - `certParams.identity` (string): Certificate identity/key ID (for audit logs)
-- `certParams.principals` ([]string): Exactly one entry — the requested principal
+- `certParams.principals` ([]string): Exactly one entry — currently the requested account name; this does not bind the certificate to `remoteHost`
 - `certParams.expiration` (integer): Certificate validity, in **nanoseconds** (this is `time.Duration` marshaled by Go's default `encoding/json`, i.e. an integer, not a duration string like `"5m"`)
 - `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, derived from the user token's expiry. The CA signs with `min(now + expiration, notAfter)`. Omitted (zero value) means no ceiling beyond `expiration`.
 - `certParams.extensions` (map[string]string): SSH certificate extensions to grant

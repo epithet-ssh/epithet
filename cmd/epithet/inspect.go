@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -93,35 +94,40 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		return enc.Encode(resp)
 	}
 
-	// Human-readable output.
-	fmt.Printf("Broker State\n")
-	fmt.Printf("============\n\n")
-	fmt.Printf("Socket: %s\n", resp.SocketPath)
-	fmt.Printf("Agent Dir: %s\n\n", resp.AgentSocketDir)
+	writeInspect(os.Stdout, resp, time.Now())
+	return nil
+}
 
-	fmt.Printf("CA Endpoints (%d)\n", len(resp.CAEndpoints))
-	fmt.Printf("-----------------\n")
+// writeInspect writes the human-readable broker inspection output.
+func writeInspect(w io.Writer, resp *broker.InspectResponse, now time.Time) {
+	fmt.Fprintln(w, "Broker State")
+	fmt.Fprintln(w, "============")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Socket: %s\n", resp.SocketPath)
+	fmt.Fprintf(w, "Agent Dir: %s\n\n", resp.AgentSocketDir)
+
+	fmt.Fprintf(w, "CA Endpoints (%d)\n", len(resp.CAEndpoints))
+	fmt.Fprintln(w, "-----------------")
 	if len(resp.CAEndpoints) == 0 {
-		fmt.Printf("  (none)\n")
+		fmt.Fprintln(w, "  (none)")
 	} else {
 		for _, ep := range resp.CAEndpoints {
 			status := "healthy"
 			if ep.State == "open" || ep.State == "half-open" {
 				status = "broken"
 			}
-			fmt.Printf("  %s\n", ep.URL)
-			fmt.Printf("    Priority: %d\n", ep.Priority)
-			fmt.Printf("    Status: %s\n", status)
+			fmt.Fprintf(w, "  %s\n", ep.URL)
+			fmt.Fprintf(w, "    Priority: %d\n", ep.Priority)
+			fmt.Fprintf(w, "    Status: %s\n", status)
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 
-	fmt.Printf("Agents (%d)\n", len(resp.Agents))
-	fmt.Printf("-----------\n")
+	fmt.Fprintf(w, "Agents (%d)\n", len(resp.Agents))
+	fmt.Fprintln(w, "-----------")
 	if len(resp.Agents) == 0 {
-		fmt.Printf("  (none)\n")
+		fmt.Fprintln(w, "  (none)")
 	} else {
-		now := time.Now()
 		for _, ag := range resp.Agents {
 			remaining := ag.ExpiresAt.Sub(now).Round(time.Second)
 			status := "valid"
@@ -129,19 +135,25 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 				status = "expired"
 				remaining = -remaining
 			}
-			fmt.Printf("  %s\n", ag.Hash)
-			fmt.Printf("    Socket: %s\n", ag.SocketPath)
-			fmt.Printf("    Expires: %s (%s, %s)\n", ag.ExpiresAt.Format(time.RFC3339), status, remaining)
+			proxyJump := ag.Connection.ProxyJump
+			if proxyJump == "" {
+				proxyJump = "(none)"
+			}
+			fmt.Fprintf(w, "  %s\n", ag.Hash)
+			fmt.Fprintf(w, "    Host: %s\n", ag.Connection.RemoteHost)
+			fmt.Fprintf(w, "    User: %s\n", ag.Connection.RemoteUser)
+			fmt.Fprintf(w, "    Port: %d\n", ag.Connection.Port)
+			fmt.Fprintf(w, "    ProxyJump: %s\n", proxyJump)
+			fmt.Fprintf(w, "    Socket: %s\n", ag.SocketPath)
+			fmt.Fprintf(w, "    Expires: %s (%s, %s)\n", ag.ExpiresAt.Format(time.RFC3339), status, remaining)
 
 			// Parse and display certificate info.
 			if ag.Certificate != "" {
 				fingerprint := certFingerprint(ag.Certificate)
-				fmt.Printf("    Certificate: %s\n", fingerprint)
+				fmt.Fprintf(w, "    Certificate: %s\n", fingerprint)
 			}
 		}
 	}
-
-	return nil
 }
 
 // certFingerprint returns the SHA256 fingerprint of a certificate.

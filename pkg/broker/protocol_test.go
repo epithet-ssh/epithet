@@ -200,3 +200,37 @@ func TestInspectReturnsInspectEvent(t *testing.T) {
 	require.NotNil(t, ev.Inspect)
 	require.Equal(t, b.brokerSocketPath, ev.Inspect.SocketPath)
 }
+
+func TestInspectReturnsAgentConnection(t *testing.T) {
+	t.Parallel()
+	b := newTestBroker(t, nil)
+	conn := policy.Connection{
+		RemoteHost: "server.example.com",
+		RemoteUser: "deploy",
+		Port:       2222,
+		ProxyJump:  "bastion.example.com",
+		Hash:       "connection-hash",
+	}
+	b.lock.Lock()
+	b.agents[conn.Hash] = agentEntry{
+		connection: conn,
+		expiresAt:  time.Now().Add(time.Minute),
+	}
+	b.lock.Unlock()
+	t.Cleanup(func() {
+		b.lock.Lock()
+		delete(b.agents, conn.Hash)
+		b.lock.Unlock()
+	})
+
+	client := dialBroker(t, b)
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Inspect: &struct{}{}}))
+
+	sc := bufio.NewScanner(client)
+	require.True(t, sc.Scan())
+	var ev Event
+	require.NoError(t, json.Unmarshal(sc.Bytes(), &ev))
+	require.NotNil(t, ev.Inspect)
+	require.Len(t, ev.Inspect.Agents, 1)
+	require.Equal(t, conn, ev.Inspect.Agents[0].Connection)
+}

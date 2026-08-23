@@ -359,6 +359,7 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	for _, conn := range conns {
 		entry, ok := b.agents[conn.Hash]
 		require.True(t, ok, "expected an agent for %s", conn.Hash)
+		require.Equal(t, conn, entry.connection)
 		cert, err := sshcert.Parse(entry.certificate)
 		require.NoError(t, err)
 		require.Equal(t, []string{conn.RemoteUser}, cert.ValidPrincipals,

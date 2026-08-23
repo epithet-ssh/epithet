@@ -242,10 +242,9 @@ func generateConfigs(s *Server) error {
 	// "a" and "b" are historical placeholder principals some tests still
 	// hand-sign certs for (e.g. pkg/agent/agent_test.go). s.User is added
 	// alongside them because the real policy evaluator
-	// (pkg/policyserver/evaluator) names a cert's sole principal after the
-	// actually-requested user (certs are strictly per-connection, never a
-	// union of everything a user could reach) - since Ssh/SshWithBroker
-	// always connect as s.User, that's the
+	// (pkg/policyserver/writpolicy) currently uses the requested account name
+	// as the cert's sole principal (the non-destination-bound compatibility
+	// profile). Since Ssh/SshWithBroker always connect as s.User, that is the
 	// principal any real end-to-end test presents here.
 	err = os.WriteFile(s.Path+"/auth_principals/"+s.User, []byte(s.User+"\na\nb"), 0600)
 	if err != nil {

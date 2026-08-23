@@ -2,8 +2,9 @@
 
 Writ is the policy language for the epithet SSH certificate authority. A
 writ policy decides, per connection request, whether a short-lived SSH
-certificate is issued for one `account@host` principal, and under what
-conditions.
+certificate is issued for one `(account, host)` destination, and under what
+conditions. `account@host` is the authorization tuple and surface-language
+head; it is not the literal SSH certificate principal.
 
 This document is the specification: it states what the language is. The
 design history — alternatives considered, arguments, and amendments —
@@ -80,16 +81,46 @@ structural gate no policy text can express or bypass.
 A policy reference to a duplicated group `displayName` matches the
 union; sync warns loudly and points at the IdP as the thing to fix.
 
-**Hosts** register via writ's API: a unique `name`, a
-`map[string]string` of labels (k8s-style), and an agent-reported account
-inventory. Policy matches hosts by name (globs allowed), or by label
-selector `{k=v, ...}` (entries AND).
+**Hosts** resolve through the configured inventory. A resolved host has a
+unique `name`, a `map[string]string` of labels (k8s-style), and an optional
+list of local account names. The static inventory supports exact host entries
+and ordered name patterns for ephemeral fleets. Policy matches resolved hosts
+by name (globs allowed), or by label selector `{k=v, ...}` (entries AND).
+Epithet Enterprise additionally binds canonical hostnames and aliases to an
+enrolled, designated sshd host identity key; enrollment is a control-plane
+operation, not a policy-language feature.
 
-**Accounts** are `{host, name}`, discovered by the host agent. The
-certified principal is exactly one `account@host`. Matching is
-**inventory-grounded**: every account expression, including `*` and
-globs, matches against the host's *reported* inventory. Writ never
-certifies access to an account it has no evidence exists.
+**Accounts** are byte-exact local login names. If a resolved host supplies an
+account list, matching is **inventory-grounded**: the requested account must
+be present, and even `*` or a glob cannot bypass the list. If the account list
+is absent, rules match the requested account name directly. Account existence
+is ultimately enforced by sshd; principal derivation does not require a host
+agent or synchronized per-account inventory.
+
+The allowed `(account, host)` tuple is encoded into an SSH certificate
+according to the deployment profile:
+
+- **Epithet Simple**, which is the current implementation, puts the requested
+  account name in the certificate. This does **not** enforce the host position
+  at certificate-validation time. A rule effectively authorizes
+  `account@CA-trust-domain`; the requested host is only an issuance-time
+  condition, and any host trusting the CA may accept the credential for the
+  same account name. Implementations must disclose this limitation and must
+  not describe the credential as destination-bound.
+- **Epithet Enterprise**, which is planned but not yet implemented, derives a
+  versioned, domain-separated principal from the enrolled host's canonical SSH
+  public-key blob and the byte-exact account name. The policy server derives it
+  after authorization, and an offline `AuthorizedPrincipalsCommand` on the
+  host derives the same value from its designated host key and target account.
+  Different host keys therefore produce different principals for `root`, so a
+  certificate issued for `root@dev-1` is rejected by `prod-1`. This design has
+  no per-account principal registry, mapping API, or correctness-critical
+  inventory synchronization.
+
+Enterprise host enrollment, hostname binding, cloned-key detection, and
+host-key rotation and recovery are part of the security boundary. Their
+authentication, authorization, audit, and recovery semantics belong to the
+server protocol and cannot be weakened by policy text.
 
 **Requirements** (`require`) are named async facts — `oncall`, `mfa`,
 `approval` — resolved by registered handlers. A name in policy is a
