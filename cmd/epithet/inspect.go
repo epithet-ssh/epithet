@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,10 +9,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"golang.org/x/crypto/ssh"
 )
 
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
@@ -147,21 +149,118 @@ func writeInspect(w io.Writer, resp *broker.InspectResponse, now time.Time) {
 			fmt.Fprintf(w, "    Socket: %s\n", ag.SocketPath)
 			fmt.Fprintf(w, "    Expires: %s (%s, %s)\n", ag.ExpiresAt.Format(time.RFC3339), status, remaining)
 
-			// Parse and display certificate info.
+			// Parse and display the same certificate details that ssh-keygen -L
+			// exposes, without requiring an external process.
 			if ag.Certificate != "" {
-				fingerprint := certFingerprint(ag.Certificate)
-				fmt.Fprintf(w, "    Certificate: %s\n", fingerprint)
+				writeCertificate(w, ag.Certificate)
 			}
 		}
 	}
 }
 
-// certFingerprint returns the SHA256 fingerprint of a certificate.
-func certFingerprint(rawCert sshcert.RawCertificate) string {
+func writeCertificate(w io.Writer, rawCert sshcert.RawCertificate) {
 	cert, err := sshcert.Parse(rawCert)
 	if err != nil {
-		return "(parse error)"
+		fmt.Fprintln(w, "    Certificate: (parse error)")
+		return
 	}
-	hash := sha256.Sum256(cert.Marshal())
-	return "SHA256:" + base64.RawStdEncoding.EncodeToString(hash[:])
+
+	certKind := "unknown certificate"
+	switch cert.CertType {
+	case ssh.UserCert:
+		certKind = "user certificate"
+	case ssh.HostCert:
+		certKind = "host certificate"
+	}
+
+	fmt.Fprintln(w, "    Certificate:")
+	fmt.Fprintf(w, "      Type: %s %s\n", cert.Type(), certKind)
+	fmt.Fprintf(w, "      Public key: %s %s\n", keyName(cert.Key)+"-CERT", ssh.FingerprintSHA256(cert))
+	fmt.Fprintf(w, "      Signing CA: %s %s", keyName(cert.SignatureKey), ssh.FingerprintSHA256(cert.SignatureKey))
+	if cert.Signature != nil && cert.Signature.Format != "" {
+		fmt.Fprintf(w, " (using %s)", cert.Signature.Format)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "      Key ID: %q\n", cert.KeyId)
+	fmt.Fprintf(w, "      Serial: %d\n", cert.Serial)
+	fmt.Fprintf(w, "      Valid: from %s to %s\n", certTime(cert.ValidAfter), certTime(cert.ValidBefore))
+	writeStringList(w, "Principals", cert.ValidPrincipals)
+	writeOptions(w, "Critical Options", cert.CriticalOptions)
+	writeOptions(w, "Extensions", cert.Extensions)
+}
+
+func keyName(key ssh.PublicKey) string {
+	if key == nil {
+		return "UNKNOWN"
+	}
+
+	typeName := key.Type()
+	if i := strings.Index(typeName, "-cert-v01@openssh.com"); i >= 0 {
+		typeName = typeName[:i]
+	}
+	switch {
+	case typeName == ssh.KeyAlgoED25519:
+		return "ED25519"
+	case typeName == ssh.KeyAlgoRSA:
+		return "RSA"
+	case typeName == ssh.InsecureKeyAlgoDSA:
+		return "DSA"
+	case strings.HasPrefix(typeName, "ecdsa-sha2-"):
+		return "ECDSA"
+	case strings.HasPrefix(typeName, "sk-ssh-ed25519"):
+		return "ED25519-SK"
+	case strings.HasPrefix(typeName, "sk-ecdsa-sha2-"):
+		return "ECDSA-SK"
+	default:
+		return typeName
+	}
+}
+
+func certTime(timestamp uint64) string {
+	if timestamp == ssh.CertTimeInfinity {
+		return "forever"
+	}
+	return time.Unix(int64(timestamp), 0).UTC().Format(time.RFC3339)
+}
+
+func writeStringList(w io.Writer, label string, values []string) {
+	fmt.Fprintf(w, "      %s:", label)
+	if len(values) == 0 {
+		fmt.Fprintln(w, " (none)")
+		return
+	}
+	fmt.Fprintln(w)
+	for _, value := range values {
+		fmt.Fprintf(w, "        %s\n", escapeCertificateValue(value))
+	}
+}
+
+func writeOptions(w io.Writer, label string, options map[string]string) {
+	if len(options) == 0 {
+		fmt.Fprintf(w, "      %s: (none)\n", label)
+		return
+	}
+
+	keys := make([]string, 0, len(options))
+	for key := range options {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	fmt.Fprintf(w, "      %s:\n", label)
+	for _, key := range keys {
+		fmt.Fprintf(w, "        %s", escapeCertificateValue(key))
+		if options[key] != "" {
+			fmt.Fprintf(w, " %s", escapeCertificateValue(options[key]))
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// escapeCertificateValue prevents certificate-controlled strings from adding
+// output lines or terminal control sequences. QuoteToGraphic keeps printable
+// text readable; remove its surrounding quotes because the output structure
+// already delimits each value.
+func escapeCertificateValue(value string) string {
+	quoted := strconv.QuoteToGraphic(value)
+	return quoted[1 : len(quoted)-1]
 }
