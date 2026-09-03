@@ -22,7 +22,7 @@ type HostEnrollCLI struct {
 	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
 	HostIDFile                      string   `name:"host-id-file" help:"Host-ID file (default: native system state directory)"`
 	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the host-ID file)"`
-	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept (default: epithet-principal-v1; account-name on Windows)" enum:"account-name,epithet-principal-v1"`
+	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
 	SSHDConfigFile                  string   `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
 	SSHDFragmentFile                string   `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
 	SSHDBinary                      string   `name:"sshd-binary" help:"sshd executable used to validate configuration"`
@@ -60,6 +60,11 @@ func (c *HostEnrollCLI) enroll(ctx context.Context, logger *slog.Logger, tlsCfg 
 		env = newSystemSSHDEnvironment()
 	}
 	if err := c.adoptExistingSSHDEnrollment(env); err != nil {
+		return nil, err
+	}
+	// Kong cannot express this flag's platform-dependent default as an enum.
+	// Resolve and validate all sshd settings before enrollment creates state.
+	if _, err := c.resolveSSHDSettings(env); err != nil {
 		return nil, err
 	}
 	result, err := c.enrollState(ctx, logger, tlsCfg)

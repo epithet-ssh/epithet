@@ -10,12 +10,38 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
 	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHostEnrollCLIModelAllowsPlatformDependentPrincipalModeDefault(t *testing.T) {
+	_, err := kong.New(&HostEnrollCLI{})
+	require.NoError(t, err)
+}
+
+func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	cmd := HostEnrollCLI{
+		CAURL:         "https://ca.example.com/",
+		HostIDFile:    filepath.Join(dir, "host-id"),
+		CAPubkeyFile:  filepath.Join(dir, "epithet-ca.pub"),
+		PrincipalMode: "mystery",
+		sshdEnv: &sshdEnvironment{
+			goos:       "linux",
+			getenv:     func(string) string { return "" },
+			executable: func() (string, error) { return "/test/epithet", nil },
+		},
+	}
+
+	_, err := cmd.enroll(context.Background(), nil, tlsconfig.Config{})
+	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
+	_, err = os.Stat(dir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
 
 func TestHostEnrollCreatesHostIDAndCAPublicKey(t *testing.T) {
 	pub := newTestCAPublicKey(t)
