@@ -55,7 +55,7 @@ func acquireProfileLock(runDir, name string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open lock file %s: %w", lockPath, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockProfileFile(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("profile %q is already running (use --name to run a second profile)", name)
 	}
