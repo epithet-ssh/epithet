@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,12 +43,14 @@ func (sb *safeBuffer) String() string {
 }
 
 type Server struct {
-	User     string
-	Path     string
-	Port     int
-	caPubKey sshcert.RawPublicKey
-	cmd      *exec.Cmd
-	Output   safeBuffer
+	User                        string
+	Path                        string
+	Port                        int
+	AuthorizedPrincipalsCommand string
+	caPubKey                    sshcert.RawPublicKey
+	hostPubKey                  sshcert.RawPublicKey
+	cmd                         *exec.Cmd
+	Output                      safeBuffer
 }
 
 // Start starts an sshd server as the current user, and returns a Server.
@@ -56,6 +59,23 @@ type Server struct {
 //
 // It will only process a single ssh connection before terminating.
 func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
+	return start(caPubKey, "", false)
+}
+
+// StartWithEpithetAuthorizedPrincipals starts an sshd whose principal lookup
+// runs the supplied epithet binary against the server's generated host key.
+// acceptAccountName enables the helper's bounded migration overlap.
+func StartWithEpithetAuthorizedPrincipals(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool) (*Server, error) {
+	if !filepath.IsAbs(epithetPath) {
+		return nil, fmt.Errorf("epithet binary path must be absolute")
+	}
+	if strings.ContainsAny(epithetPath, " \t\r\n") {
+		return nil, fmt.Errorf("epithet binary path cannot contain whitespace")
+	}
+	return start(caPubKey, epithetPath, acceptAccountName)
+}
+
+func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool) (*Server, error) {
 	user, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("could not get current user: %w", err)
@@ -79,6 +99,23 @@ func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
 		cmd:      nil,
 		Output:   safeBuffer{},
 	}
+	if epithetPath != "" {
+		// OpenSSH requires the configured command executable itself to be
+		// root-owned. Tests run unprivileged, so use the root-owned system env
+		// executable to launch the test-built epithet binary. Production invokes
+		// its root-owned installed epithet binary directly.
+		envPath, err := exec.LookPath("env")
+		if err != nil {
+			return nil, fmt.Errorf("could not find env for AuthorizedPrincipalsCommand: %w", err)
+		}
+		migrationFlag := ""
+		if acceptAccountName {
+			migrationFlag = " --accept-account-name"
+		}
+		s.AuthorizedPrincipalsCommand = fmt.Sprintf(
+			"%s %s host authorized-principals --host-key %s/ssh_host_ed25519_key.pub%s %%u",
+			envPath, epithetPath, s.Path, migrationFlag)
+	}
 
 	log.Printf("Starting sshd in %s", tmp_dir)
 
@@ -93,6 +130,12 @@ func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+// HostPublicKey returns the public half of the identity key used by this
+// fixture's sshd.
+func (s *Server) HostPublicKey() sshcert.RawPublicKey {
+	return s.hostPubKey
 }
 
 func (s *Server) start() error {
@@ -264,6 +307,7 @@ func generateConfigs(s *Server) error {
 	if err != nil {
 		return fmt.Errorf("could not create ssh_host_ed25519_key.pub file: %w", err)
 	}
+	s.hostPubKey = hostPubKey
 	err = os.WriteFile(s.Path+"/ssh_host_ed25519_key", []byte(hostPrivKey), 0600)
 	if err != nil {
 		return fmt.Errorf("could not create ssh_host_ed25519_key file: %w", err)
