@@ -14,7 +14,7 @@ blocked_by:
 - 41xjh97q
 ---
 
-Add deployment-default and exact-host or pattern principal modes, static exact-host identity keys, and destination-bound issuance after authorization. Acceptance: account-name-principals remains the compatibility default; hashed exact hosts require valid keys; static patterns cannot use a shared hashed key but can explicitly fall back; unknown or incomplete configuration fails closed. Implemented by jj change ktkukzqs.
+Add deployment-default and exact-host or pattern principal modes, static exact-host identity keys, and destination-bound issuance after authorization. Acceptance: account-name remains the compatibility default; destination-bound exact hosts require valid keys; static patterns cannot use a shared identity key but can explicitly fall back; unknown or incomplete configuration fails closed. Implemented by jj change ktkukzqs.
 
 ---
 # Log: 2026-09-03T03:25:05Z Brian McCallister

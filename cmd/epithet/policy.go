@@ -44,7 +44,7 @@ type PolicyServerCLI struct {
 
 	Inventory []string `help:"Inventory file path or glob (repeatable)" name:"inventory"`
 
-	PrincipalMode string `help:"Default SSH certificate principal mode" name:"principal-mode" default:"account-name-principals" enum:"account-name-principals,hashed-principals"`
+	PrincipalMode string `help:"Default SSH certificate principal mode" name:"principal-mode" default:"account-name" enum:"account-name,epithet-principal-v1"`
 
 	Extension map[string]string `help:"Certificate extension for issued certs (name=value, repeatable; default permit-pty, permit-agent-forwarding, permit-user-rc)" name:"extension"`
 

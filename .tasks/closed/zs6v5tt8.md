@@ -29,17 +29,17 @@ Principal derivation:
 - A host alias bound to the same identity key derives the same principal. Different host identity keys must derive different principals for the same account.
 
 Principal modes:
-- Configure a deployment-level default mode with exactly two values: `account-name-principals` and `hashed-principals`.
+- Configure a deployment-level default mode with exactly two initial values: `account-name` and `epithet-principal-v1`. A future principal protocol gets its own versioned value so v1 and v2 can coexist during host rollout.
 - Allow an exact host or host-pattern inventory entry to override the default. Resolution remains exact host first, otherwise first matching pattern; the matched entry's override wins over the deployment default.
-- In static inventory, an exact host whose effective mode is `hashed-principals` must provide its designated identity public key. Missing or invalid key material fails closed during inventory validation.
-- A static pattern may override to `account-name-principals`, supporting ephemeral fleets whose instances are not individually enrolled. A static pattern cannot provide one shared key for `hashed-principals`; doing so would destroy destination isolation. Hashed principals for pattern-matched names require another inventory implementation that resolves the individual instance's identity key.
-- An exact host may explicitly override to `account-name-principals` as a compatibility escape hatch.
+- In static inventory, an exact host whose effective mode is `epithet-principal-v1` must provide its designated identity public key. Missing or invalid key material fails closed during inventory validation.
+- A static pattern may override to `account-name`, supporting ephemeral fleets whose instances are not individually enrolled. A static pattern cannot provide one shared key for `epithet-principal-v1`; doing so would destroy destination isolation. Destination-bound principals for pattern-matched names require another inventory implementation that resolves the individual instance's identity key.
+- An exact host may explicitly override to `account-name` as a compatibility escape hatch.
 - Account grounding remains independent of principal mode. For example, a pattern with `accounts: [ubuntu]` prevents issuance for other account names but does not destination-bind the resulting `ubuntu` certificate.
 - The server-side effective mode and target-side sshd validation mode must agree. Account-name certificates are reusable across every host that trusts the CA and accepts literal account-name principals; hashed-mode hosts must accept only their locally derived principals.
 
 Enforcement:
-- In `account-name-principals` mode, the policy server continues to return the requested account name for certificate signing and discloses that it is not destination-bound.
-- In `hashed-principals` mode, the policy server resolves the requested hostname to its identity public key, authorizes the human-readable account@host tuple, derives the principal, and returns exactly that principal for certificate signing.
+- In `account-name` mode, the policy server continues to return the requested account name for certificate signing and discloses that it is not destination-bound.
+- In `epithet-principal-v1` mode, the policy server resolves the requested hostname to its identity public key, authorizes the human-readable account@host tuple, derives the principal, and returns exactly that principal for certificate signing.
 - The target sshd uses an offline AuthorizedPrincipalsCommand that derives the same principal from its designated local host identity public key and the target username. It does not read a per-account mapping and never contacts the control plane during authentication.
 - Reject registration of one designated identity key as multiple independent hosts; cloned keys destroy destination isolation and are a critical conflict.
 - No per-account UUID registry, account inventory synchronization, mapping rotation API, host daemon, or correctness-critical scheduled job is required.
@@ -52,7 +52,7 @@ Lifecycle:
 - Document that deleting and recreating the same account name preserves its derived principal on that host; exposure from a previously issued certificate is bounded by certificate TTL.
 
 Acceptance:
-- The deployment default and exact-host or pattern override deterministically select `account-name-principals` or `hashed-principals` for every resolved host.
+- The deployment default and exact-host or pattern override deterministically select `account-name` or a concrete versioned principal protocol for every resolved host.
 - Static inventory rejects an exact hashed-principal host without a valid identity public key and rejects a shared identity key on a pattern entry.
 - An account-name pattern supports an ephemeral fleet with a grounded default account such as `ubuntu` or `arch`, with the cross-host reuse boundary clearly documented.
 - A certificate issued for account@host A is rejected by host B even when both use the same account name and trust the same CA.
@@ -75,7 +75,7 @@ Implementation sequence:
 Public interfaces selected for the first implementation:
 - Shared derivation package: `pkg/principal`, exporting `SchemeV1` and `DeriveV1`.
 - Offline helper: `epithet host authorized-principals`.
-- Configuration fields: `principal-mode` and `identity-key`; an omitted deployment mode preserves `account-name-principals` compatibility.
+- Configuration fields: `principal-mode` and `identity-key`; an omitted deployment mode preserves `account-name` compatibility.
 
 Documentation and the Writ specification must distinguish the account-name compatibility boundary from the destination-bound hashed mode, and must not present planned managed enrollment behavior as implemented.
 

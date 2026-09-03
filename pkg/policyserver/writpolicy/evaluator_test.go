@@ -75,7 +75,7 @@ func TestIssueDerivesHashedPrincipal(t *testing.T) {
 	inv := testInv()
 	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(evaluatorIdentityKey))
 	require.NoError(t, err)
-	inv.hosts["prod-db-1"].PrincipalMode = inventory.HashedPrincipals
+	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	inv.hosts["prod-db-1"].IdentityKey = key
 	e := NewForTesting(pol, inv)
 
@@ -89,7 +89,7 @@ func TestIssueDerivesHashedPrincipal(t *testing.T) {
 func TestIssueHashedPrincipalWithoutIdentityKeyFailsClosed(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
-	inv.hosts["prod-db-1"].PrincipalMode = inventory.HashedPrincipals
+	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	e := NewForTesting(pol, inv)
 
 	_, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))

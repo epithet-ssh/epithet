@@ -151,8 +151,8 @@ func (s *Static) loadFile(path string) error {
 			if err != nil {
 				return fmt.Errorf("%s: hosts[%d] identity-key: %w", path, i, err)
 			}
-			if mode == HashedPrincipals && identityKey == nil {
-				return fmt.Errorf("%s: hosts[%d] %q uses %s but has no identity-key", path, i, name, HashedPrincipals)
+			if mode == EpithetPrincipalV1 && identityKey == nil {
+				return fmt.Errorf("%s: hosts[%d] %q uses %s but has no identity-key", path, i, name, EpithetPrincipalV1)
 			}
 			s.hosts[name] = &ResolvedHost{
 				Policy:        eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts},
@@ -163,8 +163,8 @@ func (s *Static) loadFile(path string) error {
 			if h.IdentityKey != "" {
 				return fmt.Errorf("%s: hosts[%d] pattern %q cannot specify one shared identity-key", path, i, h.Pattern)
 			}
-			if mode == HashedPrincipals {
-				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use %s in static inventory", path, i, h.Pattern, HashedPrincipals)
+			if mode == EpithetPrincipalV1 {
+				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use %s in static inventory", path, i, h.Pattern, EpithetPrincipalV1)
 			}
 			s.patterns = append(s.patterns, patternHost{
 				pattern:       il.HostName(h.Pattern),

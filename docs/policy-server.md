@@ -15,7 +15,7 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 - `epithet policy --check` validates policy + inventory without starting a server
 - Built-in to the epithet binary (no separate deployment needed)
 
-**Security boundary:** `account-name-principals`, the compatibility default,
+**Security boundary:** `account-name`, the compatibility default,
 puts the requested account name (for example, `root`) in the SSH certificate.
 It does not put the host identity in the credential. A certificate authorized
 for `root@dev-1` can therefore authenticate as `root` on `prod-1` while it
@@ -23,7 +23,7 @@ remains valid if both hosts trust the same CA. Treat host selectors in this
 mode as issuance-time conditions and the effective credential scope as
 `account@CA-trust-domain`, not `account@host`.
 
-`hashed-principals` makes issuance destination-bound. The policy server
+`epithet-principal-v1` makes issuance destination-bound using the v1 encoding. The policy server
 derives a versioned principal from the inventory host identity key and
 requested account name after authorizing the human-readable `account@host`
 tuple. An offline `AuthorizedPrincipalsCommand` on the target derives the same
@@ -111,7 +111,7 @@ epithet policy \
 requested connection, never the union of every account the user could reach.
 A certificate is minted fresh for every connection past the broker's local
 cache of still-valid agents. Destination binding only applies when the
-resolved host's effective mode is `hashed-principals` and the target is
+resolved host's effective mode is `epithet-principal-v1` and the target is
 configured to validate the derived principal.
 
 ### 5. Configure the CA to use the policy server
@@ -211,11 +211,11 @@ hosts:
   - name: prod-db-1               # exact entry (name is lowercased at load)
     labels: {env: prod, role: db}
     accounts: [root, postgres]    # optional account grounding — see below
-    principal-mode: hashed-principals
+    principal-mode: epithet-principal-v1
     identity-key: "ssh-ed25519 AAAA..." # one designated host public key
   - pattern: "ci-runner-*"        # pattern entry: writ glob
     labels: {env: ci}
-    principal-mode: account-name-principals
+    principal-mode: account-name
 ```
 
 A connection's host must resolve in the inventory or the request is denied — this is what makes label selectors trustworthy. Two entry forms:
@@ -224,13 +224,13 @@ A connection's host must resolve in the inventory or the request is denied — t
 - **Pattern entries** (`pattern:`) synthesize a host for any requested name they match, adopting the requested name and carrying the entry's labels. This is the escape hatch for short-lived fleets (VM pools, CI runners) that follow a naming pattern but cannot be enumerated. Patterns match in file order; first match wins.
 
 `principal-mode` overrides the deployment default for that exact host or
-pattern. An exact host whose effective mode is `hashed-principals` must have
+pattern. An exact host whose effective mode is `epithet-principal-v1` must have
 one `identity-key`, written as a plain OpenSSH public key. That key must be the
 same designated host key used by the target's authorization command. Static
-patterns cannot use `hashed-principals` or provide a shared `identity-key`,
+patterns cannot use `epithet-principal-v1` or provide a shared `identity-key`,
 because one key for a fleet would erase destination isolation. Under a hashed
 deployment default, give ephemeral patterns an explicit
-`principal-mode: account-name-principals` fallback. Exact entries win before
+`principal-mode: account-name` fallback. Exact entries win before
 patterns; otherwise the first matching pattern wins.
 
 Multiple exact names may intentionally use the same identity key as aliases;
@@ -255,7 +255,7 @@ policy:
   policy-file: /etc/epithet/policy.writ
   inventory:
     - /etc/epithet/inventory.yaml
-  principal-mode: hashed-principals
+  principal-mode: epithet-principal-v1
   default-expiration: 5m
 ```
 
@@ -264,7 +264,7 @@ policy:
 - **`oidc`** (required): `issuer` and `client-id` — `client-id` is required so audience checking can never be silently skipped.
 - **`policy-file`** (required): the writ policy file.
 - **`inventory`** (required): inventory file paths or globs.
-- **`principal-mode`** (optional): deployment default, either `account-name-principals` (the compatibility default) or `hashed-principals`. A host entry's `principal-mode` overrides it.
+- **`principal-mode`** (optional): deployment default, either `account-name` (the compatibility default) or `epithet-principal-v1`. A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
 - **`default-expiration`** (optional): cert TTL when no satisfied rule sets a `ttl` (default `5m`). Always further clamped to the auth token's remaining lifetime.
 - **`extension`** (flag only): repeatable `name=value` cert extensions.
 

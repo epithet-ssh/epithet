@@ -33,7 +33,7 @@ type ServerCLI struct {
 	PolicyFile    string            `help:"Path to the writ policy file" name:"policy-file"`
 	Inventory     []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
 	Extension     map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
-	PrincipalMode string            `help:"Default SSH certificate principal mode" name:"principal-mode"`
+	PrincipalMode string            `help:"Default SSH certificate principal mode" name:"principal-mode" default:"account-name" enum:"account-name,epithet-principal-v1"`
 }
 
 func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {

@@ -161,7 +161,7 @@ func certificatePrincipals(host *inventory.ResolvedHost, account string) ([]stri
 	switch host.PrincipalMode.Effective() {
 	case inventory.AccountNamePrincipals:
 		return []string{account}, nil
-	case inventory.HashedPrincipals:
+	case inventory.EpithetPrincipalV1:
 		name, err := principal.DeriveV1(host.IdentityKey, account)
 		if err != nil {
 			return nil, fmt.Errorf("deriving principal for %s@%s: %w", account, host.Policy.Name, err)

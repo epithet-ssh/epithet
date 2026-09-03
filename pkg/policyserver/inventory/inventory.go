@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"golang.org/x/crypto/ssh"
 )
@@ -22,11 +23,11 @@ const (
 	// AccountNamePrincipals places the literal requested account name in the
 	// certificate. It is compatible with ordinary OpenSSH CA configuration but
 	// is not destination-bound.
-	AccountNamePrincipals PrincipalMode = "account-name-principals"
+	AccountNamePrincipals PrincipalMode = "account-name"
 
-	// HashedPrincipals derives a destination-bound principal from the host
-	// identity public key and requested account name.
-	HashedPrincipals PrincipalMode = "hashed-principals"
+	// EpithetPrincipalV1 derives a destination-bound v1 principal from the
+	// host identity public key and requested account name.
+	EpithetPrincipalV1 PrincipalMode = principal.SchemeV1
 )
 
 // Validate rejects unknown non-empty principal modes. Empty is the zero-value
@@ -34,7 +35,7 @@ const (
 // implementations constructed in Go.
 func (m PrincipalMode) Validate() error {
 	switch m {
-	case "", AccountNamePrincipals, HashedPrincipals:
+	case "", AccountNamePrincipals, EpithetPrincipalV1:
 		return nil
 	default:
 		return fmt.Errorf("unknown principal mode %q", m)

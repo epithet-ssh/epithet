@@ -106,12 +106,12 @@ func TestHashedDefaultRequiresAndLoadsExactHostIdentityKey(t *testing.T) {
 	src := "hosts:\n  - name: prod-1\n    identity-key: " + identityKey + "\n"
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
-		WithDefaultPrincipalMode(HashedPrincipals))
+		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
 	h, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
-	require.Equal(t, HashedPrincipals, h.PrincipalMode)
+	require.Equal(t, EpithetPrincipalV1, h.PrincipalMode)
 	require.NotNil(t, h.IdentityKey)
 }
 
@@ -119,12 +119,12 @@ func TestPatternCanFallBackFromHashedDefault(t *testing.T) {
 	src := `
 hosts:
   - pattern: "ci-*"
-    principal-mode: account-name-principals
+    principal-mode: account-name
     accounts: [ubuntu]
 `
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
-		WithDefaultPrincipalMode(HashedPrincipals))
+		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
 	h, err := s.LookupHost(context.Background(), "ci-42")
@@ -138,11 +138,11 @@ func TestExactHostCanFallBackFromHashedDefault(t *testing.T) {
 	src := `
 hosts:
   - name: legacy-1
-    principal-mode: account-name-principals
+    principal-mode: account-name
 `
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
-		WithDefaultPrincipalMode(HashedPrincipals))
+		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
 	h, err := s.LookupHost(context.Background(), "legacy-1")
@@ -154,7 +154,7 @@ func TestHashedExactHostWithoutIdentityKeyIsError(t *testing.T) {
 	src := "hosts:\n  - name: prod-1\n"
 	_, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
-		WithDefaultPrincipalMode(HashedPrincipals))
+		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.ErrorContains(t, err, "has no identity-key")
 }
 
@@ -162,12 +162,12 @@ func TestHashedPatternIsErrorInStaticInventory(t *testing.T) {
 	src := "hosts:\n  - pattern: 'prod-*'\n"
 	_, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
-		WithDefaultPrincipalMode(HashedPrincipals))
-	require.ErrorContains(t, err, "cannot use hashed-principals")
+		WithDefaultPrincipalMode(EpithetPrincipalV1))
+	require.ErrorContains(t, err, "cannot use epithet-principal-v1")
 }
 
 func TestPatternWithSharedIdentityKeyIsError(t *testing.T) {
-	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name-principals\n    identity-key: " + identityKey + "\n"
+	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name\n    identity-key: " + identityKey + "\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.ErrorContains(t, err, "cannot specify one shared identity-key")
 }

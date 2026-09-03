@@ -31,7 +31,10 @@ The scheme name is deliberately both the hash domain separator and the
 visible prefix. A future incompatible encoding must use a new name in both
 places.
 
-## Normative vector
+## Normative test vector
+
+This is an example input with an authoritative expected result. Independent
+implementations can use it to verify byte-for-byte interoperability.
 
 ```text
 host public key:

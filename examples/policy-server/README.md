@@ -45,7 +45,7 @@ policy:
   inventory:
     - ./inventory.yaml
   # Compatibility default. See "Destination-bound mode" below before changing.
-  principal-mode: account-name-principals
+  principal-mode: account-name
 ```
 
 ### 3. Start the services
@@ -176,7 +176,7 @@ PubkeyAuthentication yes
 AuthenticationMethods publickey
 ```
 
-This uses Epithet's `account-name-principals` compatibility mode. A certificate
+This uses Epithet's `account-name` compatibility mode. A certificate
 for an account can be accepted by any host in the CA trust domain with the
 same account name. Use separate CAs for separate security boundaries, or
 configure destination-bound mode below.
@@ -196,14 +196,14 @@ inventory and select hashed principals:
 hosts:
   - name: prod-web-1.example.com
     labels: {env: prod, role: web}
-    principal-mode: hashed-principals
+    principal-mode: epithet-principal-v1
     identity-key: "ssh-ed25519 AAAA..."
 ```
 
-Set `policy.principal-mode: hashed-principals` to make this the deployment
+Set `policy.principal-mode: epithet-principal-v1` to make this the deployment
 default. Exact hosts that inherit that default still need an `identity-key`.
 Static ephemeral patterns must explicitly fall back to
-`account-name-principals`.
+`account-name`.
 
 Install the Epithet binary on the host and add:
 

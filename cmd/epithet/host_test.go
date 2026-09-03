@@ -29,6 +29,7 @@ func TestHostAuthorizedPrincipalsNormativeVector(t *testing.T) {
 func TestHostAuthorizedPrincipalsSupportsRotationAndMigration(t *testing.T) {
 	first := writeHostPublicKey(t, "first.pub", []byte(hostVectorEd25519))
 	second := writeHostPublicKey(t, "second.pub", generateHostPublicKey(t))
+	// Include first twice to verify duplicate key inputs emit one principal.
 	cmd := HostAuthorizedPrincipalsCLI{
 		HostKeys:          []string{first, second, first},
 		AcceptAccountName: true,
