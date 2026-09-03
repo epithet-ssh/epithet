@@ -245,11 +245,15 @@ func profileTag(name string) string {
 	return "epithet-" + name
 }
 
-// generateSSHConfig writes an SSH config file for this profile. The block is
-// gated by "Match tagged epithet-<name>" rather than a bare Match exec so
-// that multiple profiles' generated configs can coexist: ssh only evaluates
-// a profile's exec line for hosts the user opted into via a Tag directive in
-// their own Host blocks, keyed by this profile's name.
+// generateSSHConfig writes an SSH config file for this profile. A plain tagged
+// block selects IdentityAgent as soon as the tag is available, whether the tag
+// matched the original host on the first pass or the canonical host on the
+// final pass. The broker call is separately gated by "Match final tagged
+// epithet-<name>" so it sees the effective hostname after OpenSSH has performed
+// any canonicalization. "final" also requests a second pass when
+// canonicalization is disabled, so epithet match runs at the same point for
+// every connection. IdentityAgent expands %C when it is used, after
+// canonicalization, so it addresses the same connection hash as the broker.
 func (a *AgentCLI) generateSSHConfig(path, agentDir, brokerSock, homeDir string) error {
 	// Find epithet binary path
 	epithetPath, err := os.Executable()
@@ -277,16 +281,19 @@ func (a *AgentCLI) generateSSHConfig(path, agentDir, brokerSock, homeDir string)
 #
 # Requires OpenSSH 9.4 or newer (Tag / Match tagged).
 
-Match tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
+Match tagged %s
     IdentityAgent %s/%%C
+
+Match final tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
 `,
 		a.Name,
 		tag,
 		includePattern,
 		tag,
+		agentDir,
+		tag,
 		epithetPath,
 		brokerSock,
-		agentDir,
 	)
 
 	// Ensure directory exists

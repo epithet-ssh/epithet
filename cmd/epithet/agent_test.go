@@ -21,11 +21,11 @@ func TestGenerateSSHConfigIsTagGated(t *testing.T) {
 	out, err := os.ReadFile(path)
 	require.NoError(t, err)
 	s := string(out)
-	require.Contains(t, s, `Match tagged epithet-work exec`)
-	require.Contains(t, s, "IdentityAgent /run/agent/%C")
+	require.Contains(t, s, "Match tagged epithet-work\n    IdentityAgent /run/agent/%C")
+	require.Contains(t, s, `Match final tagged epithet-work exec`)
 	require.Contains(t, s, "--broker '/run/broker.sock'")
-	require.NotContains(t, strings.Split(s, "Match tagged")[0], "\nMatch ",
-		"nothing before the tagged Match may open a match block")
+	require.Less(t, strings.Index(s, "Match tagged epithet-work\n"), strings.Index(s, "Match final tagged epithet-work exec"),
+		"IdentityAgent selection must precede the final broker invocation")
 }
 
 func TestProfileNameValidation(t *testing.T) {
@@ -103,6 +103,7 @@ func TestGenerateSSHConfigDefaultProfileUsesBareTag(t *testing.T) {
 
 	out, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.Contains(t, string(out), "Match tagged epithet exec")
+	require.Contains(t, string(out), "Match tagged epithet\n")
+	require.Contains(t, string(out), "Match final tagged epithet exec")
 	require.NotContains(t, string(out), "epithet-default")
 }

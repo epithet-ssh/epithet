@@ -27,7 +27,7 @@ sequenceDiagram
     ca -->> user: Link: <discovery>; rel="https://epithet.dev/rel/auth"
     user ->> ca: GET discovery (resolved from Link header)
     ca -->> user: {"auth": {"issuer", "client_id"}}
-    user ->> fs: Generate ssh-config.conf (Match tagged epithet-<name> ...)
+    user ->> fs: Generate ssh-config.conf (tagged IdentityAgent + final tagged exec)
     user ->> sock: Start broker socket listener
     Note over user,sock: Ready — waiting for SSH connections
 ```
@@ -50,7 +50,7 @@ sequenceDiagram
         participant policy
     end
 
-    ssh ->> match: Match tagged epithet-<name> exec ...
+    ssh ->> match: Match final tagged epithet-<name> exec ...
     match ->> broker: {"match": {connection...}}\n (JSON line, unix socket)
 
     alt no cached JWT valid for expiryBuffer
@@ -92,7 +92,7 @@ The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML c
 epithet match --host %h --port %p --user %r --hash %C [--jump %j] --broker <path>
 ```
 
-- Invoked by OpenSSH `Match tagged <tag> exec` during connection establishment (the generated per-profile config supplies the tag and broker path)
+- Invoked by OpenSSH `Match final tagged <tag> exec` during connection establishment (the generated per-profile config supplies the tag and broker path). The final pass ensures `%h` and `%C` reflect OpenSSH hostname canonicalization before Epithet requests a certificate.
 - Sends one JSON request line to the broker's unix socket and reads streamed events back
 - Returns success/failure to OpenSSH to control whether connection proceeds
 
@@ -106,7 +106,7 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 - `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
 - `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
 - Fetches OIDC issuer/client ID from the CA's auth config once at startup (discovered via Link header on `GET /`) — no local auth configuration
-- Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`, gated by `Match tagged epithet-<name>`
+- Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`. A plain `Match tagged` block selects the per-connection `IdentityAgent` on whichever pass first supplies the tag; a separate `Match final tagged` block invokes Epithet after hostname canonicalization. `%C` is expanded from the final connection in both places.
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
 - Creates in-process SSH agent instances for each unique connection
 - Graceful shutdown with proper cleanup
@@ -174,7 +174,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 
 ## Key data flow
 
-1. User initiates SSH connection → OpenSSH `Match tagged` (via the user's own `Tag` lines) calls `epithet match`
+1. User initiates SSH connection → OpenSSH finishes hostname processing, including canonicalization when enabled, then `Match final tagged` (via the user's own `Tag` lines) calls `epithet match`
 2. Broker checks if an agent with an unexpired certificate already exists for this connection hash
 3. If not: broker gets a JWT (cached, proactively refreshed, or freshly acquired via OIDC)
 4. Broker generates an ephemeral keypair for this connection
@@ -222,7 +222,7 @@ These design decisions affect how epithet interacts with SSH's `Match exec` beha
 ### SSH config precedence
 
 - SSH uses **first match wins** for configuration parameters
-- `Match tagged` blocks are only evaluated for hosts the user tagged in their own `Host` blocks, evaluated in order
+- The plain `Match tagged` block selects `IdentityAgent` on either configuration pass; the `Match final tagged` block invokes Epithet only on OpenSSH's final pass. Tags selected from either the original hostname or the canonical hostname work.
 - When a `Match exec` returns non-zero, that Match block doesn't apply and SSH continues to the next Match or default config
 
 ### Match failure strategy
@@ -230,11 +230,11 @@ These design decisions affect how epithet interacts with SSH's `Match exec` beha
 When epithet cannot obtain a certificate (auth failures, CA errors, agent creation failures):
 1. **Log clear error to stderr** - user-friendly message explaining what went wrong
 2. **Exit with non-zero status** - fail the Match so SSH falls through to next config
-3. **Allow SSH fallback** - enables breakglass/escape hatch scenarios
+3. **Allow SSH fallback** - enables breakglass/escape hatch scenarios through configured identity files or other authentication methods
 
 **Rationale:**
-- Enables breakglass accounts: users can have epithet `Match tagged` blocks first, then special-case configs with a specific `IdentityFile`
-- If epithet fails the Match, SSH can try other auth methods (default keys, other agents)
+- Enables breakglass accounts: users can have epithet `Match final tagged` blocks first, then special-case configs with a specific `IdentityFile`
+- If epithet fails the Match, SSH can try identity files and other enabled authentication methods. Because the tagged block has already selected Epithet's per-connection `IdentityAgent`, it does not fall back to the ambient `SSH_AUTH_SOCK`; an explicit breakglass `IdentityFile` remains available.
 - Users who need strict security can configure SSH with no fallbacks after epithet's blocks
 
 **Multiple concurrent brokers**: Epithet supports multiple named profiles (work vs personal, different CAs). Each gets its own rundir, socket, and `Tag epithet-<name>`; the same `Include ~/.epithet/run/*/ssh-config.conf` line picks up all of them.
@@ -260,7 +260,7 @@ Certificates are minted fresh per connection and are not stored independently of
 
 ## Configuration and SSH integration
 
-When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<name>/ssh-config.conf`, gated by `Match tagged epithet-<name>`. Tag the `Host` blocks it should handle in your own `~/.ssh/config`, then include the generated configs *after* those Tag lines:
+When `epithet agent` starts, it auto-generates an SSH config at `~/.epithet/run/<name>/ssh-config.conf`. It selects `IdentityAgent` in a plain `Match tagged` block and invokes Epithet in a separate `Match final tagged` block. Tag the `Host` blocks it should handle in your own `~/.ssh/config`, then include the generated configs *after* those Tag lines:
 
 ```ssh_config
 Host *.example.com

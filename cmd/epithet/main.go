@@ -40,7 +40,7 @@ var cli struct {
 	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
 	Agent  AgentCLI        `cmd:"agent" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
-	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match tagged ... exec ...'"`
+	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
 	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
 	Host   HostCLI         `cmd:"host" help:"Manage and authorize Epithet hosts"`
 	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,7 +189,7 @@ func TestBrokerEndToEnd(t *testing.T) {
 }
 
 // TestBrokerEndToEnd_TagGatedSSHConfig drives the real end-to-end path from
-// ssh itself: an ssh_config "Match tagged epithet-test exec" block (the same
+// ssh itself: an ssh_config "Match final tagged epithet-test exec" block (the same
 // shape `epithet agent`'s generateSSHConfig produces) invokes the built
 // epithet binary, which dials the real broker over its Unix socket, gets a
 // real certificate, and hands it to ssh via IdentityAgent.
@@ -276,6 +277,75 @@ Include %s
 	require.Contains(t, string(taggedOut), "hello from sshd", "the tagged connection should reach the fixture's ForceCommand")
 }
 
+// TestGeneratedConfigDefersMatchUntilHostnameCanonicalization uses a numeric
+// address so the test does not depend on external DNS: OpenSSH normalizes the
+// long IPv6 loopback spelling to ::1 after its initial configuration pass.
+// Tags selected from either the original or normalized address must work,
+// while epithet match runs exactly once on the final pass with the normalized
+// %h and matching %C. A non-canonicalizing case verifies that Match final
+// itself requests the required second pass.
+func TestGeneratedConfigDefersMatchUntilHostnameCanonicalization(t *testing.T) {
+	requireSSHTagSupport(t)
+
+	for _, tc := range []struct {
+		name         string
+		originalHost string
+		tagPattern   string
+		expectedHost string
+	}{
+		{
+			name:         "tag selected from original host",
+			originalHost: "0:0:0:0:0:0:0:1",
+			tagPattern:   "0:0:0:0:0:0:0:1",
+			expectedHost: "::1",
+		},
+		{
+			name:         "tag selected from canonical host",
+			originalHost: "0:0:0:0:0:0:0:1",
+			tagPattern:   "::1",
+			expectedHost: "::1",
+		},
+		{
+			name:         "canonicalization disabled",
+			originalHost: "localhost",
+			tagPattern:   "localhost",
+			expectedHost: "localhost",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := shortTempDir(t)
+			recordPath := filepath.Join(tmpDir, "match-record")
+			recorderPath := filepath.Join(tmpDir, "record-match")
+			recorder := fmt.Sprintf("#!/bin/sh\nprintf '%%s %%s\\n' \"$3\" \"${11}\" >> %s\n", recordPath)
+			require.NoError(t, os.WriteFile(recorderPath, []byte(recorder), 0o700))
+
+			const tag = "epithet-test"
+			agentDir := filepath.Join(tmpDir, "agent")
+			generatedConfigPath := filepath.Join(tmpDir, "generated-ssh-config")
+			writeGeneratedConfig(t, generatedConfigPath, tag, recorderPath, filepath.Join(tmpDir, "unused-broker"), agentDir)
+
+			clientConfigPath := filepath.Join(tmpDir, "client-ssh-config")
+			writeClientConfig(t, clientConfigPath, fmt.Sprintf(`Host %s
+    Tag %s
+
+Include %s
+`, tc.tagPattern, tag, generatedConfigPath))
+
+			output, err := exec.Command("ssh", "-G", "-F", clientConfigPath, tc.originalHost).CombinedOutput()
+			require.NoError(t, err, "evaluate ssh config: %s", output)
+			require.Contains(t, string(output), "hostname "+tc.expectedHost+"\n")
+
+			recorded, err := os.ReadFile(recordPath)
+			require.NoError(t, err)
+			fields := strings.Fields(string(recorded))
+			require.Len(t, fields, 2, "epithet match must execute exactly once: %q", recorded)
+			require.Equal(t, tc.expectedHost, fields[0], "epithet match must receive final %%h")
+			require.Contains(t, string(output), "identityagent "+filepath.Join(agentDir, fields[1])+"\n",
+				"IdentityAgent and epithet match must use the same final %%C")
+		})
+	}
+}
+
 func testLogger(t *testing.T) *slog.Logger {
 	return slog.New(tint.NewHandler(t.Output(), &tint.Options{
 		Level:      slog.LevelDebug,
@@ -320,13 +390,16 @@ func closedTCPPort(t *testing.T) int {
 
 // writeGeneratedConfig writes an ssh_config snippet in the same shape
 // `epithet agent`'s generateSSHConfig produces (cmd/epithet/agent.go, Task
-// 12): a Match-tagged block whose exec line invokes epithetBin's `match`
-// subcommand, gated on tag, pointing at brokerSock.
+// 12): a plain tagged block selects IdentityAgent on whichever pass supplies
+// the tag, then a final-pass tagged block invokes epithetBin's `match`
+// subcommand after hostname canonicalization.
 func writeGeneratedConfig(t *testing.T, path, tag, epithetBin, brokerSock, agentDir string) {
 	t.Helper()
-	content := fmt.Sprintf(`Match tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
+	content := fmt.Sprintf(`Match tagged %s
     IdentityAgent %s/%%C
-`, tag, epithetBin, brokerSock, agentDir)
+
+Match final tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
+`, tag, agentDir, tag, epithetBin, brokerSock)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
 }
 
