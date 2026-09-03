@@ -3,7 +3,7 @@ yatl_version: 1
 title: Publish Epithet through a FreeBSD pkg repository
 id: y4fsaskj
 created: 2026-02-23T04:06:46.519858Z
-updated: 2026-09-03T21:13:41.428754Z
+updated: 2026-09-03T21:52:38.228688Z
 author: Brian McCallister
 priority: high
 tags:
@@ -48,3 +48,8 @@ Created task.
 # Log: 2026-09-03T21:13:41Z Brian McCallister
 
 Refreshed the existing FreeBSD packaging task after v0.23.0: focus the first package on host installation and upgrades, require signed repository publication, preserve enrolled host state, and remove obsolete combined-server assumptions.
+
+---
+# Log: 2026-09-03T21:52:38Z Brian McCallister
+
+Started working.
