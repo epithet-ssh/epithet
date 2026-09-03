@@ -1,8 +1,8 @@
 # Releasing
 
 Releases are triggered by pushing an annotated `vX.Y.Z` git tag. Everything
-downstream — building binaries, publishing the GitHub Release, updating the
-Homebrew tap, and building the FreeBSD package — is automated in CI. You never
+downstream — building binaries, publishing the GitHub Release, and updating the
+Homebrew tap — is automated in CI. You never
 run goreleaser by hand for a real release; you only create and push the tag.
 
 ## Quick procedure
@@ -17,6 +17,17 @@ git push origin vX.Y.Z  # this push is what triggers the release (make release p
 Then watch the `release` workflow in GitHub Actions and confirm the GitHub
 Release, its `checksums.txt`, and the updated formula in the
 `epithet-ssh/homebrew-tap` repository.
+
+Once the GitHub Release is complete, explicitly publish the native FreeBSD
+repository from the FreeBSD build host:
+
+```sh
+ssh BUILD_HOST sudo epithet-pkg-publish publish vX.Y.Z
+```
+
+This separate command builds and tests the port before atomically updating the
+signed repository at `pkg.epithet.dev`. See
+[`contrib/freebsd/README.md`](../contrib/freebsd/README.md).
 
 ## How the version is chosen
 
@@ -54,15 +65,13 @@ So a release happens exactly when — and only when — a `v*` tag is pushed.
 
 ## What CI produces
 
-`release.yml` runs two jobs:
+`release.yml` runs one job:
 
 1. **release** — checks out full history, runs `make test`, then goreleaser
    (`release --clean`, config in `.goreleaser.yaml`). goreleaser builds six
    binaries (linux, darwin, freebsd × amd64, arm64), publishes a GitHub Release
    with a filtered changelog and `checksums.txt`, and pushes an updated formula
    to `epithet-ssh/homebrew-tap`.
-2. **freebsd-pkg** — after the release job, builds the FreeBSD `.pkg` in a
-   FreeBSD VM (`contrib/freebsd`) and uploads it to the same release.
 
 ## Required secrets
 

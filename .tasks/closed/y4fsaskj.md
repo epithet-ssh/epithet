@@ -3,7 +3,7 @@ yatl_version: 1
 title: Publish Epithet through a FreeBSD pkg repository
 id: y4fsaskj
 created: 2026-02-23T04:06:46.519858Z
-updated: 2026-09-03T21:52:38.228688Z
+updated: 2026-09-03T23:34:07.723132Z
 author: Brian McCallister
 priority: high
 tags:
@@ -53,3 +53,13 @@ Refreshed the existing FreeBSD packaging task after v0.23.0: focus the first pac
 # Log: 2026-09-03T21:52:38Z Brian McCallister
 
 Started working.
+
+---
+# Log: 2026-09-03T23:34:07Z Brian McCallister
+
+Published the signed FreeBSD:15:amd64 repository at pkg.epithet.dev with Poudriere and a read-only Bastille/Caddy serving jail. Verified v0.23.0 through clean port QA, fresh install, v0.22.0-to-v0.23.0 upgrade, signature checking, host-state preservation, uninstall, atomic promotion, and a separate install over the public HTTPS endpoint.
+
+---
+# Log: 2026-09-03T23:34:07Z Brian McCallister
+
+Closed.

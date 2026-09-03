@@ -1,0 +1,5 @@
+TIMESTAMP = 1788473589
+SHA256 (go/security_epithet/epithet-v0.23.0/v0.23.0.mod) = d61b970244a85391d3f29e437cc40f756e6995ba03baff679687de42342a738e
+SIZE (go/security_epithet/epithet-v0.23.0/v0.23.0.mod) = 890
+SHA256 (go/security_epithet/epithet-v0.23.0/v0.23.0.zip) = 30642d7c87a57c6d16a91fc30b368ae4d201e2a479a148a63901200889ba8773
+SIZE (go/security_epithet/epithet-v0.23.0/v0.23.0.zip) = 536172

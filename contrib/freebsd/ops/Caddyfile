@@ -1,0 +1,8 @@
+pkg.epithet.dev {
+	root * /srv/pkg
+	file_server
+
+	header {
+		X-Content-Type-Options nosniff
+	}
+}

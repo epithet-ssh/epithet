@@ -150,7 +150,9 @@ most supervisors run `ExecStart`-style command lines without a shell, so a
 
 For a single-process alternative that supervises both itself, see `epithet
 server` in the [architecture guide](../../docs/architecture.md#epithet-server).
-FreeBSD users have a packaged rc.d service in [`contrib/freebsd`](../../contrib/freebsd/).
+The initial FreeBSD package is host-focused and does not install server rc.d
+services; run the CA and policy processes under an explicitly configured
+supervisor.
 
 ## Configuring target hosts
 

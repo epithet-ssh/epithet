@@ -1,0 +1,179 @@
+#!/bin/sh
+
+set -eu
+
+CONFIG=${EPITHET_PKG_CONFIG:-/usr/local/etc/epithet-pkg.conf}
+[ -r "$CONFIG" ] || {
+	echo "cannot read configuration: $CONFIG" >&2
+	exit 1
+}
+. "$CONFIG"
+
+: "${POUDRIERE_JAIL:?}"
+: "${POUDRIERE_PORTS:?}"
+: "${PORT_ORIGIN:?}"
+: "${PORT_TEMPLATE:?}"
+: "${PORT_DIR:?}"
+: "${POUDRIERE_PACKAGES:?}"
+: "${POUDRIERE_PACKAGE_BRANCH:?}"
+: "${SOURCE_REPOSITORY:?}"
+: "${PUBLIC_ROOT:?}"
+: "${SIGNING_KEY:?}"
+: "${REPOSITORY_URL:?}"
+
+ABI=FreeBSD:15:amd64
+ABI_ROOT=$PUBLIC_ROOT/$ABI
+LOCK_FILE=/var/run/epithet-pkg-publish.lock
+
+usage() {
+	cat >&2 <<EOF
+usage: epithet-pkg-publish publish vX.Y.Z
+       epithet-pkg-publish status
+       epithet-pkg-publish rollback X.Y.Z
+EOF
+	exit 64
+}
+
+require_root() {
+	[ "$(id -u)" -eq 0 ] || {
+		echo "epithet-pkg-publish must run as root" >&2
+		exit 1
+	}
+}
+
+current_version() {
+	if [ -L "$ABI_ROOT/latest" ]; then
+		basename "$(readlink "$ABI_ROOT/latest")"
+	else
+		echo none
+	fi
+}
+
+validate_version() {
+	case "$1" in
+	[0-9]*.[0-9]*.[0-9]*) ;;
+	*) echo "invalid release version: $1" >&2; exit 64 ;;
+	esac
+	case "$1" in
+	*[!0-9A-Za-z.+-]*) echo "invalid release version: $1" >&2; exit 64 ;;
+	esac
+}
+
+render_port() {
+	port_version=$1
+	rm -rf "$PORT_DIR"
+	mkdir -p "$PORT_DIR"
+	cp -R "$PORT_TEMPLATE"/. "$PORT_DIR"/
+	sed "s/^DISTVERSION=.*/DISTVERSION=\t${port_version}/" "$PORT_DIR/Makefile" > "$PORT_DIR/Makefile.new"
+	mv "$PORT_DIR/Makefile.new" "$PORT_DIR/Makefile"
+	make -C "$PORT_DIR" BATCH=yes clean makesum
+}
+
+build_package() {
+	package_version=$1
+	render_port "$package_version"
+	poudriere testport -b "$POUDRIERE_PACKAGE_BRANCH" -j "$POUDRIERE_JAIL" -p "$POUDRIERE_PORTS" -o "$PORT_ORIGIN"
+	poudriere bulk -b "$POUDRIERE_PACKAGE_BRANCH" -j "$POUDRIERE_JAIL" -p "$POUDRIERE_PORTS" "$PORT_ORIGIN"
+
+	BUILT_PACKAGE=$(find -L "$POUDRIERE_PACKAGES/All" -maxdepth 1 -type f -name "epithet-${package_version}*.pkg" | head -n 1)
+	[ -n "$BUILT_PACKAGE" ] || {
+		echo "poudriere did not produce epithet ${package_version}" >&2
+		exit 1
+	}
+}
+
+previous_version() {
+	previous_tag=$1
+	git -C "$SOURCE_REPOSITORY" tag --merged "${previous_tag}^" --sort=-version:refname |
+		awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { sub(/^v/, ""); print; exit }'
+}
+
+publish() {
+	release_tag=${1:-}
+	case "$release_tag" in
+	v*) ;;
+	*) echo "release must be an explicit vX.Y.Z tag" >&2; exit 64 ;;
+	esac
+	release_version=${release_tag#v}
+	validate_version "$release_version"
+
+	if [ "$(current_version)" = "$release_version" ]; then
+		echo "epithet ${release_version} is already published"
+		return
+	fi
+	[ ! -e "$ABI_ROOT/releases/$release_version" ] || {
+		echo "release ${release_version} already exists; use rollback to select an existing release" >&2
+		exit 1
+	}
+
+	if [ ! -d "$SOURCE_REPOSITORY/.git" ]; then
+		mkdir -p "$(dirname "$SOURCE_REPOSITORY")"
+		git clone https://github.com/epithet-ssh/epithet "$SOURCE_REPOSITORY"
+	fi
+	git -C "$SOURCE_REPOSITORY" fetch --force --tags origin
+	git -C "$SOURCE_REPOSITORY" rev-parse --verify "${release_tag}^{commit}" >/dev/null
+
+	work=$(mktemp -d /var/tmp/epithet-pkg-publish.XXXXXX)
+	trap 'rm -rf "$work"' EXIT INT TERM HUP
+
+	previous=$(previous_version "$release_tag")
+	previous_package=
+	if [ -n "$previous" ]; then
+		previous_package=$(find "$ABI_ROOT/releases" -type f -path "*/All/epithet-${previous}*.pkg" 2>/dev/null | head -n 1 || true)
+		if [ -z "$previous_package" ]; then
+			build_package "$previous"
+			previous_package=$work/$(basename "$BUILT_PACKAGE")
+			cp "$BUILT_PACKAGE" "$previous_package"
+		fi
+	fi
+
+	build_package "$release_version"
+	current_built=$BUILT_PACKAGE
+	candidate=$work/repository
+	mkdir -p "$candidate/All"
+	cp "$current_built" "$candidate/All/"
+	pkg repo "$candidate" "$SIGNING_KEY"
+
+	public_key=$work/epithet.pub
+	openssl rsa -in "$SIGNING_KEY" -pubout -out "$public_key"
+	EPITHET_PKG_PUBLIC_KEY=$public_key /usr/local/sbin/epithet-pkg-test \
+		"$candidate" "$release_version" ${previous_package:+"$previous_package"}
+
+	mkdir -p "$ABI_ROOT/releases" "$PUBLIC_ROOT/keys"
+	mv "$candidate" "$ABI_ROOT/releases/$release_version"
+	install -m 0444 "$public_key" "$PUBLIC_ROOT/keys/epithet.pub"
+	ln -s "releases/$release_version" "$ABI_ROOT/.latest.$$"
+	mv -fh "$ABI_ROOT/.latest.$$" "$ABI_ROOT/latest"
+	printf '%s\n' "$release_version" > "$ABI_ROOT/published-version"
+	printf 'published epithet %s at %s/%s/latest\n' "$release_version" "$REPOSITORY_URL" "$ABI"
+}
+
+rollback() {
+	rollback_version=${1:-}
+	validate_version "$rollback_version"
+	[ -d "$ABI_ROOT/releases/$rollback_version" ] || {
+		echo "release ${rollback_version} is not retained" >&2
+		exit 1
+	}
+	ln -s "releases/$rollback_version" "$ABI_ROOT/.latest.$$"
+	mv -fh "$ABI_ROOT/.latest.$$" "$ABI_ROOT/latest"
+	printf '%s\n' "$rollback_version" > "$ABI_ROOT/published-version"
+	echo "rolled back repository metadata to epithet ${rollback_version}"
+}
+
+require_root
+command=${1:-}
+case "$command" in
+status)
+	printf 'published: %s\n' "$(current_version)"
+	;;
+publish|rollback)
+	shift
+	[ "$#" -eq 1 ] || usage
+	if [ "${EPITHET_PKG_LOCKED:-}" != 1 ]; then
+		exec env EPITHET_PKG_LOCKED=1 lockf -k -t 0 "$LOCK_FILE" "$0" "$command" "$1"
+	fi
+	"$command" "$1"
+	;;
+*) usage ;;
+esac

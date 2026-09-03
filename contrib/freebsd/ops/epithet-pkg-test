@@ -1,0 +1,85 @@
+#!/bin/sh
+
+set -eu
+
+usage() {
+	echo "usage: epithet-pkg-test CANDIDATE_REPOSITORY VERSION [PREVIOUS_PACKAGE]" >&2
+	exit 64
+}
+
+[ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage
+
+repository=$(realpath "$1")
+version=$2
+previous_package=${3:-}
+public_key=${EPITHET_PKG_PUBLIC_KEY:?EPITHET_PKG_PUBLIC_KEY is required}
+
+work=$(mktemp -d /var/tmp/epithet-pkg-test.XXXXXX)
+trap 'rm -rf "$work"' EXIT INT TERM HUP
+
+repos_dir="$work/repos"
+root="$work/root"
+mkdir -p "$repos_dir" "$root"
+
+cat > "$repos_dir/Epithet.conf" <<EOF
+Epithet: {
+    url: "file://${repository}",
+    signature_type: "pubkey",
+    pubkey: "${public_key}",
+    enabled: yes
+}
+EOF
+
+pkg_cmd() {
+	pkg -r "$root" -o REPOS_DIR="$repos_dir" "$@"
+}
+
+reset_root() {
+	rm -rf "$root"
+	mkdir -p "$root"
+}
+
+assert_version() {
+	actual=$($root/usr/local/bin/epithet --version)
+	case "$actual" in
+	*"$version"*) ;;
+	*)
+		echo "installed binary reported unexpected version: $actual" >&2
+		exit 1
+		;;
+	esac
+}
+
+pkg_cmd update -f
+pkg_cmd install -y -r Epithet epithet
+assert_version
+$root/usr/local/bin/epithet host enroll --help >/dev/null
+pkg_cmd delete -y epithet
+[ ! -e "$root/usr/local/bin/epithet" ]
+
+if [ -n "$previous_package" ]; then
+	previous_package=$(realpath "$previous_package")
+	reset_root
+	pkg_cmd add "$previous_package"
+
+	mkdir -p "$root/var/db/epithet" "$root/etc/ssh/sshd_config.d"
+	printf '%s\n' 'epithet-host-v1-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' > "$root/var/db/epithet/host-id"
+	printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG9ubHktYS1wYWNrYWdlLXRlc3Q epithet-test' > "$root/var/db/epithet/epithet-ca.pub"
+	printf '%s\n' '# managed enrollment fixture' > "$root/etc/ssh/sshd_config.d/60-epithet.conf"
+
+	before=$(find "$root/var/db/epithet" "$root/etc/ssh/sshd_config.d/60-epithet.conf" -type f -exec sha256 -q {} \; | sha256 -q)
+	pkg_cmd upgrade -y -r Epithet epithet
+	assert_version
+	after=$(find "$root/var/db/epithet" "$root/etc/ssh/sshd_config.d/60-epithet.conf" -type f -exec sha256 -q {} \; | sha256 -q)
+	[ "$before" = "$after" ] || {
+		echo "package upgrade changed enrolled host state" >&2
+		exit 1
+	}
+
+	pkg_cmd delete -y epithet
+	after_delete=$(find "$root/var/db/epithet" "$root/etc/ssh/sshd_config.d/60-epithet.conf" -type f -exec sha256 -q {} \; | sha256 -q)
+	[ "$before" = "$after_delete" ] || {
+		echo "package deletion changed enrolled host state" >&2
+		exit 1
+	}
+fi

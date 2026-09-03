@@ -1,0 +1,6 @@
+Epithet provides short-lived SSH certificates, per-connection SSH agents,
+and local host enrollment. The host enrollment command configures sshd to
+authorize destination-bound principals without a persistent Epithet process.
+
+This package installs only the Epithet command-line binary. It does not
+install or enable a CA, policy server, or other persistent service.

@@ -1,0 +1,12 @@
+# Installed as /usr/local/etc/epithet-pkg.conf on the repository host.
+POUDRIERE_JAIL=151amd64
+POUDRIERE_PORTS=epithet
+PORT_ORIGIN=security/epithet
+PORT_TEMPLATE=/usr/local/share/epithet-pkg/port
+PORT_DIR=/usr/local/poudriere/ports/epithet/security/epithet
+POUDRIERE_PACKAGES=/usr/local/poudriere/data/packages/151amd64-epithet
+POUDRIERE_PACKAGE_BRANCH=latest
+SOURCE_REPOSITORY=/var/db/epithet-pkg/source
+PUBLIC_ROOT=/srv/epithet-pkg
+SIGNING_KEY=/usr/local/etc/ssl/keys/epithet-pkg.key
+REPOSITORY_URL=https://pkg.epithet.dev
