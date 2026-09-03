@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
@@ -66,22 +65,7 @@ func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) e
 }
 
 func readHostID(path string) (hostid.ID, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("reading host ID %s: %w", path, err)
-	}
-	text := string(data)
-	if strings.HasSuffix(text, "\n") {
-		text = strings.TrimSuffix(text, "\n")
-	}
-	if strings.ContainsAny(text, "\r\n") {
-		return "", fmt.Errorf("host ID %s must contain exactly one line", path)
-	}
-	id, err := hostid.Parse(text)
-	if err != nil {
-		return "", fmt.Errorf("parsing host ID %s: %w", path, err)
-	}
-	return id, nil
+	return hostid.ReadFile(path)
 }
 
 func validateLiteralPrincipal(account string) error {
