@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
 )
@@ -29,12 +30,16 @@ type ServerCLI struct {
 	// Policy flags threaded through to the policy subprocess. The
 	// subprocess re-runs Kong against the same --config, so these are
 	// only needed when configuring via flags rather than a config file.
-	PolicyFile string            `help:"Path to the writ policy file" name:"policy-file"`
-	Inventory  []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
-	Extension  map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
+	PolicyFile    string            `help:"Path to the writ policy file" name:"policy-file"`
+	Inventory     []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
+	Extension     map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
+	PrincipalMode string            `help:"Default SSH certificate principal mode" name:"principal-mode"`
 }
 
 func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
+	if err := inventory.PrincipalMode(c.PrincipalMode).Validate(); err != nil {
+		return err
+	}
 	caKeyPath := c.CAKey
 
 	// Read CA private key and derive the public key so the policy
@@ -76,6 +81,9 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 	for _, inv := range c.Inventory {
 		policyArgs = append(policyArgs, "--inventory", inv)
+	}
+	if c.PrincipalMode != "" {
+		policyArgs = append(policyArgs, "--principal-mode", c.PrincipalMode)
 	}
 	for name, value := range c.Extension {
 		policyArgs = append(policyArgs, "--extension", name+"="+value)

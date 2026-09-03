@@ -37,6 +37,8 @@ hosts:
     labels: {env: ci, ephemeral: "true"}
 `
 
+const identityKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S host-comment"
+
 func loadBasic(t *testing.T) *Static {
 	t.Helper()
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", basicInventory)})
@@ -98,6 +100,82 @@ func TestPatternSynthesizesHost(t *testing.T) {
 	require.Equal(t, "ci-runner-42.internal", h.Policy.Name, "synthesized host adopts the requested name")
 	require.Equal(t, "ci", h.Policy.Labels["env"])
 	require.Nil(t, h.Policy.Accounts)
+}
+
+func TestHashedDefaultRequiresAndLoadsExactHostIdentityKey(t *testing.T) {
+	src := "hosts:\n  - name: prod-1\n    identity-key: " + identityKey + "\n"
+	s, err := NewStatic(
+		[]string{writeInv(t, "inv.yaml", src)},
+		WithDefaultPrincipalMode(HashedPrincipals))
+	require.NoError(t, err)
+
+	h, err := s.LookupHost(context.Background(), "prod-1")
+	require.NoError(t, err)
+	require.Equal(t, HashedPrincipals, h.PrincipalMode)
+	require.NotNil(t, h.IdentityKey)
+}
+
+func TestPatternCanFallBackFromHashedDefault(t *testing.T) {
+	src := `
+hosts:
+  - pattern: "ci-*"
+    principal-mode: account-name-principals
+    accounts: [ubuntu]
+`
+	s, err := NewStatic(
+		[]string{writeInv(t, "inv.yaml", src)},
+		WithDefaultPrincipalMode(HashedPrincipals))
+	require.NoError(t, err)
+
+	h, err := s.LookupHost(context.Background(), "ci-42")
+	require.NoError(t, err)
+	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
+	require.Equal(t, []string{"ubuntu"}, h.Policy.Accounts)
+	require.Nil(t, h.IdentityKey)
+}
+
+func TestExactHostCanFallBackFromHashedDefault(t *testing.T) {
+	src := `
+hosts:
+  - name: legacy-1
+    principal-mode: account-name-principals
+`
+	s, err := NewStatic(
+		[]string{writeInv(t, "inv.yaml", src)},
+		WithDefaultPrincipalMode(HashedPrincipals))
+	require.NoError(t, err)
+
+	h, err := s.LookupHost(context.Background(), "legacy-1")
+	require.NoError(t, err)
+	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
+}
+
+func TestHashedExactHostWithoutIdentityKeyIsError(t *testing.T) {
+	src := "hosts:\n  - name: prod-1\n"
+	_, err := NewStatic(
+		[]string{writeInv(t, "inv.yaml", src)},
+		WithDefaultPrincipalMode(HashedPrincipals))
+	require.ErrorContains(t, err, "has no identity-key")
+}
+
+func TestHashedPatternIsErrorInStaticInventory(t *testing.T) {
+	src := "hosts:\n  - pattern: 'prod-*'\n"
+	_, err := NewStatic(
+		[]string{writeInv(t, "inv.yaml", src)},
+		WithDefaultPrincipalMode(HashedPrincipals))
+	require.ErrorContains(t, err, "cannot use hashed-principals")
+}
+
+func TestPatternWithSharedIdentityKeyIsError(t *testing.T) {
+	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name-principals\n    identity-key: " + identityKey + "\n"
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.ErrorContains(t, err, "cannot specify one shared identity-key")
+}
+
+func TestUnknownPrincipalModeIsError(t *testing.T) {
+	src := "hosts:\n  - name: prod-1\n    principal-mode: mystery\n"
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
 }
 
 func TestUnknownHostIsNilNil(t *testing.T) {

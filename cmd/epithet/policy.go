@@ -44,6 +44,8 @@ type PolicyServerCLI struct {
 
 	Inventory []string `help:"Inventory file path or glob (repeatable)" name:"inventory"`
 
+	PrincipalMode string `help:"Default SSH certificate principal mode" name:"principal-mode" default:"account-name-principals" enum:"account-name-principals,hashed-principals"`
+
 	Extension map[string]string `help:"Certificate extension for issued certs (name=value, repeatable; default permit-pty, permit-agent-forwarding, permit-user-rc)" name:"extension"`
 
 	DefaultExpiration string `help:"Default certificate expiration when no rule sets a ttl (e.g., 5m)" name:"default-expiration"`
@@ -161,7 +163,8 @@ func (c *PolicyServerCLI) buildEvaluator(logger *slog.Logger) (*writpolicy.Evalu
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("no inventory files match %s", strings.Join(c.Inventory, ", "))
 	}
-	inv, err := inventory.NewStatic(paths)
+	inv, err := inventory.NewStatic(paths,
+		inventory.WithDefaultPrincipalMode(inventory.PrincipalMode(c.PrincipalMode)))
 	if err != nil {
 		return nil, err
 	}

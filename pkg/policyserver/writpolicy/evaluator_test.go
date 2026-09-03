@@ -14,7 +14,10 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
+
+const evaluatorIdentityKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S host-comment"
 
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
@@ -65,6 +68,44 @@ func TestIssueMapsToCertParams(t *testing.T) {
 	require.Equal(t, expiry, resp.CertParams.NotAfter, "cert clamped to token expiry")
 	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration, "deployment default TTL")
 	require.Contains(t, resp.CertParams.Extensions, "permit-pty")
+}
+
+func TestIssueDerivesHashedPrincipal(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	inv := testInv()
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(evaluatorIdentityKey))
+	require.NoError(t, err)
+	inv.hosts["prod-db-1"].PrincipalMode = inventory.HashedPrincipals
+	inv.hosts["prod-db-1"].IdentityKey = key
+	e := NewForTesting(pol, inv)
+
+	resp, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{"epithet-principal-v1-HcwzCGITHSEX6igxojnaiOsRzW_khMOLrWbxlFGaFe8"},
+		resp.CertParams.Names)
+}
+
+func TestIssueHashedPrincipalWithoutIdentityKeyFailsClosed(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	inv := testInv()
+	inv.hosts["prod-db-1"].PrincipalMode = inventory.HashedPrincipals
+	e := NewForTesting(pol, inv)
+
+	_, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
+	require.ErrorContains(t, err, "host public key is required")
+	var perr *wire.PolicyError
+	require.False(t, errors.As(err, &perr), "issuance configuration errors are 500s, not policy denials")
+}
+
+func TestIssueUnknownPrincipalModeFailsClosed(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	inv := testInv()
+	inv.hosts["prod-db-1"].PrincipalMode = "mystery"
+	e := NewForTesting(pol, inv)
+
+	_, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
+	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
 }
 
 func TestRuleTTLOverridesDefault(t *testing.T) {

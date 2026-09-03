@@ -11,6 +11,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
@@ -116,18 +117,19 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 
 	switch decision.Outcome {
 	case eval.Issue:
-		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		ttl := decision.TTL
 		if ttl == 0 {
 			ttl = e.opts.DefaultTTL
 		}
+		names, err := certificatePrincipals(host, conn.RemoteUser)
+		if err != nil {
+			return nil, err
+		}
+		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		return &wire.PolicyResponse{
 			CertParams: wire.CertParams{
-				Identity: identity,
-				// Compatibility profile: this account-name principal is not
-				// destination-bound. Enterprise will derive a principal from the
-				// enrolled host identity key and requested account name.
-				Names:      []string{conn.RemoteUser},
+				Identity:   identity,
+				Names:      names,
 				Expiration: ttl,
 				Extensions: e.opts.Extensions,
 				NotAfter:   tokenExpiry,
@@ -146,6 +148,27 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 		}
 		return nil, policyserver.Forbidden(fmt.Sprintf("%s is not authorized for %s@%s: %s",
 			identity, conn.RemoteUser, conn.RemoteHost, detail))
+	}
+}
+
+func certificatePrincipals(host *inventory.ResolvedHost, account string) ([]string, error) {
+	if host == nil {
+		return nil, fmt.Errorf("cannot issue a certificate for an unresolved host")
+	}
+	if err := host.PrincipalMode.Validate(); err != nil {
+		return nil, fmt.Errorf("host %q: %w", host.Policy.Name, err)
+	}
+	switch host.PrincipalMode.Effective() {
+	case inventory.AccountNamePrincipals:
+		return []string{account}, nil
+	case inventory.HashedPrincipals:
+		name, err := principal.DeriveV1(host.IdentityKey, account)
+		if err != nil {
+			return nil, fmt.Errorf("deriving principal for %s@%s: %w", account, host.Policy.Name, err)
+		}
+		return []string{name}, nil
+	default:
+		panic("validated principal mode was not handled")
 	}
 }
 

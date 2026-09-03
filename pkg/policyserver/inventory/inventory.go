@@ -8,16 +8,55 @@ package inventory
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
+	"golang.org/x/crypto/ssh"
 )
+
+// PrincipalMode selects how an allowed account@host tuple is represented in
+// an issued SSH certificate.
+type PrincipalMode string
+
+const (
+	// AccountNamePrincipals places the literal requested account name in the
+	// certificate. It is compatible with ordinary OpenSSH CA configuration but
+	// is not destination-bound.
+	AccountNamePrincipals PrincipalMode = "account-name-principals"
+
+	// HashedPrincipals derives a destination-bound principal from the host
+	// identity public key and requested account name.
+	HashedPrincipals PrincipalMode = "hashed-principals"
+)
+
+// Validate rejects unknown non-empty principal modes. Empty is the zero-value
+// spelling of AccountNamePrincipals for compatibility with custom inventory
+// implementations constructed in Go.
+func (m PrincipalMode) Validate() error {
+	switch m {
+	case "", AccountNamePrincipals, HashedPrincipals:
+		return nil
+	default:
+		return fmt.Errorf("unknown principal mode %q", m)
+	}
+}
+
+// Effective returns the concrete mode represented by m.
+func (m PrincipalMode) Effective() PrincipalMode {
+	if m == "" {
+		return AccountNamePrincipals
+	}
+	return m
+}
 
 // ResolvedHost carries both the host attributes consumed by Writ and, as the
 // inventory grows, issuance metadata that must remain outside the pure policy
 // model. Keeping those layers separate prevents certificate-construction
 // details from becoming policy-language semantics.
 type ResolvedHost struct {
-	Policy eval.Host
+	Policy        eval.Host
+	PrincipalMode PrincipalMode
+	IdentityKey   ssh.PublicKey
 }
 
 // Inventory looks up users and hosts at evaluation time.

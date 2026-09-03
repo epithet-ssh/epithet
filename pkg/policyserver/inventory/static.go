@@ -9,6 +9,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,15 +23,36 @@ import (
 // for fleets of short-lived hosts (VM pools, CI runners) that follow a
 // naming pattern but cannot be enumerated in a file.
 type Static struct {
-	users    map[string]*eval.User
-	hosts    map[string]*ResolvedHost
-	patterns []patternHost // file order; first match wins
+	users                map[string]*eval.User
+	hosts                map[string]*ResolvedHost
+	patterns             []patternHost // file order; first match wins
+	defaultPrincipalMode PrincipalMode
 }
 
 type patternHost struct {
-	pattern  string
-	labels   map[string]string
-	accounts []string
+	pattern       string
+	labels        map[string]string
+	accounts      []string
+	principalMode PrincipalMode
+}
+
+type staticOptions struct {
+	defaultPrincipalMode PrincipalMode
+}
+
+// StaticOption configures static inventory loading.
+type StaticOption func(*staticOptions) error
+
+// WithDefaultPrincipalMode sets the mode inherited by host entries that omit
+// principal-mode. The default is AccountNamePrincipals.
+func WithDefaultPrincipalMode(mode PrincipalMode) StaticOption {
+	return func(opts *staticOptions) error {
+		if err := mode.Validate(); err != nil {
+			return err
+		}
+		opts.defaultPrincipalMode = mode.Effective()
+		return nil
+	}
 }
 
 // The file format. Users use RFC 7643 field names (userName, userType,
@@ -50,23 +72,32 @@ type userEntry struct {
 }
 
 type hostEntry struct {
-	Name     string            `yaml:"name"`
-	Pattern  string            `yaml:"pattern"`
-	Labels   map[string]string `yaml:"labels"`
-	Accounts []string          `yaml:"accounts"`
+	Name          string            `yaml:"name"`
+	Pattern       string            `yaml:"pattern"`
+	Labels        map[string]string `yaml:"labels"`
+	Accounts      []string          `yaml:"accounts"`
+	PrincipalMode PrincipalMode     `yaml:"principal-mode"`
+	IdentityKey   string            `yaml:"identity-key"`
 }
 
 // NewStatic loads an inventory from one or more YAML files. Files
 // concatenate; a duplicate userName or exact host name across the set
 // is a load error. Decoding is strict — an unknown field is an error,
 // not a silently ignored typo.
-func NewStatic(paths []string) (*Static, error) {
+func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("at least one inventory file is required")
 	}
+	opts := staticOptions{defaultPrincipalMode: AccountNamePrincipals}
+	for _, option := range options {
+		if err := option(&opts); err != nil {
+			return nil, fmt.Errorf("configuring static inventory: %w", err)
+		}
+	}
 	s := &Static{
-		users: map[string]*eval.User{},
-		hosts: map[string]*ResolvedHost{},
+		users:                map[string]*eval.User{},
+		hosts:                map[string]*ResolvedHost{},
+		defaultPrincipalMode: opts.defaultPrincipalMode,
 	}
 	for _, path := range paths {
 		if err := s.loadFile(path); err != nil {
@@ -102,6 +133,10 @@ func (s *Static) loadFile(path string) error {
 		}
 	}
 	for i, h := range doc.Hosts {
+		mode, err := s.resolvePrincipalMode(h.PrincipalMode)
+		if err != nil {
+			return fmt.Errorf("%s: hosts[%d]: %w", path, i, err)
+		}
 		switch {
 		case h.Name != "" && h.Pattern != "":
 			return fmt.Errorf("%s: hosts[%d] has both name and pattern — pick one", path, i)
@@ -112,12 +147,30 @@ func (s *Static) loadFile(path string) error {
 			if _, ok := s.hosts[name]; ok {
 				return fmt.Errorf("%s: duplicate host %q", path, name)
 			}
-			s.hosts[name] = &ResolvedHost{Policy: eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts}}
+			identityKey, err := parseIdentityKey(h.IdentityKey)
+			if err != nil {
+				return fmt.Errorf("%s: hosts[%d] identity-key: %w", path, i, err)
+			}
+			if mode == HashedPrincipals && identityKey == nil {
+				return fmt.Errorf("%s: hosts[%d] %q uses %s but has no identity-key", path, i, name, HashedPrincipals)
+			}
+			s.hosts[name] = &ResolvedHost{
+				Policy:        eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts},
+				PrincipalMode: mode,
+				IdentityKey:   identityKey,
+			}
 		case h.Pattern != "":
+			if h.IdentityKey != "" {
+				return fmt.Errorf("%s: hosts[%d] pattern %q cannot specify one shared identity-key", path, i, h.Pattern)
+			}
+			if mode == HashedPrincipals {
+				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use %s in static inventory", path, i, h.Pattern, HashedPrincipals)
+			}
 			s.patterns = append(s.patterns, patternHost{
-				pattern:  il.HostName(h.Pattern),
-				labels:   h.Labels,
-				accounts: h.Accounts,
+				pattern:       il.HostName(h.Pattern),
+				labels:        h.Labels,
+				accounts:      h.Accounts,
+				principalMode: mode,
 			})
 		default:
 			return fmt.Errorf("%s: hosts[%d] has neither name nor pattern", path, i)
@@ -139,10 +192,43 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, erro
 	}
 	for _, p := range s.patterns {
 		if eval.GlobMatch(p.pattern, name) {
-			return &ResolvedHost{Policy: eval.Host{Name: name, Labels: p.labels, Accounts: p.accounts}}, nil
+			return &ResolvedHost{
+				Policy:        eval.Host{Name: name, Labels: p.labels, Accounts: p.accounts},
+				PrincipalMode: p.principalMode,
+			}, nil
 		}
 	}
 	return nil, nil
+}
+
+func (s *Static) resolvePrincipalMode(override PrincipalMode) (PrincipalMode, error) {
+	if err := override.Validate(); err != nil {
+		return "", err
+	}
+	if override == "" {
+		return s.defaultPrincipalMode, nil
+	}
+	return override, nil
+}
+
+func parseIdentityKey(raw string) (ssh.PublicKey, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	key, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parsing SSH public key: %w", err)
+	}
+	if len(options) != 0 {
+		return nil, fmt.Errorf("SSH public key contains authorized_keys options")
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("expected exactly one SSH public key")
+	}
+	if _, ok := key.(*ssh.Certificate); ok {
+		return nil, fmt.Errorf("SSH certificate is not a host identity public key")
+	}
+	return key, nil
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an
