@@ -432,7 +432,7 @@ func renderSSHDFragment(settings *sshdSettings, hostIDPath, caKeyPath, goos stri
 	fmt.Fprintf(&b, "# ca-pubkey-file: %s\n", caToken)
 	fmt.Fprintf(&b, "TrustedUserCAKeys %s\n", caToken)
 	if settings.principalMode == principal.SchemeV1 {
-		binaryToken, err := quoteSSHDToken(escapeSSHDPercent(normalizeSSHDPath(settings.epithetBinary, goos)))
+		binaryToken, err := escapeSSHDCommandPath(escapeSSHDPercent(normalizeSSHDPath(settings.epithetBinary, goos)))
 		if err != nil {
 			return nil, fmt.Errorf("rendering epithet executable path: %w", err)
 		}
@@ -515,6 +515,28 @@ func normalizeSSHDPath(path, goos string) string {
 
 func escapeSSHDPercent(value string) string {
 	return strings.ReplaceAll(value, "%", "%%")
+}
+
+// escapeSSHDCommandPath leaves the leading slash visible because OpenSSH
+// validates AuthorizedPrincipalsCommand as an absolute path before it splits
+// the command into arguments. Quoting the entire path would make the first
+// character a quote and fail validation. Backslash escapes preserve paths that
+// contain spaces or other sshd_config token delimiters.
+func escapeSSHDCommandPath(value string) (string, error) {
+	if !strings.HasPrefix(value, "/") {
+		return "", fmt.Errorf("command is not an absolute path")
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if r < ' ' || r == 0x7f {
+			return "", fmt.Errorf("value contains a control character")
+		}
+		if r == ' ' || r == '\\' || r == '\'' || r == '"' || r == '#' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String(), nil
 }
 
 func validateSSHDValue(value string) error {

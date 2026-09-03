@@ -117,9 +117,12 @@ func TestRenderSSHDFragmentDestinationBound(t *testing.T) {
 # host-id-file: "/var/lib/epithet/host-id"
 # ca-pubkey-file: "/var/lib/epithet/epithet-ca.pub"
 TrustedUserCAKeys "/var/lib/epithet/epithet-ca.pub"
-AuthorizedPrincipalsCommand "/opt/Epithet Bin/epithet" host authorized-principals --host-id-file "/var/lib/epithet/host-id" %u
+AuthorizedPrincipalsCommand /opt/Epithet\ Bin/epithet host authorized-principals --host-id-file "/var/lib/epithet/host-id" %u
 AuthorizedPrincipalsCommandUser nobody
 `, string(got))
+	commandLine := strings.Split(string(got), "\n")[5]
+	require.True(t, strings.HasPrefix(commandLine, "AuthorizedPrincipalsCommand /"),
+		"OpenSSH requires the command value itself to begin with an absolute path")
 }
 
 func TestRenderSSHDFragmentAccountNameOmitsPrincipalCommand(t *testing.T) {
@@ -138,8 +141,13 @@ func TestRenderSSHDFragmentEscapesPercentTokensInPaths(t *testing.T) {
 	}
 	got, err := renderSSHDFragment(settings, "/state/%h/host-id", "/state/epithet-ca.pub", "linux")
 	require.NoError(t, err)
-	require.Contains(t, string(got), `"/opt/%%d/epithet"`)
+	require.Contains(t, string(got), `/opt/%%d/epithet`)
 	require.Contains(t, string(got), `"/state/%%h/host-id" %u`)
+}
+
+func TestEscapeSSHDCommandPathRejectsNonAbsolutePath(t *testing.T) {
+	_, err := escapeSSHDCommandPath("usr/local/bin/epithet")
+	require.ErrorContains(t, err, "not an absolute path")
 }
 
 func TestRenderManagedSSHDMainIsIdempotent(t *testing.T) {
