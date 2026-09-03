@@ -295,21 +295,44 @@ epithet-host-v1-...
 ```
 
 The command validates the CA response before changing local state and will not
-replace a different existing CA key. It is safe to rerun. On Linux the default
-files are `/var/lib/epithet/host-id` and
+replace a different existing CA key. It then validates the existing sshd
+configuration, validates a complete candidate configuration, installs a
+managed fragment, validates the installed configuration, and reloads sshd. If
+installation or reload fails, it restores the previous configuration. It is
+safe to rerun and does not install a persistent Epithet process. The managed
+fragment records the selected principal mode and the absolute host-ID and CA-key
+paths, so a later CA-URL-only rerun recovers nondefault state paths before it
+touches host state. If the main sshd configuration itself is nonstandard,
+repeat `--sshd-config-file` so enrollment can find that managed fragment.
+
+On Linux the default state files are `/var/lib/epithet/host-id` and
 `/var/lib/epithet/epithet-ca.pub`; the native state directory is
 `/var/db/epithet` on the BSDs, `/var/opt/epithet` on Solaris, illumos, and AIX,
 `/Library/Application Support/Epithet` on macOS, and `%ProgramData%\Epithet`
 on Windows. Use `--host-id-file` and `--ca-pubkey-file` during enrollment to
 select another layout or to support an otherwise unknown platform.
 
+The sshd defaults use `/etc/ssh/sshd_config` and
+`/etc/ssh/sshd_config.d/60-epithet.conf` on Unix-like systems, and the OpenSSH
+directory beneath `%ProgramData%` on Windows. The command reloads through the
+native service manager (`systemctl`/`service`, BSD rc, `launchctl`, SMF, AIX
+SRC, or PowerShell). Use `--sshd-config-file`, `--sshd-fragment-file`,
+`--sshd-binary`, `--epithet-binary`, or `--reload-command` with repeated
+`--reload-arg` options for a nonstandard installation.
+
 The printed host ID is the value to put in this host's static-inventory entry.
+Enrollment defaults to `epithet-principal-v1` on Unix-like hosts; pass
+`--principal-mode account-name` for a compatibility host. The selection must
+match the mode the policy server resolves for that inventory entry. Windows
+defaults to `account-name` because its in-box OpenSSH does not support
+`AuthorizedPrincipalsCommand`; destination-bound mode is rejected there.
 
 ### Destination-bound hashed principals
 
-Point sshd at the enrolled files. The authorized-principals command is entirely
-local: it hashes the canonical host ID and the account supplied as `%u`, then
-prints the one principal sshd should accept.
+The managed fragment for destination-bound mode contains the following
+configuration. The authorized-principals command is entirely local: it hashes
+the canonical host ID and the account supplied as `%u`, then prints the one
+principal sshd should accept.
 
 ```ssh_config
 TrustedUserCAKeys /var/lib/epithet/epithet-ca.pub
@@ -317,11 +340,12 @@ AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --
 AuthorizedPrincipalsCommandUser nobody
 ```
 
-The binary, host-ID file, and their parent directories must meet OpenSSH's
-ownership and permissions checks and be readable by the configured command
-user. The ID is not secret, but only root should be able to change it. Validate
-the sshd configuration before reloading it. Put the exact `epithet-host-v1-...`
-text from the file in the matching inventory entry's `host-id`.
+Enrollment verifies that the binary, host ID, CA key, and their parent
+directories remain root-controlled, and that the configured command user can
+execute the binary and read the host-ID file through every parent directory.
+The ID is not secret, but only root should be able to change it. Put the exact
+`epithet-host-v1-...` text printed by enrollment in the matching inventory
+entry's `host-id`.
 
 The host ID is independent of SSH transport keys, so routine host-key rotation
 does not change principals. Changing the host ID means enrolling a new host;
@@ -347,7 +371,14 @@ The compatibility mode names the SSH username the client requested
 as the certificate's sole principal. sshd's default principal matching is
 therefore enough, and no `AuthorizedPrincipalsFile` mapping is required.
 
-**Configure sshd** (`/etc/ssh/sshd_config`):
+Enroll the host in compatibility mode:
+
+```console
+$ sudo epithet host enroll --ca-url https://epithet.example.com/ --principal-mode account-name
+epithet-host-v1-...
+```
+
+Its managed sshd fragment only needs the trust anchor:
 
 ```ssh_config
 # Trust the epithet CA

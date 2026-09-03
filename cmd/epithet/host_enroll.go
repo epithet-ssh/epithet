@@ -19,9 +19,19 @@ import (
 
 // HostEnrollCLI bootstraps the durable local state needed to enroll a host.
 type HostEnrollCLI struct {
-	CAURL        string `name:"ca-url" help:"CA bootstrap URL" required:""`
-	HostIDFile   string `name:"host-id-file" help:"Host-ID file (default: native system state directory)"`
-	CAPubkeyFile string `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the host-ID file)"`
+	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
+	HostIDFile                      string   `name:"host-id-file" help:"Host-ID file (default: native system state directory)"`
+	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the host-ID file)"`
+	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept (default: epithet-principal-v1; account-name on Windows)" enum:"account-name,epithet-principal-v1"`
+	SSHDConfigFile                  string   `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
+	SSHDFragmentFile                string   `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
+	SSHDBinary                      string   `name:"sshd-binary" help:"sshd executable used to validate configuration"`
+	EpithetBinary                   string   `name:"epithet-binary" help:"Epithet executable written into AuthorizedPrincipalsCommand"`
+	AuthorizedPrincipalsCommandUser string   `name:"authorized-principals-command-user" help:"Unprivileged account used for AuthorizedPrincipalsCommand" default:"nobody"`
+	ReloadCommand                   string   `name:"reload-command" help:"Service reload executable (default: platform native)"`
+	ReloadArgs                      []string `name:"reload-arg" help:"Argument for --reload-command (repeatable)"`
+
+	sshdEnv *sshdEnvironment
 }
 
 type hostEnrollment struct {
@@ -45,6 +55,24 @@ func (c *HostEnrollCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error 
 }
 
 func (c *HostEnrollCLI) enroll(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config) (*hostEnrollment, error) {
+	env := c.sshdEnv
+	if env == nil {
+		env = newSystemSSHDEnvironment()
+	}
+	if err := c.adoptExistingSSHDEnrollment(env); err != nil {
+		return nil, err
+	}
+	result, err := c.enrollState(ctx, logger, tlsCfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.configureSSHD(ctx, result, env); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config) (*hostEnrollment, error) {
 	endpoint, err := caclient.ParseCAURL(c.CAURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ca-url: %w", err)

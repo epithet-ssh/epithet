@@ -154,43 +154,23 @@ FreeBSD users have a packaged rc.d service in [`contrib/freebsd`](../../contrib/
 
 ## Configuring target hosts
 
-On each target SSH server:
+Install the Epithet binary on each target SSH server, then enroll it. The local
+example uses plain HTTP, so it also needs the explicit global `--insecure`
+opt-in:
 
-### 1. Install CA public key
-
-```bash
-sudo mkdir -p /etc/ssh/ca
-sudo curl -o /etc/ssh/ca/epithet.pub http://ca-server:8080/
+```console
+$ sudo epithet --insecure host enroll --ca-url http://ca-server:8080/
+epithet-host-v1-...
 ```
 
-### 2. Configure sshd
+Enrollment downloads the CA key, creates the stable host ID, installs and
+validates a managed sshd fragment, and reloads sshd. It defaults to
+destination-bound principals.
 
-Edit `/etc/ssh/sshd_config`:
+### Destination-bound inventory
 
-```
-# Trust epithet CA for user certificates
-TrustedUserCAKeys /etc/ssh/ca/epithet.pub
-
-# Optional: Require certificate authentication
-PubkeyAuthentication yes
-AuthenticationMethods publickey
-```
-
-This uses Epithet's `account-name` compatibility mode. A certificate
-for an account can be accepted by any host in the CA trust domain with the
-same account name. Use separate CAs for separate security boundaries, or
-configure destination-bound mode below.
-
-Restart sshd:
-
-```bash
-sudo systemctl restart sshd
-```
-
-### 3. Destination-bound mode
-
-For each exact host, copy its canonical Epithet host ID into the static
-inventory and select hashed principals:
+Copy the host ID printed by enrollment into the exact host's static inventory
+entry and select the same principal mode:
 
 ```yaml
 hosts:
@@ -205,17 +185,16 @@ default. Exact hosts that inherit that default still need a `host-id`.
 Static ephemeral patterns must explicitly fall back to
 `account-name`.
 
-Install the Epithet binary on the host and add:
-
-```ssh_config
-AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --host-id-file /var/lib/epithet/host-id %u
-AuthorizedPrincipalsCommandUser nobody
-```
-
 The helper is offline and derives the accepted principal from the local host
 ID and `%u`; it does not contact the policy server. See the
 [policy server guide](../../docs/policy-server.md#target-host-configuration)
 for permissions, migration, and host-identity details.
+
+For an `account-name` compatibility host, enroll with
+`--principal-mode account-name` and configure the matching inventory override.
+That mode accepts a certificate for an account on any host in the CA trust
+domain with the same account name; use it only where that broader boundary is
+intentional.
 
 ## See also
 
