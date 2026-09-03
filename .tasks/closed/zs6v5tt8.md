@@ -3,7 +3,7 @@ yatl_version: 1
 title: Bind issued SSH certificate principals to registered host accounts
 id: zs6v5tt8
 created: 2026-08-23T14:53:16.777722Z
-updated: 2026-09-03T02:24:20.853141Z
+updated: 2026-09-03T03:26:29.135541Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -61,7 +61,7 @@ Acceptance:
 - Host aliases for one enrolled key derive the same principal.
 - A cloned host key cannot silently create a second host identity.
 - Planned and emergency host-key rotation follow the specified overlap and revocation behavior.
-- Epithet Simple continues to issue account-name principals scoped to a CA trust domain; Epithet Enterprise uses deterministic destination-bound principals.
+- Account-name compatibility remains scoped to a CA trust domain; exact static-inventory hosts can select deterministic destination-bound principals. Managed Enterprise inventory will supply the same issuance metadata through authenticated enrollment.
 
 Implementation sequence:
 1. `docs: specify destination-bound principal design` records this protocol, mode semantics, and implementation plan.
@@ -77,7 +77,7 @@ Public interfaces selected for the first implementation:
 - Offline helper: `epithet host authorized-principals`.
 - Configuration fields: `principal-mode` and `identity-key`; an omitted deployment mode preserves `account-name-principals` compatibility.
 
-Until this task is complete, documentation and the Writ specification must describe the current implementation as account@CA-trust-domain with host selectors enforced only at issuance time.
+Documentation and the Writ specification must distinguish the account-name compatibility boundary from the destination-bound hashed mode, and must not present planned managed enrollment behavior as implemented.
 
 ---
 # Log: 2026-08-23T14:53:16Z Brian McCallister
@@ -108,3 +108,13 @@ Specified SSH-string-framed epithet-principal-v1 derivation and default/per-host
 # Log: 2026-09-03T02:24:20Z Brian McCallister
 
 Added the ordered Jujutsu implementation stack and selected the public package, host command, and configuration names.
+
+---
+# Log: 2026-09-03T03:20:48Z Brian McCallister
+
+Implemented the static-inventory slice as the planned Jujutsu stack: shared v1 derivation, offline target helper with migration and rotation overlap, inventory issuance metadata, default and per-entry modes, fail-closed validation, destination-isolation integration coverage, and operator documentation. Managed enrollment, clone detection, and authoritative rotation/recovery remain tracked control-plane work, so this task stays open.
+
+---
+# Log: 2026-09-03T03:26:29Z Brian McCallister
+
+Closed: Superseded by the dependency chain p7qrspc2 -> ykn4kjq6 -> 41xjh97q -> 6ehfhp0m -> va3jrtx4; the implemented static-inventory slice is complete.

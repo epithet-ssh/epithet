@@ -80,7 +80,7 @@ The `epithet match` workflow (`pkg/broker/broker.go:MatchWithUserOutput()`) is t
 1. **Existing agent check**: If an agent socket already exists for this connection hash (`%C`) with an unexpired certificate (with a 5-second expiry buffer), allow immediately — no auth, no CA call.
 2. **Fresh certificate mint**: Otherwise, generate an ephemeral keypair, get a JWT (from cache or via OIDC), request a certificate from the CA, and start a per-connection agent serving it.
 
-Certificates are never cached or reused across connections — every mint past the fast path is a fresh policy decision naming exactly the requested principal. A background sweep deletes expired agent sockets every 30 seconds.
+Certificates are never cached or reused across connections — every mint past the fast path is a fresh policy decision naming one principal for the requested account/host tuple. A background sweep deletes expired agent sockets every 30 seconds.
 
 ## Command structure
 
@@ -181,7 +181,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 5. Broker requests a certificate from the CA, sending the JWT and connection details
 6. CA authenticates itself to the policy server with a service JWT and forwards the user's JWT and connection details unvalidated
 7. Policy server validates the user's JWT (JWKS, issuer, audience, expiry), evaluates policy: "can this identity access this host as this exact requested user right now?"
-8. Policy server returns `CertParams` — identity, principals (exactly the requested user), expiration, `NotAfter`, extensions
+8. Policy server returns `CertParams` — identity, one account-name or destination-bound principal according to the resolved host's mode, expiration, `NotAfter`, extensions
 9. CA signs a certificate clamped to `min(now + expiration, NotAfter)` and returns it
 10. Broker starts (or reuses) a per-connection agent socket serving this certificate
 11. OpenSSH uses the certificate from the agent socket to establish the connection

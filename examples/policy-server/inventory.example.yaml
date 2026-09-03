@@ -23,6 +23,10 @@ hosts:
   # Exact entries: one host each. Names are matched case-insensitively.
   - name: prod-web-1.example.com
     labels: {env: prod, role: web}
+    # For destination binding, set principal-mode: hashed-principals and copy
+    # this host's designated public key into identity-key as one quoted line:
+    # principal-mode: hashed-principals
+    # identity-key: "ssh-ed25519 AAAA..."
   - name: prod-db-1.example.com
     labels: {env: prod, role: db}
     # Optional account grounding: certs are only issuable for accounts
@@ -35,3 +39,6 @@ hosts:
   # writ globs (* and ? only; * crosses dots).
   - pattern: "dev-*.example.com"
     labels: {env: dev}
+    # Required fallback if the deployment default is hashed-principals. A
+    # static pattern cannot safely share one host identity key.
+    principal-mode: account-name-principals

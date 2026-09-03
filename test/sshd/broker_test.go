@@ -51,9 +51,10 @@ type fullStack struct {
 // oidc.Validator against idp + a real evaluator - not a stub that approves
 // everything), and a real broker, then starts an sshd fixture. The policy
 // authorizes the current OS user - the account ssh will actually connect as
-// - on any host; the real evaluator's current compatibility profile carries
-// only that account-name principal on the issued certificate, so the sshd
-// fixture's AuthorizedPrincipalsFile is written to match (test/sshd/sshd.go).
+// - on any host; this fixture selects the evaluator's default compatibility
+// mode, which carries only that account-name principal on the certificate.
+// The sshd fixture's AuthorizedPrincipalsFile is written to match
+// (test/sshd/sshd.go).
 func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	t.Helper()
 	logger := testLogger(t)
@@ -72,7 +73,8 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	require.NoError(t, err)
 
 	// The policy authorizes the current OS user's account on any host; the
-	// compatibility profile carries that account name as the cert principal.
+	// default compatibility mode carries that account name as the cert
+	// principal.
 	policySrc := fmt.Sprintf("allow id:%q -> %q@*\n", oidctest.TokenEmail, currentUser.Username)
 	pol, diags := writ.Load(policySrc)
 	require.NotNil(t, pol, "policy failed to load: %v", diags)

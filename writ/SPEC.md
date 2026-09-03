@@ -82,45 +82,23 @@ A policy reference to a duplicated group `displayName` matches the
 union; sync warns loudly and points at the IdP as the thing to fix.
 
 **Hosts** resolve through the configured inventory. A resolved host has a
-unique `name`, a `map[string]string` of labels (k8s-style), and an optional
-list of local account names. The static inventory supports exact host entries
+unique `name`, a `map[string]string` of labels (k8s-style), an optional list of
+local account names. An inventory implementation may carry other host data,
+but Writ does not observe it. The static inventory supports exact host entries
 and ordered name patterns for ephemeral fleets. Policy matches resolved hosts
 by name (globs allowed), or by label selector `{k=v, ...}` (entries AND).
-Epithet Enterprise additionally binds canonical hostnames and aliases to an
-enrolled, designated sshd host identity key; enrollment is a control-plane
-operation, not a policy-language feature.
 
 **Accounts** are byte-exact local login names. If a resolved host supplies an
 account list, matching is **inventory-grounded**: the requested account must
 be present, and even `*` or a glob cannot bypass the list. If the account list
 is absent, rules match the requested account name directly. Account existence
-is ultimately enforced by sshd; principal derivation does not require a host
-agent or synchronized per-account inventory.
+is ultimately enforced by the target host's login system, not by Writ.
 
-The allowed `(account, host)` tuple is encoded into an SSH certificate
-according to the deployment profile:
-
-- **Epithet Simple**, which is the current implementation, puts the requested
-  account name in the certificate. This does **not** enforce the host position
-  at certificate-validation time. A rule effectively authorizes
-  `account@CA-trust-domain`; the requested host is only an issuance-time
-  condition, and any host trusting the CA may accept the credential for the
-  same account name. Implementations must disclose this limitation and must
-  not describe the credential as destination-bound.
-- **Epithet Enterprise**, which is planned but not yet implemented, derives a
-  versioned, domain-separated principal from the enrolled host's canonical SSH
-  public-key blob and the byte-exact account name. The policy server derives it
-  after authorization, and an offline `AuthorizedPrincipalsCommand` on the
-  host derives the same value from its designated host key and target account.
-  Different host keys therefore produce different principals for `root`, so a
-  certificate issued for `root@dev-1` is rejected by `prod-1`. This design has
-  no per-account principal registry, mapping API, or correctness-critical
-  inventory synchronization.
-
-Enterprise host enrollment, hostname binding, cloned-key detection, and
-host-key rotation and recovery are part of the security boundary. Their
-authentication, authorization, audit, and recovery semantics belong to the
-server protocol and cannot be weakened by policy text.
+Writ stops at the authorization decision for the human-readable
+`(identity, account, host)` tuple. It does not define SSH certificate principal
+encoding, host identity enrollment, or key-rotation protocols. Those belong
+to the policy server and its surrounding control plane and cannot be changed
+by policy text.
 
 **Requirements** (`require`) are named async facts — `oncall`, `mfa`,
 `approval` — resolved by registered handlers. A name in policy is a

@@ -86,7 +86,7 @@ paths:
         1. Verify the CA's service JWT (see Security)
         2. Validate the user's token (JWT: signature, issuer, audience, expiry)
         3. Check authorization (can this identity access this host as the requested user?)
-        4. Set principals (exactly the one requested user), expiration, notAfter, and extensions
+        4. Set exactly one principal, encoding the requested user according to the resolved host's mode, plus expiration, notAfter, and extensions
 
       security:
         - ServiceJWT: []
@@ -236,9 +236,9 @@ components:
         remoteUser:
           type: string
           description: |
-            Target username on remote server (OpenSSH %r) - the single principal
-            being requested. The issued certificate, if approved, names exactly
-            this principal and no others.
+            Target username on remote server (OpenSSH %r). The policy server
+            authorizes this account and encodes it as the certificate's one
+            principal according to the resolved host's principal mode.
           example: "deploy"
 
         port:
@@ -288,11 +288,12 @@ components:
           type: array
           description: |
             The certificate's principals. Epithet's own evaluator always
-            returns exactly one entry — the requested connection.remoteUser —
-            since certificates are minted per connection and never cached or
-            reused across a different host/user pair. A custom policy server
-            may return more, but epithet's client-side code never relies on
-            more than the one it asked for.
+            returns exactly one entry: either connection.remoteUser or its
+            destination-bound derivation, according to the resolved host's
+            mode. Certificates are minted per connection and never reused
+            across a different host/user pair. A custom policy server may
+            return more, but epithet's client-side code never relies on more
+            than the one it asked for.
           items:
             type: string
           example: ["deploy"]

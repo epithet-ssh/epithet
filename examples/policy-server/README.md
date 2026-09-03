@@ -44,6 +44,8 @@ policy:
   policy-file: ./policy.writ
   inventory:
     - ./inventory.yaml
+  # Compatibility default. See "Destination-bound mode" below before changing.
+  principal-mode: account-name-principals
 ```
 
 ### 3. Start the services
@@ -174,35 +176,46 @@ PubkeyAuthentication yes
 AuthenticationMethods publickey
 ```
 
+This uses Epithet's `account-name-principals` compatibility mode. A certificate
+for an account can be accepted by any host in the CA trust domain with the
+same account name. Use separate CAs for separate security boundaries, or
+configure destination-bound mode below.
+
 Restart sshd:
 
 ```bash
 sudo systemctl restart sshd
 ```
 
-### 3. (Optional) add AuthorizedPrincipalsCommand
+### 3. Destination-bound mode
 
-For additional host-side validation:
+For each exact host, copy its designated sshd public key into the static
+inventory and select hashed principals:
 
-```bash
-# Create a script that validates principals
-sudo tee /usr/local/bin/check-principals.sh > /dev/null << 'EOF'
-#!/bin/bash
-# Check if the principal matches the local username
-if [ "$1" = "$(whoami)" ]; then
-  echo "$1"
-fi
-EOF
-
-sudo chmod +x /usr/local/bin/check-principals.sh
+```yaml
+hosts:
+  - name: prod-web-1.example.com
+    labels: {env: prod, role: web}
+    principal-mode: hashed-principals
+    identity-key: "ssh-ed25519 AAAA..."
 ```
 
-Add to `/etc/ssh/sshd_config`:
+Set `policy.principal-mode: hashed-principals` to make this the deployment
+default. Exact hosts that inherit that default still need an `identity-key`.
+Static ephemeral patterns must explicitly fall back to
+`account-name-principals`.
 
-```
-AuthorizedPrincipalsCommand /usr/local/bin/check-principals.sh %u
+Install the Epithet binary on the host and add:
+
+```ssh_config
+AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --host-key /etc/ssh/ssh_host_ed25519_key.pub %u
 AuthorizedPrincipalsCommandUser nobody
 ```
+
+The helper is offline and derives the accepted principal from the local
+public key and `%u`; it does not contact the policy server. See the
+[policy server guide](../../docs/policy-server.md#target-host-configuration)
+for permissions, migration, and host-key rotation details.
 
 ## See also
 

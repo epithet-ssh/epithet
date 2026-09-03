@@ -3,7 +3,7 @@ yatl_version: 1
 title: Implement host enrollment and destination trust
 id: mvnn9qry
 created: 2026-08-23T17:27:15.170420Z
-updated: 2026-08-23T18:59:56.910491Z
+updated: 2026-09-03T03:26:32.897980Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -109,3 +109,8 @@ Recorded enrollment admission design: default-closed manual windows, bounded eph
 # Log: 2026-08-23T18:59:56Z Brian McCallister
 
 Revised host design: one-shot enrollment plus offline deterministic AuthorizedPrincipalsCommand; no persistent host agent, per-account mapping state, or correctness-critical scheduler.
+
+---
+# Log: 2026-09-03T03:26:32Z Brian McCallister
+
+Closed: Superseded by the managed-control-plane dependency chain 548x7rsk -> vpcj6szt -> v6hz0x82 -> 0rm7n86c -> 508fj5h3 -> b7pbqbss.

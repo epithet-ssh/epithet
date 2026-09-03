@@ -60,6 +60,7 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 
 - [Architecture](docs/architecture.md) - How epithet works under the hood
 - [Policy Server Guide](docs/policy-server.md) - Setup and configuration for the policy server
+- [Destination-bound Principals](docs/principals.md) - Interoperable principal derivation protocol
 - [Authentication](docs/authentication.md) - The OIDC token contract and in-process auth flow
 - [OIDC Setup](docs/oidc-setup.md) - Provider-specific OIDC configuration (Google, Okta, Azure AD)
 - [Releasing](docs/RELEASING.md) - Notes on cutting releases

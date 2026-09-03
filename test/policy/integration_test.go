@@ -112,8 +112,8 @@ func doPolicyRequest(t *testing.T, handler http.Handler, sign func(*http.Request
 // path (real JWT signed by a real IdP, real discovery/JWKS fetch, real
 // evaluator) end to end: a valid token for an authorized user/host/principal
 // combination gets a 200 with cert params clamped to the token's own expiry
-// and naming exactly the requested principal - never a union of everything
-// the user's tags could reach.
+// and naming exactly the requested account in the default principal mode -
+// never a union of everything the user's tags could reach.
 //
 // The token is minted with a 2m lifetime, deliberately distinct from the
 // policy's own "defaults.expiration: 5m" (see newIntegrationHandler): if
