@@ -23,7 +23,7 @@ import (
 // naming pattern but cannot be enumerated in a file.
 type Static struct {
 	users    map[string]*eval.User
-	hosts    map[string]*eval.Host
+	hosts    map[string]*ResolvedHost
 	patterns []patternHost // file order; first match wins
 }
 
@@ -66,7 +66,7 @@ func NewStatic(paths []string) (*Static, error) {
 	}
 	s := &Static{
 		users: map[string]*eval.User{},
-		hosts: map[string]*eval.Host{},
+		hosts: map[string]*ResolvedHost{},
 	}
 	for _, path := range paths {
 		if err := s.loadFile(path); err != nil {
@@ -112,7 +112,7 @@ func (s *Static) loadFile(path string) error {
 			if _, ok := s.hosts[name]; ok {
 				return fmt.Errorf("%s: duplicate host %q", path, name)
 			}
-			s.hosts[name] = &eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts}
+			s.hosts[name] = &ResolvedHost{Policy: eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts}}
 		case h.Pattern != "":
 			s.patterns = append(s.patterns, patternHost{
 				pattern:  il.HostName(h.Pattern),
@@ -133,13 +133,13 @@ func (s *Static) LookupUser(_ context.Context, identity string) (*eval.User, err
 
 // LookupHost implements Inventory: exact entries first, then pattern
 // entries in file order, first match wins.
-func (s *Static) LookupHost(_ context.Context, name string) (*eval.Host, error) {
+func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, error) {
 	if h, ok := s.hosts[name]; ok {
 		return h, nil
 	}
 	for _, p := range s.patterns {
 		if eval.GlobMatch(p.pattern, name) {
-			return &eval.Host{Name: name, Labels: p.labels, Accounts: p.accounts}, nil
+			return &ResolvedHost{Policy: eval.Host{Name: name, Labels: p.labels, Accounts: p.accounts}}, nil
 		}
 	}
 	return nil, nil

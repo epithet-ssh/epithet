@@ -102,7 +102,11 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 		return nil, fmt.Errorf("looking up host: %w", err)
 	}
 
-	req := eval.Request{User: user, Host: host, Account: conn.RemoteUser}
+	var policyHost *eval.Host
+	if host != nil {
+		policyHost = &host.Policy
+	}
+	req := eval.Request{User: user, Host: policyHost, Account: conn.RemoteUser}
 	decision, err := eval.Decide(e.pol, req, e.opts.Clock(),
 		e.flagResolver(ctx),
 		e.factResolver(ctx, req, conn))
@@ -119,7 +123,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry t
 		}
 		return &wire.PolicyResponse{
 			CertParams: wire.CertParams{
-				Identity:   identity,
+				Identity: identity,
 				// Compatibility profile: this account-name principal is not
 				// destination-bound. Enterprise will derive a principal from the
 				// enrolled host identity key and requested account name.

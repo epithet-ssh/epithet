@@ -12,6 +12,14 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 )
 
+// ResolvedHost carries both the host attributes consumed by Writ and, as the
+// inventory grows, issuance metadata that must remain outside the pure policy
+// model. Keeping those layers separate prevents certificate-construction
+// details from becoming policy-language semantics.
+type ResolvedHost struct {
+	Policy eval.Host
+}
+
 // Inventory looks up users and hosts at evaluation time.
 //
 // A (nil, nil) return means "no such entity" — a structural non-match
@@ -27,5 +35,5 @@ type Inventory interface {
 	// LookupHost resolves a requested host name. Callers must pass the
 	// name through il.HostName first; implementations may synthesize a
 	// host for names they can derive attributes for.
-	LookupHost(ctx context.Context, name string) (*eval.Host, error)
+	LookupHost(ctx context.Context, name string) (*ResolvedHost, error)
 }

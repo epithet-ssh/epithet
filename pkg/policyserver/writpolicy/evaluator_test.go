@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
@@ -18,7 +19,7 @@ import (
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
 	users map[string]*eval.User
-	hosts map[string]*eval.Host
+	hosts map[string]*inventory.ResolvedHost
 	err   error
 }
 
@@ -26,7 +27,7 @@ func (f *fakeInv) LookupUser(_ context.Context, identity string) (*eval.User, er
 	return f.users[identity], f.err
 }
 
-func (f *fakeInv) LookupHost(_ context.Context, name string) (*eval.Host, error) {
+func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, error) {
 	return f.hosts[name], f.err
 }
 
@@ -35,8 +36,8 @@ func testInv() *fakeInv {
 		users: map[string]*eval.User{
 			"alice@example.com": {ID: "alice@example.com", Active: true, Groups: []string{"SRE"}, Type: "employee"},
 		},
-		hosts: map[string]*eval.Host{
-			"prod-db-1": {Name: "prod-db-1", Labels: map[string]string{"env": "prod"}},
+		hosts: map[string]*inventory.ResolvedHost{
+			"prod-db-1": {Policy: eval.Host{Name: "prod-db-1", Labels: map[string]string{"env": "prod"}}},
 		},
 	}
 }

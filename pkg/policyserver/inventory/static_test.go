@@ -77,9 +77,9 @@ func TestExactHostLowercasedAtLoad(t *testing.T) {
 	h, err := s.LookupHost(context.Background(), "prod-db-1")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Equal(t, "prod-db-1", h.Name)
-	require.Equal(t, map[string]string{"env": "prod", "role": "db"}, h.Labels)
-	require.Equal(t, []string{"root", "postgres"}, h.Accounts)
+	require.Equal(t, "prod-db-1", h.Policy.Name)
+	require.Equal(t, map[string]string{"env": "prod", "role": "db"}, h.Policy.Labels)
+	require.Equal(t, []string{"root", "postgres"}, h.Policy.Accounts)
 }
 
 func TestHostWithoutAccountsIsUngrounded(t *testing.T) {
@@ -87,7 +87,7 @@ func TestHostWithoutAccountsIsUngrounded(t *testing.T) {
 	h, err := s.LookupHost(context.Background(), "dev-box")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Nil(t, h.Accounts)
+	require.Nil(t, h.Policy.Accounts)
 }
 
 func TestPatternSynthesizesHost(t *testing.T) {
@@ -95,9 +95,9 @@ func TestPatternSynthesizesHost(t *testing.T) {
 	h, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
 	require.NoError(t, err)
 	require.NotNil(t, h, "glob crosses dots")
-	require.Equal(t, "ci-runner-42.internal", h.Name, "synthesized host adopts the requested name")
-	require.Equal(t, "ci", h.Labels["env"])
-	require.Nil(t, h.Accounts)
+	require.Equal(t, "ci-runner-42.internal", h.Policy.Name, "synthesized host adopts the requested name")
+	require.Equal(t, "ci", h.Policy.Labels["env"])
+	require.Nil(t, h.Policy.Accounts)
 }
 
 func TestUnknownHostIsNilNil(t *testing.T) {
@@ -119,7 +119,7 @@ hosts:
 	require.NoError(t, err)
 	h, err := s.LookupHost(context.Background(), "ci-runner-1")
 	require.NoError(t, err)
-	require.Equal(t, "prod", h.Labels["env"])
+	require.Equal(t, "prod", h.Policy.Labels["env"])
 }
 
 func TestFirstMatchingPatternWins(t *testing.T) {
@@ -134,7 +134,7 @@ hosts:
 	require.NoError(t, err)
 	h, err := s.LookupHost(context.Background(), "ci-runner-1")
 	require.NoError(t, err)
-	require.Equal(t, "broad", h.Labels["tier"], "pattern entries match in file order")
+	require.Equal(t, "broad", h.Policy.Labels["tier"], "pattern entries match in file order")
 }
 
 func TestEmptyAccountsListStaysNonNil(t *testing.T) {
@@ -147,8 +147,8 @@ hosts:
 	require.NoError(t, err)
 	h, err := s.LookupHost(context.Background(), "locked-down")
 	require.NoError(t, err)
-	require.NotNil(t, h.Accounts, "accounts: [] grounds nothing, which is different from absent")
-	require.Empty(t, h.Accounts)
+	require.NotNil(t, h.Policy.Accounts, "accounts: [] grounds nothing, which is different from absent")
+	require.Empty(t, h.Policy.Accounts)
 }
 
 func TestMultipleFilesConcatenate(t *testing.T) {
