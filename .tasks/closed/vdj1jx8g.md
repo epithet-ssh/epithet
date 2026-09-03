@@ -3,7 +3,7 @@ yatl_version: 1
 title: Fetch and install the CA key during host enrollment
 id: vdj1jx8g
 created: 2026-09-03T16:00:58.912309Z
-updated: 2026-09-03T16:01:06.238038Z
+updated: 2026-09-03T16:23:53.891461Z
 author: Brian McCallister
 priority: high
 tags:
@@ -19,3 +19,13 @@ Add `epithet host enroll --ca-url <url>` as the privileged local-enrollment entr
 # Log: 2026-09-03T16:00:58Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-03T16:11:46Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-03T16:23:53Z Brian McCallister
+
+Closed: Implemented host enroll CA bootstrap: strict CA-root key validation, durable non-replacing epithet-ca.pub installation beside the canonical host ID, idempotent reruns, preserved Link fields, portable path overrides, operator documentation, and focused plus full-suite coverage.

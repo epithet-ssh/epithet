@@ -18,6 +18,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	gobreaker "github.com/sony/gobreaker/v2"
+	"golang.org/x/crypto/ssh"
 )
 
 // InvalidTokenError indicates the authentication token is invalid or expired.
@@ -73,6 +74,15 @@ func (e *AllCAsUnavailableError) Error() string {
 // CertResponse contains the certificate issued for this connection.
 type CertResponse struct {
 	Certificate sshcert.RawCertificate
+}
+
+// RootResponse is the anonymous bootstrap document returned by a CA URL.
+// FinalURL is the URL after redirects and Links preserves every Link header
+// field for consumers that implement advertised enrollment capabilities.
+type RootResponse struct {
+	PublicKey sshcert.RawPublicKey
+	FinalURL  string
+	Links     []string
 }
 
 // DefaultTimeout is the default per-request timeout for CA requests.
@@ -233,6 +243,83 @@ func (c *Client) GetCert(ctx context.Context, token string, req *caserver.Create
 	}
 
 	return result.(*CertResponse), nil
+}
+
+// GetRoot fetches and validates the CA's anonymous bootstrap document, with
+// automatic failover to backup CAs. The returned public key is canonical
+// authorized-key text and the response's Link fields are retained verbatim.
+func (c *Client) GetRoot(ctx context.Context) (*RootResponse, error) {
+	result, err := c.pool.Execute(func(caURL string) (any, error) {
+		if c.logger != nil {
+			c.logger.Debug("GetRoot request", "url", caURL)
+		}
+		return c.doGetRoot(ctx, caURL)
+	})
+
+	if err != nil {
+		var allUnavail *breakerpool.AllUnavailableError
+		if errors.As(err, &allUnavail) {
+			return nil, &AllCAsUnavailableError{Message: allUnavail.Error()}
+		}
+		return nil, err
+	}
+	return result.(*RootResponse), nil
+}
+
+func (c *Client) doGetRoot(ctx context.Context, caURL string) (*RootResponse, error) {
+	if c.logger != nil {
+		c.logger.Debug("http request", "method", "GET", "url", caURL)
+	}
+
+	rq, err := http.NewRequestWithContext(ctx, http.MethodGet, caURL, nil)
+	if err != nil {
+		return nil, &InvalidRequestError{Message: err.Error()}
+	}
+
+	start := time.Now()
+	res, err := c.httpClient.Do(rq)
+	duration := time.Since(start)
+	if err != nil {
+		if c.logger != nil {
+			c.logger.Debug("http request failed", "method", "GET", "url", caURL, "duration_ms", duration.Milliseconds(), "error", err)
+		}
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > wire.MaxBodySize {
+		return nil, &InvalidRequestError{Message: fmt.Sprintf("CA root response exceeds %d bytes", wire.MaxBodySize)}
+	}
+
+	if c.logger != nil {
+		c.logger.Debug("http response", "method", "GET", "url", caURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
+	}
+
+	if res.StatusCode != http.StatusOK {
+		message := fmt.Sprintf("GET %s returned %d: %s", caURL, res.StatusCode, string(body))
+		if res.StatusCode >= 500 {
+			return nil, &CAUnavailableError{Message: message}
+		}
+		return nil, &InvalidRequestError{Message: message}
+	}
+
+	key, err := sshcert.ParsePublicKey(sshcert.RawPublicKey(body))
+	if err != nil {
+		return nil, &InvalidRequestError{Message: fmt.Sprintf("CA at %s returned an invalid SSH public key: %v", caURL, err)}
+	}
+	finalURL := caURL
+	if res.Request != nil && res.Request.URL != nil {
+		finalURL = res.Request.URL.String()
+	}
+	return &RootResponse{
+		PublicKey: sshcert.RawPublicKey(ssh.MarshalAuthorizedKey(key)),
+		FinalURL:  finalURL,
+		Links:     append([]string(nil), res.Header.Values("Link")...),
+	}, nil
 }
 
 // GetDiscovery fetches the CA's discovery document by following the Link

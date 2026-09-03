@@ -11,6 +11,7 @@ import (
 
 // HostCLI groups commands intended to run on or administer target hosts.
 type HostCLI struct {
+	Enroll               HostEnrollCLI               `cmd:"enroll" help:"Bootstrap this host from a CA URL (run as root)"`
 	AuthorizedPrincipals HostAuthorizedPrincipalsCLI `cmd:"authorized-principals" help:"Print the principals authorized for a local account"`
 }
 

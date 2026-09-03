@@ -284,15 +284,35 @@ Evaluator or inventory failures fail **closed** (500), never "treat as no match"
 
 ## Target host configuration
 
+### Host enrollment
+
+Install the same Epithet binary on the target, then bootstrap its identity and
+CA trust anchor from the CA URL:
+
+```console
+$ sudo epithet host enroll --ca-url https://epithet.example.com/
+epithet-host-v1-...
+```
+
+The command validates the CA response before changing local state and will not
+replace a different existing CA key. It is safe to rerun. On Linux the default
+files are `/var/lib/epithet/host-id` and
+`/var/lib/epithet/epithet-ca.pub`; the native state directory is
+`/var/db/epithet` on the BSDs, `/var/opt/epithet` on Solaris, illumos, and AIX,
+`/Library/Application Support/Epithet` on macOS, and `%ProgramData%\Epithet`
+on Windows. Use `--host-id-file` and `--ca-pubkey-file` during enrollment to
+select another layout or to support an otherwise unknown platform.
+
+The printed host ID is the value to put in this host's static-inventory entry.
+
 ### Destination-bound hashed principals
 
-Install the same Epithet binary on the target and point sshd at its Epithet
-host-ID file. This command is entirely local: it hashes the canonical host ID
-and the account supplied as `%u`, then prints the one principal sshd should
-accept.
+Point sshd at the enrolled files. The authorized-principals command is entirely
+local: it hashes the canonical host ID and the account supplied as `%u`, then
+prints the one principal sshd should accept.
 
 ```ssh_config
-TrustedUserCAKeys /etc/ssh/ca/epithet.pub
+TrustedUserCAKeys /var/lib/epithet/epithet-ca.pub
 AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --host-id-file /var/lib/epithet/host-id %u
 AuthorizedPrincipalsCommandUser nobody
 ```
@@ -331,7 +351,7 @@ therefore enough, and no `AuthorizedPrincipalsFile` mapping is required.
 
 ```ssh_config
 # Trust the epithet CA
-TrustedUserCAKeys /etc/ssh/ca/epithet.pub
+TrustedUserCAKeys /var/lib/epithet/epithet-ca.pub
 ```
 
 With only `TrustedUserCAKeys` set, sshd's default behavior is to

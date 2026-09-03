@@ -132,6 +132,45 @@ func TestGetCert_ReturnsCertificate(t *testing.T) {
 	assert.Equal(t, sshcert.RawCertificate("ssh-ed25519-cert-v01@openssh.com AAAA..."), resp.Certificate)
 }
 
+func TestGetRootReturnsCanonicalKeyAndLinkFields(t *testing.T) {
+	pub, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Link", `<enroll>; rel="https://epithet.dev/rel/enroll"`)
+		w.Header().Add("Link", `<enroll-backup>; rel="https://epithet.dev/rel/enroll"`)
+		fmt.Fprintf(w, "%s enrollment-ca\n", strings.TrimSpace(string(pub)))
+	}))
+	defer server.Close()
+
+	client, err := caclient.New([]caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}})
+	require.NoError(t, err)
+
+	root, err := client.GetRoot(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, pub, root.PublicKey)
+	require.Equal(t, server.URL, root.FinalURL)
+	require.Equal(t, []string{
+		`<enroll>; rel="https://epithet.dev/rel/enroll"`,
+		`<enroll-backup>; rel="https://epithet.dev/rel/enroll"`,
+	}, root.Links)
+}
+
+func TestGetRootRejectsInvalidPublicKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "not an SSH public key")
+	}))
+	defer server.Close()
+
+	client, err := caclient.New([]caclient.CAEndpoint{{URL: server.URL, Priority: caclient.DefaultPriority}})
+	require.NoError(t, err)
+
+	_, err = client.GetRoot(context.Background())
+	var invalid *caclient.InvalidRequestError
+	require.ErrorAs(t, err, &invalid)
+	require.ErrorContains(t, err, "invalid SSH public key")
+}
+
 // Discovery flow tests
 
 func TestGetDiscoveryHitsDiscoveryPathUnauthenticated(t *testing.T) {

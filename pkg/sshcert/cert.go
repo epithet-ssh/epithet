@@ -1,6 +1,7 @@
 package sshcert
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -18,6 +19,27 @@ type RawCertificate string
 
 // RawPublicKey is a public key in the on-disk format
 type RawPublicKey string
+
+// ParsePublicKey parses exactly one authorized-key-formatted SSH public key.
+// Comments are accepted, but authorized_keys options, trailing records, and
+// certificates are not. Callers that persist the key can use
+// ssh.MarshalAuthorizedKey on the result to obtain its canonical form.
+func ParsePublicKey(raw RawPublicKey) (ssh.PublicKey, error) {
+	key, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(raw))
+	if err != nil {
+		return nil, fmt.Errorf("error parsing public key: %w", err)
+	}
+	if len(options) != 0 {
+		return nil, fmt.Errorf("public key must not have authorized_keys options")
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("public key input must contain exactly one key")
+	}
+	if _, ok := key.(*ssh.Certificate); ok {
+		return nil, fmt.Errorf("public key input is an SSH certificate, not a public key")
+	}
+	return key, nil
+}
 
 // Parse parses a certificate
 func Parse(raw RawCertificate) (*ssh.Certificate, error) {
