@@ -10,9 +10,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
-	"golang.org/x/crypto/ssh"
 )
 
 // PrincipalMode selects how an allowed account@host tuple is represented in
@@ -26,7 +26,7 @@ const (
 	AccountNamePrincipals PrincipalMode = "account-name"
 
 	// EpithetPrincipalV1 derives a destination-bound v1 principal from the
-	// host identity public key and requested account name.
+	// host ID and requested account name.
 	EpithetPrincipalV1 PrincipalMode = principal.SchemeV1
 )
 
@@ -57,7 +57,7 @@ func (m PrincipalMode) Effective() PrincipalMode {
 type ResolvedHost struct {
 	Policy        eval.Host
 	PrincipalMode PrincipalMode
-	IdentityKey   ssh.PublicKey
+	HostID        hostid.ID
 }
 
 // Inventory looks up users and hosts at evaluation time.

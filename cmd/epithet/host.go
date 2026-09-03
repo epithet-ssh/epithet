@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
-	"golang.org/x/crypto/ssh"
 )
 
 // HostCLI groups commands intended to run on or administer target hosts.
@@ -18,9 +18,9 @@ type HostCLI struct {
 // HostAuthorizedPrincipalsCLI implements the offline
 // AuthorizedPrincipalsCommand hook for sshd.
 type HostAuthorizedPrincipalsCLI struct {
-	HostKeys          []string `name:"host-key" help:"Designated host identity public-key file (repeatable during rotation)" required:""`
-	AcceptAccountName bool     `name:"accept-account-name" help:"Also accept the literal account name during a bounded migration"`
-	Account           string   `arg:"" name:"account" help:"Target account name supplied by sshd as %u" required:""`
+	HostIDFile        string `name:"host-id-file" help:"Host-ID file" required:""`
+	AcceptAccountName bool   `name:"accept-account-name" help:"Also accept the literal account name during a bounded migration"`
+	Account           string `arg:"" name:"account" help:"Target account name supplied by sshd as %u" required:""`
 }
 
 func (c *HostAuthorizedPrincipalsCLI) Run() error {
@@ -28,8 +28,8 @@ func (c *HostAuthorizedPrincipalsCLI) Run() error {
 }
 
 func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) error {
-	if len(c.HostKeys) == 0 {
-		return fmt.Errorf("at least one host public key is required")
+	if c.HostIDFile == "" {
+		return fmt.Errorf("host-ID file is required")
 	}
 	if c.Account == "" {
 		return fmt.Errorf("account name is empty")
@@ -40,28 +40,20 @@ func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) e
 		}
 	}
 
-	seen := make(map[string]struct{}, len(c.HostKeys))
-	names := make([]string, 0, len(c.HostKeys)+1)
-	for _, rawPath := range c.HostKeys {
-		path, err := expandPath(rawPath)
-		if err != nil {
-			return fmt.Errorf("expanding host public-key path %q: %w", rawPath, err)
-		}
-		key, err := readHostPublicKey(path)
-		if err != nil {
-			return err
-		}
-		name, err := principal.DeriveV1(key, c.Account)
-		if err != nil {
-			return fmt.Errorf("deriving principal from %s: %w", path, err)
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
+	path, err := expandPath(c.HostIDFile)
+	if err != nil {
+		return fmt.Errorf("expanding host-ID path %q: %w", c.HostIDFile, err)
+	}
+	hostID, err := readHostID(path)
+	if err != nil {
+		return err
+	}
+	name, err := principal.DeriveV1(hostID, c.Account)
+	if err != nil {
+		return fmt.Errorf("deriving principal from %s: %w", path, err)
 	}
 
+	names := []string{name}
 	if c.AcceptAccountName {
 		names = append(names, c.Account)
 	}
@@ -73,25 +65,23 @@ func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) e
 	return nil
 }
 
-func readHostPublicKey(path string) (ssh.PublicKey, error) {
+func readHostID(path string) (hostid.ID, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading host public key %s: %w", path, err)
+		return "", fmt.Errorf("reading host ID %s: %w", path, err)
 	}
-	key, _, options, rest, err := ssh.ParseAuthorizedKey(data)
+	text := string(data)
+	if strings.HasSuffix(text, "\n") {
+		text = strings.TrimSuffix(text, "\n")
+	}
+	if strings.ContainsAny(text, "\r\n") {
+		return "", fmt.Errorf("host ID %s must contain exactly one line", path)
+	}
+	id, err := hostid.Parse(text)
 	if err != nil {
-		return nil, fmt.Errorf("parsing host public key %s: %w", path, err)
+		return "", fmt.Errorf("parsing host ID %s: %w", path, err)
 	}
-	if len(options) != 0 {
-		return nil, fmt.Errorf("host public key %s contains authorized_keys options", path)
-	}
-	if len(bytes.TrimSpace(rest)) != 0 {
-		return nil, fmt.Errorf("host public key %s contains more than one key", path)
-	}
-	if _, ok := key.(*ssh.Certificate); ok {
-		return nil, fmt.Errorf("host public key %s is an SSH certificate, not a public key", path)
-	}
-	return key, nil
+	return id, nil
 }
 
 func validateLiteralPrincipal(account string) error {

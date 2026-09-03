@@ -20,6 +20,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
@@ -49,6 +50,7 @@ type Server struct {
 	AuthorizedPrincipalsCommand string
 	caPubKey                    sshcert.RawPublicKey
 	hostPubKey                  sshcert.RawPublicKey
+	hostID                      hostid.ID
 	cmd                         *exec.Cmd
 	Output                      safeBuffer
 }
@@ -63,7 +65,7 @@ func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
 }
 
 // StartWithEpithetAuthorizedPrincipals starts an sshd whose principal lookup
-// runs the supplied epithet binary against the server's generated host key.
+// runs the supplied epithet binary against the server's generated host ID.
 // acceptAccountName enables the helper's bounded migration overlap.
 func StartWithEpithetAuthorizedPrincipals(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool) (*Server, error) {
 	if !filepath.IsAbs(epithetPath) {
@@ -113,7 +115,7 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName 
 			migrationFlag = " --accept-account-name"
 		}
 		s.AuthorizedPrincipalsCommand = fmt.Sprintf(
-			"%s %s host authorized-principals --host-key %s/ssh_host_ed25519_key.pub%s %%u",
+			"%s %s host authorized-principals --host-id-file %s/host-id%s %%u",
 			envPath, epithetPath, s.Path, migrationFlag)
 	}
 
@@ -136,6 +138,12 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName 
 // fixture's sshd.
 func (s *Server) HostPublicKey() sshcert.RawPublicKey {
 	return s.hostPubKey
+}
+
+// HostID returns the logical identity used by this fixture's principal
+// authorization helper.
+func (s *Server) HostID() hostid.ID {
+	return s.hostID
 }
 
 func (s *Server) start() error {
@@ -296,6 +304,15 @@ func generateConfigs(s *Server) error {
 	err = os.WriteFile(s.Path+"/ca.pub", []byte(s.caPubKey), 0600)
 	if err != nil {
 		return fmt.Errorf("could not create ca.pub file: %w", err)
+	}
+
+	hostID, err := hostid.Generate()
+	if err != nil {
+		return fmt.Errorf("could not generate host ID: %w", err)
+	}
+	s.hostID = hostID
+	if err := os.WriteFile(s.Path+"/host-id", []byte(hostID.String()+"\n"), 0600); err != nil {
+		return fmt.Errorf("could not create host-id file: %w", err)
 	}
 
 	hostPubKey, hostPrivKey, err := sshcert.GenerateKeys()

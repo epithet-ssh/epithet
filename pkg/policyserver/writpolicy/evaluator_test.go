@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -14,10 +15,9 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/ssh"
 )
 
-const evaluatorIdentityKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S host-comment"
+const evaluatorHostID = hostid.ID("epithet-host-v1-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
 
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
@@ -73,27 +73,25 @@ func TestIssueMapsToCertParams(t *testing.T) {
 func TestIssueDerivesHashedPrincipal(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(evaluatorIdentityKey))
-	require.NoError(t, err)
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
-	inv.hosts["prod-db-1"].IdentityKey = key
+	inv.hosts["prod-db-1"].HostID = evaluatorHostID
 	e := NewForTesting(pol, inv)
 
 	resp, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{"epithet-principal-v1-HcwzCGITHSEX6igxojnaiOsRzW_khMOLrWbxlFGaFe8"},
+		[]string{"epithet-principal-v1-_f8q1Ui1SZlMWCXVBJueB_F3OZzcXTaHIziX1PPULSw"},
 		resp.CertParams.Names)
 }
 
-func TestIssueHashedPrincipalWithoutIdentityKeyFailsClosed(t *testing.T) {
+func TestIssueHashedPrincipalWithoutHostIDFailsClosed(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	e := NewForTesting(pol, inv)
 
 	_, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
-	require.ErrorContains(t, err, "host public key is required")
+	require.ErrorContains(t, err, "invalid host ID")
 	var perr *wire.PolicyError
 	require.False(t, errors.As(err, &perr), "issuance configuration errors are 500s, not policy denials")
 }

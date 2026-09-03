@@ -5,64 +5,41 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/ssh"
 )
 
-const vectorEd25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S vector-comment"
+const vectorHostID = hostid.ID("epithet-host-v1-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
 
 func TestDeriveV1NormativeVector(t *testing.T) {
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(vectorEd25519))
-	require.NoError(t, err)
-
-	got, err := DeriveV1(key, "ubuntu")
+	got, err := DeriveV1(vectorHostID, "ubuntu")
 	require.NoError(t, err)
 	require.Equal(t,
-		"epithet-principal-v1-pV-Og_HWXFEBuK01mJV1xsd1VpSny25vP3SwcfikJmg",
+		"epithet-principal-v1-1G2FFzyyJShb63-XQoyRcIgz0rVX62Ob9KhnKc5k90o",
 		got)
 	require.Len(t, got, 64)
 }
 
-func TestDeriveV1UsesCanonicalPublicKeyBlob(t *testing.T) {
-	a, _, _, _, err := ssh.ParseAuthorizedKey([]byte(vectorEd25519))
-	require.NoError(t, err)
-	b, _, _, _, err := ssh.ParseAuthorizedKey([]byte(
-		"ssh-ed25519\tAAAAC3NzaC1lZDI1NTE5AAAAIP73g5MlWigY2P0s7iU/Chtf3Mi+Kxxy415OkEyxA75S different-comment\n"))
-	require.NoError(t, err)
-
-	principalA, err := DeriveV1(a, "ubuntu")
-	require.NoError(t, err)
-	principalB, err := DeriveV1(b, "ubuntu")
-	require.NoError(t, err)
-	require.Equal(t, principalA, principalB)
-}
-
 func TestDeriveV1AccountIsByteExact(t *testing.T) {
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(vectorEd25519))
+	lower, err := DeriveV1(vectorHostID, "ubuntu")
 	require.NoError(t, err)
-
-	lower, err := DeriveV1(key, "ubuntu")
+	upper, err := DeriveV1(vectorHostID, "Ubuntu")
 	require.NoError(t, err)
-	upper, err := DeriveV1(key, "Ubuntu")
-	require.NoError(t, err)
-	withNUL, err := DeriveV1(key, "ubuntu\x00")
+	withNUL, err := DeriveV1(vectorHostID, "ubuntu\x00")
 	require.NoError(t, err)
 
 	require.NotEqual(t, lower, upper)
 	require.NotEqual(t, lower, withNUL)
 }
 
-func TestDeriveV1RequiresHostKey(t *testing.T) {
-	_, err := DeriveV1(nil, "ubuntu")
-	require.EqualError(t, err, "host public key is required")
+func TestDeriveV1RequiresValidHostID(t *testing.T) {
+	_, err := DeriveV1("", "ubuntu")
+	require.ErrorContains(t, err, "invalid host ID")
 }
 
 func TestV1PreimageFraming(t *testing.T) {
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(vectorEd25519))
-	require.NoError(t, err)
-
 	h := sha256.New()
-	for _, field := range [][]byte{[]byte(SchemeV1), key.Marshal(), []byte("ubuntu")} {
+	for _, field := range [][]byte{[]byte(SchemeV1), []byte(vectorHostID), []byte("ubuntu")} {
 		require.NoError(t, writeSSHString(h, field))
 	}
 
@@ -70,8 +47,8 @@ func TestV1PreimageFraming(t *testing.T) {
 	// the final digest assertion above.
 	want, err := hex.DecodeString(
 		"00000014657069746865742d7072696e636970616c2d7631" +
-			"000000330000000b7373682d6564323535313900000020" +
-			"fef78393255a2818d8fd2cee253f0a1b5fdcc8be2b1c72e35e4e904cb103be52" +
+			"0000003b657069746865742d686f73742d76312d414145434177514642676349" +
+			"43516f4c4441304f4478415245684d554652595847426b6147787764486838" +
 			"000000067562756e7475")
 	require.NoError(t, err)
 

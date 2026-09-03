@@ -12,7 +12,7 @@ import (
 	"io"
 	"math"
 
-	"golang.org/x/crypto/ssh"
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 )
 
 // SchemeV1 is both the visible prefix of a v1 principal and the domain
@@ -20,17 +20,17 @@ import (
 const SchemeV1 = "epithet-principal-v1"
 
 // DeriveV1 derives the destination-bound certificate principal for account on
-// the host identified by hostKey. The public key is hashed in its canonical
-// SSH wire encoding; account is used byte-for-byte.
-func DeriveV1(hostKey ssh.PublicKey, account string) (string, error) {
-	if hostKey == nil {
-		return "", fmt.Errorf("host public key is required")
+// the host identified by hostID. The canonical host-ID text and account are
+// used byte-for-byte.
+func DeriveV1(hostID hostid.ID, account string) (string, error) {
+	if err := hostID.Validate(); err != nil {
+		return "", fmt.Errorf("invalid host ID: %w", err)
 	}
 
 	h := sha256.New()
 	for _, field := range [][]byte{
 		[]byte(SchemeV1),
-		hostKey.Marshal(),
+		[]byte(hostID),
 		[]byte(account),
 	} {
 		if err := writeSSHString(h, field); err != nil {

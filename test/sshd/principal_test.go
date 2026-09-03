@@ -16,7 +16,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/ssh"
 )
 
 func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
@@ -30,13 +29,9 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostB.Close() })
 
-	hostAKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hostA.HostPublicKey()))
+	hostAPrincipal, err := principal.DeriveV1(hostA.HostID(), hostA.User)
 	require.NoError(t, err)
-	hostBKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hostB.HostPublicKey()))
-	require.NoError(t, err)
-	hostAPrincipal, err := principal.DeriveV1(hostAKey, hostA.User)
-	require.NoError(t, err)
-	hostBPrincipal, err := principal.DeriveV1(hostBKey, hostB.User)
+	hostBPrincipal, err := principal.DeriveV1(hostB.HostID(), hostB.User)
 	require.NoError(t, err)
 	require.NotEqual(t, hostAPrincipal, hostBPrincipal)
 

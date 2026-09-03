@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
-	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -77,7 +77,7 @@ type hostEntry struct {
 	Labels        map[string]string `yaml:"labels"`
 	Accounts      []string          `yaml:"accounts"`
 	PrincipalMode PrincipalMode     `yaml:"principal-mode"`
-	IdentityKey   string            `yaml:"identity-key"`
+	HostID        string            `yaml:"host-id"`
 }
 
 // NewStatic loads an inventory from one or more YAML files. Files
@@ -147,21 +147,21 @@ func (s *Static) loadFile(path string) error {
 			if _, ok := s.hosts[name]; ok {
 				return fmt.Errorf("%s: duplicate host %q", path, name)
 			}
-			identityKey, err := parseIdentityKey(h.IdentityKey)
+			hostID, err := parseHostID(h.HostID)
 			if err != nil {
-				return fmt.Errorf("%s: hosts[%d] identity-key: %w", path, i, err)
+				return fmt.Errorf("%s: hosts[%d] host-id: %w", path, i, err)
 			}
-			if mode == EpithetPrincipalV1 && identityKey == nil {
-				return fmt.Errorf("%s: hosts[%d] %q uses %s but has no identity-key", path, i, name, EpithetPrincipalV1)
+			if mode == EpithetPrincipalV1 && hostID == "" {
+				return fmt.Errorf("%s: hosts[%d] %q uses %s but has no host-id", path, i, name, EpithetPrincipalV1)
 			}
 			s.hosts[name] = &ResolvedHost{
 				Policy:        eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts},
 				PrincipalMode: mode,
-				IdentityKey:   identityKey,
+				HostID:        hostID,
 			}
 		case h.Pattern != "":
-			if h.IdentityKey != "" {
-				return fmt.Errorf("%s: hosts[%d] pattern %q cannot specify one shared identity-key", path, i, h.Pattern)
+			if h.HostID != "" {
+				return fmt.Errorf("%s: hosts[%d] pattern %q cannot specify one shared host-id", path, i, h.Pattern)
 			}
 			if mode == EpithetPrincipalV1 {
 				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use %s in static inventory", path, i, h.Pattern, EpithetPrincipalV1)
@@ -211,24 +211,11 @@ func (s *Static) resolvePrincipalMode(override PrincipalMode) (PrincipalMode, er
 	return override, nil
 }
 
-func parseIdentityKey(raw string) (ssh.PublicKey, error) {
+func parseHostID(raw string) (hostid.ID, error) {
 	if raw == "" {
-		return nil, nil
+		return "", nil
 	}
-	key, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(raw))
-	if err != nil {
-		return nil, fmt.Errorf("parsing SSH public key: %w", err)
-	}
-	if len(options) != 0 {
-		return nil, fmt.Errorf("SSH public key contains authorized_keys options")
-	}
-	if len(bytes.TrimSpace(rest)) != 0 {
-		return nil, fmt.Errorf("expected exactly one SSH public key")
-	}
-	if _, ok := key.(*ssh.Certificate); ok {
-		return nil, fmt.Errorf("SSH certificate is not a host identity public key")
-	}
-	return key, nil
+	return hostid.Parse(raw)
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an

@@ -24,9 +24,9 @@ hosts:
   - name: prod-web-1.example.com
     labels: {env: prod, role: web}
     # For destination binding, set principal-mode: epithet-principal-v1 and copy
-    # this host's designated public key into identity-key as one quoted line:
+    # this host's canonical ID from `epithet host enroll` into host-id:
     # principal-mode: epithet-principal-v1
-    # identity-key: "ssh-ed25519 AAAA..."
+    # host-id: "epithet-host-v1-..."
   - name: prod-db-1.example.com
     labels: {env: prod, role: db}
     # Optional account grounding: certs are only issuable for accounts
@@ -40,5 +40,5 @@ hosts:
   - pattern: "dev-*.example.com"
     labels: {env: dev}
     # Required fallback if the deployment default is epithet-principal-v1. A
-    # static pattern cannot safely share one host identity key.
+    # static pattern cannot safely share one host ID.
     principal-mode: account-name

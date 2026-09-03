@@ -189,7 +189,7 @@ sudo systemctl restart sshd
 
 ### 3. Destination-bound mode
 
-For each exact host, copy its designated sshd public key into the static
+For each exact host, copy its canonical Epithet host ID into the static
 inventory and select hashed principals:
 
 ```yaml
@@ -197,25 +197,25 @@ hosts:
   - name: prod-web-1.example.com
     labels: {env: prod, role: web}
     principal-mode: epithet-principal-v1
-    identity-key: "ssh-ed25519 AAAA..."
+    host-id: "epithet-host-v1-..."
 ```
 
 Set `policy.principal-mode: epithet-principal-v1` to make this the deployment
-default. Exact hosts that inherit that default still need an `identity-key`.
+default. Exact hosts that inherit that default still need a `host-id`.
 Static ephemeral patterns must explicitly fall back to
 `account-name`.
 
 Install the Epithet binary on the host and add:
 
 ```ssh_config
-AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --host-key /etc/ssh/ssh_host_ed25519_key.pub %u
+AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --host-id-file /var/lib/epithet/host-id %u
 AuthorizedPrincipalsCommandUser nobody
 ```
 
-The helper is offline and derives the accepted principal from the local
-public key and `%u`; it does not contact the policy server. See the
+The helper is offline and derives the accepted principal from the local host
+ID and `%u`; it does not contact the policy server. See the
 [policy server guide](../../docs/policy-server.md#target-host-configuration)
-for permissions, migration, and host-key rotation details.
+for permissions, migration, and host-identity details.
 
 ## See also
 
