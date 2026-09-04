@@ -11,26 +11,23 @@ import (
 	"hash"
 	"io"
 	"math"
-
-	"github.com/epithet-ssh/epithet/pkg/hostid"
 )
 
 // SchemeV1 is both the visible prefix of a v1 principal and the domain
 // separator framed into its digest input.
 const SchemeV1 = "epithet-principal-v1"
 
-// DeriveV1 derives the destination-bound certificate principal for account on
-// the host identified by hostID. The canonical host-ID text and account are
-// used byte-for-byte.
-func DeriveV1(hostID hostid.ID, account string) (string, error) {
-	if err := hostID.Validate(); err != nil {
-		return "", fmt.Errorf("invalid host ID: %w", err)
+// DeriveV1 derives the destination-bound certificate principal for account in
+// domain. The canonical domain and account are used byte-for-byte.
+func DeriveV1(domain Domain, account string) (string, error) {
+	if err := domain.Validate(); err != nil {
+		return "", fmt.Errorf("invalid principal domain: %w", err)
 	}
 
 	h := sha256.New()
 	for _, field := range [][]byte{
 		[]byte(SchemeV1),
-		[]byte(hostID),
+		[]byte(domain),
 		[]byte(account),
 	} {
 		if err := writeSSHString(h, field); err != nil {

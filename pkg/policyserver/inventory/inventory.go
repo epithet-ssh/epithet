@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 )
@@ -26,7 +25,7 @@ const (
 	AccountNamePrincipals PrincipalMode = "account-name"
 
 	// EpithetPrincipalV1 derives a destination-bound v1 principal from the
-	// host ID and requested account name.
+	// principal domain and requested account name.
 	EpithetPrincipalV1 PrincipalMode = principal.SchemeV1
 )
 
@@ -50,14 +49,14 @@ func (m PrincipalMode) Effective() PrincipalMode {
 	return m
 }
 
-// ResolvedHost carries both the host attributes consumed by Writ and, as the
-// inventory grows, issuance metadata that must remain outside the pure policy
-// model. Keeping those layers separate prevents certificate-construction
-// details from becoming policy-language semantics.
+// ResolvedHost carries both the authorization resource consumed by Writ and
+// issuance metadata that must remain outside the pure policy model. For a
+// shared named domain, Policy.Name is the domain rather than the requested
+// hostname because the resulting credential is portable across every member.
 type ResolvedHost struct {
 	Policy        eval.Host
 	PrincipalMode PrincipalMode
-	HostID        hostid.ID
+	Domain        principal.Domain
 }
 
 // Inventory looks up users and hosts at evaluation time.

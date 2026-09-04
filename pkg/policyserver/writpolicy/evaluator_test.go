@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const evaluatorHostID = hostid.ID("epithet-host-v1-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+const evaluatorDomain = principal.Domain("production-database")
 
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
@@ -74,24 +74,24 @@ func TestIssueDerivesHashedPrincipal(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
-	inv.hosts["prod-db-1"].HostID = evaluatorHostID
+	inv.hosts["prod-db-1"].Domain = evaluatorDomain
 	e := NewForTesting(pol, inv)
 
 	resp, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{"epithet-principal-v1-_f8q1Ui1SZlMWCXVBJueB_F3OZzcXTaHIziX1PPULSw"},
+		[]string{"epithet-principal-v1-ytLZdjJ27kR56wJQB7SL4EZyr7leVrxIkDa1wZg_Uog"},
 		resp.CertParams.Names)
 }
 
-func TestIssueHashedPrincipalWithoutHostIDFailsClosed(t *testing.T) {
+func TestIssueHashedPrincipalWithoutDomainFailsClosed(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	e := NewForTesting(pol, inv)
 
 	_, err := e.Evaluate(context.Background(), "alice@example.com", time.Now(), conn("root", "prod-db-1"))
-	require.ErrorContains(t, err, "invalid host ID")
+	require.ErrorContains(t, err, "invalid principal domain")
 	var perr *wire.PolicyError
 	require.False(t, errors.As(err, &perr), "issuance configuration errors are 500s, not policy denials")
 }

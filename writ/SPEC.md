@@ -81,12 +81,15 @@ structural gate no policy text can express or bypass.
 A policy reference to a duplicated group `displayName` matches the
 union; sync warns loudly and points at the IdP as the thing to fix.
 
-**Hosts** resolve through the configured inventory. A resolved host has a
-unique `name`, a `map[string]string` of labels (k8s-style), an optional list of
-local account names. An inventory implementation may carry other host data,
-but Writ does not observe it. The static inventory supports exact host entries
-and ordered name patterns for ephemeral fleets. Policy matches resolved hosts
-by name (globs allowed), or by label selector `{k=v, ...}` (entries AND).
+**Hosts** resolve through the configured inventory. A resolved authorization
+resource has a unique `name`, a `map[string]string` of labels (k8s-style), and
+an optional list of local account names. An inventory implementation may carry
+other host data, but Writ does not observe it. The static inventory supports
+exact host entries and ordered name patterns for ephemeral fleets. When hosts
+share a destination-bound principal domain, inventory exposes the domain name
+as the resource name so policy cannot imply per-member isolation that SSH does
+not enforce. Policy matches resolved resources by name (globs allowed), or by
+label selector `{k=v, ...}` (entries AND).
 
 **Accounts** are byte-exact local login names. If a resolved host supplies an
 account list, matching is **inventory-grounded**: the requested account must

@@ -20,8 +20,8 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
@@ -50,7 +50,7 @@ type Server struct {
 	AuthorizedPrincipalsCommand string
 	caPubKey                    sshcert.RawPublicKey
 	hostPubKey                  sshcert.RawPublicKey
-	hostID                      hostid.ID
+	domain                      principal.Domain
 	cmd                         *exec.Cmd
 	Output                      safeBuffer
 }
@@ -61,23 +61,34 @@ type Server struct {
 //
 // It will only process a single ssh connection before terminating.
 func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
-	return start(caPubKey, "", false)
+	return start(caPubKey, "", false, "")
 }
 
 // StartWithEpithetAuthorizedPrincipals starts an sshd whose principal lookup
-// runs the supplied epithet binary against the server's generated host ID.
+// runs the supplied epithet binary against the server's generated domain.
 // acceptAccountName enables the helper's bounded migration overlap.
 func StartWithEpithetAuthorizedPrincipals(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool) (*Server, error) {
+	return StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey, epithetPath, acceptAccountName, "")
+}
+
+// StartWithEpithetAuthorizedPrincipalsInDomain starts an sshd in domain. An
+// empty domain generates the ordinary isolated per-host default.
+func StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool, domain principal.Domain) (*Server, error) {
 	if !filepath.IsAbs(epithetPath) {
 		return nil, fmt.Errorf("epithet binary path must be absolute")
 	}
 	if strings.ContainsAny(epithetPath, " \t\r\n") {
 		return nil, fmt.Errorf("epithet binary path cannot contain whitespace")
 	}
-	return start(caPubKey, epithetPath, acceptAccountName)
+	if domain != "" {
+		if err := domain.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid principal domain: %w", err)
+		}
+	}
+	return start(caPubKey, epithetPath, acceptAccountName, domain)
 }
 
-func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool) (*Server, error) {
+func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool, domain principal.Domain) (*Server, error) {
 	user, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("could not get current user: %w", err)
@@ -100,6 +111,7 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName 
 		caPubKey: caPubKey,
 		cmd:      nil,
 		Output:   safeBuffer{},
+		domain:   domain,
 	}
 	if epithetPath != "" {
 		// OpenSSH requires the configured command executable itself to be
@@ -115,7 +127,7 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName 
 			migrationFlag = " --accept-account-name"
 		}
 		s.AuthorizedPrincipalsCommand = fmt.Sprintf(
-			"%s %s host authorized-principals --host-id-file %s/host-id%s %%u",
+			"%s %s host authorized-principals --domain-file %s/domain%s %%u",
 			envPath, epithetPath, s.Path, migrationFlag)
 	}
 
@@ -140,10 +152,10 @@ func (s *Server) HostPublicKey() sshcert.RawPublicKey {
 	return s.hostPubKey
 }
 
-// HostID returns the logical identity used by this fixture's principal
+// Domain returns the authorization domain used by this fixture's principal
 // authorization helper.
-func (s *Server) HostID() hostid.ID {
-	return s.hostID
+func (s *Server) Domain() principal.Domain {
+	return s.domain
 }
 
 func (s *Server) start() error {
@@ -306,13 +318,15 @@ func generateConfigs(s *Server) error {
 		return fmt.Errorf("could not create ca.pub file: %w", err)
 	}
 
-	hostID, err := hostid.Generate()
-	if err != nil {
-		return fmt.Errorf("could not generate host ID: %w", err)
+	if s.domain == "" {
+		domain, err := principal.GenerateHostDomain()
+		if err != nil {
+			return fmt.Errorf("could not generate principal domain: %w", err)
+		}
+		s.domain = domain
 	}
-	s.hostID = hostID
-	if err := os.WriteFile(s.Path+"/host-id", []byte(hostID.String()+"\n"), 0600); err != nil {
-		return fmt.Errorf("could not create host-id file: %w", err)
+	if err := os.WriteFile(s.Path+"/domain", []byte(s.domain.String()+"\n"), 0600); err != nil {
+		return fmt.Errorf("could not create principal-domain file: %w", err)
 	}
 
 	hostPubKey, hostPrivKey, err := sshcert.GenerateKeys()

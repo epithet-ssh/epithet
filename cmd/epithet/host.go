@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
 
@@ -18,7 +17,7 @@ type HostCLI struct {
 // HostAuthorizedPrincipalsCLI implements the offline
 // AuthorizedPrincipalsCommand hook for sshd.
 type HostAuthorizedPrincipalsCLI struct {
-	HostIDFile        string `name:"host-id-file" help:"Host-ID file" required:""`
+	DomainFile        string `name:"domain-file" help:"Principal-domain file" required:""`
 	AcceptAccountName bool   `name:"accept-account-name" help:"Also accept the literal account name during a bounded migration"`
 	Account           string `arg:"" name:"account" help:"Target account name supplied by sshd as %u" required:""`
 }
@@ -28,8 +27,8 @@ func (c *HostAuthorizedPrincipalsCLI) Run() error {
 }
 
 func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) error {
-	if c.HostIDFile == "" {
-		return fmt.Errorf("host-ID file is required")
+	if c.DomainFile == "" {
+		return fmt.Errorf("principal-domain file is required")
 	}
 	if c.Account == "" {
 		return fmt.Errorf("account name is empty")
@@ -40,15 +39,15 @@ func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) e
 		}
 	}
 
-	path, err := expandPath(c.HostIDFile)
+	path, err := expandPath(c.DomainFile)
 	if err != nil {
-		return fmt.Errorf("expanding host-ID path %q: %w", c.HostIDFile, err)
+		return fmt.Errorf("expanding principal-domain path %q: %w", c.DomainFile, err)
 	}
-	hostID, err := readHostID(path)
+	domain, err := readDomain(path)
 	if err != nil {
 		return err
 	}
-	name, err := principal.DeriveV1(hostID, c.Account)
+	name, err := principal.DeriveV1(domain, c.Account)
 	if err != nil {
 		return fmt.Errorf("deriving principal from %s: %w", path, err)
 	}
@@ -65,8 +64,8 @@ func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) e
 	return nil
 }
 
-func readHostID(path string) (hostid.ID, error) {
-	return hostid.ReadFile(path)
+func readDomain(path string) (principal.Domain, error) {
+	return principal.ReadDomainFile(path)
 }
 
 func validateLiteralPrincipal(account string) error {

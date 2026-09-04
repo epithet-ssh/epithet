@@ -112,7 +112,7 @@ if [ -n "$previous_package" ]; then
 	pkg_cmd add "$previous_package"
 
 	mkdir -p "$root/var/db/epithet" "$root/etc/ssh/sshd_config.d"
-	printf '%s\n' 'epithet-host-v1-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' > "$root/var/db/epithet/host-id"
+	printf '%s\n' 'epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' > "$root/var/db/epithet/domain"
 	printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG9ubHktYS1wYWNrYWdlLXRlc3Q epithet-test' > "$root/var/db/epithet/epithet-ca.pub"
 	printf '%s\n' '# managed enrollment fixture' > "$root/etc/ssh/sshd_config.d/60-epithet.conf"
 	mkdir -p "$root/usr/local/etc/epithet"

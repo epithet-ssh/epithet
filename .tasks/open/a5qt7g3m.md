@@ -23,7 +23,7 @@ Responsibilities and trust boundaries:
 
 Resolver contract:
 - Define a versioned inventory protocol independent of Writ and any database schema.
-- Resolve the authenticated identity and requested host together so user, membership, host labels/accounts, host ID, and principal-mode metadata come from one consistent snapshot.
+- Resolve the authenticated identity and requested host together so user, membership, host labels/accounts, principal domain, and principal-mode metadata come from one consistent snapshot.
 - Preserve the distinction between an absent entity (structural denial) and a resolver/storage failure (retryable 5xx that fails closed).
 - Return an inventory revision plus observed-at/freshness information sufficient to enforce and audit an explicit stale-read policy.
 - Keep the Writ-facing host projection separate from certificate-issuance metadata, and bound request/response sizes and latency.

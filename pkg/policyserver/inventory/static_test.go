@@ -37,7 +37,7 @@ hosts:
     labels: {env: ci, ephemeral: "true"}
 `
 
-const inventoryHostID = "epithet-host-v1-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+const inventoryGeneratedDomain = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
 func loadBasic(t *testing.T) *Static {
 	t.Helper()
@@ -102,8 +102,8 @@ func TestPatternSynthesizesHost(t *testing.T) {
 	require.Nil(t, h.Policy.Accounts)
 }
 
-func TestHashedDefaultRequiresAndLoadsExactHostID(t *testing.T) {
-	src := "hosts:\n  - name: prod-1\n    host-id: " + inventoryHostID + "\n"
+func TestHashedDefaultRequiresAndLoadsExactDomain(t *testing.T) {
+	src := "hosts:\n  - name: prod-1\n    domain: " + inventoryGeneratedDomain + "\n"
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
@@ -112,7 +112,7 @@ func TestHashedDefaultRequiresAndLoadsExactHostID(t *testing.T) {
 	h, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, h.PrincipalMode)
-	require.Equal(t, inventoryHostID, h.HostID.String())
+	require.Equal(t, inventoryGeneratedDomain, h.Domain.String())
 }
 
 func TestPatternCanFallBackFromHashedDefault(t *testing.T) {
@@ -131,7 +131,7 @@ hosts:
 	require.NoError(t, err)
 	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
 	require.Equal(t, []string{"ubuntu"}, h.Policy.Accounts)
-	require.Empty(t, h.HostID)
+	require.Empty(t, h.Domain)
 }
 
 func TestExactHostCanFallBackFromHashedDefault(t *testing.T) {
@@ -150,32 +150,139 @@ hosts:
 	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
 }
 
-func TestHashedExactHostWithoutHostIDIsError(t *testing.T) {
+func TestHashedExactHostWithoutDomainIsError(t *testing.T) {
 	src := "hosts:\n  - name: prod-1\n"
 	_, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
-	require.ErrorContains(t, err, "has no host-id")
+	require.ErrorContains(t, err, "has no domain")
 }
 
-func TestHashedPatternIsErrorInStaticInventory(t *testing.T) {
-	src := "hosts:\n  - pattern: 'prod-*'\n"
-	_, err := NewStatic(
+func TestHashedPatternLoadsDeclaredNamedDomain(t *testing.T) {
+	src := "domains: [production]\nhosts:\n  - pattern: 'prod-*'\n    domain: production\n"
+	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
-	require.ErrorContains(t, err, "cannot use epithet-principal-v1")
+	require.NoError(t, err)
+
+	host, err := s.LookupHost(context.Background(), "prod-worker-1")
+	require.NoError(t, err)
+	require.Equal(t, EpithetPrincipalV1, host.PrincipalMode)
+	require.Equal(t, "production", host.Domain.String())
+	require.Equal(t, "production", host.Policy.Name, "Writ authorizes the shared domain, not one member hostname")
 }
 
-func TestPatternWithSharedHostIDIsError(t *testing.T) {
-	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name\n    host-id: " + inventoryHostID + "\n"
+func TestPatternWithGeneratedHostDomainIsError(t *testing.T) {
+	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name\n    domain: " + inventoryGeneratedDomain + "\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "cannot specify one shared host-id")
+	require.ErrorContains(t, err, "cannot use generated host domain")
 }
 
-func TestMalformedHostIDIsError(t *testing.T) {
-	src := "hosts:\n  - name: prod-1\n    host-id: not-a-host-id\n"
+func TestMalformedDomainIsError(t *testing.T) {
+	src := "hosts:\n  - name: prod-1\n    domain: 'not a domain'\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "host-id")
+	require.ErrorContains(t, err, "domain")
+}
+
+func TestUndeclaredNamedDomainIsError(t *testing.T) {
+	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: epithet-principal-v1\n    domain: prodution\n"
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.ErrorContains(t, err, `references undeclared domain "prodution"`)
+}
+
+func TestNamedDomainMayBeDeclaredInLaterFile(t *testing.T) {
+	hosts := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: epithet-principal-v1\n    domain: production\n"
+	domains := "domains: [production]\n"
+	_, err := NewStatic([]string{writeInv(t, "hosts.yaml", hosts), writeInv(t, "domains.yaml", domains)})
+	require.NoError(t, err)
+}
+
+func TestDuplicateNamedDomainIsError(t *testing.T) {
+	one := "domains: [production]\n"
+	_, err := NewStatic([]string{writeInv(t, "a.yaml", one), writeInv(t, "b.yaml", one)})
+	require.ErrorContains(t, err, `duplicate domain "production"`)
+}
+
+func TestNamedDomainRequiresHashedPrincipalMode(t *testing.T) {
+	src := "domains: [production]\nhosts:\n  - pattern: 'prod-*'\n    domain: production\n"
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.ErrorContains(t, err, "named domain")
+	require.ErrorContains(t, err, string(EpithetPrincipalV1))
+}
+
+func TestNamedDomainEntriesMustShareAuthorizationAttributes(t *testing.T) {
+	src := `
+domains: [production]
+hosts:
+  - name: prod-1
+    domain: production
+    principal-mode: epithet-principal-v1
+    labels: {role: web}
+  - name: prod-2
+    domain: production
+    principal-mode: epithet-principal-v1
+    labels: {role: database}
+`
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.ErrorContains(t, err, "different authorization attributes")
+}
+
+func TestNamedDomainEntriesResolveToSamePolicyResource(t *testing.T) {
+	src := `
+domains: [production]
+hosts:
+  - name: prod-1
+    domain: production
+    principal-mode: epithet-principal-v1
+    labels: {env: prod}
+  - name: prod-2
+    domain: production
+    principal-mode: epithet-principal-v1
+    labels: {env: prod}
+`
+	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.NoError(t, err)
+
+	one, err := s.LookupHost(context.Background(), "prod-1")
+	require.NoError(t, err)
+	two, err := s.LookupHost(context.Background(), "prod-2")
+	require.NoError(t, err)
+	require.Equal(t, "production", one.Policy.Name)
+	require.Equal(t, one.Policy, two.Policy)
+	require.Equal(t, one.Domain, two.Domain)
+}
+
+func TestNamedDomainAccountOrderDoesNotChangeAuthorizationAttributes(t *testing.T) {
+	src := `
+domains: [production]
+hosts:
+  - name: prod-1
+    domain: production
+    principal-mode: epithet-principal-v1
+    accounts: [root, ubuntu]
+  - name: prod-2
+    domain: production
+    principal-mode: epithet-principal-v1
+    accounts: [ubuntu, root]
+`
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.NoError(t, err)
+}
+
+func TestNamedDomainDistinguishesAbsentAndEmptyAccountGrounding(t *testing.T) {
+	src := `
+domains: [production]
+hosts:
+  - name: prod-1
+    domain: production
+    principal-mode: epithet-principal-v1
+  - name: prod-2
+    domain: production
+    principal-mode: epithet-principal-v1
+    accounts: []
+`
+	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.ErrorContains(t, err, "different authorization attributes")
 }
 
 func TestUnknownPrincipalModeIsError(t *testing.T) {

@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 
-	"github.com/epithet-ssh/epithet/pkg/hostid"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
 	"gopkg.in/yaml.v3"
@@ -18,14 +20,18 @@ import (
 //
 // Host entries come in two forms. An exact entry (`name:`) is one
 // registered host. A pattern entry (`pattern:`, writ glob — `*`/`?`
-// only) synthesizes a host for any requested name it matches, adopting
-// the requested name and carrying the entry's labels: the escape hatch
-// for fleets of short-lived hosts (VM pools, CI runners) that follow a
-// naming pattern but cannot be enumerated in a file.
+// only) resolves any requested name it matches. Account-name entries adopt
+// the requested name; destination-bound named domains expose that domain as
+// the Writ resource so policy cannot claim per-member isolation. Patterns are
+// the escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
+// follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
 	users                map[string]*eval.User
 	hosts                map[string]*ResolvedHost
 	patterns             []patternHost // file order; first match wins
+	domains              map[principal.Domain]struct{}
+	domainReferences     []domainReference
+	domainPolicies       map[principal.Domain]domainPolicy
 	defaultPrincipalMode PrincipalMode
 }
 
@@ -34,6 +40,20 @@ type patternHost struct {
 	labels        map[string]string
 	accounts      []string
 	principalMode PrincipalMode
+	domain        principal.Domain
+}
+
+type domainReference struct {
+	domain    principal.Domain
+	path      string
+	hostIndex int
+}
+
+type domainPolicy struct {
+	labels    map[string]string
+	accounts  []string
+	path      string
+	hostIndex int
 }
 
 type staticOptions struct {
@@ -58,8 +78,9 @@ func WithDefaultPrincipalMode(mode PrincipalMode) StaticOption {
 // The file format. Users use RFC 7643 field names (userName, userType,
 // enterprise department/organization); hosts mirror writ's host model.
 type staticDoc struct {
-	Users []userEntry `yaml:"users"`
-	Hosts []hostEntry `yaml:"hosts"`
+	Domains []string    `yaml:"domains"`
+	Users   []userEntry `yaml:"users"`
+	Hosts   []hostEntry `yaml:"hosts"`
 }
 
 type userEntry struct {
@@ -77,7 +98,7 @@ type hostEntry struct {
 	Labels        map[string]string `yaml:"labels"`
 	Accounts      []string          `yaml:"accounts"`
 	PrincipalMode PrincipalMode     `yaml:"principal-mode"`
-	HostID        string            `yaml:"host-id"`
+	Domain        string            `yaml:"domain"`
 }
 
 // NewStatic loads an inventory from one or more YAML files. Files
@@ -97,12 +118,17 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	s := &Static{
 		users:                map[string]*eval.User{},
 		hosts:                map[string]*ResolvedHost{},
+		domains:              map[principal.Domain]struct{}{},
+		domainPolicies:       map[principal.Domain]domainPolicy{},
 		defaultPrincipalMode: opts.defaultPrincipalMode,
 	}
 	for _, path := range paths {
 		if err := s.loadFile(path); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.validateDomainReferences(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -115,6 +141,16 @@ func (s *Static) loadFile(path string) error {
 	var doc staticDoc
 	if err := strictUnmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parsing inventory %s: %w", path, err)
+	}
+	for i, raw := range doc.Domains {
+		domain, err := principal.ParseNamedDomain(raw)
+		if err != nil {
+			return fmt.Errorf("%s: domains[%d]: %w", path, i, err)
+		}
+		if _, exists := s.domains[domain]; exists {
+			return fmt.Errorf("%s: duplicate domain %q", path, domain)
+		}
+		s.domains[domain] = struct{}{}
 	}
 	for i, u := range doc.Users {
 		if u.UserName == "" {
@@ -137,6 +173,24 @@ func (s *Static) loadFile(path string) error {
 		if err != nil {
 			return fmt.Errorf("%s: hosts[%d]: %w", path, i, err)
 		}
+		domain, err := parseDomain(h.Domain)
+		if err != nil {
+			return fmt.Errorf("%s: hosts[%d] domain: %w", path, i, err)
+		}
+		if mode == EpithetPrincipalV1 && domain == "" {
+			return fmt.Errorf("%s: hosts[%d] uses %s but has no domain", path, i, EpithetPrincipalV1)
+		}
+		if domain != "" && !domain.IsGeneratedHost() {
+			if mode != EpithetPrincipalV1 {
+				return fmt.Errorf("%s: hosts[%d] named domain %q requires %s", path, i, domain, EpithetPrincipalV1)
+			}
+			s.domainReferences = append(s.domainReferences, domainReference{
+				domain: domain, path: path, hostIndex: i,
+			})
+			if err := s.recordDomainPolicy(domain, h.Labels, h.Accounts, path, i); err != nil {
+				return err
+			}
+		}
 		switch {
 		case h.Name != "" && h.Pattern != "":
 			return fmt.Errorf("%s: hosts[%d] has both name and pattern — pick one", path, i)
@@ -147,30 +201,21 @@ func (s *Static) loadFile(path string) error {
 			if _, ok := s.hosts[name]; ok {
 				return fmt.Errorf("%s: duplicate host %q", path, name)
 			}
-			hostID, err := parseHostID(h.HostID)
-			if err != nil {
-				return fmt.Errorf("%s: hosts[%d] host-id: %w", path, i, err)
-			}
-			if mode == EpithetPrincipalV1 && hostID == "" {
-				return fmt.Errorf("%s: hosts[%d] %q uses %s but has no host-id", path, i, name, EpithetPrincipalV1)
-			}
 			s.hosts[name] = &ResolvedHost{
-				Policy:        eval.Host{Name: name, Labels: h.Labels, Accounts: h.Accounts},
+				Policy:        resolvedPolicyHost(name, domain, h.Labels, h.Accounts),
 				PrincipalMode: mode,
-				HostID:        hostID,
+				Domain:        domain,
 			}
 		case h.Pattern != "":
-			if h.HostID != "" {
-				return fmt.Errorf("%s: hosts[%d] pattern %q cannot specify one shared host-id", path, i, h.Pattern)
-			}
-			if mode == EpithetPrincipalV1 {
-				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use %s in static inventory", path, i, h.Pattern, EpithetPrincipalV1)
+			if domain.IsGeneratedHost() {
+				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use generated host domain %q", path, i, h.Pattern, domain)
 			}
 			s.patterns = append(s.patterns, patternHost{
 				pattern:       il.HostName(h.Pattern),
 				labels:        h.Labels,
 				accounts:      h.Accounts,
 				principalMode: mode,
+				domain:        domain,
 			})
 		default:
 			return fmt.Errorf("%s: hosts[%d] has neither name nor pattern", path, i)
@@ -193,8 +238,9 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, erro
 	for _, p := range s.patterns {
 		if eval.GlobMatch(p.pattern, name) {
 			return &ResolvedHost{
-				Policy:        eval.Host{Name: name, Labels: p.labels, Accounts: p.accounts},
+				Policy:        resolvedPolicyHost(name, p.domain, p.labels, p.accounts),
 				PrincipalMode: p.principalMode,
+				Domain:        p.domain,
 			}, nil
 		}
 	}
@@ -211,11 +257,47 @@ func (s *Static) resolvePrincipalMode(override PrincipalMode) (PrincipalMode, er
 	return override, nil
 }
 
-func parseHostID(raw string) (hostid.ID, error) {
+func parseDomain(raw string) (principal.Domain, error) {
 	if raw == "" {
 		return "", nil
 	}
-	return hostid.Parse(raw)
+	return principal.ParseDomain(raw)
+}
+
+func (s *Static) validateDomainReferences() error {
+	for _, ref := range s.domainReferences {
+		if _, ok := s.domains[ref.domain]; !ok {
+			return fmt.Errorf("%s: hosts[%d] references undeclared domain %q", ref.path, ref.hostIndex, ref.domain)
+		}
+	}
+	return nil
+}
+
+func (s *Static) recordDomainPolicy(domain principal.Domain, labels map[string]string, accounts []string, path string, hostIndex int) error {
+	previous, exists := s.domainPolicies[domain]
+	canonicalAccounts := slices.Clone(accounts)
+	slices.Sort(canonicalAccounts)
+	if !exists {
+		s.domainPolicies[domain] = domainPolicy{
+			labels: maps.Clone(labels), accounts: canonicalAccounts, path: path, hostIndex: hostIndex,
+		}
+		return nil
+	}
+	sameAccounts := (previous.accounts == nil) == (accounts == nil) && slices.Equal(previous.accounts, canonicalAccounts)
+	if maps.Equal(previous.labels, labels) && sameAccounts {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: hosts[%d] domain %q has different authorization attributes from %s: hosts[%d]",
+		path, hostIndex, domain, previous.path, previous.hostIndex)
+}
+
+func resolvedPolicyHost(requestedName string, domain principal.Domain, labels map[string]string, accounts []string) eval.Host {
+	name := requestedName
+	if domain != "" && !domain.IsGeneratedHost() {
+		name = domain.String()
+	}
+	return eval.Host{Name: name, Labels: labels, Accounts: accounts}
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an

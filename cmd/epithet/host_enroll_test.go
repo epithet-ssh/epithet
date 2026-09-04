@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
-	"github.com/epithet-ssh/epithet/pkg/hostid"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -27,7 +26,7 @@ func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) 
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:         "https://ca.example.com/",
-		HostIDFile:    filepath.Join(dir, "host-id"),
+		DomainFile:    filepath.Join(dir, "domain"),
 		CAPubkeyFile:  filepath.Join(dir, "epithet-ca.pub"),
 		PrincipalMode: "mystery",
 		sshdEnv: &sshdEnvironment{
@@ -43,7 +42,7 @@ func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) 
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestHostEnrollCreatesHostIDAndCAPublicKey(t *testing.T) {
+func TestHostEnrollCreatesDomainAndCAPublicKey(t *testing.T) {
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Link", `<enroll>; rel="https://epithet.dev/rel/enroll"`)
@@ -54,24 +53,24 @@ func TestHostEnrollCreatesHostIDAndCAPublicKey(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        server.URL,
-		HostIDFile:   filepath.Join(dir, "host-id"),
+		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
 	result, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	require.True(t, result.HostIDCreated)
+	require.True(t, result.DomainCreated)
 	require.True(t, result.CAPublicKeyCreated)
 	require.Equal(t, pub, result.CAPublicKey)
 	require.Equal(t, server.URL, result.CAFinalURL)
 	require.Equal(t, []string{`<enroll>; rel="https://epithet.dev/rel/enroll"`}, result.AdvertisedLinkFields)
 
-	storedID, err := hostid.ReadFile(cmd.HostIDFile)
+	storedDomain, err := principal.ReadDomainFile(cmd.DomainFile)
 	require.NoError(t, err)
-	require.Equal(t, result.HostID, storedID)
+	require.Equal(t, result.Domain, storedDomain)
 	storedKey, err := os.ReadFile(cmd.CAPubkeyFile)
 	require.NoError(t, err)
 	require.Equal(t, string(pub), string(storedKey))
-	requireFileMode(t, cmd.HostIDFile, 0o644)
+	requireFileMode(t, cmd.DomainFile, 0o644)
 	requireFileMode(t, cmd.CAPubkeyFile, 0o644)
 }
 
@@ -85,19 +84,19 @@ func TestHostEnrollRerunIsIdempotent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        server.URL,
-		HostIDFile:   filepath.Join(dir, "host-id"),
+		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
 	first, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	second, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	require.Equal(t, first.HostID, second.HostID)
-	require.False(t, second.HostIDCreated)
+	require.Equal(t, first.Domain, second.Domain)
+	require.False(t, second.DomainCreated)
 	require.False(t, second.CAPublicKeyCreated)
 }
 
-func TestHostEnrollRejectsConflictingCAWithoutCreatingHostID(t *testing.T) {
+func TestHostEnrollRejectsConflictingCAWithoutCreatingDomain(t *testing.T) {
 	fetched := newTestCAPublicKey(t)
 	existing := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,14 +105,14 @@ func TestHostEnrollRejectsConflictingCAWithoutCreatingHostID(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dir := t.TempDir()
-	hostIDPath := filepath.Join(dir, "host-id")
+	domainPath := filepath.Join(dir, "domain")
 	caKeyPath := filepath.Join(dir, "ca.pub")
 	require.NoError(t, os.WriteFile(caKeyPath, []byte(existing), 0o644))
-	cmd := HostEnrollCLI{CAURL: server.URL, HostIDFile: hostIDPath, CAPubkeyFile: caKeyPath}
+	cmd := HostEnrollCLI{CAURL: server.URL, DomainFile: domainPath, CAPubkeyFile: caKeyPath}
 
 	_, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.ErrorContains(t, err, "conflicts with the key returned by the CA")
-	_, err = os.Stat(hostIDPath)
+	_, err = os.Stat(domainPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	data, err := os.ReadFile(caKeyPath)
 	require.NoError(t, err)
@@ -129,7 +128,7 @@ func TestHostEnrollInvalidResponseLeavesHostStateAbsent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        server.URL,
-		HostIDFile:   filepath.Join(dir, "host-id"),
+		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
 	_, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
@@ -146,7 +145,7 @@ func TestHostEnrollFailedRequestLeavesHostStateAbsent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        url,
-		HostIDFile:   filepath.Join(dir, "host-id"),
+		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "epithet-ca.pub"),
 	}
 	_, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
@@ -155,14 +154,14 @@ func TestHostEnrollFailedRequestLeavesHostStateAbsent(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestHostEnrollDefaultsCAKeyBesideOverriddenHostID(t *testing.T) {
-	hostIDPath := filepath.Join(t.TempDir(), "custom", "identity")
-	cmd := HostEnrollCLI{HostIDFile: hostIDPath}
+func TestHostEnrollDefaultsCAKeyBesideOverriddenDomain(t *testing.T) {
+	domainPath := filepath.Join(t.TempDir(), "custom", "domain")
+	cmd := HostEnrollCLI{DomainFile: domainPath}
 
-	gotHostID, gotCAKey, err := cmd.paths()
+	gotDomain, gotCAKey, err := cmd.paths()
 	require.NoError(t, err)
-	require.Equal(t, hostIDPath, gotHostID)
-	require.Equal(t, filepath.Join(filepath.Dir(hostIDPath), "epithet-ca.pub"), gotCAKey)
+	require.Equal(t, domainPath, gotDomain)
+	require.Equal(t, filepath.Join(filepath.Dir(domainPath), "epithet-ca.pub"), gotCAKey)
 }
 
 func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
@@ -186,7 +185,7 @@ func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
 	}
 	cmd := HostEnrollCLI{
 		CAURL:                           server.URL,
-		HostIDFile:                      filepath.Join(dir, "state", "host-id"),
+		DomainFile:                      filepath.Join(dir, "state", "domain"),
 		CAPubkeyFile:                    filepath.Join(dir, "state", "epithet-ca.pub"),
 		PrincipalMode:                   principal.SchemeV1,
 		SSHDConfigFile:                  mainPath,
@@ -201,8 +200,8 @@ func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
 
 	result, err := cmd.enroll(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	require.NotEmpty(t, result.HostID)
-	requireFileMode(t, cmd.HostIDFile, 0o644)
+	require.NotEmpty(t, result.Domain)
+	requireFileMode(t, cmd.DomainFile, 0o644)
 	requireFileMode(t, cmd.CAPubkeyFile, 0o644)
 	requireFileContents(t, mainPath, sshdMainBegin+"\nInclude \""+fragmentPath+"\"\n"+sshdMainEnd+"\n\nPort 22\n")
 	fragment, err := os.ReadFile(fragmentPath)
@@ -221,7 +220,7 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "ssh", "sshd_config")
 	fragmentPath := filepath.Join(dir, "custom-ssh", "epithet.conf")
-	hostIDPath := filepath.Join(dir, "custom-state", "machine-identity")
+	domainPath := filepath.Join(dir, "custom-state", "principal-domain")
 	caKeyPath := filepath.Join(dir, "custom-trust", "epithet-ca.pub")
 	require.NoError(t, os.MkdirAll(filepath.Dir(mainPath), 0o755))
 	require.NoError(t, os.WriteFile(mainPath, []byte("Port 22\n"), 0o600))
@@ -235,7 +234,7 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	}
 	firstCommand := HostEnrollCLI{
 		CAURL:                           server.URL,
-		HostIDFile:                      hostIDPath,
+		DomainFile:                      domainPath,
 		CAPubkeyFile:                    caKeyPath,
 		PrincipalMode:                   principal.SchemeV1,
 		SSHDConfigFile:                  mainPath,
@@ -259,10 +258,10 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	}
 	second, err := secondCommand.enroll(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	require.Equal(t, first.HostID, second.HostID)
-	require.False(t, second.HostIDCreated)
+	require.Equal(t, first.Domain, second.Domain)
+	require.False(t, second.DomainCreated)
 	require.False(t, second.CAPublicKeyCreated)
-	require.Equal(t, hostIDPath, secondCommand.HostIDFile)
+	require.Equal(t, domainPath, secondCommand.DomainFile)
 	require.Equal(t, caKeyPath, secondCommand.CAPubkeyFile)
 	require.Equal(t, fragmentPath, secondCommand.SSHDFragmentFile)
 	require.Len(t, secondRunner.calls, 1, "an unchanged rerun validates but does not reload sshd")

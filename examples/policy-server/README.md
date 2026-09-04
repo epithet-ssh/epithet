@@ -163,16 +163,16 @@ opt-in:
 
 ```console
 $ sudo epithet --insecure host enroll --ca-url http://ca-server:8080/
-epithet-host-v1-...
+epithet-host-id-v1:...
 ```
 
-Enrollment downloads the CA key, creates the stable host ID, installs and
+Enrollment downloads the CA key, creates a stable generated domain, installs and
 validates a managed sshd fragment, and reloads sshd. It defaults to
 destination-bound principals.
 
 ### Destination-bound inventory
 
-Copy the host ID printed by enrollment into the exact host's static inventory
+Copy the domain printed by enrollment into the exact host's static inventory
 entry and select the same principal mode:
 
 ```yaml
@@ -180,18 +180,28 @@ hosts:
   - name: prod-web-1.example.com
     labels: {env: prod, role: web}
     principal-mode: epithet-principal-v1
-    host-id: "epithet-host-v1-..."
+    domain: "epithet-host-id-v1:..."
 ```
 
 Set `policy.principal-mode: epithet-principal-v1` to make this the deployment
-default. Exact hosts that inherit that default still need a `host-id`.
-Static ephemeral patterns must explicitly fall back to
-`account-name`.
+default. Entries that inherit that default still need a `domain`. Static
+ephemeral patterns may share a declared human-readable domain:
 
-The helper is offline and derives the accepted principal from the local host
-ID and `%u`; it does not contact the policy server. See the
+```yaml
+domains: [dev-fleet]
+hosts:
+  - pattern: "dev-*.example.com"
+    domain: dev-fleet
+```
+
+Provision `dev-fleet` as the only line of `/var/lib/epithet/domain` in the
+fleet image before running `epithet host enroll`. The local/static enrollment
+path preserves that existing canonical value.
+
+The helper is offline and derives the accepted principal from the local domain
+and `%u`; it does not contact the policy server. See the
 [policy server guide](../../docs/policy-server.md#target-host-configuration)
-for permissions, migration, and host-identity details.
+for permissions and principal-domain details.
 
 For an `account-name` compatibility host, enroll with
 `--principal-mode account-name` and configure the matching inventory override.

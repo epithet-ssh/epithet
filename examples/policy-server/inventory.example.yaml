@@ -19,14 +19,19 @@ users:
     groups: [Developers]
     userType: contractor
 
+# Human-readable domains must be declared before host entries can reference
+# them. This catches misspellings instead of silently creating a new fleet.
+domains:
+  - dev-fleet
+
 hosts:
   # Exact entries: one host each. Names are matched case-insensitively.
   - name: prod-web-1.example.com
     labels: {env: prod, role: web}
     # For destination binding, set principal-mode: epithet-principal-v1 and copy
-    # this host's canonical ID from `epithet host enroll` into host-id:
+    # the domain printed by `epithet host enroll`:
     # principal-mode: epithet-principal-v1
-    # host-id: "epithet-host-v1-..."
+    # domain: "epithet-host-id-v1:..."
   - name: prod-db-1.example.com
     labels: {env: prod, role: db}
     # Optional account grounding: certs are only issuable for accounts
@@ -39,6 +44,5 @@ hosts:
   # writ globs (* and ? only; * crosses dots).
   - pattern: "dev-*.example.com"
     labels: {env: dev}
-    # Required fallback if the deployment default is epithet-principal-v1. A
-    # static pattern cannot safely share one host ID.
-    principal-mode: account-name
+    principal-mode: epithet-principal-v1
+    domain: dev-fleet

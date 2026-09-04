@@ -11,13 +11,13 @@ import (
 	"syscall"
 )
 
-func validateAuthorizedPrincipalsAccess(binary, hostIDPath, caKeyPath, commandUser string, destinationBound bool) error {
-	resolvedHostID, err := filepath.EvalSymlinks(hostIDPath)
+func validateAuthorizedPrincipalsAccess(binary, domainPath, caKeyPath, commandUser string, destinationBound bool) error {
+	resolvedDomain, err := filepath.EvalSymlinks(domainPath)
 	if err != nil {
-		return fmt.Errorf("resolving host-ID file %s: %w", hostIDPath, err)
+		return fmt.Errorf("resolving principal-domain file %s: %w", domainPath, err)
 	}
-	if err := requireRootControlledPath(resolvedHostID); err != nil {
-		return fmt.Errorf("host-ID file: %w", err)
+	if err := requireRootControlledPath(resolvedDomain); err != nil {
+		return fmt.Errorf("principal-domain file: %w", err)
 	}
 	resolvedCAKey, err := filepath.EvalSymlinks(caKeyPath)
 	if err != nil {
@@ -83,8 +83,8 @@ func validateAuthorizedPrincipalsAccess(binary, hostIDPath, caKeyPath, commandUs
 		return fmt.Errorf("AuthorizedPrincipalsCommand: %w", err)
 	}
 
-	if err := requirePathAccess(resolvedHostID, uint32(uid), groups, 0o4, commandUser); err != nil {
-		return fmt.Errorf("host-ID file: %w", err)
+	if err := requirePathAccess(resolvedDomain, uint32(uid), groups, 0o4, commandUser); err != nil {
+		return fmt.Errorf("principal-domain file: %w", err)
 	}
 	return nil
 }

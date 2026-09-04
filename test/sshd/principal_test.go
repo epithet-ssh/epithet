@@ -29,9 +29,9 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostB.Close() })
 
-	hostAPrincipal, err := principal.DeriveV1(hostA.HostID(), hostA.User)
+	hostAPrincipal, err := principal.DeriveV1(hostA.Domain(), hostA.User)
 	require.NoError(t, err)
-	hostBPrincipal, err := principal.DeriveV1(hostB.HostID(), hostB.User)
+	hostBPrincipal, err := principal.DeriveV1(hostB.Domain(), hostB.User)
 	require.NoError(t, err)
 	require.NotEqual(t, hostAPrincipal, hostBPrincipal)
 
@@ -66,6 +66,50 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	out, err = hostB.Ssh(a)
 	require.Error(t, err, "another host must reject the same certificate")
 	require.Contains(t, out, "Permission denied")
+}
+
+func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
+	testCA, caPublicKey := newPrincipalTestCA(t)
+	epithetBin := buildEpithet(t)
+	domain := principal.Domain("ai-worker-pool-1")
+
+	hostA, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, false, domain)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = hostA.Close() })
+	hostB, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, false, domain)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = hostB.Close() })
+
+	fleetPrincipal, err := principal.DeriveV1(domain, hostA.User)
+	require.NoError(t, err)
+	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	certificate, err := testCA.SignPublicKey(userPublicKey, &wire.CertParams{
+		Identity:   "principal-domain-test",
+		Names:      []string{fleetPrincipal},
+		Expiration: time.Minute,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	a := agent.New(testLogger(t), "")
+	go func() {
+		if err := a.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("agent.Serve: %v", err)
+		}
+	}()
+	require.NoError(t, a.WaitReady())
+	t.Cleanup(a.Close)
+	require.NoError(t, a.UseCredential(agent.Credential{
+		PrivateKey:  userPrivateKey,
+		Certificate: certificate,
+	}))
+
+	out, err := hostA.Ssh(a)
+	require.NoError(t, err, "first fleet host should accept its domain principal; ssh output:\n%s\nsshd output:\n%s", out, hostA.Output.String())
+	out, err = hostB.Ssh(a)
+	require.NoError(t, err, "second fleet host should accept the shared domain principal; ssh output:\n%s\nsshd output:\n%s", out, hostB.Output.String())
 }
 
 func newPrincipalTestCA(t *testing.T) (*ca.CA, sshcert.RawPublicKey) {

@@ -11,7 +11,7 @@ import (
 )
 
 func TestRequireRootControlledPathRejectsWritableFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "host-id")
+	path := filepath.Join(t.TempDir(), "domain")
 	require.NoError(t, os.WriteFile(path, []byte("identity\n"), 0o666))
 	require.NoError(t, os.Chmod(path, 0o666))
 

@@ -11,7 +11,7 @@ import (
 	"runtime"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/hostid"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
@@ -20,8 +20,8 @@ import (
 // HostEnrollCLI bootstraps the durable local state needed to enroll a host.
 type HostEnrollCLI struct {
 	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
-	HostIDFile                      string   `name:"host-id-file" help:"Host-ID file (default: native system state directory)"`
-	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the host-ID file)"`
+	DomainFile                      string   `name:"domain-file" help:"Principal-domain file (default: native system state directory)"`
+	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
 	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
 	SSHDConfigFile                  string   `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
 	SSHDFragmentFile                string   `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
@@ -35,9 +35,9 @@ type HostEnrollCLI struct {
 }
 
 type hostEnrollment struct {
-	HostID               hostid.ID
-	HostIDFile           string
-	HostIDCreated        bool
+	Domain               principal.Domain
+	DomainFile           string
+	DomainCreated        bool
 	CAPublicKey          sshcert.RawPublicKey
 	CAPubkeyFile         string
 	CAPublicKeyCreated   bool
@@ -50,7 +50,7 @@ func (c *HostEnrollCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error 
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout, result.HostID)
+	_, err = fmt.Fprintln(os.Stdout, result.Domain)
 	return err
 }
 
@@ -86,12 +86,12 @@ func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tl
 		return nil, err
 	}
 
-	hostIDPath, caKeyPath, err := c.paths()
+	domainPath, caKeyPath, err := c.paths()
 	if err != nil {
 		return nil, err
 	}
-	if filepath.Clean(hostIDPath) == filepath.Clean(caKeyPath) {
-		return nil, fmt.Errorf("host-ID file and CA public-key file must be different paths")
+	if filepath.Clean(domainPath) == filepath.Clean(caKeyPath) {
+		return nil, fmt.Errorf("principal-domain file and CA public-key file must be different paths")
 	}
 
 	client, err := caclient.New([]caclient.CAEndpoint{endpoint},
@@ -107,14 +107,14 @@ func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tl
 
 	// Check all existing state before creating anything. In particular, a
 	// conflicting CA key must not accidentally mint an identity for this host.
-	if _, err := readHostIDIfPresent(hostIDPath); err != nil {
+	if _, err := readDomainIfPresent(domainPath); err != nil {
 		return nil, err
 	}
 	if _, err := publicKeyFileMatches(caKeyPath, root.PublicKey); err != nil {
 		return nil, err
 	}
 
-	for _, dir := range uniqueDirectories(hostIDPath, caKeyPath) {
+	for _, dir := range uniqueDirectories(domainPath, caKeyPath) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("creating enrollment directory %s: %w", dir, err)
 		}
@@ -124,22 +124,23 @@ func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tl
 	if err != nil {
 		return nil, err
 	}
-	hostID, hostCreated, err := hostid.EnsureFile(hostIDPath)
+	domain, domainCreated, err := principal.EnsureDomainFile(domainPath)
 	if err != nil {
 		return nil, err
 	}
 
 	if logger != nil {
 		logger.Info("host enrollment state ready",
-			"host_id_file", hostIDPath,
-			"host_id_created", hostCreated,
+			"domain", domain,
+			"domain_file", domainPath,
+			"domain_created", domainCreated,
 			"ca_public_key_file", caKeyPath,
 			"ca_public_key_created", caCreated)
 	}
 	return &hostEnrollment{
-		HostID:               hostID,
-		HostIDFile:           hostIDPath,
-		HostIDCreated:        hostCreated,
+		Domain:               domain,
+		DomainFile:           domainPath,
+		DomainCreated:        domainCreated,
 		CAPublicKey:          root.PublicKey,
 		CAPubkeyFile:         caKeyPath,
 		CAPublicKeyCreated:   caCreated,
@@ -149,36 +150,36 @@ func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tl
 }
 
 func (c *HostEnrollCLI) paths() (string, string, error) {
-	hostIDPath := c.HostIDFile
-	if hostIDPath == "" {
+	domainPath := c.DomainFile
+	if domainPath == "" {
 		var err error
-		hostIDPath, err = hostid.DefaultPath()
+		domainPath, err = principal.DefaultDomainPath()
 		if err != nil {
 			return "", "", err
 		}
 	}
-	hostIDPath, err := expandPath(hostIDPath)
+	domainPath, err := expandPath(domainPath)
 	if err != nil {
-		return "", "", fmt.Errorf("expanding host-ID path %q: %w", c.HostIDFile, err)
+		return "", "", fmt.Errorf("expanding principal-domain path %q: %w", c.DomainFile, err)
 	}
 
 	caKeyPath := c.CAPubkeyFile
 	if caKeyPath == "" {
-		caKeyPath = filepath.Join(filepath.Dir(hostIDPath), "epithet-ca.pub")
+		caKeyPath = filepath.Join(filepath.Dir(domainPath), "epithet-ca.pub")
 	}
 	caKeyPath, err = expandPath(caKeyPath)
 	if err != nil {
 		return "", "", fmt.Errorf("expanding CA public-key path %q: %w", c.CAPubkeyFile, err)
 	}
-	return hostIDPath, caKeyPath, nil
+	return domainPath, caKeyPath, nil
 }
 
-func readHostIDIfPresent(path string) (hostid.ID, error) {
-	id, err := hostid.ReadFile(path)
+func readDomainIfPresent(path string) (principal.Domain, error) {
+	domain, err := principal.ReadDomainFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
-	return id, err
+	return domain, err
 }
 
 func publicKeyFileMatches(path string, expected sshcert.RawPublicKey) (bool, error) {
