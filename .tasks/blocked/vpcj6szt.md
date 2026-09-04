@@ -3,7 +3,7 @@ yatl_version: 1
 title: Register hosts and principal-domain membership
 id: vpcj6szt
 created: 2026-09-03T03:25:28.969057Z
-updated: 2026-09-03T15:35:38.139957Z
+updated: 2026-09-05T16:53:44.408150Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -26,6 +26,8 @@ Acceptance: the registry supplies the canonical literal domain and
 domain-wide authorization projection used for issuance; proposed host names,
 membership, and security labels are not authoritative until an authorized
 admission decision.
+
+Agreed inventory-service boundary (September 5): inventory owns this registry and its durable storage (512htw8r). CA is the sole core-service caller of the resolution API and supplies the resulting facts/revision to policy in its signed request. Policy never reads or writes the registry and inventory never calls policy. Direct administrative mutations use the OIDC/RBAC boundary in 548x7rsk. Keep pending proposals outside the active authorization projection until admission succeeds; host names and static user/group names must not gain unnecessary extra configuration IDs. SCIM provisioning is later work in 8jwaf0d8.
 
 ---
 # Log: 2026-09-03T03:25:28Z Brian McCallister

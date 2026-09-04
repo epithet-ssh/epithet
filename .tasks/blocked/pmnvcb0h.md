@@ -3,7 +3,7 @@ yatl_version: 1
 title: Integrate host enrollment with managed registration
 id: pmnvcb0h
 created: 2026-09-03T15:34:59.839315Z
-updated: 2026-09-03T16:01:13.297985Z
+updated: 2026-09-05T16:53:44.411542Z
 author: Brian McCallister
 priority: high
 tags:
@@ -28,6 +28,8 @@ back to an unregistered static result; endpoint failure leaves a retryable,
 coherent enrollment state; conflicting host records or domain memberships fail
 closed; endpoint ordering and failover follow the separately defined discovery
 policy.
+
+Agreed dynamic-inventory flow (September 5): the discovered enrollment endpoints belong to inventory. The host submits its key proof and proposed registration directly there, then follows the pending-approval flow or presents a scoped one-time enrollment token. Administrators use their existing OIDC session for direct inventory approval/token operations; they do not obtain authority merely by holding an SSH certificate. Pending status remains explicit until authorized activation. Policy is never a client enrollment target or an inventory callback. The CA-originated inter-service authentication model in a5qt7g3m is separate from these host/admin client calls.
 
 ---
 # Log: 2026-09-03T15:34:59Z Brian McCallister
