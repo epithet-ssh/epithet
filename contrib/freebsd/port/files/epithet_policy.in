@@ -1,0 +1,50 @@
+#!/bin/sh
+
+# PROVIDE: epithet_policy
+# REQUIRE: NETWORKING
+# BEFORE: epithet_ca
+# KEYWORD: shutdown
+#
+# Add this line to /etc/rc.conf to enable the policy service:
+#
+# epithet_policy_enable="YES"
+
+. /etc/rc.subr
+
+name=epithet_policy
+desc="Epithet policy server"
+rcvar=epithet_policy_enable
+
+load_rc_config $name
+
+: ${epithet_policy_enable:=NO}
+: ${epithet_policy_config:=%%PREFIX%%/etc/epithet/server.yaml}
+: ${epithet_policy_runas:=epithet}
+: ${epithet_policy_runas_group:=epithet}
+: ${epithet_policy_pidfile:=/var/run/epithet/policy.pid}
+: ${epithet_policy_logfile:=/var/log/epithet/policy.log}
+: ${epithet_policy_args:=""}
+
+command=/usr/sbin/daemon
+procname=%%PREFIX%%/bin/epithet
+pidfile=${epithet_policy_pidfile}
+command_args="-f -p ${pidfile} -o ${epithet_policy_logfile} -u ${epithet_policy_runas} ${procname} --config ${epithet_policy_config} policy ${epithet_policy_args}"
+required_files=${epithet_policy_config}
+start_precmd=epithet_policy_precmd
+
+epithet_policy_precmd()
+{
+	load_rc_config epithet_server
+	: ${epithet_server_enable:=NO}
+	if checkyesno epithet_server_enable; then
+		echo "epithet_policy cannot run while epithet_server is enabled" >&2
+		return 1
+	fi
+
+	install -d -m 0750 -o "${epithet_policy_runas}" -g "${epithet_policy_runas_group}" /var/run/epithet /var/log/epithet
+	if [ ! -e "${epithet_policy_logfile}" ]; then
+		install -m 0640 -o "${epithet_policy_runas}" -g "${epithet_policy_runas_group}" /dev/null "${epithet_policy_logfile}"
+	fi
+}
+
+run_rc_command "$1"

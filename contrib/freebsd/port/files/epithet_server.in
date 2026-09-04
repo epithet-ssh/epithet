@@ -1,0 +1,51 @@
+#!/bin/sh
+
+# PROVIDE: epithet_server
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+#
+# Add this line to /etc/rc.conf to enable the combined server:
+#
+# epithet_server_enable="YES"
+
+. /etc/rc.subr
+
+name=epithet_server
+desc="Epithet combined CA and policy server"
+rcvar=epithet_server_enable
+
+load_rc_config $name
+
+: ${epithet_server_enable:=NO}
+: ${epithet_server_config:=%%PREFIX%%/etc/epithet/server.yaml}
+: ${epithet_server_runas:=epithet}
+: ${epithet_server_runas_group:=epithet}
+: ${epithet_server_pidfile:=/var/run/epithet/server.pid}
+: ${epithet_server_logfile:=/var/log/epithet/server.log}
+: ${epithet_server_args:=""}
+
+command=/usr/sbin/daemon
+procname=%%PREFIX%%/bin/epithet
+pidfile=${epithet_server_pidfile}
+command_args="-f -p ${pidfile} -o ${epithet_server_logfile} -u ${epithet_server_runas} ${procname} --config ${epithet_server_config} server ${epithet_server_args}"
+required_files=${epithet_server_config}
+start_precmd=epithet_server_precmd
+
+epithet_server_precmd()
+{
+	load_rc_config epithet_ca
+	load_rc_config epithet_policy
+	: ${epithet_ca_enable:=NO}
+	: ${epithet_policy_enable:=NO}
+	if checkyesno epithet_ca_enable || checkyesno epithet_policy_enable; then
+		echo "epithet_server cannot run while epithet_ca or epithet_policy is enabled" >&2
+		return 1
+	fi
+
+	install -d -m 0750 -o "${epithet_server_runas}" -g "${epithet_server_runas_group}" /var/run/epithet /var/log/epithet
+	if [ ! -e "${epithet_server_logfile}" ]; then
+		install -m 0640 -o "${epithet_server_runas}" -g "${epithet_server_runas_group}" /dev/null "${epithet_server_logfile}"
+	fi
+}
+
+run_rc_command "$1"

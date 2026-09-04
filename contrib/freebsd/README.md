@@ -5,11 +5,18 @@ Epithet publishes a native package for `FreeBSD:15:amd64` at
 FreeBSD build host; a Bastille jail serves the completed repository over
 HTTPS.
 
-The package is intentionally host-focused. It installs only
-`/usr/local/bin/epithet`, supports `epithet host enroll`, and does not install
-or enable a persistent service. Enrollment state under `/var/db/epithet` and
-the managed sshd configuration are not package-owned, so upgrades and package
-deletion leave them in place.
+The package installs the `epithet` binary and three rc.d services:
+
+- `epithet_server` runs the combined CA and policy server.
+- `epithet_ca` and `epithet_policy` run the same components as separate
+  processes.
+
+All three services are disabled by default, run as the dedicated `epithet`
+account, and read `/usr/local/etc/epithet/server.yaml` unless overridden in
+`rc.conf`. The package installs that file from a sample on first installation
+and preserves operator changes across upgrades and deletion. Enrollment state
+under `/var/db/epithet` and the managed sshd configuration are also not
+package-owned.
 
 ## Client setup
 
@@ -30,6 +37,37 @@ Normal upgrades use:
 ```sh
 pkg upgrade epithet
 ```
+
+## Server setup
+
+Edit `/usr/local/etc/epithet/server.yaml`, install the referenced policy and
+inventory files, and generate the CA key:
+
+```sh
+ssh-keygen -t ed25519 -f /usr/local/etc/epithet/ca.key -N "" -C epithet-ca
+chown root:epithet /usr/local/etc/epithet/ca.key
+chmod 0640 /usr/local/etc/epithet/ca.key
+```
+
+For the normal single-process deployment, enable only the combined service:
+
+```sh
+sysrc epithet_server_enable=YES
+service epithet_server start
+```
+
+For split operation, enable the policy server and CA instead:
+
+```sh
+sysrc epithet_policy_enable=YES
+sysrc epithet_ca_enable=YES
+service epithet_policy start
+service epithet_ca start
+```
+
+The split services communicate over `/var/run/epithet/policy.sock`. The rc.d
+scripts reject a configuration that enables `epithet_server` together with
+either split service. Logs are written under `/var/log/epithet/`.
 
 The checked-in [`ops/Epithet.conf`](ops/Epithet.conf) expands `${ABI}` on the
 client and requires repository metadata signed by the bootstrapped public key.
@@ -105,15 +143,17 @@ bastille service pkg caddy start
 Publication is deliberately explicit:
 
 ```sh
-sudo epithet-pkg-publish publish v0.23.0
+sudo epithet-pkg-publish publish v0.23.1_3
 sudo epithet-pkg-publish status
 ```
 
-The command validates the tag, builds the preceding stable version when it is
-not already retained, runs poudriere's port tests, builds the current package,
-generates signed candidate metadata, and exercises fresh install, upgrade,
-deinstall, version, and host-state preservation checks. Only then does it move
-the public `latest` symlink.
+The optional `_N` suffix is a FreeBSD package revision: `v0.23.1_3` builds the
+unchanged `v0.23.1` source with `PORTREVISION=3`. The command validates the
+source tag, saves the currently published package for an upgrade test, runs
+poudriere's port tests, builds the new package, generates signed candidate
+metadata, and exercises fresh install, upgrade, deinstall, version, service
+file, config-preservation, and host-state checks. Only then does it move the
+public `latest` symlink.
 
 The command is idempotent for the currently published version. A future poller
 may discover the latest stable GitHub tag and invoke this same command; it must

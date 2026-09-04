@@ -27,9 +27,9 @@ LOCK_FILE=/var/run/epithet-pkg-publish.lock
 
 usage() {
 	cat >&2 <<EOF
-usage: epithet-pkg-publish publish vX.Y.Z
+usage: epithet-pkg-publish publish vX.Y.Z[_N]
        epithet-pkg-publish status
-       epithet-pkg-publish rollback X.Y.Z
+       epithet-pkg-publish rollback X.Y.Z[_N]
 EOF
 	exit 64
 }
@@ -49,60 +49,93 @@ current_version() {
 	fi
 }
 
-validate_version() {
-	case "$1" in
-	[0-9]*.[0-9]*.[0-9]*) ;;
-	*) echo "invalid release version: $1" >&2; exit 64 ;;
+validate_source_version() {
+	if ! printf '%s\n' "$1" | awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { valid = 1 } END { exit !valid }'; then
+		echo "invalid source version: $1" >&2
+		exit 64
+	fi
+}
+
+parse_release_spec() {
+	prs_spec=$1
+	case "$prs_spec" in
+	v*) prs_package_version=${prs_spec#v} ;;
+	*) echo "release must be an explicit vX.Y.Z or vX.Y.Z_N version" >&2; exit 64 ;;
 	esac
-	case "$1" in
-	*[!0-9A-Za-z.+-]*) echo "invalid release version: $1" >&2; exit 64 ;;
+
+	case "$prs_package_version" in
+	*_*)
+		prs_source_version=${prs_package_version%%_*}
+		prs_revision=${prs_package_version#*_}
+		case "$prs_revision" in
+		''|0|0[0-9]*|*[!0-9]*) echo "invalid package revision: $prs_revision" >&2; exit 64 ;;
+		esac
+		case "$prs_revision" in
+		*_* ) echo "invalid release version: $prs_package_version" >&2; exit 64 ;;
+		esac
+		;;
+	*)
+		prs_source_version=$prs_package_version
+		prs_revision=0
+		;;
 	esac
+	validate_source_version "$prs_source_version"
+
+	RELEASE_SOURCE_VERSION=$prs_source_version
+	RELEASE_PORTREVISION=$prs_revision
+	RELEASE_PACKAGE_VERSION=$prs_package_version
+	RELEASE_SOURCE_TAG=v$prs_source_version
 }
 
 render_port() {
-	port_version=$1
+	rp_source_version=$1
+	rp_revision=$2
 	rm -rf "$PORT_DIR"
 	mkdir -p "$PORT_DIR"
 	cp -R "$PORT_TEMPLATE"/. "$PORT_DIR"/
-	sed "s/^DISTVERSION=.*/DISTVERSION=\t${port_version}/" "$PORT_DIR/Makefile" > "$PORT_DIR/Makefile.new"
+	sed \
+		-e "s/^DISTVERSION=.*/DISTVERSION=\t${rp_source_version}/" \
+		-e "s/^PORTREVISION=.*/PORTREVISION=\t${rp_revision}/" \
+		"$PORT_DIR/Makefile" > "$PORT_DIR/Makefile.new"
 	mv "$PORT_DIR/Makefile.new" "$PORT_DIR/Makefile"
 	make -C "$PORT_DIR" BATCH=yes clean makesum
 }
 
 build_package() {
-	package_version=$1
-	render_port "$package_version"
+	bp_source_version=$1
+	bp_revision=$2
+	bp_package_version=$3
+	render_port "$bp_source_version" "$bp_revision"
 	poudriere testport -b "$POUDRIERE_PACKAGE_BRANCH" -j "$POUDRIERE_JAIL" -p "$POUDRIERE_PORTS" -o "$PORT_ORIGIN"
 	poudriere bulk -b "$POUDRIERE_PACKAGE_BRANCH" -j "$POUDRIERE_JAIL" -p "$POUDRIERE_PORTS" "$PORT_ORIGIN"
 
-	BUILT_PACKAGE=$(find -L "$POUDRIERE_PACKAGES/All" -maxdepth 1 -type f -name "epithet-${package_version}*.pkg" | head -n 1)
+	BUILT_PACKAGE=$(find -L "$POUDRIERE_PACKAGES/All" -maxdepth 1 -type f -name "epithet-${bp_package_version}.pkg" | head -n 1)
 	[ -n "$BUILT_PACKAGE" ] || {
-		echo "poudriere did not produce epithet ${package_version}" >&2
+		echo "poudriere did not produce epithet ${bp_package_version}" >&2
 		exit 1
 	}
 }
 
 previous_version() {
-	previous_tag=$1
-	git -C "$SOURCE_REPOSITORY" tag --merged "${previous_tag}^" --sort=-version:refname |
+	pv_tag=$1
+	git -C "$SOURCE_REPOSITORY" tag --merged "${pv_tag}^" --sort=-version:refname |
 		awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { sub(/^v/, ""); print; exit }'
 }
 
 publish() {
-	release_tag=${1:-}
-	case "$release_tag" in
-	v*) ;;
-	*) echo "release must be an explicit vX.Y.Z tag" >&2; exit 64 ;;
-	esac
-	release_version=${release_tag#v}
-	validate_version "$release_version"
+	pub_spec=${1:-}
+	parse_release_spec "$pub_spec"
+	pub_source_version=$RELEASE_SOURCE_VERSION
+	pub_revision=$RELEASE_PORTREVISION
+	pub_package_version=$RELEASE_PACKAGE_VERSION
+	pub_source_tag=$RELEASE_SOURCE_TAG
 
-	if [ "$(current_version)" = "$release_version" ]; then
-		echo "epithet ${release_version} is already published"
+	if [ "$(current_version)" = "$pub_package_version" ]; then
+		echo "epithet ${pub_package_version} is already published"
 		return
 	fi
-	[ ! -e "$ABI_ROOT/releases/$release_version" ] || {
-		echo "release ${release_version} already exists; use rollback to select an existing release" >&2
+	[ ! -e "$ABI_ROOT/releases/$pub_package_version" ] || {
+		echo "release ${pub_package_version} already exists; use rollback to select an existing release" >&2
 		exit 1
 	}
 
@@ -111,23 +144,31 @@ publish() {
 		git clone https://github.com/epithet-ssh/epithet "$SOURCE_REPOSITORY"
 	fi
 	git -C "$SOURCE_REPOSITORY" fetch --force --tags origin
-	git -C "$SOURCE_REPOSITORY" rev-parse --verify "${release_tag}^{commit}" >/dev/null
+	git -C "$SOURCE_REPOSITORY" rev-parse --verify "${pub_source_tag}^{commit}" >/dev/null
 
 	work=$(mktemp -d /var/tmp/epithet-pkg-publish.XXXXXX)
 	trap 'rm -rf "$work"' EXIT INT TERM HUP
 
-	previous=$(previous_version "$release_tag")
 	previous_package=
-	if [ -n "$previous" ]; then
-		previous_package=$(find "$ABI_ROOT/releases" -type f -path "*/All/epithet-${previous}*.pkg" 2>/dev/null | head -n 1 || true)
-		if [ -z "$previous_package" ]; then
-			build_package "$previous"
+	pub_current_version=$(current_version)
+	if [ "$pub_current_version" != none ]; then
+		pub_current_package=$(find -L "$ABI_ROOT/latest/All" -maxdepth 1 -type f -name "epithet-${pub_current_version}.pkg" | head -n 1)
+		[ -n "$pub_current_package" ] || {
+			echo "published repository does not contain epithet ${pub_current_version}" >&2
+			exit 1
+		}
+		previous_package=$work/$(basename "$pub_current_package")
+		cp "$pub_current_package" "$previous_package"
+	else
+		previous=$(previous_version "$pub_source_tag")
+		if [ -n "$previous" ]; then
+			build_package "$previous" 0 "$previous"
 			previous_package=$work/$(basename "$BUILT_PACKAGE")
 			cp "$BUILT_PACKAGE" "$previous_package"
 		fi
 	fi
 
-	build_package "$release_version"
+	build_package "$pub_source_version" "$pub_revision" "$pub_package_version"
 	current_built=$BUILT_PACKAGE
 	candidate=$work/repository
 	mkdir -p "$candidate/All"
@@ -137,20 +178,20 @@ publish() {
 	public_key=$work/epithet.pub
 	openssl rsa -in "$SIGNING_KEY" -pubout -out "$public_key"
 	EPITHET_PKG_PUBLIC_KEY=$public_key /usr/local/sbin/epithet-pkg-test \
-		"$candidate" "$release_version" ${previous_package:+"$previous_package"}
+		"$candidate" "$pub_package_version" ${previous_package:+"$previous_package"}
 
 	mkdir -p "$ABI_ROOT/releases" "$PUBLIC_ROOT/keys"
-	mv "$candidate" "$ABI_ROOT/releases/$release_version"
+	mv "$candidate" "$ABI_ROOT/releases/$pub_package_version"
 	install -m 0444 "$public_key" "$PUBLIC_ROOT/keys/epithet.pub"
-	ln -s "releases/$release_version" "$ABI_ROOT/.latest.$$"
+	ln -s "releases/$pub_package_version" "$ABI_ROOT/.latest.$$"
 	mv -fh "$ABI_ROOT/.latest.$$" "$ABI_ROOT/latest"
-	printf '%s\n' "$release_version" > "$ABI_ROOT/published-version"
-	printf 'published epithet %s at %s/%s/latest\n' "$release_version" "$REPOSITORY_URL" "$ABI"
+	printf '%s\n' "$pub_package_version" > "$ABI_ROOT/published-version"
+	printf 'published epithet %s at %s/%s/latest\n' "$pub_package_version" "$REPOSITORY_URL" "$ABI"
 }
 
 rollback() {
-	rollback_version=${1:-}
-	validate_version "$rollback_version"
+	parse_release_spec "v${1:-}"
+	rollback_version=$RELEASE_PACKAGE_VERSION
 	[ -d "$ABI_ROOT/releases/$rollback_version" ] || {
 		echo "release ${rollback_version} is not retained" >&2
 		exit 1

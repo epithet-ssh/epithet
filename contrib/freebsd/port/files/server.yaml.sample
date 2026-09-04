@@ -1,0 +1,27 @@
+# Shared configuration for the Epithet rc.d services. Edit this file before
+# enabling either the combined service or the split CA and policy services.
+
+server:
+  listen: "0.0.0.0:8080"
+  ca-key: /usr/local/etc/epithet/ca.key
+  policy-file: /usr/local/etc/epithet/policy.writ
+  inventory:
+    - /usr/local/etc/epithet/inventory.yaml
+  principal-mode: epithet-principal-v1
+
+ca:
+  listen: "0.0.0.0:8080"
+  key: /usr/local/etc/epithet/ca.key
+  policy: unix:///var/run/epithet/policy.sock
+
+policy:
+  listen: unix:///var/run/epithet/policy.sock
+  ca-pubkey: /usr/local/etc/epithet/ca.key.pub
+  oidc:
+    issuer: "https://replace-with-your-issuer.example"
+    client-id: "replace-with-your-client-id"
+  policy-file: /usr/local/etc/epithet/policy.writ
+  inventory:
+    - /usr/local/etc/epithet/inventory.yaml
+  principal-mode: epithet-principal-v1
+  default-expiration: 5m

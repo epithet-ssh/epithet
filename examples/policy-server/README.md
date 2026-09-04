@@ -150,9 +150,10 @@ most supervisors run `ExecStart`-style command lines without a shell, so a
 
 For a single-process alternative that supervises both itself, see `epithet
 server` in the [architecture guide](../../docs/architecture.md#epithet-server).
-The initial FreeBSD package is host-focused and does not install server rc.d
-services; run the CA and policy processes under an explicitly configured
-supervisor.
+On FreeBSD, the package installs disabled-by-default `epithet_server`,
+`epithet_ca`, and `epithet_policy` rc.d services. They share
+`/usr/local/etc/epithet/server.yaml`; enable `epithet_server` for combined mode,
+or enable both `epithet_policy` and `epithet_ca` for split mode.
 
 ## Configuring target hosts
 

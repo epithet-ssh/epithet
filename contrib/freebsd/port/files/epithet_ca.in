@@ -1,0 +1,49 @@
+#!/bin/sh
+
+# PROVIDE: epithet_ca
+# REQUIRE: NETWORKING epithet_policy
+# KEYWORD: shutdown
+#
+# Add this line to /etc/rc.conf to enable the CA service:
+#
+# epithet_ca_enable="YES"
+
+. /etc/rc.subr
+
+name=epithet_ca
+desc="Epithet certificate authority server"
+rcvar=epithet_ca_enable
+
+load_rc_config $name
+
+: ${epithet_ca_enable:=NO}
+: ${epithet_ca_config:=%%PREFIX%%/etc/epithet/server.yaml}
+: ${epithet_ca_runas:=epithet}
+: ${epithet_ca_runas_group:=epithet}
+: ${epithet_ca_pidfile:=/var/run/epithet/ca.pid}
+: ${epithet_ca_logfile:=/var/log/epithet/ca.log}
+: ${epithet_ca_args:=""}
+
+command=/usr/sbin/daemon
+procname=%%PREFIX%%/bin/epithet
+pidfile=${epithet_ca_pidfile}
+command_args="-f -p ${pidfile} -o ${epithet_ca_logfile} -u ${epithet_ca_runas} ${procname} --config ${epithet_ca_config} ca ${epithet_ca_args}"
+required_files=${epithet_ca_config}
+start_precmd=epithet_ca_precmd
+
+epithet_ca_precmd()
+{
+	load_rc_config epithet_server
+	: ${epithet_server_enable:=NO}
+	if checkyesno epithet_server_enable; then
+		echo "epithet_ca cannot run while epithet_server is enabled" >&2
+		return 1
+	fi
+
+	install -d -m 0750 -o "${epithet_ca_runas}" -g "${epithet_ca_runas_group}" /var/run/epithet /var/log/epithet
+	if [ ! -e "${epithet_ca_logfile}" ]; then
+		install -m 0640 -o "${epithet_ca_runas}" -g "${epithet_ca_runas_group}" /dev/null "${epithet_ca_logfile}"
+	fi
+}
+
+run_rc_command "$1"

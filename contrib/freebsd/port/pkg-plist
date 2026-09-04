@@ -1,0 +1,2 @@
+bin/epithet
+@sample(root,epithet,0640) %%ETCDIR%%/server.yaml.sample
