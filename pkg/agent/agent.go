@@ -190,6 +190,12 @@ func (a *Agent) AgentSocketPath() string {
 	return a.agentSocketPath
 }
 
+// Certificate returns the raw certificate currently served by this agent.
+// An empty value means the agent has no live credential.
+func (a *Agent) Certificate() sshcert.RawCertificate {
+	return a.keyring.certificate()
+}
+
 // Running returns true if the agent is currently running and accepting connections
 func (a *Agent) Running() bool {
 	select {
@@ -209,6 +215,9 @@ func (a *Agent) Done() <-chan struct{} {
 // Close stops the agent and cleans up resources. Safe to call multiple times.
 func (a *Agent) Close() {
 	a.closeOnce.Do(func() {
+		// Drop the credential before closing the listener so clients already
+		// connected to this socket cannot keep using it for later requests.
+		a.keyring.clear()
 		if a.agentListener != nil {
 			_ = a.agentListener.Close() // Ignore error
 		}
@@ -228,7 +237,12 @@ var errReadOnly = fmt.Errorf("epithet agent is read-only")
 // so UseCredential never needs to lock out concurrent Sign calls or unwind a
 // partial list-add-remove sequence on error.
 type readOnlyKeyring struct {
-	inner atomic.Pointer[agent.Agent]
+	state atomic.Pointer[keyringState]
+}
+
+type keyringState struct {
+	inner       agent.Agent
+	certificate sshcert.RawCertificate
 }
 
 // newReadOnlyKeyring creates a readOnlyKeyring with an empty inner keyring,
@@ -236,7 +250,7 @@ type readOnlyKeyring struct {
 func newReadOnlyKeyring() *readOnlyKeyring {
 	r := &readOnlyKeyring{}
 	empty := agent.NewKeyring()
-	r.inner.Store(&empty)
+	r.state.Store(&keyringState{inner: empty})
 	return r
 }
 
@@ -260,12 +274,22 @@ func (r *readOnlyKeyring) swap(c Credential) error {
 		return fmt.Errorf("unable to add new credential: %w", err)
 	}
 
-	r.inner.Store(&fresh)
+	r.state.Store(&keyringState{inner: fresh, certificate: c.Certificate})
 	return nil
 }
 
+// clear atomically replaces the live credential with an empty keyring.
+func (r *readOnlyKeyring) clear() {
+	empty := agent.NewKeyring()
+	r.state.Store(&keyringState{inner: empty})
+}
+
 func (r *readOnlyKeyring) current() agent.Agent {
-	return *r.inner.Load()
+	return r.state.Load().inner
+}
+
+func (r *readOnlyKeyring) certificate() sshcert.RawCertificate {
+	return r.state.Load().certificate
 }
 
 func (r *readOnlyKeyring) List() ([]*agent.Key, error) {

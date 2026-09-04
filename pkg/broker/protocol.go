@@ -16,6 +16,7 @@ import (
 type Request struct {
 	Match   *policy.Connection `json:"match,omitempty"`
 	Inspect *struct{}          `json:"inspect,omitempty"`
+	Kill    *KillRequest       `json:"kill,omitempty"`
 }
 
 // Event is one line of JSON sent by the broker in response to a Request.
@@ -26,6 +27,7 @@ type Event struct {
 	Output  string           `json:"output,omitempty"`
 	Result  *MatchResponse   `json:"result,omitempty"`
 	Inspect *InspectResponse `json:"inspect,omitempty"`
+	Kill    *KillResponse    `json:"kill,omitempty"`
 }
 
 // eventWriter serializes Event writes to a single client connection. Auth
@@ -128,10 +130,16 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		_ = w.writeEvent(Event{Inspect: &resp})
+	case req.Kill != nil:
+		resp := KillResponse{ID: req.Kill.ID}
+		if err := b.Kill(*req.Kill, &resp); err != nil {
+			resp.Error = err.Error()
+		}
+		_ = w.writeEvent(Event{Kill: &resp})
 	default:
 		_ = w.writeEvent(Event{Result: &MatchResponse{
 			Allow: false,
-			Error: "request must set exactly one of match or inspect",
+			Error: "request must set exactly one of match, inspect, or kill",
 		}})
 	}
 }

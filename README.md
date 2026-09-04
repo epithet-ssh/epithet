@@ -51,6 +51,7 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 |---------|-------------|
 | `epithet agent` | Start the broker daemon that manages certificates and agents |
 | `epithet agent inspect` | Query a running broker's state |
+| `epithet agent kill AGENT_ID` | Evict one agent so its next connection fetches a fresh certificate |
 | `epithet server` | Run the CA and policy server as supervised subprocesses behind one port |
 | `epithet match` | Called by SSH `Match tagged ... exec` to trigger certificate flow |
 | `epithet host enroll` | Enroll a target host, install its CA key, and configure sshd |

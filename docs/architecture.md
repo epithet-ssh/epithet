@@ -105,10 +105,12 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 - Starts the broker daemon, listening on `~/.epithet/run/<name>/broker.sock`
 - `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
 - `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
+- `agent inspect` and `agent kill` locate the running broker from this profile name; `--broker` overrides the derived socket path.
 - Fetches OIDC issuer/client ID from the CA's auth config once at startup (discovered via Link header on `GET /`) — no local auth configuration
 - Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`. A plain `Match tagged` block selects the per-connection `IdentityAgent` on whichever pass first supplies the tag; a separate `Match final tagged` block invokes Epithet after hostname canonicalization. `%C` is expanded from the final connection in both places.
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
 - Creates in-process SSH agent instances for each unique connection
+- `epithet agent kill AGENT_ID` evicts the identified agent and its in-memory credential; the next match for that connection generates a new keypair and requests a fresh certificate. This is local cache eviction, not certificate revocation, and does not disconnect established SSH sessions.
 - Graceful shutdown with proper cleanup
 
 ### epithet ca
@@ -150,9 +152,9 @@ epithet server --listen <addr> --ca-key <path>
 
 2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
-3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and OIDC authentication on endpoints. Communicates with `epithet match`/`epithet agent inspect` over newline-framed JSON on a unix socket — see [Protocols](#protocols). Implements per-connection agent creation and automatic expiry cleanup.
+3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and OIDC authentication on endpoints. Communicates with `epithet match` and `epithet agent inspect`/`kill` over newline-framed JSON on a unix socket — see [Protocols](#protocols). Implements per-connection agent creation and automatic expiry cleanup. Its agent map holds routing and expiry metadata, not copies of credentials.
 
-4. **Per-connection agents** (`pkg/agent`): In-process, read-only (`List`/`Sign` only) SSH agent implementation using `golang.org/x/crypto/ssh/agent`. One agent instance per unique connection, each exposing a unix socket at `~/.epithet/run/<name>/agent/%C`.
+4. **Per-connection agents** (`pkg/agent`): In-process, read-only (`List`/`Sign` only) SSH agent implementation using `golang.org/x/crypto/ssh/agent`. One agent instance per unique connection, each owning its private key and certificate and exposing a unix socket at `~/.epithet/run/<name>/agent/%C`.
 
 ## Authentication mechanism
 
@@ -164,7 +166,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 
 **Authentication vs certificate expiry:**
 - **Auth sessions**: Long-lived (hours/days) via OIDC refresh tokens held in the broker's memory
-- **SSH certificates**: Short-lived (2-10 minutes, further clamped to the token's remaining lifetime) for just-in-time authorization, minted fresh per connection
+- **SSH certificates**: Short-lived (2-10 minutes, further clamped to the token's remaining lifetime) for just-in-time authorization. Each connection hash has its own agent and certificate; repeated matches reuse only that agent until expiry or explicit eviction.
 - **OIDC calls**: Proactive, ahead of JWT expiry, plus a single forced retry on a CA 401
 
 **User experience:**
@@ -196,12 +198,13 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 
 ## Protocols
 
-### Broker ↔ epithet match/inspect (local IPC)
+### Broker ↔ epithet match/agent commands (local IPC)
 
 Newline-framed JSON over the broker's unix socket — no gRPC, no protobuf. Both peers are the same binary, and the socket is 0700 in the profile rundir, so there is no cross-version or cross-language contract to protect.
 
 - `epithet match` sends one line: `{"match": {"remoteHost":...,"remoteUser":...,"port":...,"proxyJump":...,"hash":...}}`. The broker streams zero or more `{"output": "<text>"}` events (auth progress, e.g. the authorization URL to visit, written to the user's stderr) followed by exactly one `{"result": {"allow": bool, "error": "..."}}`.
 - `epithet agent inspect` sends `{"inspect": {}}` and receives one `{"inspect": {...}}` response describing the broker's current agents (including each agent's host, user, port, ProxyJump, and `%C` hash) and CA endpoint states.
+- `epithet agent kill AGENT_ID` sends `{"kill": {"id":"..."}}` and receives one `{"kill": {"id":"...","connection":{...}}}` response. A failed lookup returns the same typed response with an `error` field.
 
 ### Broker → CA protocol
 

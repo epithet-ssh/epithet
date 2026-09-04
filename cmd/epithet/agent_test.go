@@ -34,6 +34,15 @@ func TestProfileNameValidation(t *testing.T) {
 	require.NoError(t, validateProfileName("home-2"))
 }
 
+func TestAgentControlCommandsResolveBrokerFromProfileWithoutCAURL(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	got, err := resolveAgentBrokerSocket(&AgentCLI{Name: "work"}, "")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(homeDir, ".epithet", "run", "work", "broker.sock"), got)
+}
+
 // TestAcquireProfileLockPreventsConcurrentAgents exercises the flock guard
 // the same way AgentStartCLI.Run does: acquire once (as the first agent
 // process would), then attempt a second acquisition against the same rundir

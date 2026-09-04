@@ -58,6 +58,7 @@ func TestBasics(t *testing.T) {
 		Certificate: userCert,
 	})
 	require.NoError(t, err)
+	require.Equal(t, userCert, a.Certificate())
 
 	out, err := server.Ssh(a)
 	t.Log(out)
@@ -75,6 +76,7 @@ func TestBasics(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("agent did not complete cleanup within timeout")
 	}
+	require.Empty(t, a.Certificate(), "closing the agent must discard its credential")
 
 	_, err = os.Stat(a.AgentSocketPath())
 	if !os.IsNotExist(err) {

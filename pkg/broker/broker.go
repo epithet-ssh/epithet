@@ -33,12 +33,12 @@ const cleanupInterval = 30 * time.Second
 // without meaningfully reducing usability.
 const expiryBuffer = 5 * time.Second
 
-// agentEntry tracks a running agent and when its certificate expires
+// agentEntry tracks a running agent plus the routing and expiry metadata the
+// broker needs. The credential itself is owned only by the agent.
 type agentEntry struct {
-	agent       *agent.Agent
-	connection  policy.Connection
-	expiresAt   time.Time
-	certificate sshcert.RawCertificate
+	agent      *agent.Agent
+	connection policy.Connection
+	expiresAt  time.Time
 }
 
 // Broker manages authentication and per-connection SSH agents. Certificates
@@ -177,6 +177,20 @@ type MatchResponse struct {
 // InspectRequest is the input for Broker.Inspect over the JSON line protocol
 type InspectRequest struct{}
 
+// KillRequest identifies one per-connection agent by the ID returned from
+// Inspect. The ID is the OpenSSH connection hash used as the broker's map key.
+type KillRequest struct {
+	ID policy.ConnectionHash `json:"id"`
+}
+
+// KillResponse confirms which agent was evicted. Error is populated on the
+// wire when a protocol request cannot be completed.
+type KillResponse struct {
+	ID         policy.ConnectionHash `json:"id"`
+	Connection policy.Connection     `json:"connection"`
+	Error      string                `json:"error,omitempty"`
+}
+
 // AgentInfo contains information about a running agent
 type AgentInfo struct {
 	Hash        string                 `json:"hash"`
@@ -302,7 +316,6 @@ func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Cred
 			return fmt.Errorf("failed to parse certificate expiry: %w", err)
 		}
 		entry.expiresAt = expiresAt
-		entry.certificate = credential.Certificate
 		entry.connection = connection
 		b.agents[connectionHash] = entry
 		return nil
@@ -354,10 +367,9 @@ func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Cred
 
 	// Store the agent entry
 	b.agents[connectionHash] = agentEntry{
-		agent:       ag,
-		connection:  connection,
-		expiresAt:   expiresAt,
-		certificate: credential.Certificate,
+		agent:      ag,
+		connection: connection,
+		expiresAt:  expiresAt,
 	}
 
 	b.log.Info("agent created and started", "hash", connectionHash, "socket", socketPath)
@@ -482,12 +494,16 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 	output.Agents = make([]AgentInfo, 0, len(b.agents))
 	for hash, entry := range b.agents {
 		socketPath := filepath.Join(b.agentSocketDir, string(hash))
+		var certificate sshcert.RawCertificate
+		if entry.agent != nil {
+			certificate = entry.agent.Certificate()
+		}
 		output.Agents = append(output.Agents, AgentInfo{
 			Hash:        string(hash),
 			Connection:  entry.connection,
 			SocketPath:  socketPath,
 			ExpiresAt:   entry.expiresAt,
-			Certificate: entry.certificate,
+			Certificate: certificate,
 		})
 	}
 
@@ -500,5 +516,31 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 		})
 	}
 
+	return nil
+}
+
+// Kill evicts one per-connection agent and its in-memory credential. The next
+// Match for the connection requests a fresh certificate. This does not revoke
+// the issued certificate or disconnect an already-established SSH session.
+func (b *Broker) Kill(request KillRequest, output *KillResponse) error {
+	if request.ID == "" {
+		return fmt.Errorf("agent ID is empty")
+	}
+
+	b.lock.Lock()
+	entry, exists := b.agents[request.ID]
+	if !exists {
+		b.lock.Unlock()
+		return fmt.Errorf("agent %q does not exist", request.ID)
+	}
+	delete(b.agents, request.ID)
+	if entry.agent != nil {
+		entry.agent.Close()
+	}
+	b.lock.Unlock()
+
+	output.ID = request.ID
+	output.Connection = entry.connection
+	b.log.Info("agent killed", "hash", request.ID, "host", entry.connection.RemoteHost, "user", entry.connection.RemoteUser)
 	return nil
 }

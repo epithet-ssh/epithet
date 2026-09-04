@@ -34,6 +34,26 @@ func validateProfileName(name string) error {
 	return nil
 }
 
+// resolveAgentBrokerSocket locates the broker controlled by agent subcommands
+// such as inspect and kill. An explicit socket overrides profile discovery.
+func resolveAgentBrokerSocket(parent *AgentCLI, override string) (string, error) {
+	if override != "" {
+		brokerSock, err := expandPath(override)
+		if err != nil {
+			return "", fmt.Errorf("failed to expand broker socket path: %w", err)
+		}
+		return brokerSock, nil
+	}
+	if err := validateProfileName(parent.Name); err != nil {
+		return "", err
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(homeDir, ".epithet", "run", parent.Name, "broker.sock"), nil
+}
+
 // acquireProfileLock takes an exclusive, non-blocking flock on
 // <runDir>/agent.lock so at most one agent process ever owns a given
 // profile's rundir: two agents sharing a rundir would race on
@@ -72,6 +92,7 @@ type AgentCLI struct {
 
 	Start   AgentStartCLI   `cmd:"" default:"withargs" help:"Start the epithet agent"`
 	Inspect AgentInspectCLI `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
+	Kill    AgentKillCLI    `cmd:"kill" help:"Kill one agent and discard its certificate"`
 }
 
 // AgentStartCLI is the default subcommand that starts the agent/broker.

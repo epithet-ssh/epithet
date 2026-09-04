@@ -360,11 +360,91 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 		entry, ok := b.agents[conn.Hash]
 		require.True(t, ok, "expected an agent for %s", conn.Hash)
 		require.Equal(t, conn, entry.connection)
-		cert, err := sshcert.Parse(entry.certificate)
+		cert, err := sshcert.Parse(entry.agent.Certificate())
 		require.NoError(t, err)
 		require.Equal(t, []string{conn.RemoteUser}, cert.ValidPrincipals,
 			"cert for %s must name only the requested principal", conn.RemoteHost)
 	}
+}
+
+func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	idp := oidctest.New(t)
+
+	eval := writEvaluator(t,
+		"allow id:\"test@example.com\" -> root@*\n",
+		"users:\n  - userName: test@example.com\nhosts:\n  - pattern: \"*\"\n")
+	caURL, hits := realCAAndPolicy(t, idp, eval)
+
+	tmpDir := shortTempDir(t)
+	b, err := New(*testLogger(t), tmpDir+"/b.sock", testTokenFunc(t, idp), testCAClient(t, caURL), tmpDir+"/a")
+	require.NoError(t, err)
+	b.SetShutdownTimeout(0)
+
+	go func() {
+		err := b.Serve(ctx)
+		if err != nil && err != ctx.Err() {
+			t.Errorf("broker.Serve error: %v", err)
+		}
+	}()
+	t.Cleanup(b.Close)
+	<-b.Ready()
+
+	one := policy.Connection{RemoteHost: "one.example.com", RemoteUser: "root", Hash: "hash-one"}
+	two := policy.Connection{RemoteHost: "two.example.com", RemoteUser: "root", Hash: "hash-two"}
+	require.True(t, callMatch(t, b.brokerSocketPath, one).Allow)
+	require.True(t, callMatch(t, b.brokerSocketPath, two).Allow)
+	require.Equal(t, int32(2), atomic.LoadInt32(hits))
+
+	b.lock.Lock()
+	firstAgent := b.agents[one.Hash].agent
+	firstCertificate := firstAgent.Certificate()
+	secondAgent := b.agents[two.Hash].agent
+	secondCertificate := secondAgent.Certificate()
+	b.lock.Unlock()
+
+	var killed KillResponse
+	require.NoError(t, b.Kill(KillRequest{ID: one.Hash}, &killed))
+	require.Equal(t, one.Hash, killed.ID)
+	require.Equal(t, one, killed.Connection)
+	require.Empty(t, firstAgent.Certificate(), "the killed agent must discard its credential")
+
+	b.lock.Lock()
+	_, oneStillExists := b.agents[one.Hash]
+	remaining := b.agents[two.Hash]
+	b.lock.Unlock()
+	require.False(t, oneStillExists)
+	require.Same(t, secondAgent, remaining.agent)
+	require.Equal(t, secondCertificate, remaining.agent.Certificate())
+
+	require.True(t, callMatch(t, b.brokerSocketPath, one).Allow)
+	require.Equal(t, int32(3), atomic.LoadInt32(hits), "the killed connection must request one fresh certificate")
+
+	b.lock.Lock()
+	freshCertificate := b.agents[one.Hash].agent.Certificate()
+	b.lock.Unlock()
+	require.NotEqual(t, firstCertificate, freshCertificate)
+}
+
+func TestKillUnknownAgentLeavesBrokerStateUnchanged(t *testing.T) {
+	t.Parallel()
+	b := newTestBroker(t, nil)
+	b.lock.Lock()
+	b.agents["known"] = agentEntry{connection: policy.Connection{Hash: "known"}}
+	b.lock.Unlock()
+	t.Cleanup(func() {
+		b.lock.Lock()
+		delete(b.agents, "known")
+		b.lock.Unlock()
+	})
+
+	err := b.Kill(KillRequest{ID: "missing"}, &KillResponse{})
+	require.EqualError(t, err, `agent "missing" does not exist`)
+
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	require.Contains(t, b.agents, policy.ConnectionHash("known"))
 }
 
 // TestMatchCADown_ReturnsHumanLegibleError covers the other deletion-risk

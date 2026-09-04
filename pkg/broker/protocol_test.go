@@ -234,3 +234,43 @@ func TestInspectReturnsAgentConnection(t *testing.T) {
 	require.Len(t, ev.Inspect.Agents, 1)
 	require.Equal(t, conn, ev.Inspect.Agents[0].Connection)
 }
+
+func TestKillReturnsTypedEventAndRemovesAgent(t *testing.T) {
+	t.Parallel()
+	b := newTestBroker(t, nil)
+	connection := policy.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Hash: "connection-hash"}
+	b.lock.Lock()
+	b.agents[connection.Hash] = agentEntry{connection: connection}
+	b.lock.Unlock()
+
+	client := dialBroker(t, b)
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Kill: &KillRequest{ID: connection.Hash}}))
+
+	scanner := bufio.NewScanner(client)
+	require.True(t, scanner.Scan())
+	var event Event
+	require.NoError(t, json.Unmarshal(scanner.Bytes(), &event))
+	require.NotNil(t, event.Kill)
+	require.Empty(t, event.Kill.Error)
+	require.Equal(t, connection.Hash, event.Kill.ID)
+	require.Equal(t, connection, event.Kill.Connection)
+
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	require.NotContains(t, b.agents, connection.Hash)
+}
+
+func TestKillUnknownAgentReturnsTypedError(t *testing.T) {
+	t.Parallel()
+	b := newTestBroker(t, nil)
+	client := dialBroker(t, b)
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Kill: &KillRequest{ID: "missing"}}))
+
+	scanner := bufio.NewScanner(client)
+	require.True(t, scanner.Scan())
+	var event Event
+	require.NoError(t, json.Unmarshal(scanner.Bytes(), &event))
+	require.NotNil(t, event.Kill)
+	require.Equal(t, policy.ConnectionHash("missing"), event.Kill.ID)
+	require.Contains(t, event.Kill.Error, "does not exist")
+}
