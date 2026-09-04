@@ -270,11 +270,26 @@ func TestUnsetTTLDoesNotParticipateInMinimum(t *testing.T) {
 
 // ── host and account matching detail ────────────────────────────────
 
-func TestHostGlobCrossesDots(t *testing.T) {
+func TestHostGlobStarStopsAtLabelBoundary(t *testing.T) {
 	src := "allow * -> root@web-*\n"
 	h := &eval.Host{Name: "web-1.example.com"}
 	d := decide(t, src, eval.Request{User: sreUser(), Host: h, Account: "root"})
+	require.Equal(t, eval.Deny, d.Outcome)
+}
+
+func TestHostGlobMatchesWithinLabel(t *testing.T) {
+	src := "allow * -> root@web-*.example.com\n"
+	h := &eval.Host{Name: "web-1.example.com"}
+	d := decide(t, src, eval.Request{User: sreUser(), Host: h, Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
+}
+
+func TestHostGlobDoublestarCrossesLabels(t *testing.T) {
+	src := "allow * -> root@**.controlplane.internal\n"
+	for _, name := range []string{"controlplane.internal", "api.controlplane.internal", "blue.api.controlplane.internal"} {
+		d := decide(t, src, eval.Request{User: sreUser(), Host: &eval.Host{Name: name}, Account: "root"})
+		require.Equal(t, eval.Issue, d.Outcome, name)
+	}
 }
 
 func TestLabelSelectorEntriesAND(t *testing.T) {

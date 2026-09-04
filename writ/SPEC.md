@@ -177,10 +177,15 @@ policy file must not mean different things on different machines.
 plus `s` / `m` / `h`, composable (`2m`, `90s`, `1h30m`). They occur only
 after `ttl`.
 
-**Globs** use `*` and `?` only — no character classes (they would
-collide with list `[]`) and no `**`. `*` matches any run of characters
-including dots; host names are writ registrations, not DNS labels, so
-there is no hierarchy for a glob to respect.
+**Globs** match the complete name. Account globs are flat: `*` matches any run
+of characters and `?` matches one character. Host globs are label-aware: `*`
+and `?` never cross `.`, while `**` is legal only as a complete dot-delimited
+label and matches zero or more labels. Thus `*.controlplane.internal` matches
+`api.controlplane.internal` but not `blue.api.controlplane.internal`, while
+`**.controlplane.internal` matches both and also `controlplane.internal`.
+A standalone `*` is the universal matcher, not a glob. Character classes,
+brace alternatives, escapes, `/`, malformed star runs, and embedded `**` are
+errors in host patterns.
 
 **Trailing commas** are legal inside `[]` and `{}`. At bracket depth
 zero a trailing comma drives continuation, so one immediately before EOF
@@ -304,7 +309,8 @@ negated allow is a syntax error. The reason is drift: a negated set
 on an allow.
 
 **Globs match names, never attribute values.** Account names and host
-names may glob; a standalone `*` is legal anywhere. Tag values
+names may glob; a standalone `*` is legal anywhere and means every value in
+that position. Tag values
 (`group:`, `id:`, …), label keys, and label values are exact. A bare `*`
 or `?` in an attribute-value position is an error; a **quoted attribute
 value is always a literal** (`group:"weird*name"` matches a group with a
@@ -545,9 +551,10 @@ express the `[!$a, !$b]` footgun the grammar forbids.
 | `accounts` | `{"name": s}` `{"glob": s}` `{"any": true}` |
 | `hosts` | `{"name": s}` `{"glob": s}` `{"labels": {k: v}}` `{"any": true}` |
 
-All string values compare byte-exact; `glob` supports `*` and `?` only.
-Host `name` and `glob` values are stored ASCII-lowercased. A surface
-`*` compiles to `{"any": true}` in every position, never to
+All literal string values compare byte-exact. Account `glob` supports flat
+`*` and `?`; host `glob` uses the label-aware syntax defined in section 3.
+Host `name` and `glob` values are stored ASCII-lowercased. A standalone
+`*`, quoted or bare, compiles to `{"any": true}` in every position, never to
 `{"glob": "*"}` — it is semantically distinct, skips the glob engine,
 and gives the "grants to everyone" lint a token to recognize.
 

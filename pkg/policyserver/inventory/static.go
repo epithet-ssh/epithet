@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
@@ -19,11 +20,11 @@ import (
 // once at startup. Reload is a process restart, like the policy itself.
 //
 // Host entries come in two forms. An exact entry (`name:`) is one
-// registered host. A pattern entry (`pattern:`, writ glob — `*`/`?`
-// only) resolves any requested name it matches. Account-name entries adopt
-// the requested name; destination-bound named domains expose that domain as
-// the Writ resource so policy cannot claim per-member isolation. Patterns are
-// the escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
+// registered host. A pattern entry (`pattern:`) uses the same DNS-label-aware
+// hostname patterns as Writ host selectors. Account-name entries adopt the
+// requested name; destination-bound named domains expose that domain as the
+// Writ resource so policy cannot claim per-member isolation. Patterns are the
+// escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
 	users                map[string]*eval.User
@@ -36,7 +37,7 @@ type Static struct {
 }
 
 type patternHost struct {
-	pattern       string
+	pattern       hostpattern.Pattern
 	labels        map[string]string
 	accounts      []string
 	principalMode PrincipalMode
@@ -210,8 +211,12 @@ func (s *Static) loadFile(path string) error {
 			if domain.IsGeneratedHost() {
 				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use generated host domain %q", path, i, h.Pattern, domain)
 			}
+			pattern, err := hostpattern.Parse(il.HostName(h.Pattern))
+			if err != nil {
+				return fmt.Errorf("%s: hosts[%d] pattern %q: %w", path, i, h.Pattern, err)
+			}
 			s.patterns = append(s.patterns, patternHost{
-				pattern:       il.HostName(h.Pattern),
+				pattern:       pattern,
 				labels:        h.Labels,
 				accounts:      h.Accounts,
 				principalMode: mode,
@@ -236,7 +241,7 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, erro
 		return h, nil
 	}
 	for _, p := range s.patterns {
-		if eval.GlobMatch(p.pattern, name) {
+		if p.pattern.Match(name) {
 			return &ResolvedHost{
 				Policy:        resolvedPolicyHost(name, p.domain, p.labels, p.accounts),
 				PrincipalMode: p.principalMode,

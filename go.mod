@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	github.com/alecthomas/kong v1.15.0
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/int128/oauth2cli v1.18.0
 	github.com/lmittmann/tint v1.1.3

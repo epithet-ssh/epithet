@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/writ/ast"
 	"github.com/epithet-ssh/epithet/pkg/writ/diag"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
@@ -137,6 +138,12 @@ func (c *checker) checkAtom(atom ast.Atom, kind ast.Kind) {
 				c.errf(pair.Key.Pos, "duplicate key `%s` in label selector — first at %s", pair.Key.Text, first)
 			} else {
 				seen[pair.Key.Text] = pair.Key.Pos
+			}
+		}
+	case *ast.Name:
+		if kind == ast.KindHost && strings.ContainsAny(a.Value.Text, "*?") {
+			if _, err := hostpattern.Parse(il.HostName(a.Value.Text)); err != nil {
+				c.errf(a.Value.Pos, "invalid host pattern `%s`: %v", a.Value.Text, err)
 			}
 		}
 	}
@@ -307,6 +314,11 @@ func (l *lowerer) matchers(expr *ast.Expr, kind ast.Kind) []il.Matcher {
 func nameMatcher(text string, kind ast.Kind) il.Matcher {
 	if kind == ast.KindHost {
 		text = il.HostName(text)
+	}
+	// Quoting affects tokenization, not matcher meaning. Preserve the one
+	// universal spelling in the IL even when an author quotes it.
+	if text == "*" {
+		return il.Matcher{Kind: il.MatchAny}
 	}
 	if strings.ContainsAny(text, "*?") {
 		return il.Matcher{Kind: il.MatchGlob, Value: text}

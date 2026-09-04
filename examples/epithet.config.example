@@ -54,10 +54,9 @@ agent:
 #       permit-pty: ""
 #       permit-agent-forwarding: ""
 #
-#   # Per-host policy overrides. Host patterns use doublestar glob
-#   # semantics: "*" crosses dots, so "*.prod.example.com" also matches
-#   # "a.b.prod.example.com", and brace alternation works
-#   # ("web{1,2}.example.com", "host{,.example.com}").
+#   # Per-host policy overrides. Host patterns are label-aware: "*" and "?"
+#   # do not cross dots, while a whole-label "**" crosses labels. Character
+#   # classes, brace alternatives, and escapes are not supported.
 #   hosts:
 #     "*.prod.example.com":
 #       expiration: "2m"       # shorter expiration for production

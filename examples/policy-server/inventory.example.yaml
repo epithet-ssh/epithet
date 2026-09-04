@@ -40,8 +40,9 @@ hosts:
     accounts: [root, postgres, ubuntu]
 
   # Pattern entries synthesize a host for any matching name - useful
-  # for short-lived fleets that follow a naming convention. Globs are
-  # writ globs (* and ? only; * crosses dots).
+  # for short-lived fleets that follow a naming convention. Inventory and
+  # Writ share host globs: * and ? stay within one dot-delimited label, while
+  # a whole-label ** crosses zero or more labels.
   - pattern: "dev-*.example.com"
     labels: {env: dev}
     principal-mode: epithet-principal-v1

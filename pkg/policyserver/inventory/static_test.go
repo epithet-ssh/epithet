@@ -94,12 +94,49 @@ func TestHostWithoutAccountsIsUngrounded(t *testing.T) {
 
 func TestPatternSynthesizesHost(t *testing.T) {
 	s := loadBasic(t)
-	h, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
+	h, err := s.LookupHost(context.Background(), "ci-runner-42")
 	require.NoError(t, err)
-	require.NotNil(t, h, "glob crosses dots")
-	require.Equal(t, "ci-runner-42.internal", h.Policy.Name, "synthesized host adopts the requested name")
+	require.NotNil(t, h)
+	require.Equal(t, "ci-runner-42", h.Policy.Name, "synthesized host adopts the requested name")
 	require.Equal(t, "ci", h.Policy.Labels["env"])
 	require.Nil(t, h.Policy.Accounts)
+}
+
+func TestPatternStarStopsAtLabelBoundary(t *testing.T) {
+	s := loadBasic(t)
+	h, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
+	require.NoError(t, err)
+	require.Nil(t, h)
+}
+
+func TestPatternDoublestarCrossesLabelBoundaries(t *testing.T) {
+	src := "hosts:\n  - pattern: '**.controlplane.internal'\n"
+	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+	require.NoError(t, err)
+
+	for _, name := range []string{"controlplane.internal", "api.controlplane.internal", "blue.api.controlplane.internal"} {
+		h, err := s.LookupHost(context.Background(), name)
+		require.NoError(t, err)
+		require.NotNil(t, h, name)
+	}
+}
+
+func TestInvalidPatternSyntaxIsLoadError(t *testing.T) {
+	patterns := []string{
+		"host{,.internal}",
+		"host[0-9].internal",
+		`host\*.internal`,
+		"host/internal",
+		"host**.internal",
+		"host.***.internal",
+	}
+	for _, pattern := range patterns {
+		t.Run(pattern, func(t *testing.T) {
+			src := "hosts:\n  - pattern: '" + pattern + "'\n"
+			_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
+			require.ErrorContains(t, err, "hosts[0] pattern")
+		})
+	}
 }
 
 func TestHashedDefaultRequiresAndLoadsExactDomain(t *testing.T) {

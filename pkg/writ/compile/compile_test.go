@@ -190,6 +190,32 @@ func TestQuotedGlobInNamePositionGlobs(t *testing.T) {
 	require.Equal(t, il.MatchGlob, pol.Allows[0].Accounts.Or[0].Kind)
 }
 
+func TestQuotedStandaloneStarStillCompilesToAny(t *testing.T) {
+	pol := compileOK(t, "allow group:A -> \"*\"@\"*\"\n")
+	require.Equal(t, []il.Matcher{{Kind: il.MatchAny}}, pol.Allows[0].Accounts.Or)
+	require.Equal(t, []il.Matcher{{Kind: il.MatchAny}}, pol.Allows[0].Hosts.Or)
+}
+
+func TestValidHostDoublestarCompiles(t *testing.T) {
+	pol := compileOK(t, "allow group:A -> root@**.controlplane.internal\n")
+	require.Equal(t, []il.Matcher{{Kind: il.MatchGlob, Value: "**.controlplane.internal"}}, pol.Allows[0].Hosts.Or)
+}
+
+func TestInvalidHostPatternSyntaxIsCompileError(t *testing.T) {
+	tests := []string{
+		`"host*.{internal,example.com}"`,
+		`"host-[0-9]*.internal"`,
+		`"host*/internal"`,
+		"host**.internal",
+		"host.***.internal",
+	}
+	for _, pattern := range tests {
+		t.Run(pattern, func(t *testing.T) {
+			assertErr(t, "allow group:A -> root@"+pattern+"\n", "invalid host pattern")
+		})
+	}
+}
+
 func TestMacroRenameKeepsContentID(t *testing.T) {
 	a := compileOK(t, "user sre = group:SRE\nallow $sre -> root@h\n")
 	b := compileOK(t, "user oncall = group:SRE\nallow $oncall -> root@h\n")
