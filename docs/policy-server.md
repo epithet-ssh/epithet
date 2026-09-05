@@ -280,6 +280,11 @@ policy:
 - **`default-expiration`** (optional): cert TTL when no satisfied rule sets a `ttl` (default `5m`). Always further clamped to the auth token's remaining lifetime.
 - **`extension`** (flag only): repeatable `name=value` cert extensions.
 
+When using `epithet server`, `policy.principal-mode` also supplies the default
+for the policy subprocess. An explicitly configured `server.principal-mode`
+overrides it, and `epithet server --principal-mode ...` overrides both config
+settings. If none is set, the policy default remains `account-name`.
+
 Policy and inventory are read once at startup; picking up changes is a process restart. `epithet policy --check` validates the pair (parse and compile errors with positions, unknown require/when/notify references, warnings such as unused macros or already-expired `until` rules) and exits non-zero on errors.
 
 ## Authorization logic

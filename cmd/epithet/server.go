@@ -30,10 +30,12 @@ type ServerCLI struct {
 	// Policy flags threaded through to the policy subprocess. The
 	// subprocess re-runs Kong against the same --config, so these are
 	// only needed when configuring via flags rather than a config file.
-	PolicyFile    string            `help:"Path to the writ policy file" name:"policy-file"`
-	Inventory     []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
-	Extension     map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
-	PrincipalMode string            `help:"Default SSH certificate principal mode" name:"principal-mode" default:"account-name" enum:"account-name,epithet-principal-v1"`
+	PolicyFile string            `help:"Path to the writ policy file" name:"policy-file"`
+	Inventory  []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
+	Extension  map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
+	// Leave unset to inherit policy configuration (including its default).
+	// Validate in Run so Kong does not require an enum default here.
+	PrincipalMode string `help:"Override policy principal mode: account-name or epithet-principal-v1 (default: inherit policy configuration)" name:"principal-mode"`
 }
 
 func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
@@ -72,22 +74,7 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	globalArgs := buildGlobalArgs()
 
 	// Start policy subprocess first — the CA depends on it.
-	policyArgs := append(globalArgs, "policy",
-		"--listen", "unix://"+policySock,
-		"--ca-pubkey", caPubkey,
-	)
-	if c.PolicyFile != "" {
-		policyArgs = append(policyArgs, "--policy-file", c.PolicyFile)
-	}
-	for _, inv := range c.Inventory {
-		policyArgs = append(policyArgs, "--inventory", inv)
-	}
-	if c.PrincipalMode != "" {
-		policyArgs = append(policyArgs, "--principal-mode", c.PrincipalMode)
-	}
-	for name, value := range c.Extension {
-		policyArgs = append(policyArgs, "--extension", name+"="+value)
-	}
+	policyArgs := c.policyArgs(globalArgs, policySock, caPubkey)
 	policyCmd := exec.CommandContext(ctx, os.Args[0], policyArgs...)
 	policyCmd.Stdout = os.Stdout
 	policyCmd.Stderr = os.Stderr
@@ -144,6 +131,28 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 
 	logger.Info("shutdown complete")
 	return subprocessErr
+}
+
+// policyArgs builds the subprocess command. Only explicit server overrides
+// should be forwarded; the policy subprocess reads its own configuration.
+func (c *ServerCLI) policyArgs(globalArgs []string, policySock, caPubkey string) []string {
+	policyArgs := append(globalArgs, "policy",
+		"--listen", "unix://"+policySock,
+		"--ca-pubkey", caPubkey,
+	)
+	if c.PolicyFile != "" {
+		policyArgs = append(policyArgs, "--policy-file", c.PolicyFile)
+	}
+	for _, inv := range c.Inventory {
+		policyArgs = append(policyArgs, "--inventory", inv)
+	}
+	if c.PrincipalMode != "" {
+		policyArgs = append(policyArgs, "--principal-mode", c.PrincipalMode)
+	}
+	for name, value := range c.Extension {
+		policyArgs = append(policyArgs, "--extension", name+"="+value)
+	}
+	return policyArgs
 }
 
 // buildGlobalArgs constructs the global CLI flags to pass through to subprocesses.
