@@ -16,7 +16,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Scopes is fixed: nothing in epithet consumes claims beyond email/sub.
+// Scopes is the fixed set requested during browser authentication.
+// Email/profile claims do not select the authorization identity; policy binds sub.
 var Scopes = []string{"openid", "profile", "email"}
 
 // openBrowser is a seam over browser.OpenURL so tests can stub it out —

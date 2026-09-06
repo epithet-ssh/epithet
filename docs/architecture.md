@@ -182,7 +182,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 4. Broker generates an ephemeral keypair for this connection
 5. Broker requests a certificate from the CA, sending the JWT and connection details
 6. CA authenticates itself to the policy server with a service JWT and forwards the user's JWT and connection details unvalidated
-7. Policy server validates the user's JWT (JWKS, issuer, audience, expiry), evaluates policy: "can this identity access this host as this exact requested user right now?"
+7. Policy server validates the user's JWT (JWKS, issuer, audience, expiry, nonempty subject), resolves its `sub` against inventory `oidc-subject` under the single configured issuer, then evaluates Writ for the resolved user's name/groups/attributes. Email claims do not select the user.
 8. Policy server returns `CertParams` — identity, one account-name or destination-bound principal according to the resolved host's mode, expiration, `NotAfter`, extensions
 9. CA signs a certificate clamped to `min(now + expiration, NotAfter)` and returns it
 10. Broker starts (or reuses) a per-connection agent socket serving this certificate

@@ -82,8 +82,17 @@ which drives an authorization-code flow with PKCE:
 3. Exchanges the code for tokens and returns the ID token (a JWT).
 
 Scopes are not configurable: the client always requests
-`openid profile email`. This is the only claim set anything in epithet
-consumes (`email`/`sub` for identity), so there is nothing to override.
+`openid profile email`. Authorization identity comes exclusively from the
+verified `sub` under the policy server's configured issuer. Email and profile
+claims do not select the inventory user. Each static user must have an explicit
+`oidc-subject`; see [inventory migration](policy-server.md#migrating-from-email-lookup).
+
+`epithet identity` uses the configured `agent.ca-url` and the same browser flow
+and then verifies the token before printing only its configured issuer and
+subject. It can obtain a binding before the user has inventory permissions.
+An explicit `--ca-url` overrides `identity.ca-url`, which otherwise takes
+precedence over the inherited `agent.ca-url`. The normal config-file search
+and `--config` flag are supported.
 
 On later calls, `prev` carries the previous `oauth2.Token` (including its
 refresh token). `Authenticate` reuses a still-valid access token or uses the

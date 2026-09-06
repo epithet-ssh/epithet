@@ -15,15 +15,15 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// PolicyEvaluator makes authorization decisions based on identity and connection details.
-// The token has already been validated and identity extracted by the handler.
+// PolicyEvaluator makes authorization decisions based on subject and connection details.
+// The handler has verified the token against the single configured OIDC issuer.
 // Implementations must:
 // - Make authorization decision (allow/deny) based on identity
 // - Return certificate parameters (principals, expiration, extensions) for the matching host pattern
 // - Return appropriate errors for different failure modes
 type PolicyEvaluator interface {
-	// Evaluate makes an authorization decision for the given identity and connection.
-	// The identity has already been extracted from a validated token.
+	// Evaluate resolves the validated OIDC subject to an inventory user and
+	// makes an authorization decision for that user and connection.
 	// tokenExpiry is the auth token's expiry, used to clamp the issued
 	// certificate's validity so it can never outlive the auth session that
 	// requested it.
@@ -34,7 +34,7 @@ type PolicyEvaluator interface {
 	// Error handling:
 	// - Return policyserver.Forbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error)
+	Evaluate(ctx context.Context, subject string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error)
 }
 
 // Forbidden returns a 403 error with the given message.
@@ -152,7 +152,7 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request, body
 	}
 
 	// Evaluate policy based on identity (authorization).
-	resp, err := h.config.Evaluator.Evaluate(r.Context(), claims.Identity, claims.ExpiresAt, req.Connection)
+	resp, err := h.config.Evaluator.Evaluate(r.Context(), claims.Subject, claims.ExpiresAt, req.Connection)
 	if err != nil {
 		if policyErr, ok := err.(*wire.PolicyError); ok {
 			h.writeError(w, policyErr.StatusCode, policyErr.Message)

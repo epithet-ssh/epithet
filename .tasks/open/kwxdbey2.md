@@ -3,7 +3,7 @@ yatl_version: 1
 title: 'Security hardening: signature replay window, --insecure scope, plain-HTTP policy fetch'
 id: kwxdbey2
 created: 2026-06-23T16:52:29.964019493Z
-updated: 2026-08-16T08:18:27.755350Z
+updated: 2026-09-06T03:21:04.744380Z
 author: Brian McCallister
 priority: low
 tags:
@@ -34,3 +34,8 @@ Created task.
 # Log: 2026-08-16T08:18:27Z Brian McCallister
 
 Slimmed post-refactor: item 1 (signature replay window) is overtaken - RFC 9421 signing was replaced by 60s request-bound service JWTs (aud, exp, jti minted, body-hash, htm/htu method+target binding), leaving only jti-uniqueness tracking as a possible future hardening (needs CA<->policy MITM to exploit). Remaining live scope: --insecure is one global switch covering CA, JWKS, and policy fetch; plain-HTTP policy fetch guard.
+
+---
+# Log: 2026-09-06T03:21:04Z Brian McCallister
+
+Review 2026-09-05: this task predates the serviceauth JWT implementation; its httpsig paths and timing are obsolete. Current JWTs bind body, method and host/path with 60-second minted expiry, but jti is not consumed and query is not bound. Confirmed HTTPS redirect exposure is tracked separately in 767qfv72.

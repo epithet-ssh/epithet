@@ -12,6 +12,7 @@ import (
 // Validator validates OIDC JWT tokens.
 type Validator struct {
 	verifier *oidc.IDTokenVerifier
+	issuer   string
 }
 
 // Config configures the OIDC validator.
@@ -29,8 +30,11 @@ type Config struct {
 
 // Claims represents the claims extracted from an OIDC token.
 type Claims struct {
-	// Identity is the user's identity, extracted from the email claim (or sub if email not present).
-	Identity string
+	// Issuer is the configured issuer against which the token was verified.
+	Issuer string
+	// Subject is the stable, case-sensitive identifier within this issuer.
+	// Profile claims such as email never select an authorization identity.
+	Subject string
 
 	// ExpiresAt is when the token expires.
 	ExpiresAt time.Time
@@ -63,6 +67,7 @@ func NewValidator(ctx context.Context, config Config) (*Validator, error) {
 
 	return &Validator{
 		verifier: verifier,
+		issuer:   config.Issuer,
 	}, nil
 }
 
@@ -75,22 +80,12 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 		return nil, fmt.Errorf("token verification failed: %w", err)
 	}
 
-	// Extract all claims into a map to look for the email claim.
-	var allClaims map[string]any
-	if err := idToken.Claims(&allClaims); err != nil {
-		return nil, fmt.Errorf("failed to extract claims: %w", err)
+	if idToken.Subject == "" {
+		return nil, fmt.Errorf("OIDC token has no subject")
 	}
-
-	claims := &Claims{
+	return &Claims{
+		Issuer:    v.issuer,
+		Subject:   idToken.Subject,
 		ExpiresAt: idToken.Expiry,
-	}
-
-	// Extract email claim (preferred for identity), falling back to subject.
-	if email, ok := allClaims["email"].(string); ok {
-		claims.Identity = email
-	} else {
-		claims.Identity = idToken.Subject
-	}
-
-	return claims, nil
+	}, nil
 }

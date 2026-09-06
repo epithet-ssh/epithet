@@ -59,7 +59,7 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("failed to write policy: %v", err)
 	}
 	inventoryPath := filepath.Join(tmpDir, "inventory.yaml")
-	inventoryContent := "users:\n  - userName: test@example.com\nhosts:\n  - pattern: \"*\"\n"
+	inventoryContent := "users:\n  - userName: test@example.com\n    oidc-subject: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n"
 	if err := os.WriteFile(inventoryPath, []byte(inventoryContent), 0644); err != nil {
 		t.Fatalf("failed to write inventory: %v", err)
 	}

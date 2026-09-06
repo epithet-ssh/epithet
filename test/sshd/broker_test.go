@@ -80,7 +80,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	pol, diags := writ.Load(policySrc)
 	require.NotNil(t, pol, "policy failed to load: %v", diags)
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
-	invYAML := fmt.Sprintf("users:\n  - userName: %s\nhosts:\n  - pattern: \"*\"\n", oidctest.TokenEmail)
+	invYAML := fmt.Sprintf("users:\n  - userName: %s\n    oidc-subject: %s\nhosts:\n  - pattern: \"*\"\n", oidctest.TokenEmail, oidctest.Subject(oidctest.TokenEmail))
 	require.NoError(t, os.WriteFile(invPath, []byte(invYAML), 0o600))
 	inv, err := inventory.NewStatic([]string{invPath})
 	require.NoError(t, err)

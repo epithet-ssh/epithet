@@ -92,11 +92,15 @@ func NewForTesting(pol *il.Policy, inv inventory.Inventory) *Evaluator {
 // decision onto the wire. Inventory and resolver failures return plain
 // errors (500, fail closed); policy denials return 403; pending
 // requirements return 202.
-func (e *Evaluator) Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
-	user, err := e.inv.LookupUser(ctx, identity)
+func (e *Evaluator) Evaluate(ctx context.Context, subject string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
+	user, err := e.inv.LookupUser(ctx, subject)
 	if err != nil {
 		return nil, fmt.Errorf("looking up user: %w", err)
 	}
+	if user == nil {
+		return nil, policyserver.Forbidden("OIDC subject is not bound to an inventory user")
+	}
+	identity := user.ID
 	hostName := il.HostName(conn.RemoteHost)
 	host, err := e.inv.LookupHost(ctx, hostName)
 	if err != nil {

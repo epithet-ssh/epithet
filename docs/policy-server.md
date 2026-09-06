@@ -74,10 +74,12 @@ Create `~/.epithet/inventory.yaml`:
 
 ```yaml
 users:
-  - userName: alice@example.com     # matched against the OIDC identity
+  - userName: alice@example.com     # readable Writ id: and audit identity
+    oidc-subject: "example-alice-subject" # replace with verified OIDC sub
     groups: [SRE]
     userType: employee
   - userName: bob@example.com
+    oidc-subject: "example-bob-subject"
     groups: [Engineering]
     userType: contractor
 
@@ -193,11 +195,12 @@ The inventory answers two questions at evaluation time: who is this identity, an
 
 ### Users
 
-User records follow the SCIM (RFC 7643) shape and field names:
+User profile fields follow the SCIM (RFC 7643) shape. The required Epithet field `oidc-subject` binds the record to an authenticated user:
 
 ```yaml
 users:
-  - userName: alice@example.com   # the identity key
+  - userName: alice@example.com   # matched by Writ id:; used in cert/audit identity
+    oidc-subject: "example-alice-subject" # required; exact verified OIDC sub
     active: true                  # default true; false matches nothing, ever
     groups: [SRE, Engineering]    # matched by group:
     userType: employee            # matched by type:
@@ -205,7 +208,31 @@ users:
     organization: Acme            # matched by org:
 ```
 
-The OIDC token's identity (the `email` claim, falling back to `sub`) is compared **byte-for-byte** against `userName`. An identity with no inventory record, or with `active: false`, is denied structurally — no policy rule can grant it anything.
+The policy server verifies the token against its single configured `policy.oidc.issuer`, including signature, audience, and expiration, then requires a nonempty `sub`. That subject is compared **byte-for-byte** against `oidc-subject`. Email and other profile claims never select an inventory record. An unknown subject or a user with `active: false` is denied structurally — no policy rule can grant it anything. Duplicate `userName` or `oidc-subject` values across inventory files, and users with no subject binding, fail startup and `--check`.
+
+`userName` remains an administrator-controlled, readable name for Writ's `id:` selector and certificate/audit identity. A token's email change does not rename it. An intentional inventory rename changes which `id:` rules match; group and attribute selectors continue to evaluate the same user's configured attributes.
+
+Subjects are scoped to the configured issuer, which all files inherit. Changing issuers requires deliberately reviewing/rebinding every subject; matching strings from different issuers do not establish the same person. There is no email fallback or automatic email-based enrollment.
+
+### Migrating from email lookup
+
+This is a breaking inventory change. Before stopping the existing CA/policy service, use the new binary on a client with an existing `agent.ca-url` configuration:
+
+```sh
+epithet identity
+```
+
+`identity` inherits `agent.ca-url` from the normal client config files, including an explicit `--config /path/to/client.yaml`. This is a deliberate cross-command fallback: the normal `identity.ca-url` setting takes precedence, and `--ca-url https://ca.example.com/` overrides both. Scalar and list settings, CA priorities, and failover work as for the agent. Global TLS settings still apply.
+
+This uses the CA's existing OIDC discovery and browser login, verifies the returned token, and prints JSON containing only `issuer` and `subject`. It does not request a certificate or need an inventory binding, and it does not print bearer/refresh tokens or client secrets. Confirm that `issuer` matches your configured policy issuer and that you signed in as the intended account. Copy `subject` into that user's inventory record as a quoted `oidc-subject`, keeping the existing `userName`, groups, and Writ rules.
+
+Prepare the inventory separately, then validate it with the new binary and existing policy:
+
+```sh
+epithet policy --check --policy-file /path/to/policy.writ --inventory /path/to/updated-inventory.yaml
+```
+
+Include your configured `--principal-mode` if hosts inherit a nondefault mode. Install the new binary and updated inventory together, restart the policy service (or combined server), and verify a fresh issuance. Older binaries reject the new inventory field; newer binaries reject the old unbound user records. Keep a working administrative SSH session during the switch. A cached certificate does not test the new binding: use a fresh agent profile or evict the relevant certificate before checking issuance.
 
 ### Hosts
 
@@ -466,7 +493,7 @@ epithet policy --check --policy-file /etc/epithet/policy.writ --inventory /etc/e
 ### Common errors
 
 **"user does not resolve to an active inventory user" (403)**
-- The OIDC token's email/sub claim doesn't match any inventory `userName` (byte-for-byte, case-sensitive), or the record has `active: false`
+- The OIDC token's `sub` doesn't match any inventory `oidc-subject` (byte-for-byte, case-sensitive), or the record has `active: false`
 - Verify the OIDC provider is sending the expected claim
 
 **"host is not in inventory" (403)**

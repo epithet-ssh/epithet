@@ -66,10 +66,10 @@ type ResolvedHost struct {
 // means the lookup itself failed and the evaluation must fail closed
 // (500).
 type Inventory interface {
-	// LookupUser resolves an OIDC-bound identity to a user by comparing
-	// it byte-for-byte against the configured SCIM identity attribute
-	// (default userName).
-	LookupUser(ctx context.Context, identity string) (*eval.User, error)
+	// LookupUser resolves a subject from the single configured OIDC issuer.
+	// The caller must verify the token against that issuer before lookup.
+	// Compare subject byte-for-byte with oidc-subject, never userName/email.
+	LookupUser(ctx context.Context, subject string) (*eval.User, error)
 
 	// LookupHost resolves a requested host name. Callers must pass the
 	// name through il.HostName first; implementations may synthesize a

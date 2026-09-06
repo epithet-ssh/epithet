@@ -20,8 +20,11 @@ import (
 // ClientID is the audience carried by every minted token.
 const ClientID = "epithet-test-client"
 
-// TokenEmail is the identity minted by the /token endpoint (browser-flow path).
+// TokenEmail is the profile email minted by the /token endpoint (browser-flow path).
 const TokenEmail = "test@example.com"
+
+// Subject returns a deterministic test-only subject distinct from the email.
+func Subject(email string) string { return "subject:" + email }
 
 type IdP struct {
 	server *httptest.Server
@@ -65,13 +68,27 @@ func (p *IdP) MintIDToken(email string, expiresAt time.Time) string {
 }
 
 func (p *IdP) MintIDTokenWithAudience(email, aud string, expiresAt time.Time) string {
+	return p.MintIDTokenWithClaims(email, expiresAt, map[string]any{"aud": aud})
+}
+
+// MintIDTokenWithClaims overrides standard fixture claims. A nil value removes
+// a claim, allowing malformed tokens to exercise the real validation boundary.
+func (p *IdP) MintIDTokenWithClaims(email string, expiresAt time.Time, overrides map[string]any) string {
 	claims := map[string]any{
-		"iss":   p.server.URL,
-		"aud":   aud,
-		"sub":   email,
-		"email": email,
-		"iat":   time.Now().Unix(),
-		"exp":   expiresAt.Unix(),
+		"iss":            p.server.URL,
+		"aud":            ClientID,
+		"sub":            Subject(email),
+		"email":          email,
+		"email_verified": true,
+		"iat":            time.Now().Unix(),
+		"exp":            expiresAt.Unix(),
+	}
+	for name, value := range overrides {
+		if value == nil {
+			delete(claims, name)
+		} else {
+			claims[name] = value
+		}
 	}
 	raw, err := jwt.Signed(p.signer).Claims(claims).Serialize()
 	if err != nil {
