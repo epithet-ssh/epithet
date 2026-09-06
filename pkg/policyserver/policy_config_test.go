@@ -96,3 +96,17 @@ func TestServerConfig_BootstrapAuth(t *testing.T) {
 		t.Errorf("expected client_secret 'shh', got %q", auth.ClientSecret)
 	}
 }
+
+func TestBootstrapAdvertisesEffectiveUserIDClaim(t *testing.T) {
+	for _, tc := range []struct{ issuer, override, want string }{
+		{"https://accounts.google.com", "", "sub"},
+		{"https://login.microsoftonline.com/tenant/v2.0", "", "oid"},
+		{"https://login.microsoftonline.com/tenant/v2.0", "sub", "sub"},
+		{"https://idp.example", "directory_id", "directory_id"},
+	} {
+		cfg := policyserver.ServerConfig{OIDC: policyserver.OIDCConfig{Issuer: tc.issuer, UserIDClaim: tc.override}}
+		if got := cfg.BootstrapAuth().UserIDClaim; got != tc.want {
+			t.Errorf("issuer %s override %s: got %s want %s", tc.issuer, tc.override, got, tc.want)
+		}
+	}
+}

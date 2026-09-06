@@ -90,9 +90,10 @@ type AgentCLI struct {
 	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 
-	Start   AgentStartCLI   `cmd:"" default:"withargs" help:"Start the epithet agent"`
-	Inspect AgentInspectCLI `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
-	Kill    AgentKillCLI    `cmd:"kill" help:"Kill one agent and discard its certificate"`
+	Identity AgentIdentityCLI `cmd:"identity" help:"Authenticate the running agent and print its verified inventory ID"`
+	Start    AgentStartCLI    `cmd:"" default:"withargs" help:"Start the epithet agent"`
+	Inspect  AgentInspectCLI  `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
+	Kill     AgentKillCLI     `cmd:"kill" help:"Kill one agent and discard its certificate"`
 }
 
 // AgentStartCLI is the default subcommand that starts the agent/broker.
@@ -211,7 +212,8 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	}
 
 	// Create broker
-	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, agentDir)
+	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, agentDir,
+		broker.WithIdentityVerifier(makeAgentIdentityVerifier(*discovery.Auth, tlsCfg)))
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}

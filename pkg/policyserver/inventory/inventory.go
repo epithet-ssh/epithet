@@ -66,10 +66,11 @@ type ResolvedHost struct {
 // means the lookup itself failed and the evaluation must fail closed
 // (500).
 type Inventory interface {
-	// LookupUser resolves a subject from the single configured OIDC issuer.
-	// The caller must verify the token against that issuer before lookup.
-	// Compare subject byte-for-byte with oidc-subject, never userName/email.
-	LookupUser(ctx context.Context, subject string) (*eval.User, error)
+	// LookupUser resolves the mapped ID within the configured provider/tenant.
+	// The caller must validate the OIDC token before extracting this ID.
+	// Compare IDs byte-for-byte, never falling back to userName or email.
+	// The resolved ID is immutable and non-reassignable; UserName is mutable.
+	LookupUser(ctx context.Context, id string) (*eval.User, error)
 
 	// LookupHost resolves a requested host name. Callers must pass the
 	// name through il.HostName first; implementations may synthesize a

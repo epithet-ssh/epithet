@@ -76,11 +76,11 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	// The policy authorizes the current OS user's account on any host; the
 	// default compatibility mode carries that account name as the cert
 	// principal.
-	policySrc := fmt.Sprintf("allow id:%q -> %q@*\n", oidctest.TokenEmail, currentUser.Username)
+	policySrc := fmt.Sprintf("allow userName:%q -> %q@*\n", oidctest.TokenEmail, currentUser.Username)
 	pol, diags := writ.Load(policySrc)
 	require.NotNil(t, pol, "policy failed to load: %v", diags)
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
-	invYAML := fmt.Sprintf("users:\n  - userName: %s\n    oidc-subject: %s\nhosts:\n  - pattern: \"*\"\n", oidctest.TokenEmail, oidctest.Subject(oidctest.TokenEmail))
+	invYAML := fmt.Sprintf("users:\n  - userName: %s\n    id: %s\nhosts:\n  - pattern: \"*\"\n", oidctest.TokenEmail, oidctest.Subject(oidctest.TokenEmail))
 	require.NoError(t, os.WriteFile(invPath, []byte(invYAML), 0o600))
 	inv, err := inventory.NewStatic([]string{invPath})
 	require.NoError(t, err)

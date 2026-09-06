@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,92 +12,145 @@ import (
 
 	"github.com/alecthomas/kong"
 	kongyaml "github.com/alecthomas/kong-yaml"
+	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIdentityCAConfigPrecedence(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		defaults []string
-		explicit string
-		args     []string
-		want     []string
-	}{
-		{"default-client-config", []string{"agent:\n  ca-url: https://default.example\n"}, "", nil, []string{"https://default.example"}},
-		{"explicit-client-config", nil, "agent:\n  ca-url: https://explicit.example\n", nil, []string{"https://explicit.example"}},
-		{"multiple-CAs", nil, "agent:\n  ca-url: [https://one.example, 'priority=50:https://two.example']\n", nil, []string{"https://one.example", "priority=50:https://two.example"}},
-		{"later-default-file", []string{"agent:\n  ca-url: https://first.example\n", "agent:\n  ca-url: https://last.example\n"}, "", nil, []string{"https://last.example"}},
-		{"explicit-over-default", []string{"agent:\n  ca-url: https://default.example\n"}, "agent:\n  ca-url: https://explicit.example\n", nil, []string{"https://explicit.example"}},
-		{"unrelated-overlay-retains-default", []string{"agent:\n  ca-url: https://default.example\n"}, "agent:\n  name: work\n", nil, []string{"https://default.example"}},
-		{"identity-config-over-agent", nil, "agent:\n  ca-url: https://agent.example\nidentity:\n  ca-url: https://identity.example\n", nil, []string{"https://identity.example"}},
-		{"CLI-over-both-config-sections", nil, "agent:\n  ca-url: https://agent.example\nidentity:\n  ca-url: https://identity.example\n", []string{"--ca-url", "https://cli.example"}, []string{"https://cli.example"}},
-		{"repeated-CLI-URLs", nil, "agent:\n  ca-url: https://agent.example\n", []string{"--ca-url", "https://one.example", "--ca-url", "https://two.example"}, []string{"https://one.example", "https://two.example"}},
-		{"no-config", nil, "", nil, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			write := func(body string) string {
-				path := filepath.Join(t.TempDir(), "config.yaml")
-				require.NoError(t, os.WriteFile(path, []byte(body), 0600))
-				return path
-			}
-			var paths []string
-			for _, body := range tc.defaults {
-				paths = append(paths, write(body))
-			}
-			var root struct {
-				Config   kong.ConfigFlag `name:"config"`
-				Identity IdentityCLI     `cmd:"identity"`
-			}
-			parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, paths...))
+func TestAgentIdentityUsesProfileAndSocketOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("agent:\n  name: work\n  ca-url: https://ca.example\n"), 0600))
+	for _, args := range [][]string{{"agent", "identity"}, {"agent", "--name", "personal", "identity", "--broker", "/tmp/identity.sock"}} {
+		var root struct {
+			Agent AgentCLI `cmd:"agent"`
+		}
+		parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
+		require.NoError(t, err)
+		_, err = parser.Parse(args)
+		require.NoError(t, err)
+		socket, err := resolveAgentBrokerSocket(&root.Agent, root.Agent.Identity.Broker)
+		require.NoError(t, err)
+		if len(args) == 2 {
+			home, err := os.UserHomeDir()
 			require.NoError(t, err)
-			args := []string{"identity"}
-			if tc.explicit != "" {
-				args = append([]string{"--config", write(tc.explicit)}, args...)
-			}
-			_, err = parser.Parse(append(args, tc.args...))
-			require.NoError(t, err)
-			urls, err := root.Identity.resolveCAURLs(paths, string(root.Config))
-			if tc.want == nil {
-				require.ErrorContains(t, err, "set agent.ca-url")
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, tc.want, urls)
-			}
-		})
+			require.Equal(t, filepath.Join(home, ".epithet/run/work/broker.sock"), socket)
+		} else {
+			require.Equal(t, "/tmp/identity.sock", socket)
+		}
 	}
 }
 
-func TestIdentityOutputRequiresVerifiedTokenAndContainsNoCredentials(t *testing.T) {
+func TestAgentIdentityVerifier(t *testing.T) {
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(context.Background(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID})
-	require.NoError(t, err)
+	verify := makeAgentIdentityVerifier(wire.AuthConfig{
+		Issuer: idp.Issuer(), ClientID: oidctest.ClientID, UserIDClaim: "oid",
+	}, tlsconfig.Config{})
 	for _, tc := range []struct {
 		name      string
 		overrides map[string]any
 		valid     bool
 	}{
-		{"valid", nil, true},
+		{"mapped", nil, true},
 		{"wrong-audience", map[string]any{"aud": "other-client"}, false},
 		{"wrong-issuer", map[string]any{"iss": "https://other-issuer.example"}, false},
 		{"missing-subject", map[string]any{"sub": nil}, false},
+		{"missing-id", map[string]any{"oid": nil}, false},
 		{"expired", map[string]any{"exp": time.Now().Add(-time.Minute).Unix()}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			token := idp.MintIDTokenWithClaims("alice@example.com", time.Now().Add(time.Minute), tc.overrides)
-			var out bytes.Buffer
-			err := writeVerifiedIdentity(context.Background(), validator, token, &out)
+			t.Parallel() // Exercise concurrent lazy discovery and verification.
+			claims := map[string]any{"oid": "directory-id"}
+			for k, v := range tc.overrides {
+				claims[k] = v
+			}
+			token := idp.MintIDTokenWithClaims("alice@example.com", time.Now().Add(time.Minute), claims)
+			identity, err := verify(context.Background(), token)
 			if !tc.valid {
 				require.Error(t, err)
+				require.Nil(t, identity)
+				require.NotContains(t, err.Error(), token)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, &broker.Identity{ID: "directory-id", Issuer: idp.Issuer(), Subject: oidctest.Subject("alice@example.com")}, identity)
+		})
+	}
+}
+
+func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "failure"}[fail], func(t *testing.T) {
+			dir, err := os.MkdirTemp("/tmp", "epithet-id-")
+			require.NoError(t, err)
+			t.Cleanup(func() { os.RemoveAll(dir) })
+			socket := filepath.Join(dir, "b.sock")
+			listener, err := net.Listen("unix", socket)
+			require.NoError(t, err)
+			t.Cleanup(func() { listener.Close() })
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				conn, err := listener.Accept()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				var req broker.Request
+				if err := json.NewDecoder(conn).Decode(&req); err != nil {
+					t.Error(err)
+					return
+				}
+				if req.Identity == nil {
+					t.Error("expected identity request")
+					return
+				}
+				enc := json.NewEncoder(conn)
+				_ = enc.Encode(broker.Event{Output: "visit login URL\n"})
+				resp := &broker.IdentityResponse{Identity: &broker.Identity{ID: "directory-id", Issuer: "issuer", Subject: "subject"}}
+				if fail {
+					resp = &broker.IdentityResponse{Error: "login failed"}
+				}
+				_ = enc.Encode(broker.Event{Identity: resp})
+			}()
+			var out, progress bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err = (&AgentIdentityCLI{}).run(ctx, socket, &out, &progress)
+			<-done
+			require.Equal(t, "visit login URL\n", progress.String())
+			if fail {
+				require.ErrorContains(t, err, "login failed")
 				require.Empty(t, out.String())
 				return
 			}
 			require.NoError(t, err)
 			var fields map[string]string
 			require.NoError(t, json.Unmarshal(out.Bytes(), &fields))
-			require.Equal(t, map[string]string{"issuer": idp.Issuer(), "subject": oidctest.Subject("alice@example.com")}, fields)
-			require.NotContains(t, out.String(), token)
+			require.Equal(t, map[string]string{"id": "directory-id", "issuer": "issuer", "subject": "subject"}, fields)
 		})
+	}
+}
+
+func TestPolicyUserIDClaimConfigAndCLI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("policy:\n  oidc:\n    issuer: https://issuer.example\n    user-id-claim: directory_id\n"), 0600))
+	for _, override := range []bool{false, true} {
+		var root struct {
+			Policy PolicyServerCLI `cmd:"policy"`
+		}
+		parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
+		require.NoError(t, err)
+		args := []string{"policy"}
+		want := "directory_id"
+		if override {
+			args = append(args, "--oidc-user-id-claim", "oid")
+			want = "oid"
+		}
+		_, err = parser.Parse(args)
+		require.NoError(t, err)
+		require.Equal(t, want, root.Policy.OIDC.UserIDClaim)
 	}
 }

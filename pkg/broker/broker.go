@@ -71,8 +71,9 @@ type Broker struct {
 	brokerSocketPath string // Immutable after New()
 	brokerListener   net.Listener
 
-	auth   *Auth                                // Has internal locking, safe to call concurrently
-	agents map[policy.ConnectionHash]agentEntry // Protected by b.lock
+	verifyIdentity IdentityVerifier                     // Immutable after New(); safe for concurrent calls
+	auth           *Auth                                // Has internal locking, safe to call concurrently
+	agents         map[policy.ConnectionHash]agentEntry // Protected by b.lock
 
 	caClient       *caclient.Client // Immutable after New()
 	agentSocketDir string           // Immutable after New()

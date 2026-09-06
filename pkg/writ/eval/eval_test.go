@@ -22,7 +22,7 @@ func policy(t *testing.T, src string) *il.Policy {
 }
 
 func sreUser() *eval.User {
-	return &eval.User{ID: "alice@example.com", Active: true, Groups: []string{"SRE"}, Type: "employee"}
+	return &eval.User{UserName: "alice@example.com", Active: true, Groups: []string{"SRE"}, UserType: "employee"}
 }
 
 func prodHost() *eval.Host {
@@ -112,7 +112,7 @@ func TestNoMatchDenies(t *testing.T) {
 }
 
 func TestDenyWinsOverAllow(t *testing.T) {
-	src := "allow group:SRE -> root@*\ndeny type:employee -> root@{env=prod}, label \"no-emp-root\"\n"
+	src := "allow group:SRE -> root@*\ndeny userType:employee -> root@{env=prod}, label \"no-emp-root\"\n"
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Deny, d.Outcome)
 	require.NotNil(t, d.DenyRule)
@@ -121,7 +121,7 @@ func TestDenyWinsOverAllow(t *testing.T) {
 
 // File order never matters: the same deny wins when authored first.
 func TestDenyWinsRegardlessOfFileOrder(t *testing.T) {
-	src := "deny type:employee -> root@{env=prod}\nallow group:SRE -> root@*\n"
+	src := "deny userType:employee -> root@{env=prod}\nallow group:SRE -> root@*\n"
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Deny, d.Outcome)
 	require.NotNil(t, d.DenyRule)
@@ -134,7 +134,7 @@ func TestNegatedDenyMatchesOutsiders(t *testing.T) {
 	require.Equal(t, eval.Deny, d.Outcome)
 	require.NotNil(t, d.DenyRule)
 	// An Infrastructure member is not.
-	infra := &eval.User{ID: "bob", Active: true, Groups: []string{"Infrastructure"}}
+	infra := &eval.User{UserName: "bob", Active: true, Groups: []string{"Infrastructure"}}
 	d = decide(t, src, eval.Request{User: infra, Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
 }
@@ -144,7 +144,7 @@ func TestNegatedListMeansInNeither(t *testing.T) {
 	src := "allow * -> *@*\ndeny ![group:SRE, group:DBA] -> *@*\n"
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome, "SRE is in the union, deny must not fire")
-	outsider := &eval.User{ID: "eve", Active: true, Groups: []string{"Sales"}}
+	outsider := &eval.User{UserName: "eve", Active: true, Groups: []string{"Sales"}}
 	d = decide(t, src, eval.Request{User: outsider, Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Deny, d.Outcome)
 	require.NotNil(t, d.DenyRule)
@@ -248,7 +248,7 @@ func TestOneSatisfiedAllowBeatsAPendingOne(t *testing.T) {
 // ── TTL combination ─────────────────────────────────────────────────
 
 func TestTTLCombinesByMinimum(t *testing.T) {
-	src := "allow group:SRE -> root@*, ttl 10m\nallow type:employee -> root@*, ttl 2m\n"
+	src := "allow group:SRE -> root@*, ttl 10m\nallow userType:employee -> root@*, ttl 2m\n"
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
 	require.Equal(t, 2*time.Minute, d.TTL)
@@ -262,7 +262,7 @@ func TestNoTTLMeansDeploymentDefault(t *testing.T) {
 
 // A rule without ttl does not drag the minimum to zero.
 func TestUnsetTTLDoesNotParticipateInMinimum(t *testing.T) {
-	src := "allow group:SRE -> root@*, ttl 5m\nallow type:employee -> root@*\n"
+	src := "allow group:SRE -> root@*, ttl 5m\nallow userType:employee -> root@*\n"
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
 	require.Equal(t, 5*time.Minute, d.TTL)
@@ -310,12 +310,12 @@ func TestAccountGlob(t *testing.T) {
 	require.Equal(t, eval.Deny, d.Outcome)
 }
 
-func TestUserIDMatcher(t *testing.T) {
-	src := "allow id:\"alice@example.com\" -> root@*\n"
+func TestUsernameMatcher(t *testing.T) {
+	src := "allow userName:\"alice@example.com\" -> root@*\n"
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
 
-	bob := &eval.User{ID: "bob@example.com", Active: true}
+	bob := &eval.User{UserName: "bob@example.com", Active: true}
 	d = decide(t, src, eval.Request{User: bob, Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Deny, d.Outcome)
 }
@@ -340,4 +340,55 @@ func TestFactErrorFailsClosed(t *testing.T) {
 		time.Now(), noFlags,
 		func(string) (eval.FactState, error) { return eval.FactUnknown, boom })
 	require.ErrorIs(t, err, boom)
+}
+
+func TestUserSelectorsAcrossRenameAndNameReuse(t *testing.T) {
+	original := eval.User{UserName: "alice", ID: "resource-1", Active: true, Groups: []string{"SRE"}, UserType: "employee", Department: "Platform", Organization: "Acme"}
+	renamed := original
+	renamed.UserName = "renamed"
+	replacement := eval.User{UserName: "alice", ID: "resource-2", Active: true}
+	withoutID := original
+	withoutID.ID = ""
+	for _, tc := range []struct {
+		selector string
+		want     [4]eval.Outcome
+	}{
+		{"userName:alice", [4]eval.Outcome{eval.Issue, eval.Deny, eval.Issue, eval.Issue}},
+		{"userName:Alice", [4]eval.Outcome{eval.Deny, eval.Deny, eval.Deny, eval.Deny}},
+		{"id:resource-1", [4]eval.Outcome{eval.Issue, eval.Issue, eval.Deny, eval.Deny}},
+		{"id:Resource-1", [4]eval.Outcome{eval.Deny, eval.Deny, eval.Deny, eval.Deny}},
+		{"id:alice", [4]eval.Outcome{eval.Deny, eval.Deny, eval.Deny, eval.Deny}},
+		{"id:\"\"", [4]eval.Outcome{eval.Deny, eval.Deny, eval.Deny, eval.Deny}},
+		{"group:SRE", [4]eval.Outcome{eval.Issue, eval.Issue, eval.Deny, eval.Issue}},
+		{"userType:employee", [4]eval.Outcome{eval.Issue, eval.Issue, eval.Deny, eval.Issue}},
+		{"department:Platform", [4]eval.Outcome{eval.Issue, eval.Issue, eval.Deny, eval.Issue}},
+		{"organization:Acme", [4]eval.Outcome{eval.Issue, eval.Issue, eval.Deny, eval.Issue}},
+	} {
+		t.Run(tc.selector, func(t *testing.T) {
+			for i, u := range []*eval.User{&original, &renamed, &replacement, &withoutID} {
+				req := eval.Request{User: u, Host: prodHost(), Account: "root"}
+				d := decide(t, "allow "+tc.selector+" -> root@*\n", req)
+				require.Equal(t, tc.want[i], d.Outcome, "user %d", i)
+				// Deny negation uses the same distinction, including absent IDs.
+				d = decide(t, "allow * -> root@*\ndeny !"+tc.selector+" -> root@*\n", req)
+				require.Equal(t, tc.want[i], d.Outcome, "negated deny, user %d", i)
+			}
+		})
+	}
+}
+
+func TestIncompatibleILFailsClosed(t *testing.T) {
+	for _, schema := range []int{1, il.Schema} {
+		for _, deny := range []bool{false, true} {
+			p := policy(t, "allow userName:alice -> root@*\ndeny userName:bob -> root@*\n")
+			p.Schema = schema
+			if deny {
+				p.Denies[0].Users.Or[0].Kind = il.MatcherKind("uid")
+			} else {
+				p.Allows[0].Users.Or[0].Kind = il.MatcherKind("uid")
+			}
+			_, err := eval.Decide(p, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"}, time.Now(), nil, nil)
+			require.Error(t, err)
+		}
+	}
 }

@@ -46,6 +46,9 @@ type Evaluator struct {
 // already past matches nothing, which is safe, so it warns rather than
 // bricking a restart.
 func New(pol *il.Policy, inv inventory.Inventory, reg *Registry, opts Options) (*Evaluator, []string, error) {
+	if err := pol.ValidateUserSelectors(); err != nil {
+		return nil, nil, err
+	}
 	if reg == nil {
 		reg = &Registry{}
 	}
@@ -92,15 +95,15 @@ func NewForTesting(pol *il.Policy, inv inventory.Inventory) *Evaluator {
 // decision onto the wire. Inventory and resolver failures return plain
 // errors (500, fail closed); policy denials return 403; pending
 // requirements return 202.
-func (e *Evaluator) Evaluate(ctx context.Context, subject string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
-	user, err := e.inv.LookupUser(ctx, subject)
+func (e *Evaluator) Evaluate(ctx context.Context, userID string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
+	user, err := e.inv.LookupUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("looking up user: %w", err)
 	}
 	if user == nil {
-		return nil, policyserver.Forbidden("OIDC subject is not bound to an inventory user")
+		return nil, policyserver.Forbidden("OIDC user ID is not bound to an inventory user")
 	}
-	identity := user.ID
+	identity := user.UserName
 	hostName := il.HostName(conn.RemoteHost)
 	host, err := e.inv.LookupHost(ctx, hostName)
 	if err != nil {

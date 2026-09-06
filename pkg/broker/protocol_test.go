@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 // TokenFunc took (ctx, out), but this codebase's real TokenFunc (see
 // pkg/broker/auth.go) also carries a `force` bool, so tokenFn here matches
 // the real signature instead.
-func newTestBroker(t *testing.T, tokenFn TokenFunc) *Broker {
+func newTestBroker(t *testing.T, tokenFn TokenFunc, options ...Option) *Broker {
 	t.Helper()
 	if tokenFn == nil {
 		tokenFn = stubTokenFunc
@@ -34,7 +35,7 @@ func newTestBroker(t *testing.T, tokenFn TokenFunc) *Broker {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, tokenFn, testCAClientOK(t), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, tokenFn, testCAClientOK(t), agentSocketDir, options...)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -273,4 +274,88 @@ func TestKillUnknownAgentReturnsTypedError(t *testing.T) {
 	require.NotNil(t, event.Kill)
 	require.Equal(t, policy.ConnectionHash("missing"), event.Kill.ID)
 	require.Contains(t, event.Kill.Error, "does not exist")
+}
+
+func TestIdentitySharesAgentAuthentication(t *testing.T) {
+	idp := oidctest.New(t)
+	token := idp.MintIDToken("test@example.com", time.Now().Add(time.Hour))
+	var fetches atomic.Int32
+	b := newTestBroker(t, func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		fetches.Add(1)
+		fmt.Fprintln(out, "authenticate agent")
+		return token, nil
+	}, WithIdentityVerifier(func(ctx context.Context, actual string) (*Identity, error) {
+		if actual != token {
+			return nil, fmt.Errorf("not the agent's token")
+		}
+		return &Identity{ID: "directory-id", Issuer: idp.Issuer(), Subject: "login-subject"}, nil
+	}))
+	for i := 0; i < 2; i++ {
+		conn := dialBroker(t, b)
+		require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+		require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &struct{}{}}))
+		sc := bufio.NewScanner(conn)
+		var terminal *IdentityResponse
+		var progress string
+		for sc.Scan() {
+			require.NotContains(t, sc.Text(), token, "credentials must stay inside the agent")
+			var ev Event
+			require.NoError(t, json.Unmarshal(sc.Bytes(), &ev))
+			progress += ev.Output
+			if ev.Identity != nil {
+				terminal = ev.Identity
+				break
+			}
+		}
+		require.NotNil(t, terminal)
+		require.Empty(t, terminal.Error)
+		require.Equal(t, "directory-id", terminal.Identity.ID)
+		if i == 0 {
+			require.Contains(t, progress, "authenticate agent")
+		} else {
+			require.Empty(t, progress)
+		}
+		conn.Close()
+	}
+	result := b.MatchWithUserOutput(context.Background(), policy.Connection{RemoteHost: "h", RemoteUser: "u", Hash: "identity-reuse"}, io.Discard)
+	require.False(t, result.Allow) // This fixture intentionally returns no certificate.
+	require.Contains(t, result.Error, "certificate request failed")
+	require.Equal(t, int32(1), fetches.Load(), "identity and SSH must share the same cached authentication")
+}
+
+func TestIdentityVerificationFailureReturnsNoIdentity(t *testing.T) {
+	idp := oidctest.New(t)
+	b := newTestBroker(t, testTokenFunc(t, idp), WithIdentityVerifier(func(context.Context, string) (*Identity, error) {
+		return nil, fmt.Errorf("invalid issuer")
+	}))
+	resp := b.IdentityWithUserOutput(context.Background(), io.Discard)
+	require.Nil(t, resp.Identity)
+	require.Contains(t, resp.Error, "invalid issuer")
+}
+
+func TestClosingIdentityClientCancelsAuthentication(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	b := newTestBroker(t, func(ctx context.Context, out io.Writer, force bool) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		return "", ctx.Err()
+	}, WithIdentityVerifier(func(context.Context, string) (*Identity, error) {
+		t.Error("canceled authentication must not reach identity verification")
+		return nil, fmt.Errorf("unexpected verification")
+	}))
+	conn := dialBroker(t, b)
+	require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &struct{}{}}))
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("authentication never started")
+	}
+	require.NoError(t, conn.Close())
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("identity disconnect did not cancel authentication")
+	}
 }

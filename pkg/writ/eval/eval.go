@@ -14,15 +14,19 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
 )
 
-// User is the SCIM-shaped view of a resolved user. ID carries the value
-// of the bound identity attribute.
+// User is the policy view of the independently authenticated inventory user.
+// UserName is mutable. ID is an optional immutable, non-reassignable inventory
+// ID within the configured provider/tenant. Inventory adapters and OIDC claim
+// mapping normalize provider identifiers to this same ID. Do not synthesize it
+// from UserName. Providers must preserve ID on rename and never reuse it.
 type User struct {
-	ID     string
-	Active bool
-	Groups []string
-	Type   string
-	Dept   string
-	Org    string
+	UserName     string
+	ID           string
+	Active       bool
+	Groups       []string
+	UserType     string
+	Department   string
+	Organization string
 }
 
 // Host is a resolved host. Name must already have passed il.HostName.
@@ -91,6 +95,9 @@ type FactFunc func(name string) (FactState, error)
 // returned as-is — the caller must fail closed (500), never treat it as
 // a non-match.
 func Decide(p *il.Policy, req Request, now time.Time, flags FlagFunc, facts FactFunc) (Decision, error) {
+	if err := p.ValidateUserSelectors(); err != nil {
+		return Decision{}, err
+	}
 	// Step 1: structural gates. Not expressible or bypassable in policy.
 	if req.User == nil || !req.User.Active {
 		return Decision{Outcome: Deny, Reason: "user does not resolve to an active inventory user"}, nil
@@ -278,16 +285,18 @@ func userMatcher(u *User) func(il.Matcher) bool {
 		switch m.Kind {
 		case il.MatchAny:
 			return true
+		case il.MatchUserName:
+			return m.Value == u.UserName
 		case il.MatchID:
-			return m.Value == u.ID
+			return u.ID != "" && m.Value == u.ID
 		case il.MatchGroup:
 			return slices.Contains(u.Groups, m.Value)
-		case il.MatchType:
-			return m.Value == u.Type
-		case il.MatchDept:
-			return m.Value == u.Dept
-		case il.MatchOrg:
-			return m.Value == u.Org
+		case il.MatchUserType:
+			return m.Value == u.UserType
+		case il.MatchDepartment:
+			return m.Value == u.Department
+		case il.MatchOrganization:
+			return m.Value == u.Organization
 		}
 		return false
 	}

@@ -61,7 +61,7 @@ type parser struct {
 	bad   bool // current statement had errors and will be dropped
 }
 
-func (p *parser) cur() token  { return p.toks[p.i] }
+func (p *parser) cur() token        { return p.toks[p.i] }
 func (p *parser) at(k tokKind) bool { return p.toks[p.i].kind == k }
 
 func (p *parser) advance() token {
@@ -293,7 +293,7 @@ func (p *parser) parseAtom(kind ast.Kind, ctx negCtx, inList bool) ast.Atom {
 	case tokString:
 		p.advance()
 		if kind == ast.KindUser {
-			p.stmtErr(t.pos, "a quoted string alone is not a user matcher — use `id:\"...\"`, `group:\"...\"`, etc.")
+			p.stmtErr(t.pos, "a quoted string alone is not a user matcher — use `userName:\"...\"`, `group:\"...\"`, etc.")
 			return nil
 		}
 		return &ast.Name{Value: ast.Value{Text: t.text, Quoted: true, Pos: t.pos}}
@@ -328,8 +328,8 @@ func (p *parser) parseAtom(kind ast.Kind, ctx negCtx, inList bool) ast.Atom {
 
 func (p *parser) parseUserBare(t token) ast.Atom {
 	if tag, ok := ast.TagOf(t.text); ok && p.tagStart() {
-		p.advance()             // tag word
-		colon := p.advance()    // adjacent colon
+		p.advance()          // tag word
+		colon := p.advance() // adjacent colon
 		val := p.parseAttrValue(t.text+":", &colon)
 		if val == nil {
 			return nil
@@ -343,7 +343,7 @@ func (p *parser) parseUserBare(t token) ast.Atom {
 	if _, ok := ast.TagOf(t.text); ok {
 		p.stmtErr(t.pos, "expected `:` after user tag `%s`", t.text)
 	} else {
-		p.stmtErr(t.pos, "bare words are not user matchers — identity is opaque; use `id:\"%s\"` or a tag matcher (id, group, type, dept, org)", t.text)
+		p.stmtErr(t.pos, "bare words are not user matchers — identity is opaque; use `userName:\"%s\"` or a tag matcher (userName, id, group, userType, department, organization)", t.text)
 	}
 	return nil
 }

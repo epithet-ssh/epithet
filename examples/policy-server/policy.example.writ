@@ -28,4 +28,4 @@ allow $devs -> *@$dev
 allow $ops -> deploy@*
 
 # Contractors never reach prod, whatever else says otherwise.
-deny type:contractor -> *@$prod, label "no-contractors-in-prod"
+deny userType:contractor -> *@$prod, label "no-contractors-in-prod"

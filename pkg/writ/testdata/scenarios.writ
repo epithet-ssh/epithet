@@ -18,13 +18,13 @@ allow $sre -> ubuntu@$prod
 allow $sre -> root@$prod, require [oncall, approval], label "sre-prod-root"
 
 # S3 — authored form (the grants CLI is the preferred path)
-allow id:"carol@example.com" -> postgres@prod-db-1,
+allow userName:"carol@example.com" -> postgres@prod-db-1,
     require approval,
     until "2026-08-31T22:00Z",
     label "carol-pgdb-incident-1234"
 
 # S4 — attribute guard
-deny type:contractor -> *@$prod, label "no-contractors-in-prod"
+deny userType:contractor -> *@$prod, label "no-contractors-in-prod"
 
 # S5 — dev wildcard
 allow $eng -> *@$dev

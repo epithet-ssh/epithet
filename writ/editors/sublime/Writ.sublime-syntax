@@ -26,7 +26,7 @@ contexts:
     - match: '(?:^|,)\s*(require|when|until|ttl|notify|label)\b'
       captures:
         1: keyword.other.clause.writ
-    - match: '\b(id|group|type|dept|org)(:)'
+    - match: '\b(userName|id|group|userType|department|organization)(:)'
       captures:
         1: support.type.tag.writ
         2: punctuation.separator.key-value.writ

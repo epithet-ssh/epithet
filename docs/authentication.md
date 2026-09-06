@@ -81,18 +81,21 @@ which drives an authorization-code flow with PKCE:
 2. Runs a local callback listener to receive the authorization code.
 3. Exchanges the code for tokens and returns the ID token (a JWT).
 
-Scopes are not configurable: the client always requests
-`openid profile email`. Authorization identity comes exclusively from the
-verified `sub` under the policy server's configured issuer. Email and profile
-claims do not select the inventory user. Each static user must have an explicit
-`oidc-subject`; see [inventory migration](policy-server.md#migrating-from-email-lookup).
+Scopes are not configurable: the client always requests `openid profile email`.
+The policy server maps the verified claim selected by `policy.oidc.user-id-claim`
+to inventory `id`: Google, Okta, and generic providers default to `sub`;
+tenant-specific Microsoft Entra issuers default to `oid`. No alternate claim is
+tried if the selected value is missing or invalid. Inventory supplies groups
+and policy-visible profile attributes. See [inventory configuration](policy-server.md#users).
 
-`epithet identity` uses the configured `agent.ca-url` and the same browser flow
-and then verifies the token before printing only its configured issuer and
-subject. It can obtain a binding before the user has inventory permissions.
-An explicit `--ca-url` overrides `identity.ca-url`, which otherwise takes
-precedence over the inherited `agent.ca-url`. The normal config-file search
-and `--config` flag are supported.
+`epithet agent identity` authenticates the running agent through its shared
+login/refresh cache, then verifies the token and prints its inventory `id`,
+issuer, and OIDC subject as JSON. Browser-login progress goes to stderr. It
+works before an inventory record exists and does not request a certificate.
+Use `agent --name work identity` for a named profile or `--broker` to select
+an explicit socket. Start the agent first, and restart it after claim-mapping
+changes so it reloads the discovery configuration. The standalone `epithet identity`
+command has been removed.
 
 On later calls, `prev` carries the previous `oauth2.Token` (including its
 refresh token). `Authenticate` reuses a still-valid access token or uses the

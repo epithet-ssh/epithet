@@ -105,11 +105,11 @@ func TestStarIsLegalInUserPosition(t *testing.T) {
 }
 
 func TestTagMatcherShape(t *testing.T) {
-	file := parseOK(t, "allow id:\"carol@example.com\" -> postgres@db-1\n")
+	file := parseOK(t, "allow userName:\"carol@example.com\" -> postgres@db-1\n")
 	rule := file.Items[0].(*ast.AllowRule)
 	tag, ok := rule.Users.Atoms[0].(*ast.TagMatcher)
 	require.True(t, ok, "expected tag")
-	require.Equal(t, ast.TagID, tag.Tag)
+	require.Equal(t, ast.TagUserName, tag.Tag)
 	require.Equal(t, "carol@example.com", tag.Value.Text)
 	require.True(t, tag.Value.Quoted)
 }
@@ -122,7 +122,7 @@ func TestAdjacentRulesAreSeparateStatements(t *testing.T) {
 }
 
 func TestTrailingCommaContinuesToNextLine(t *testing.T) {
-	src := "allow id:\"carol@example.com\" -> postgres@prod-db-1,\n    require approval,\n    until \"2026-08-31T22:00Z\",\n    label \"carol\"\n"
+	src := "allow userName:\"carol@example.com\" -> postgres@prod-db-1,\n    require approval,\n    until \"2026-08-31T22:00Z\",\n    label \"carol\"\n"
 	file := parseOK(t, src)
 	require.Len(t, file.Items, 1)
 	rule := file.Items[0].(*ast.AllowRule)
@@ -308,5 +308,28 @@ func TestTimestamps(t *testing.T) {
 		"not-a-time",
 	} {
 		require.Error(t, ValidateTimestamp(in), in)
+	}
+}
+
+func TestShorthandSelectorsAreRejected(t *testing.T) {
+	for _, tag := range []string{"username", "uid", "groups", "type", "dept", "org", "UserName", "subject", "externalId"} {
+		for _, src := range []string{
+			"allow " + tag + ":alice -> root@*\n",
+			"deny !" + tag + ":alice -> root@*\n",
+			"user old = [group:SRE, " + tag + ":alice]\nallow $old -> root@*\n",
+		} {
+			assertErr(t, src, "use `userName:")
+		}
+	}
+}
+
+func TestSCIMFieldMatchers(t *testing.T) {
+	file := parseOK(t, "allow [userName:alice, id:\"resource:123\"] -> root@*\n")
+	rule := file.Items[0].(*ast.AllowRule)
+	require.Equal(t, ast.TagUserName, rule.Users.Atoms[0].(*ast.TagMatcher).Tag)
+	require.Equal(t, ast.TagID, rule.Users.Atoms[1].(*ast.TagMatcher).Tag)
+	for _, tag := range []string{"userName", "id", "group", "userType", "department", "organization"} {
+		assertErr(t, "allow "+tag+":a* -> root@*\n", "glob")
+		parseOK(t, "allow "+tag+":\"a*\" -> root@*\n")
 	}
 }

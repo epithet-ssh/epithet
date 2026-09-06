@@ -19,13 +19,13 @@ func writeInv(t *testing.T, name, content string) string {
 const basicInventory = `
 users:
   - userName: alice@example.com
-    oidc-subject: subject:alice@example.com
+    id: subject:alice@example.com
     groups: [SRE, Engineering]
     userType: employee
     department: Platform
     organization: Acme
   - userName: mallory@example.com
-    oidc-subject: subject:mallory@example.com
+    id: subject:mallory@example.com
     active: false
     groups: [SRE]
 
@@ -53,12 +53,13 @@ func TestLookupUser(t *testing.T) {
 	u, err := s.LookupUser(context.Background(), "subject:alice@example.com")
 	require.NoError(t, err)
 	require.NotNil(t, u)
-	require.Equal(t, "alice@example.com", u.ID)
+	require.Equal(t, "alice@example.com", u.UserName)
+	require.Equal(t, "subject:alice@example.com", u.ID)
 	require.True(t, u.Active, "active defaults to true")
 	require.Equal(t, []string{"SRE", "Engineering"}, u.Groups)
-	require.Equal(t, "employee", u.Type)
-	require.Equal(t, "Platform", u.Dept)
-	require.Equal(t, "Acme", u.Org)
+	require.Equal(t, "employee", u.UserType)
+	require.Equal(t, "Platform", u.Department)
+	require.Equal(t, "Acme", u.Organization)
 }
 
 func TestInactiveUserLoads(t *testing.T) {
@@ -81,22 +82,22 @@ func TestLookupUserNeverFallsBackToUserName(t *testing.T) {
 	for _, subject := range []string{"alice@example.com", "Subject:alice@example.com", ""} {
 		u, err := s.LookupUser(context.Background(), subject)
 		require.NoError(t, err)
-		require.Nil(t, u, "subject must match exactly, without fallback: %q", subject)
+		require.Nil(t, u, "ID must match exactly, without fallback: %q", subject)
 	}
 }
 
-func TestUserRequiresSubject(t *testing.T) {
-	for _, field := range []string{"", "    oidc-subject: ''\n", "    oidc-subject: null\n"} {
+func TestUserRequiresID(t *testing.T) {
+	for _, field := range []string{"", "    id: ''\n", "    id: null\n"} {
 		_, err := NewStatic([]string{writeInv(t, "inv.yaml", "users:\n  - userName: alice@example.com\n"+field)})
-		require.ErrorContains(t, err, "has no oidc-subject")
+		require.ErrorContains(t, err, "has no id")
 	}
 }
 
-func TestDuplicateSubjectAcrossFilesIsError(t *testing.T) {
-	one := "users:\n  - userName: alice\n    oidc-subject: '12345'\n"
-	two := "users:\n  - userName: bob\n    oidc-subject: '12345'\n"
+func TestDuplicateIDAcrossFilesIsError(t *testing.T) {
+	one := "users:\n  - userName: alice\n    id: '12345'\n"
+	two := "users:\n  - userName: bob\n    id: '12345'\n"
 	_, err := NewStatic([]string{writeInv(t, "a.yaml", one), writeInv(t, "b.yaml", two)})
-	require.ErrorContains(t, err, "duplicate oidc-subject")
+	require.ErrorContains(t, err, "duplicate id")
 }
 
 func TestExactHostLowercasedAtLoad(t *testing.T) {
@@ -405,7 +406,7 @@ hosts:
 }
 
 func TestMultipleFilesConcatenate(t *testing.T) {
-	users := "users:\n  - userName: alice@example.com\n    oidc-subject: subject:alice@example.com\n"
+	users := "users:\n  - userName: alice@example.com\n    id: subject:alice@example.com\n"
 	hosts := "hosts:\n  - name: web-1\n"
 	s, err := NewStatic([]string{writeInv(t, "users.yaml", users), writeInv(t, "hosts.yaml", hosts)})
 	require.NoError(t, err)
@@ -416,7 +417,7 @@ func TestMultipleFilesConcatenate(t *testing.T) {
 }
 
 func TestDuplicateUserAcrossFilesIsError(t *testing.T) {
-	one := "users:\n  - userName: alice@example.com\n    oidc-subject: subject:alice@example.com\n"
+	one := "users:\n  - userName: alice@example.com\n    id: subject:alice@example.com\n"
 	_, err := NewStatic([]string{writeInv(t, "a.yaml", one), writeInv(t, "b.yaml", one)})
 	require.ErrorContains(t, err, "duplicate user")
 }
@@ -428,7 +429,7 @@ func TestDuplicateHostIsError(t *testing.T) {
 }
 
 func TestUnknownFieldIsError(t *testing.T) {
-	src := "users:\n  - userName: alice@example.com\n    oidc-subject: subject:alice@example.com\n    grops: [SRE]\n"
+	src := "users:\n  - userName: alice@example.com\n    id: subject:alice@example.com\n    grops: [SRE]\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.ErrorContains(t, err, "grops")
 }
@@ -455,4 +456,13 @@ func TestEmptyFileIsEmptyInventory(t *testing.T) {
 	u, err := s.LookupUser(context.Background(), "anyone")
 	require.NoError(t, err)
 	require.Nil(t, u)
+}
+
+func TestLegacySubjectKeysAreRejected(t *testing.T) {
+	for _, key := range []string{"subject", "oidc-subject"} {
+		for _, prefix := range []string{"", "    id: current\n"} {
+			_, err := NewStatic([]string{writeInv(t, "inv.yaml", "users:\n  - userName: alice\n"+prefix+"    "+key+": legacy\n")})
+			require.ErrorContains(t, err, key)
+		}
+	}
 }

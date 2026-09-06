@@ -328,16 +328,18 @@ func nameMatcher(text string, kind ast.Kind) il.Matcher {
 
 func tagKind(t ast.Tag) il.MatcherKind {
 	switch t {
+	case ast.TagUserName:
+		return il.MatchUserName
 	case ast.TagID:
 		return il.MatchID
 	case ast.TagGroup:
 		return il.MatchGroup
-	case ast.TagType:
-		return il.MatchType
-	case ast.TagDept:
-		return il.MatchDept
+	case ast.TagUserType:
+		return il.MatchUserType
+	case ast.TagDepartment:
+		return il.MatchDepartment
 	default:
-		return il.MatchOrg
+		return il.MatchOrganization
 	}
 }
 

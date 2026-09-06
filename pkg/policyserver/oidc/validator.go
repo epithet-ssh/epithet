@@ -3,6 +3,8 @@ package oidc
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -11,8 +13,9 @@ import (
 
 // Validator validates OIDC JWT tokens.
 type Validator struct {
-	verifier *oidc.IDTokenVerifier
-	issuer   string
+	verifier    *oidc.IDTokenVerifier
+	issuer      string
+	userIDClaim string
 }
 
 // Config configures the OIDC validator.
@@ -24,6 +27,10 @@ type Config struct {
 	// token issued by the provider for any client would be accepted.
 	ClientID string
 
+	// UserIDClaim selects a top-level string claim to map to inventory ID.
+	// Empty selects the provider default (oid for Entra, sub otherwise).
+	UserIDClaim string
+
 	// TLSConfig configures TLS for OIDC provider connections.
 	TLSConfig tlsconfig.Config
 }
@@ -33,8 +40,9 @@ type Claims struct {
 	// Issuer is the configured issuer against which the token was verified.
 	Issuer string
 	// Subject is the stable, case-sensitive identifier within this issuer.
-	// Profile claims such as email never select an authorization identity.
 	Subject string
+	// UserID is the verified claim value used to look up the inventory user.
+	UserID string
 
 	// ExpiresAt is when the token expires.
 	ExpiresAt time.Time
@@ -66,8 +74,9 @@ func NewValidator(ctx context.Context, config Config) (*Validator, error) {
 	verifier := provider.Verifier(&oidc.Config{ClientID: config.ClientID})
 
 	return &Validator{
-		verifier: verifier,
-		issuer:   config.Issuer,
+		verifier:    verifier,
+		issuer:      config.Issuer,
+		userIDClaim: ResolveUserIDClaim(config.Issuer, config.UserIDClaim),
 	}, nil
 }
 
@@ -83,9 +92,47 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 	if idToken.Subject == "" {
 		return nil, fmt.Errorf("OIDC token has no subject")
 	}
+	var raw map[string]any
+	if err := idToken.Claims(&raw); err != nil {
+		return nil, fmt.Errorf("decoding OIDC claims: %w", err)
+	}
+	userID, ok := raw[v.userIDClaim].(string)
+	if !ok || userID == "" {
+		return nil, fmt.Errorf("OIDC user ID claim %q must be a nonempty string", v.userIDClaim)
+	}
 	return &Claims{
 		Issuer:    v.issuer,
 		Subject:   idToken.Subject,
+		UserID:    userID,
 		ExpiresAt: idToken.Expiry,
 	}, nil
+}
+
+// ResolveUserIDClaim uses only the configured issuer, never unverified token
+// contents. Entra defaults apply to tenant-specific v1 and v2 issuer URLs.
+// Other providers, including Google and Okta, default to the standard sub.
+func ResolveUserIDClaim(issuer, override string) string {
+	if override != "" {
+		return override
+	}
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "sub"
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	tenant := strings.ToLower(parts[0])
+	if tenant == "" || tenant == "common" || tenant == "organizations" || tenant == "consumers" {
+		return "sub"
+	}
+	switch strings.ToLower(u.Host) {
+	case "login.microsoftonline.com", "login.microsoftonline.us", "login.chinacloudapi.cn", "login.partner.microsoftonline.cn":
+		if len(parts) == 2 && parts[1] == "v2.0" {
+			return "oid"
+		}
+	case "sts.windows.net":
+		if len(parts) == 1 {
+			return "oid"
+		}
+	}
+	return "sub"
 }

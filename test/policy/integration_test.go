@@ -45,10 +45,10 @@ func newIntegrationHandler(t *testing.T) (http.Handler, *oidctest.IdP, func(*htt
 	tmpDir := t.TempDir()
 	policyPath := filepath.Join(tmpDir, "policy.writ")
 	require.NoError(t, os.WriteFile(policyPath,
-		[]byte("allow id:\"alice@example.com\" -> root@*\n"), 0644))
+		[]byte("allow userName:\"alice@example.com\" -> root@*\n"), 0644))
 	invPath := filepath.Join(tmpDir, "inventory.yaml")
 	require.NoError(t, os.WriteFile(invPath,
-		[]byte("users:\n  - userName: alice@example.com\n    oidc-subject: subject:alice@example.com\nhosts:\n  - pattern: \"*\"\n"), 0644))
+		[]byte("users:\n  - userName: alice@example.com\n    id: subject:alice@example.com\nhosts:\n  - pattern: \"*\"\n"), 0644))
 
 	src, err := os.ReadFile(policyPath)
 	require.NoError(t, err)

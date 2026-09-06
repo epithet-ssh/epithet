@@ -28,7 +28,7 @@ import (
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
 	users                map[string]*eval.User
-	subjects             map[string]*eval.User
+	ids                  map[string]*eval.User
 	hosts                map[string]*ResolvedHost
 	patterns             []patternHost // file order; first match wins
 	domains              map[principal.Domain]struct{}
@@ -87,7 +87,7 @@ type staticDoc struct {
 
 type userEntry struct {
 	UserName     string   `yaml:"userName"`
-	OIDCSubject  string   `yaml:"oidc-subject"`
+	ID           string   `yaml:"id"`
 	Active       *bool    `yaml:"active"` // default true
 	Groups       []string `yaml:"groups"`
 	UserType     string   `yaml:"userType"`
@@ -105,9 +105,9 @@ type hostEntry struct {
 }
 
 // NewStatic loads an inventory from one or more YAML files. Files
-// concatenate; a missing oidc-subject, duplicate subject/userName, or duplicate
-// exact host name across the set is a load error. All subjects belong to the
-// policy server's single verified OIDC issuer. Decoding is strict — an unknown
+// concatenate; a missing id, duplicate id/userName, or duplicate
+// exact host name across the set is a load error. All IDs belong to the
+// policy server's single configured provider/tenant. Decoding is strict — an unknown
 // field is an error, not a silently ignored typo.
 func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	if len(paths) == 0 {
@@ -121,7 +121,7 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	}
 	s := &Static{
 		users:                map[string]*eval.User{},
-		subjects:             map[string]*eval.User{},
+		ids:                  map[string]*eval.User{},
 		hosts:                map[string]*ResolvedHost{},
 		domains:              map[principal.Domain]struct{}{},
 		domainPolicies:       map[principal.Domain]domainPolicy{},
@@ -164,21 +164,22 @@ func (s *Static) loadFile(path string) error {
 		if _, ok := s.users[u.UserName]; ok {
 			return fmt.Errorf("%s: duplicate user %q", path, u.UserName)
 		}
-		if u.OIDCSubject == "" {
-			return fmt.Errorf("%s: users[%d] (%q) has no oidc-subject; bind the user to the verified subject from epithet identity", path, i, u.UserName)
+		if u.ID == "" {
+			return fmt.Errorf("%s: users[%d] (%q) has no id; use the verified id from epithet agent identity", path, i, u.UserName)
 		}
-		if previous, ok := s.subjects[u.OIDCSubject]; ok {
-			return fmt.Errorf("%s: duplicate oidc-subject %q for users %q and %q", path, u.OIDCSubject, previous.ID, u.UserName)
+		if previous, ok := s.ids[u.ID]; ok {
+			return fmt.Errorf("%s: duplicate id %q for users %q and %q", path, u.ID, previous.UserName, u.UserName)
 		}
 		s.users[u.UserName] = &eval.User{
-			ID:     u.UserName,
-			Active: u.Active == nil || *u.Active,
-			Groups: u.Groups,
-			Type:   u.UserType,
-			Dept:   u.Department,
-			Org:    u.Organization,
+			UserName:     u.UserName,
+			ID:           u.ID,
+			Active:       u.Active == nil || *u.Active,
+			Groups:       u.Groups,
+			UserType:     u.UserType,
+			Department:   u.Department,
+			Organization: u.Organization,
 		}
-		s.subjects[u.OIDCSubject] = s.users[u.UserName]
+		s.ids[u.ID] = s.users[u.UserName]
 	}
 	for i, h := range doc.Hosts {
 		mode, err := s.resolvePrincipalMode(h.PrincipalMode)
@@ -241,8 +242,8 @@ func (s *Static) loadFile(path string) error {
 }
 
 // LookupUser implements Inventory.
-func (s *Static) LookupUser(_ context.Context, subject string) (*eval.User, error) {
-	return s.subjects[subject], nil
+func (s *Static) LookupUser(_ context.Context, id string) (*eval.User, error) {
+	return s.ids[id], nil
 }
 
 // LookupHost implements Inventory: exact entries first, then pattern

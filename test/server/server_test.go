@@ -55,11 +55,11 @@ func TestServerEndToEnd(t *testing.T) {
 
 	// Write the writ policy and inventory files.
 	policyPath := filepath.Join(tmpDir, "policy.writ")
-	if err := os.WriteFile(policyPath, []byte("allow id:\"test@example.com\" -> root@*\n"), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte("allow userName:\"test@example.com\" -> root@*\n"), 0644); err != nil {
 		t.Fatalf("failed to write policy: %v", err)
 	}
 	inventoryPath := filepath.Join(tmpDir, "inventory.yaml")
-	inventoryContent := "users:\n  - userName: test@example.com\n    oidc-subject: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n"
+	inventoryContent := "users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n"
 	if err := os.WriteFile(inventoryPath, []byte(inventoryContent), 0644); err != nil {
 		t.Fatalf("failed to write inventory: %v", err)
 	}

@@ -9,7 +9,7 @@ The epithet policy server validates OIDC tokens and makes authorization decision
 **Key features:**
 - OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
 - A readable, order-independent policy language (`.writ`) with explicit `allow`/`deny` rules — deny always wins
-- SCIM-modeled user inventory (groups, type, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
+- SCIM-modeled user inventory (groups, userType, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
 - Certificates minted per connection, using either compatible account-name principals or destination-bound hashed principals
 - Certificate validity clamped to the auth token's remaining lifetime
 - `epithet policy --check` validates policy + inventory without starting a server
@@ -65,7 +65,7 @@ host dev  = {env=dev}
 allow $sre -> ubuntu@$prod
 allow $sre -> root@$prod, ttl 2m, label "sre-prod-root"
 allow $eng -> *@$dev
-deny  type:contractor -> *@$prod, label "no-contractors-in-prod"
+deny  userType:contractor -> *@$prod, label "no-contractors-in-prod"
 ```
 
 ### 3. Write an inventory file
@@ -74,12 +74,12 @@ Create `~/.epithet/inventory.yaml`:
 
 ```yaml
 users:
-  - userName: alice@example.com     # readable Writ id: and audit identity
-    oidc-subject: "example-alice-subject" # replace with verified OIDC sub
+  - userName: alice@example.com     # readable Writ userName: and audit identity
+    id: "example-alice-subject" # replace with verified inventory id
     groups: [SRE]
     userType: employee
   - userName: bob@example.com
-    oidc-subject: "example-bob-subject"
+    id: "example-bob-subject"
     groups: [Engineering]
     userType: contractor
 
@@ -142,7 +142,7 @@ Evaluation is **order-independent**: file order never matters, and any matching 
 
 | Position | Matchers |
 |---|---|
-| users | `id:"alice@example.com"`, `group:SRE`, `type:employee`, `dept:Platform`, `org:Acme`, `*` |
+| users | `userName:"alice@example.com"`, `group:SRE`, `userType:employee`, `department:Platform`, `organization:Acme`, `*` |
 | accounts | a name (`root`), a glob (`deploy-*`), `*` |
 | hosts | a name (`prod-db-1`), a label-aware glob (`*.example.com`, `**.example.com`), a label selector (`{env=prod, role=db}`), `*` |
 
@@ -195,36 +195,109 @@ The inventory answers two questions at evaluation time: who is this identity, an
 
 ### Users
 
-User profile fields follow the SCIM (RFC 7643) shape. The required Epithet field `oidc-subject` binds the record to an authenticated user:
+User profile fields follow the SCIM (RFC 7643) shape. The required `id` is the stable provider identifier used both for authentication lookup and Writ `id:` selectors:
 
 ```yaml
 users:
-  - userName: alice@example.com   # matched by Writ id:; used in cert/audit identity
-    oidc-subject: "example-alice-subject" # required; exact verified OIDC sub
+  - userName: alice@example.com   # matched by Writ userName:; used in cert/audit identity
+    id: "example-alice-subject" # required; exact mapped OIDC user ID
     active: true                  # default true; false matches nothing, ever
     groups: [SRE, Engineering]    # matched by group:
-    userType: employee            # matched by type:
-    department: Platform          # matched by dept:
-    organization: Acme            # matched by org:
+    userType: employee            # matched by userType:
+    department: Platform          # matched by department:
+    organization: Acme            # matched by organization:
 ```
 
-The policy server verifies the token against its single configured `policy.oidc.issuer`, including signature, audience, and expiration, then requires a nonempty `sub`. That subject is compared **byte-for-byte** against `oidc-subject`. Email and other profile claims never select an inventory record. An unknown subject or a user with `active: false` is denied structurally — no policy rule can grant it anything. Duplicate `userName` or `oidc-subject` values across inventory files, and users with no subject binding, fail startup and `--check`.
+The policy server verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then reads the claim selected by `policy.oidc.user-id-claim` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
 
-`userName` remains an administrator-controlled, readable name for Writ's `id:` selector and certificate/audit identity. A token's email change does not rename it. An intentional inventory rename changes which `id:` rules match; group and attribute selectors continue to evaluate the same user's configured attributes.
+Configure the mapping once on the policy server:
 
-Subjects are scoped to the configured issuer, which all files inherit. Changing issuers requires deliberately reviewing/rebinding every subject; matching strings from different issuers do not establish the same person. There is no email fallback or automatic email-based enrollment.
+```yaml
+policy:
+  oidc:
+    issuer: "https://login.microsoftonline.com/YOUR-TENANT-ID/v2.0"
+    client-id: "your-client-id"
+    user-id-claim: oid
+```
+
+The CLI equivalent is `epithet policy --oidc-user-id-claim oid`. An explicit value overrides the provider default:
+
+| Configured provider | Default claim |
+|---|---|
+| Google | `sub` |
+| Okta | `sub` |
+| Microsoft Entra, tenant-specific issuer | `oid` |
+| Other OIDC providers | `sub` |
+
+Entra detection uses the configured HTTPS issuer: tenant-specific `/TENANT/v2.0` paths on `login.microsoftonline.com`, `login.microsoftonline.us`, `login.partner.microsoftonline.cn`, or `login.chinacloudapi.cn`, and v1 `sts.windows.net/TENANT/`. Use the exact tenant-specific issuer from discovery, not `common`, `organizations`, or `consumers`. Token issuer verification remains exact; IDs from different tenants are not interchangeable. Microsoft documents the distinction between application-specific `sub` and directory `oid` in its [ID-token claims reference](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference).
+
+Overrides name a literal top-level claim (including namespaced claim names), not a JSON path or expression. Choose a stable, non-reassignable user identifier. The operator is responsible for the semantics of an override; using a mutable email or username would defeat stable identity binding. Groups and profile attributes still come from inventory. The original OIDC subject remains separate from the mapped ID.
+
+`userName` remains an administrator-controlled, readable name for Writ's `userName:` selector and certificate/audit identity. A token's email change does not rename it. An intentional inventory rename changes which `userName:` rules match; group and attribute selectors continue to evaluate the same user's configured attributes.
+
+Writ `id:"provider-user-id"` matches the same `id` supplied in static YAML. Keep it stable across `userName` renames and never reuse it for replacement users. Static inventory supplies the internal schema directly; future provisioning adapters will map provider fields into it. SCIM provisioning and its field mapping are not yet implemented.
+
+**Writ selector migration (breaking, pre-1.0):** Use the SCIM field names
+for scalar selectors; keep `group:` singular for a membership test. Replace the previous shorthand as follows:
+
+| Previous selector | Current selector |
+|---|---|
+| `username:` (or the original name-based `id:`) | `userName:` |
+| `uid:` | `id:` |
+| `type:` | `userType:` |
+| `dept:` | `department:` |
+| `org:` | `organization:` |
+
+For example:
+
+```writ
+allow userName:"alice@example.com" -> root@*
+allow group:Admins -> root@*
+```
+
+Apply the changes in macros and deny rules too. **`id:` now exclusively
+matches an immutable inventory resource ID.** It no longer matches a
+username, and no language-version declaration is required. The other old
+shorthands are rejected. Name reuse deliberately transfers `userName:`
+matches to the new holder.
+
+Scalar selectors use SCIM attribute names, with Writ matching semantics.
+The singular `group:` tests one membership in the plural inventory `groups`
+field; `groups:` is not a selector. The `department:` and
+`organization:` refer to Enterprise User extension fields. Writ does not
+parse arbitrary SCIM filters or JSON paths.
+
+Replace the old static `subject` (or `oidc-subject`) key with `id`. The old keys are rejected, including when `id` is also present. For the `sub` mapping, retain the value. For Entra's default `oid` mapping or an explicit override, obtain the newly selected identifier; do not merely rename the key and assume the old subject is correct.
+
+The compiler emits IL schema 2; evaluators reject schema 1 and obsolete
+matcher names. Recompile stored policies and update external references
+to rule content IDs, which change when matcher names change. Validate the
+policy and inventory with `epithet policy --check` before restarting with
+the new binary.
+
+All inventory files share the policy server's configured provider/tenant scope. Changing issuer or the selected claim requires deliberately reviewing every ID binding. Matching strings from different providers do not establish the same person. There is no automatic enrollment or provider migration.
 
 ### Migrating from email lookup
 
-This is a breaking inventory change. Before stopping the existing CA/policy service, use the new binary on a client with an existing `agent.ca-url` configuration:
+This is a breaking inventory change. Start the new agent with your existing client configuration, then ask that running agent for its identity:
 
 ```sh
-epithet identity
+epithet agent                         # runs in the foreground
+# In another terminal:
+epithet agent identity
+# Or, for a named running profile:
+epithet agent --name work identity
 ```
 
-`identity` inherits `agent.ca-url` from the normal client config files, including an explicit `--config /path/to/client.yaml`. This is a deliberate cross-command fallback: the normal `identity.ca-url` setting takes precedence, and `--ca-url https://ca.example.com/` overrides both. Scalar and list settings, CA priorities, and failover work as for the agent. Global TLS settings still apply.
+`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's CA configuration and advertised ID-claim mapping. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout is JSON:
 
-This uses the CA's existing OIDC discovery and browser login, verifies the returned token, and prints JSON containing only `issuer` and `subject`. It does not request a certificate or need an inventory binding, and it does not print bearer/refresh tokens or client secrets. Confirm that `issuer` matches your configured policy issuer and that you signed in as the intended account. Copy `subject` into that user's inventory record as a quoted `oidc-subject`, keeping the existing `userName`, groups, and Writ rules.
+```json
+{"id":"provider-user-id","issuer":"https://issuer.example","subject":"oidc-subject"}
+```
+
+The agent verifies the token before returning these identifiers. The command does not request a certificate or need an inventory entry, and bearer tokens, refresh tokens, and client secrets remain inside the agent. Confirm the issuer and signed-in account, then copy `id` into the user's inventory record, keeping the intended `userName` and groups. Migrate old name-based Writ `id:` rules to `userName:` as described above.
+
+The former standalone `epithet identity` command is removed. If the agent is not running, start it first. Restart existing agents after upgrading or changing the policy server's claim mapping so they rediscover the current configuration. An older policy server does not advertise overrides; upgrade it before obtaining IDs for a custom mapping.
 
 Prepare the inventory separately, then validate it with the new binary and existing policy:
 
@@ -291,6 +364,7 @@ policy:
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "your-client-id"
+    # user-id-claim: sub  # optional override; Entra defaults to oid
   policy-file: /etc/epithet/policy.writ
   inventory:
     - /etc/epithet/inventory.yaml
@@ -301,6 +375,7 @@ policy:
 - **`listen`** (optional): address to listen on (default `0.0.0.0:9999`). A `unix:///path/to/policy.sock` value listens on a Unix domain socket; this is how `epithet server` wires its subprocesses together.
 - **`ca-pubkey`** (required): the CA's SSH public key (URL, file path, or literal), used to verify the CA's service JWT.
 - **`oidc`** (required): `issuer` and `client-id` — `client-id` is required so audience checking can never be silently skipped.
+- **`oidc.user-id-claim`** (optional): verified top-level claim mapped to inventory `id`; overrides the provider default described under [Users](#users).
 - **`policy-file`** (required): the writ policy file.
 - **`inventory`** (required): inventory file paths or globs.
 - **`principal-mode`** (optional): deployment default, either `account-name` (the compatibility default) or `epithet-principal-v1`. A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
@@ -493,7 +568,7 @@ epithet policy --check --policy-file /etc/epithet/policy.writ --inventory /etc/e
 ### Common errors
 
 **"user does not resolve to an active inventory user" (403)**
-- The OIDC token's `sub` doesn't match any inventory `oidc-subject` (byte-for-byte, case-sensitive), or the record has `active: false`
+- The configured OIDC user-ID claim doesn't match any inventory `id` (byte-for-byte, case-sensitive), or the record has `active: false`
 - Verify the OIDC provider is sending the expected claim
 
 **"host is not in inventory" (403)**
@@ -551,11 +626,13 @@ Response (`HTTP 200`):
 {
   "auth": {
     "issuer": "https://accounts.google.com",
-    "client_id": "your-client-id"
+    "client_id": "your-client-id",
+    "user_id_claim": "sub"
   }
 }
 ```
 
+`user_id_claim` advertises the effective mapping for agent identity lookup.
 `client_secret` is included (unencrypted) only if configured. There are no
 host-match patterns in this response — host gating lives entirely in the
 user's own ssh config.

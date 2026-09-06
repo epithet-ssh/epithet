@@ -136,45 +136,50 @@ type Any struct {
 
 func (a *Any) Pos() diag.Pos { return a.P }
 
-// Tag is one of the five user-matcher prefixes.
+// Tag is one of the six user-matcher prefixes.
 type Tag int
 
 const (
-	TagID Tag = iota
+	TagUserName Tag = iota
+	TagID
 	TagGroup
-	TagType
-	TagDept
-	TagOrg
+	TagUserType
+	TagDepartment
+	TagOrganization
 )
 
 func (t Tag) String() string {
 	switch t {
+	case TagUserName:
+		return "userName"
 	case TagID:
 		return "id"
 	case TagGroup:
 		return "group"
-	case TagType:
-		return "type"
-	case TagDept:
-		return "dept"
+	case TagUserType:
+		return "userType"
+	case TagDepartment:
+		return "department"
 	default:
-		return "org"
+		return "organization"
 	}
 }
 
 // TagOf maps a tag word to its Tag, reporting whether s names one.
 func TagOf(s string) (Tag, bool) {
 	switch s {
+	case "userName":
+		return TagUserName, true
 	case "id":
 		return TagID, true
 	case "group":
 		return TagGroup, true
-	case "type":
-		return TagType, true
-	case "dept":
-		return TagDept, true
-	case "org":
-		return TagOrg, true
+	case "userType":
+		return TagUserType, true
+	case "department":
+		return TagDepartment, true
+	case "organization":
+		return TagOrganization, true
 	}
 	return 0, false
 }

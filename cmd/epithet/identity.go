@@ -1,35 +1,30 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
-	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
-	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
-	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/config"
+	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// IdentityCLI obtains a verified identity without requesting a certificate or
-// requiring an inventory binding. It also works against a pre-migration CA.
-type IdentityCLI struct {
-	CAURL []string `name:"ca-url" short:"c" help:"CA URL (repeatable; defaults to agent.ca-url from client config)"`
+// AgentIdentityCLI authenticates the running agent and reports its identity.
+type AgentIdentityCLI struct {
+	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b"`
 }
 
-func (c *IdentityCLI) Run(tlsCfg tlsconfig.Config) error {
-	paths, err := config.ExpandGlobs(defaultConfigPatterns)
-	if err != nil {
-		return err
-	}
-	urls, err := c.resolveCAURLs(paths, string(cli.Config))
+func (c *AgentIdentityCLI) Run(parent *AgentCLI) error {
+	socket, err := resolveAgentBrokerSocket(parent, c.Broker)
 	if err != nil {
 		return err
 	}
@@ -37,86 +32,83 @@ func (c *IdentityCLI) Run(tlsCfg tlsconfig.Config) error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	return c.run(ctx, urls, tlsCfg, os.Stdout, os.Stderr)
+	return c.run(ctx, socket, os.Stdout, os.Stderr)
 }
 
-// Kong resolves only the selected command's flags. Resolve the existing agent
-// CA setting separately, using the same loader, default files, and explicit
-// --config overlay as the main parser. This preserves scalar/list handling and
-// per-flag precedence without maintaining another YAML interpretation.
-func (c *IdentityCLI) resolveCAURLs(defaultPaths []string, explicitConfig string) ([]string, error) {
-	if len(c.CAURL) > 0 {
-		return c.CAURL, nil
-	}
-	var inherited struct {
-		Config kong.ConfigFlag `name:"config"`
-		Agent  struct {
-			CAURL []string `name:"ca-url"`
-		} `cmd:"agent"`
-	}
-	parser, err := kong.New(&inherited, kong.Configuration(kongyaml.Loader, defaultPaths...))
+func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress io.Writer) error {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("cannot connect to agent at %s; start it with epithet agent: %w", socket, err)
 	}
-	args := []string{"agent"}
-	if explicitConfig != "" {
-		args = append([]string{"--config", explicitConfig}, args...)
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	if err := json.NewEncoder(conn).Encode(broker.Request{Identity: &struct{}{}}); err != nil {
+		return fmt.Errorf("sending identity request: %w", err)
 	}
-	if _, err := parser.Parse(args); err != nil {
-		return nil, fmt.Errorf("reading agent CA configuration: %w", err)
-	}
-	if len(inherited.Agent.CAURL) == 0 {
-		return nil, fmt.Errorf("no CA URL configured; set agent.ca-url in your client config or pass --ca-url")
-	}
-	return inherited.Agent.CAURL, nil
-}
-
-func (c *IdentityCLI) run(ctx context.Context, urls []string, tlsCfg tlsconfig.Config, out, progress io.Writer) error {
-	endpoints, err := caclient.ParseCAURLs(urls)
-	if err != nil {
-		return err
-	}
-	for _, endpoint := range endpoints {
-		if err := tlsCfg.ValidateURL(endpoint.URL); err != nil {
-			return err
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
+	for scanner.Scan() {
+		var event broker.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return fmt.Errorf("reading agent identity: %w", err)
+		}
+		if event.Output != "" {
+			if _, err := io.WriteString(progress, event.Output); err != nil {
+				return err
+			}
+		}
+		if event.Identity != nil {
+			if event.Identity.Error != "" {
+				return fmt.Errorf("agent identity: %s", event.Identity.Error)
+			}
+			if event.Identity.Identity == nil {
+				return fmt.Errorf("agent returned no identity")
+			}
+			return json.NewEncoder(out).Encode(event.Identity.Identity)
+		}
+		if event.Result != nil {
+			return fmt.Errorf("agent identity: %s (restart the agent if it predates identity support)", event.Result.Error)
 		}
 	}
-	client, err := caclient.New(endpoints, caclient.WithTLSConfig(tlsCfg))
-	if err != nil {
-		return err
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
-	discovery, err := client.GetDiscovery(ctx)
-	if err != nil {
-		return fmt.Errorf("fetching authentication configuration: %w", err)
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading agent identity: %w", err)
 	}
-	if discovery.Auth == nil {
-		return fmt.Errorf("CA discovery has no authentication configuration")
-	}
-	auth := discovery.Auth
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: auth.Issuer, ClientID: auth.ClientID, TLSConfig: tlsCfg,
-	})
-	if err != nil {
-		return err
-	}
-	token, _, err := authoidc.Authenticate(ctx, authoidc.Config{
-		IssuerURL: auth.Issuer, ClientID: auth.ClientID,
-		ClientSecret: auth.ClientSecret, TLSConfig: tlsCfg,
-	}, nil, progress)
-	if err != nil {
-		return err
-	}
-	return writeVerifiedIdentity(ctx, validator, token, out)
+	return fmt.Errorf("agent closed connection without an identity")
 }
 
-// Never print or persist the bearer token, refresh token, or client secret.
-func writeVerifiedIdentity(ctx context.Context, validator *oidc.Validator, token string, out io.Writer) error {
-	claims, err := validator.Validate(ctx, token)
-	if err != nil {
-		return err
+// makeAgentIdentityVerifier uses the running agent's discovery configuration.
+// OIDC discovery happens on demand; starting an agent does not require login.
+func makeAgentIdentityVerifier(auth wire.AuthConfig, tlsCfg tlsconfig.Config) broker.IdentityVerifier {
+	var mu sync.Mutex
+	var cached *oidc.Validator
+	getValidator := func(ctx context.Context) (*oidc.Validator, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached != nil {
+			return cached, nil
+		}
+		v, err := oidc.NewValidator(ctx, oidc.Config{
+			Issuer: auth.Issuer, ClientID: auth.ClientID,
+			UserIDClaim: auth.UserIDClaim, TLSConfig: tlsCfg,
+		})
+		if err == nil {
+			cached = v // Reuse the HTTP connection pool and signing-key cache.
+		}
+		return v, err // Failed discovery is retried by the next request.
 	}
-	return json.NewEncoder(out).Encode(struct {
-		Issuer  string `json:"issuer"`
-		Subject string `json:"subject"`
-	}{Issuer: claims.Issuer, Subject: claims.Subject})
+	return func(ctx context.Context, token string) (*broker.Identity, error) {
+		validator, err := getValidator(ctx)
+		if err != nil {
+			return nil, err
+		}
+		claims, err := validator.Validate(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		return &broker.Identity{ID: claims.UserID, Issuer: claims.Issuer, Subject: claims.Subject}, nil
+	}
 }

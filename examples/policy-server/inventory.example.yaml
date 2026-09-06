@@ -1,26 +1,27 @@
 # Example static inventory: SCIM-shaped users, labeled hosts.
 #
-# The verified OIDC sub is compared byte-for-byte against oidc-subject under
-# the single policy.oidc.issuer. Replace these example subjects with the values
-# printed by `epithet identity --ca-url https://your-ca/`. userName remains the
-# readable Writ id: and audit identity. Unknown/inactive users are denied.
-# Profile fields follow SCIM (RFC 7643); oidc-subject is an Epithet binding.
+# The verified claim selected by policy.oidc.user-id-claim is compared exactly
+# against id, within the configured provider/tenant. Defaults: sub for Google,
+# Okta, and generic OIDC; oid for Microsoft Entra. Copy id from
+# `epithet agent identity` after authenticating the running agent.
+# userName remains the readable Writ userName: and audit identity; id: matches
+# the stable ID. Unknown/inactive users are denied. Profile fields follow SCIM.
 
 users:
   - userName: alice@example.com
-    oidc-subject: "example-alice-subject"
+    id: "example-alice-subject"
     groups: [Admins, Developers]
     userType: employee
   - userName: bob@example.com
-    oidc-subject: "example-bob-subject"
+    id: "example-bob-subject"
     groups: [Developers]
     userType: employee
   - userName: carol@example.com
-    oidc-subject: "example-carol-subject"
+    id: "example-carol-subject"
     groups: [Operations]
     userType: employee
   - userName: dave@contractor.example.com
-    oidc-subject: "example-dave-subject"
+    id: "example-dave-subject"
     groups: [Developers]
     userType: contractor
 

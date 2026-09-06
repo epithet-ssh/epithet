@@ -318,8 +318,8 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	idp := oidctest.New(t)
 
 	eval := writEvaluator(t,
-		"allow id:\"test@example.com\" -> [alice, bob, carol]@*\n",
-		"users:\n  - userName: test@example.com\n    oidc-subject: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
+		"allow userName:\"test@example.com\" -> [alice, bob, carol]@*\n",
+		"users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 
 	tmpDir := shortTempDir(t)
@@ -373,8 +373,8 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 	idp := oidctest.New(t)
 
 	eval := writEvaluator(t,
-		"allow id:\"test@example.com\" -> root@*\n",
-		"users:\n  - userName: test@example.com\n    oidc-subject: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
+		"allow userName:\"test@example.com\" -> root@*\n",
+		"users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 
 	tmpDir := shortTempDir(t)

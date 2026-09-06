@@ -14,20 +14,23 @@ import (
 
 // Request is one line of JSON sent by the client. Exactly one field is set.
 type Request struct {
-	Match   *policy.Connection `json:"match,omitempty"`
-	Inspect *struct{}          `json:"inspect,omitempty"`
-	Kill    *KillRequest       `json:"kill,omitempty"`
+	Identity *struct{}          `json:"identity,omitempty"`
+	Match    *policy.Connection `json:"match,omitempty"`
+	Inspect  *struct{}          `json:"inspect,omitempty"`
+	Kill     *KillRequest       `json:"kill,omitempty"`
 }
 
 // Event is one line of JSON sent by the broker in response to a Request.
 // For a Match request: zero or more Output events (auth progress, e.g. the
 // auth-code+PKCE URL to visit) followed by exactly one Result event. For an
-// Inspect request: exactly one Inspect event.
+// Inspect request: exactly one Inspect event. Identity requests stream auth
+// Output events followed by one Identity event.
 type Event struct {
-	Output  string           `json:"output,omitempty"`
-	Result  *MatchResponse   `json:"result,omitempty"`
-	Inspect *InspectResponse `json:"inspect,omitempty"`
-	Kill    *KillResponse    `json:"kill,omitempty"`
+	Identity *IdentityResponse `json:"identity,omitempty"`
+	Output   string            `json:"output,omitempty"`
+	Result   *MatchResponse    `json:"result,omitempty"`
+	Inspect  *InspectResponse  `json:"inspect,omitempty"`
+	Kill     *KillResponse     `json:"kill,omitempty"`
 }
 
 // eventWriter serializes Event writes to a single client connection. Auth
@@ -123,6 +126,9 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	case req.Match != nil:
 		result := b.MatchWithUserOutput(connCtx, *req.Match, w)
 		_ = w.writeEvent(Event{Result: &result})
+	case req.Identity != nil:
+		resp := b.IdentityWithUserOutput(connCtx, w)
+		_ = w.writeEvent(Event{Identity: &resp})
 	case req.Inspect != nil:
 		var resp InspectResponse
 		if err := b.Inspect(InspectRequest{}, &resp); err != nil {
@@ -139,7 +145,7 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	default:
 		_ = w.writeEvent(Event{Result: &MatchResponse{
 			Allow: false,
-			Error: "request must set exactly one of match, inspect, or kill",
+			Error: "request must set exactly one of match, inspect, identity, or kill",
 		}})
 	}
 }

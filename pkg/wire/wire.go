@@ -47,6 +47,8 @@ type PolicyResponse struct {
 // credentials. This is the only auth mechanism epithet supports, so there is
 // no type discriminator.
 type AuthConfig struct {
+	// UserIDClaim maps a verified ID-token claim to the inventory user ID.
+	UserIDClaim  string `json:"user_id_claim,omitempty"`
 	Issuer       string `json:"issuer"`
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret,omitempty"`

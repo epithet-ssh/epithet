@@ -49,7 +49,13 @@ func tlsconfigFor(t *testing.T, server *httptest.Server) tlsconfig.Config {
 	return tlsconfig.Config{CACertFile: trustServer(t, server)}
 }
 
-func TestSubjectBindingControlsCertificateIssuance(t *testing.T) {
+func TestMappedIDControlsCertificateIssuance(t *testing.T) {
+	for _, claim := range []string{"sub", "oid"} {
+		t.Run(claim, func(t *testing.T) { testMappedIDIssuance(t, claim) })
+	}
+}
+
+func testMappedIDIssuance(t *testing.T, userIDClaim string) {
 	ctx := context.Background()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -76,7 +82,7 @@ func TestSubjectBindingControlsCertificateIssuance(t *testing.T) {
 	t.Cleanup(idp.Close)
 	issuer = idp.URL
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: issuer, ClientID: "review-client",
+		Issuer: issuer, ClientID: "review-client", UserIDClaim: userIDClaim,
 		TLSConfig: tlsconfigFor(t, idp),
 	})
 	require.NoError(t, err)
@@ -86,7 +92,7 @@ func TestSubjectBindingControlsCertificateIssuance(t *testing.T) {
 	require.NoError(t, os.WriteFile(invPath, []byte(`domains: [prod.example.com]
 users:
   - userName: victim@example.com
-    oidc-subject: victim-subject
+    id: victim-subject
 hosts:
   - name: prod.example.com
     domain: prod.example.com
@@ -95,7 +101,7 @@ hosts:
 `), 0600))
 	inv, err := inventory.NewStatic([]string{invPath})
 	require.NoError(t, err)
-	pol, diags := writ.Load("allow id:\"victim@example.com\" -> root@prod.example.com\n")
+	pol, diags := writ.Load("allow id:\"victim-subject\" -> root@prod.example.com\n")
 	require.NotNil(t, pol, "%v", diags)
 	evaluator := writpolicy.NewForTesting(pol, inv)
 	ph, err := policyserver.NewHandler(policyserver.Config{
@@ -134,6 +140,12 @@ hosts:
 			claims := map[string]any{
 				"iss": issuer, "aud": "review-client", "sub": tc.subject,
 				"email": tc.email, "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+			}
+			if userIDClaim != "sub" {
+				claims[userIDClaim] = tc.subject
+				if tc.subject != "" {
+					claims["sub"] = "victim-subject" // Must not select this record when oid differs.
+				}
 			}
 			if tc.email == "" {
 				delete(claims, "email")

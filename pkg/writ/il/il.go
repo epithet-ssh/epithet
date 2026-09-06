@@ -8,10 +8,13 @@
 // equality.
 package il
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Schema is the IL schema version carried by every policy.
-const Schema = 1
+const Schema = 2
 
 // Policy is a compiled rule set. Rule order is preserved from the
 // source for reporting, but evaluation is order-independent.
@@ -21,16 +24,49 @@ type Policy struct {
 	Denies []DenyRule
 }
 
+// ValidateUserSelectors rejects incompatible IL before any rule can grant
+// access. In particular, ignoring a legacy matcher in a deny would fail open.
+func (p *Policy) ValidateUserSelectors() error {
+	if p == nil {
+		return fmt.Errorf("nil Writ policy")
+	}
+	if p.Schema != Schema {
+		return fmt.Errorf("unsupported Writ IL schema %d (want %d); migrate legacy name selectors to userName: and recompile the policy", p.Schema, Schema)
+	}
+	check := func(users MatchSet) error {
+		for _, m := range users.Or {
+			switch m.Kind {
+			case MatchUserName, MatchID, MatchGroup, MatchUserType, MatchDepartment, MatchOrganization, MatchAny:
+			default:
+				return fmt.Errorf("unsupported Writ user matcher %q; use user selectors: userName, id, group, userType, department, organization", m.Kind)
+			}
+		}
+		return nil
+	}
+	for _, a := range p.Allows {
+		if err := check(a.Users); err != nil {
+			return err
+		}
+	}
+	for _, d := range p.Denies {
+		if err := check(d.Users.MatchSet); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // MatcherKind discriminates Matcher values.
 type MatcherKind string
 
 const (
 	// User position.
-	MatchID    MatcherKind = "id"
-	MatchGroup MatcherKind = "group"
-	MatchType  MatcherKind = "type"
-	MatchDept  MatcherKind = "dept"
-	MatchOrg   MatcherKind = "org"
+	MatchUserName     MatcherKind = "userName"
+	MatchID           MatcherKind = "id"
+	MatchGroup        MatcherKind = "group"
+	MatchUserType     MatcherKind = "userType"
+	MatchDepartment   MatcherKind = "department"
+	MatchOrganization MatcherKind = "organization"
 	// Account and host positions.
 	MatchName MatcherKind = "name"
 	MatchGlob MatcherKind = "glob"

@@ -42,7 +42,7 @@ allow $eng -> *@$dev
 
 allow $sec -> root@*, require mfa, notify "security-alerts", label "breakglass-root"
 
-deny type:contractor -> *@$prod, label "no-contractors-in-prod"
+deny userType:contractor -> *@$prod, label "no-contractors-in-prod"
 
 deny !$infra -> *@$prod, when freeze, label "prod-freeze"
 ```
@@ -53,7 +53,9 @@ keyword **tail** of comma-separated clauses. The head carries the
 dangerous part of the rule in a shape that cannot be silently
 mis-grouped; the tail absorbs conditions and metadata.
 
-The normative example set is `prototype/examples/scenarios.writ`.
+The normative example set is `../pkg/writ/testdata/scenarios.writ`.
+The retired Rust spike under `prototype/` records the earlier language;
+the Go implementation and this specification define current behavior.
 
 ## 2. Model
 
@@ -61,22 +63,69 @@ The language matches against three entity kinds. Writ owns or mirrors
 all three inventories, which is what makes inventory-aware linting
 possible.
 
-**Users** arrive via SCIM (RFC 7643); writ never edits them. Policy can
-match exactly:
+**Users** resolve through inventory independently of policy selectors. The
+policy view is SCIM-shaped; Epithet currently supplies it from static YAML.
+SCIM provisioning remains future integration work.
 
-| Matcher | SCIM source |
+| Matcher | Inventory source |
 |---|---|
-| `id:"..."` | The configured identity attribute (default `userName`) |
+| `userName:"..."` | Current, mutable `userName` |
+| `id:"..."` | Immutable, non-reassignable inventory ID within the configured provider/tenant |
 | `group:...` | Group `displayName` |
-| `type:...` | `userType` |
-| `dept:...` | Enterprise extension `department` |
-| `org:...` | Enterprise extension `organization` |
+| `userType:...` | `userType` |
+| `department:...` | Enterprise extension `department` |
+| `organization:...` | Enterprise extension `organization` |
 
-Identity is an **opaque string**: one configured OIDC claim is compared
-byte-for-byte against one configured SCIM attribute. Writ never parses
-the value; it is often email-shaped but never email-semantic. A user
-with `active=false`, or with no SCIM match, matches nothing — this is a
-structural gate no policy text can express or bypass.
+Both userName and id selectors compare opaque strings byte-for-byte, without
+case folding, normalization, or globbing. A quoted wildcard is literal.
+An absent ID never matches `id:`, including `id:""`. Normal deny negation
+still applies: `deny !id:X` matches a resolved user without an ID.
+
+An intentional inventory `userName` rename changes which `userName:` rules
+match. Reusing that name for another user intentionally lets name-based rules
+match the replacement. In contrast, `id:` follows the same inventory record
+across renames and must never adopt a replacement just because a name was
+reused. Providers offering IDs must keep them stable for the record's lifetime
+and never reassign a deleted record's ID, including after reprovisioning.
+Group and attribute selectors always inspect the authenticated user's
+resolved record, independently of its current name.
+
+Authentication validates the OIDC token and maps a configured stable claim to
+an inventory `id` before Writ evaluation. Writ only sees that normalized ID;
+it does not interpret provider-specific OIDC or SCIM fields. Static YAML
+supplies `id` directly. Epithet defaults to OIDC `sub` for Google, Okta, and
+generic providers, and `oid` for tenant-specific Microsoft Entra issuers;
+`policy.oidc.user-id-claim` overrides the mapping. Inventory IDs are scoped
+to the configured provider/tenant. Future provisioning adapters must map
+the appropriate provider field to that same ID. There is no assumption that
+SCIM `id`, SCIM `externalId`, or OIDC `sub` universally share a value.
+A user with `active=false`, or with no inventory match, matches nothing —
+this is a structural gate no policy text can express or bypass. Certificate
+and audit identity remains the resolved `userName`.
+
+**Migration (breaking, pre-1.0):** Scalar selector names now use SCIM attribute
+names verbatim: `userName`, `id`, `userType`, `department`, and
+`organization`. The singular `group` selector tests one group membership.
+The former aliases `username`, `uid`, `type`,
+`dept`, and `org` are rejected. Replace old name-based `id:` rules with
+`userName:`, including in macros and negated denies. **The spelling `id:`
+now means only the immutable inventory resource ID.** There is no alias or
+language-version declaration preserving the former meaning. Use it only
+with the normalized ID provided by inventory. Static inventory requires an
+explicit `id`; its former `subject` and `oidc-subject` keys are rejected.
+
+Recompile policies to IL schema 2; schema 1 and obsolete matcher names are
+rejected. Renamed matcher keys change rule content IDs, so review external
+rule-ID references. Rule content IDs are unrelated to user resource IDs.
+
+Writ uses these names without implementing SCIM's JSON structure
+or filter language. `group:Admins` tests membership by group name; SCIM
+represents memberships as complex entries in the User's `groups` attribute.
+The inventory field remains plural `groups`; the selector is singular
+`group` because each matcher tests membership in one named group.
+`department` and `organization` are the unqualified Enterprise User extension
+attribute names. Matching retains Writ's exact, case-sensitive semantics.
+See [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643.html).
 
 A policy reference to a duplicated group `displayName` matches the
 union; sync warns loudly and points at the IdP as the thing to fix.
@@ -166,8 +215,8 @@ word at statement start is a parse error.)
 `-`. `$` is its own token, followed by an identifier; `$foo.bar` is a
 diagnosable error rather than a silent short match.
 
-**Tags** are the five user-matcher prefixes `id`, `group`, `type`,
-`dept`, `org`, each immediately followed by `:`.
+**Tags** are the six user-matcher prefixes `userName`, `id`, `group`, `userType`,
+`department`, `organization`, each immediately followed by `:`.
 
 **Timestamps** are ordinary quoted strings, validated after parsing as
 RFC 3339 with a mandatory offset or `Z`: `until "2026-08-31T22:00Z"`. A
@@ -224,7 +273,7 @@ deny-clause  = "when"    name-list
 
 user-expr    = user-atom | "[" user-atom { "," user-atom } [ "," ] "]" ;
 user-atom    = "$" ident | tag ":" value | "*" ;
-tag          = "id" | "group" | "type" | "dept" | "org" ;
+tag          = "userName" | "id" | "group" | "userType" | "department" | "organization" ;
 
 acct-expr    = acct-atom | "[" acct-atom { "," acct-atom } [ "," ] "]" ;
 acct-atom    = "$" ident | name | "*" ;
@@ -311,7 +360,7 @@ on an allow.
 **Globs match names, never attribute values.** Account names and host
 names may glob; a standalone `*` is legal anywhere and means every value in
 that position. Tag values
-(`group:`, `id:`, …), label keys, and label values are exact. A bare `*`
+(`group:`, `userName:`, `id:`, …), label keys, and label values are exact. A bare `*`
 or `?` in an attribute-value position is an error; a **quoted attribute
 value is always a literal** (`group:"weird*name"` matches a group with a
 star in its name). The grouping that value-globs would provide belongs
@@ -498,7 +547,7 @@ An allow rule:
 
 ```json
 {
-  "schema":   1,
+  "schema":   2,
   "id":       "a3f9c1d2e8b4",
   "effect":   "allow",
   "label":    "sre-prod-root",
@@ -513,7 +562,7 @@ A deny rule — `not` sits on the whole expression, never on a matcher:
 
 ```json
 {
-  "schema":   1,
+  "schema":   2,
   "id":       "7c1e0b93a5df",
   "effect":   "deny",
   "label":    "prod-freeze",
@@ -547,7 +596,7 @@ express the `[!$a, !$b]` footgun the grammar forbids.
 
 | Position | Kinds |
 |---|---|
-| `users` | `{"id": s}` `{"group": s}` `{"type": s}` `{"dept": s}` `{"org": s}` `{"any": true}` |
+| `users` | `{"userName": s}` `{"id": s}` `{"group": s}` `{"userType": s}` `{"department": s}` `{"organization": s}` `{"any": true}` |
 | `accounts` | `{"name": s}` `{"glob": s}` `{"any": true}` |
 | `hosts` | `{"name": s}` `{"glob": s}` `{"labels": {k: v}}` `{"any": true}` |
 

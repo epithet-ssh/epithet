@@ -3,6 +3,7 @@ package policyserver
 import (
 	"fmt"
 
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
@@ -36,6 +37,7 @@ func (c *ServerConfig) Validate() error {
 func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
 	return wire.AuthConfig{
 		Issuer:       c.OIDC.Issuer,
+		UserIDClaim:  oidc.ResolveUserIDClaim(c.OIDC.Issuer, c.OIDC.UserIDClaim),
 		ClientID:     c.OIDC.ClientID,
 		ClientSecret: c.OIDC.ClientSecret,
 	}
@@ -43,6 +45,7 @@ func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
 
 // OIDCConfig represents OIDC configuration for token validation
 type OIDCConfig struct {
+	UserIDClaim  string `yaml:"user_id_claim,omitempty" json:"user_id_claim,omitempty"`
 	Issuer       string `yaml:"issuer" json:"issuer"`
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"` // Optional, for confidential clients

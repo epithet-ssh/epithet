@@ -24,6 +24,7 @@ import (
 
 // PolicyOIDCConfig holds OIDC configuration for the policy server.
 type PolicyOIDCConfig struct {
+	UserIDClaim  string `help:"OIDC claim mapped to inventory id (default: oid for Microsoft Entra, sub otherwise)" name:"user-id-claim"`
 	Issuer       string `help:"OIDC issuer URL" name:"issuer"`
 	ClientID     string `help:"OIDC client ID" name:"client-id"`
 	ClientSecret string `help:"OIDC client secret (for confidential clients)" name:"client-secret"`
@@ -69,6 +70,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		CAPublicKey: c.CAPubkey,
 		OIDC: policyserver.OIDCConfig{
 			Issuer:       c.OIDC.Issuer,
+			UserIDClaim:  c.OIDC.UserIDClaim,
 			ClientID:     c.OIDC.ClientID,
 			ClientSecret: c.OIDC.ClientSecret,
 		},
@@ -89,9 +91,10 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	}
 
 	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
-		Issuer:    serverCfg.OIDC.Issuer,
-		ClientID:  serverCfg.OIDC.ClientID,
-		TLSConfig: tlsCfg,
+		Issuer:      serverCfg.OIDC.Issuer,
+		UserIDClaim: serverCfg.OIDC.UserIDClaim,
+		ClientID:    serverCfg.OIDC.ClientID,
+		TLSConfig:   tlsCfg,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create OIDC validator: %w", err)

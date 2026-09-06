@@ -241,3 +241,15 @@ func TestDuplicateContentIDWarnsAndCollapses(t *testing.T) {
 	// The first label (here: none) wins.
 	require.Equal(t, "", pol.Allows[0].Label)
 }
+
+func TestUserNameAndIDCompileToDistinctMatchers(t *testing.T) {
+	p := compileOK(t, "user identity = [userName:alice, id:alice]\nallow $identity -> root@*\ndeny !$identity -> root@*\n")
+	require.Equal(t, il.Schema, p.Schema)
+	want := []il.Matcher{{Kind: il.MatchUserName, Value: "alice"}, {Kind: il.MatchID, Value: "alice"}}
+	require.Equal(t, want, p.Allows[0].Users.Or)
+	require.Equal(t, want, p.Denies[0].Users.Or)
+	require.True(t, p.Denies[0].Users.Not)
+	name := compileOK(t, "allow userName:alice -> root@*\n")
+	id := compileOK(t, "allow id:alice -> root@*\n")
+	require.NotEqual(t, name.Allows[0].ContentID(), id.Allows[0].ContentID())
+}
