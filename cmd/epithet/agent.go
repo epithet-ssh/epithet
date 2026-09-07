@@ -90,9 +90,9 @@ type AgentCLI struct {
 	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 
-	Identity AgentIdentityCLI `cmd:"identity" help:"Authenticate the running agent and print its OIDC identity"`
+	Identity AgentIdentityCLI `cmd:"identity" aliases:"id,ide,iden,ident" help:"Authenticate the running agent and print its OIDC identity"`
 	Start    AgentStartCLI    `cmd:"" default:"withargs" help:"Start the epithet agent"`
-	Inspect  AgentInspectCLI  `cmd:"inspect" help:"Inspect broker state (certificates, agents)"`
+	Inspect  AgentInspectCLI  `cmd:"inspect" aliases:"in,ins,insp" help:"Inspect broker state (certificates, agents)"`
 	Kill     AgentKillCLI     `cmd:"kill" help:"Kill one agent and discard its certificate"`
 }
 
