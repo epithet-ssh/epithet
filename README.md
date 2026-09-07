@@ -40,24 +40,9 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 
 **Components:**
 
-- **Broker** (`epithet agent`): Daemon managing OIDC authentication state and certificate lifecycle. Creates per-connection SSH agents.
+- **Agent** (`epithet agent`): Daemon managing OIDC authentication state and certificate lifecycle. Creates per-connection SSH agents.
 - **CA Server** (`epithet ca`): Signs SSH certificates after passing the caller's token through to a policy server for validation.
 - **Policy Server** (`epithet policy`): Validates tokens and makes authorization decisions - who can access what hosts as which users.
-- **Per-connection Agents**: In-process SSH agents, one per unique connection, serving a certificate minted for that connection alone.
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `epithet agent` | Start the broker daemon that manages certificates and agents |
-| `epithet agent inspect` | Query a running broker's state |
-| `epithet agent kill AGENT_ID` | Evict one agent so its next connection fetches a fresh certificate |
-| `epithet server` | Run the CA and policy server as supervised subprocesses behind one port |
-| `epithet match` | Called by SSH `Match tagged ... exec` to trigger certificate flow |
-| `epithet host enroll` | Enroll a target host, install its CA key, and configure sshd |
-| `epithet host authorized-principals` | Derive destination-bound principals locally for sshd |
-| `epithet ca` | Run the certificate authority server |
-| `epithet policy` | Run the policy server with OIDC-based authorization |
 
 ## Documentation
 
@@ -68,15 +53,6 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 - [OIDC Setup](docs/oidc-setup.md) - Provider-specific OIDC configuration (Google, Okta, Azure AD)
 - [Releasing](docs/RELEASING.md) - Notes on cutting releases
 
-## Development
-
-```bash
-make build    # Build all binaries
-make test     # Run tests
-make clean    # Clean build artifacts
-```
-
-Requirements: Go 1.25+
 **Requires OpenSSH 9.4+** on the client (for `Tag`/`Match tagged`; see below).
 
 ## License
