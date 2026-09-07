@@ -16,20 +16,20 @@ import (
 type tokKind int
 
 const (
-	tokBare tokKind = iota // bare word, including `*` and glob forms
-	tokString              // quoted string; text is the unescaped value
-	tokMacroRef            // $ident; text is the identifier
-	tokBang                // !
-	tokArrow               // ->
-	tokAt                  // @
-	tokColon               // :
-	tokComma               // ,
-	tokEq                  // =
-	tokLBracket            // [
-	tokRBracket            // ]
-	tokLBrace              // {
-	tokRBrace              // }
-	tokTerm                // statement terminator
+	tokBare     tokKind = iota // bare word, including `*` and glob forms
+	tokString                  // quoted string; text is the unescaped value
+	tokMacroRef                // $ident; text is the identifier
+	tokBang                    // !
+	tokArrow                   // ->
+	tokAt                      // @
+	tokColon                   // :
+	tokComma                   // ,
+	tokEq                      // =
+	tokLBracket                // [
+	tokRBracket                // ]
+	tokLBrace                  // {
+	tokRBrace                  // }
+	tokTerm                    // statement terminator
 	tokEOF
 )
 
