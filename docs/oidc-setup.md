@@ -4,9 +4,9 @@ This guide walks through setting up OAuth2/OIDC authentication with popular iden
 
 ## Overview
 
-Epithet's OIDC config lives on the **policy server**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the policy server with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA advertises this configuration to clients via a `Link` header on its root response, so `epithet agent` needs no OIDC configuration of its own — just `--ca-url`.
+Epithet's OIDC config lives on the **inventory service**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the inventory service with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA advertises this configuration to clients via a `Link` header on its root response, so `epithet agent` needs no OIDC configuration of its own — just `--ca-url`.
 
-**Important**: Epithet uses PKCE (Proof Key for Code Exchange), so the client secret is optional for most providers. Where a provider requires one anyway, it goes in the policy server's config, not on the client — the secret never appears in a broker or ssh config.
+**Important**: Epithet uses PKCE (Proof Key for Code Exchange), so the client secret is optional for most providers. Where a provider requires one anyway, it goes in the inventory service's config, not on the client — the secret never appears in a broker or ssh config.
 
 Scopes are not configurable: epithet always requests `openid profile email`. Nothing in epithet consumes any other claim, so there is nothing to add here.
 
@@ -34,7 +34,7 @@ Scopes are not configurable: epithet always requests `openid profile email`. Not
 - Choose **"Desktop app"**
 - **Advantage**: Standard Desktop app type
 - **Disadvantage**: Google requires client secret even with PKCE
-- You'll need to configure `client-secret` on the policy server
+- You'll need to configure `client-secret` on the inventory service
 
 ### Step 2: configure redirect URI
 
@@ -48,12 +48,12 @@ You'll see a dialog with:
   - **UWP apps**: Not needed (can ignore)
   - **Desktop apps**: Required - note this value
 
-### Step 4: configure the policy server
+### Step 4: configure the inventory service
 
 In `~/.epithet/policy.yaml` (or wherever your policy config lives):
 
 ```yaml
-policy:
+inventory:
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "YOUR_CLIENT_ID.apps.googleusercontent.com"
@@ -62,12 +62,12 @@ policy:
 
 Config-file keys for these CLI-backed scalars are kebab-case (derived from
 the flag names — `client-id`, not `client_id`); see the casing note in the
-[policy server guide](./policy-server.md#configuration-structure).
+[inventory service guide](./policy-server.md#configuration-structure).
 
 Or via flags:
 
 ```bash
-epithet policy \
+epithet inventory --static /etc/epithet/inventory.yaml \
   --ca-pubkey ... \
   --oidc-issuer https://accounts.google.com \
   --oidc-client-id YOUR_CLIENT_ID.apps.googleusercontent.com
@@ -144,10 +144,10 @@ To verify:
 2. Find your authorization server
 3. Copy the **Issuer URI**
 
-### Step 5: configure the policy server
+### Step 5: configure the inventory service
 
 ```bash
-epithet policy \
+epithet inventory --static /etc/epithet/inventory.yaml \
   --ca-pubkey ... \
   --oidc-issuer https://your-domain.okta.com/oauth2/default \
   --oidc-client-id YOUR_CLIENT_ID
@@ -183,10 +183,10 @@ Okta supports `openid`, `profile`, `email`, and `offline_access` (refresh tokens
 - **Directory (tenant) ID**: Also from the Overview page
 - **Client secret**: Not needed for public clients
 
-### Step 4: configure the policy server
+### Step 4: configure the inventory service
 
 ```bash
-epithet policy \
+epithet inventory --static /etc/epithet/inventory.yaml \
   --ca-pubkey ... \
   --oidc-issuer https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0 \
   --oidc-client-id YOUR_CLIENT_ID
@@ -230,10 +230,10 @@ https://your-provider.com/.well-known/openid-configuration
 
 The issuer URL is usually the base URL (without `/.well-known/...`).
 
-### Step 3: configure the policy server
+### Step 3: configure the inventory service
 
 ```bash
-epithet policy \
+epithet inventory --static /etc/epithet/inventory.yaml \
   --ca-pubkey ... \
   --oidc-issuer https://your-provider.com \
   --oidc-client-id YOUR_CLIENT_ID
@@ -243,7 +243,7 @@ epithet policy \
 
 ## Client setup
 
-Once the policy server is configured, clients need only the CA URL:
+Once the inventory service is configured, clients need only the CA URL:
 
 ```bash
 epithet agent --ca-url https://ca.example.com --name work
@@ -263,20 +263,20 @@ Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
 
 ### "Failed to create OIDC provider"
 
-- Check that the policy server's `--oidc-issuer` URL is correct
+- Check that the inventory service's `--oidc-issuer` URL is correct
 - Verify your provider supports OIDC discovery
 - Try accessing `{issuer}/.well-known/openid-configuration` in a browser
 
 ### "Authentication failed" in browser
 
-- Verify the policy server's `--oidc-client-id` is correct
+- Verify the inventory service's `--oidc-client-id` is correct
 - Check that the OAuth app is enabled in your provider
 - Ensure the redirect URI is registered as a loopback wildcard-port URI (`http://localhost` or `http://127.0.0.1`, with no fixed port)
 
 ### Browser opens but shows error
 
 - **"redirect_uri_mismatch"**: Your OAuth app's redirect URI must allow `http://localhost` (or `http://127.0.0.1`) with **any** port - epithet picks a free port at random each time, so a single fixed-port entry will eventually stop matching
-- **"invalid_client"**: Double-check the client ID configured on the policy server
+- **"invalid_client"**: Double-check the client ID configured on the inventory service
 - **"unauthorized_client"**: Your OAuth app may not be configured for authorization code flow or PKCE
 
 ### Token refresh fails repeatedly
@@ -296,5 +296,5 @@ This is normal for personal OAuth apps. Options:
 ## Next steps
 
 - [Authentication overview](./authentication.md) - How the in-process OIDC flow works
-- [Policy server guide](./policy-server.md) - Full policy server configuration
+- [Policy server guide](./policy-server.md) - Full inventory service configuration
 - [Example configurations](../examples/) - Complete working examples

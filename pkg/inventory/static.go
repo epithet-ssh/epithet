@@ -3,16 +3,18 @@ package inventory
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"maps"
 	"os"
 	"slices"
 
+	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/principal"
-	"github.com/epithet-ssh/epithet/pkg/writ/eval"
-	"github.com/epithet-ssh/epithet/pkg/writ/il"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,8 +29,10 @@ import (
 // escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
-	users                map[string]*eval.User
-	ids                  map[string]*eval.User
+	directoryHash        hash.Hash
+	inventoryHash        hash.Hash
+	users                map[string]*directory.User
+	ids                  map[string]*directory.User
 	hosts                map[string]*ResolvedHost
 	patterns             []patternHost // file order; first match wins
 	domains              map[principal.Domain]struct{}
@@ -107,7 +111,7 @@ type hostEntry struct {
 // NewStatic loads an inventory from one or more YAML files. Files
 // concatenate; a missing id, duplicate id/userName, or duplicate
 // exact host name across the set is a load error. All IDs belong to the
-// policy server's single configured provider/tenant. Decoding is strict — an unknown
+// inventory service's single configured provider/tenant. Decoding is strict — an unknown
 // field is an error, not a silently ignored typo.
 func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	if len(paths) == 0 {
@@ -120,13 +124,15 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 		}
 	}
 	s := &Static{
-		users:                map[string]*eval.User{},
-		ids:                  map[string]*eval.User{},
+		directoryHash: sha256.New(), inventoryHash: sha256.New(),
+		users:                map[string]*directory.User{},
+		ids:                  map[string]*directory.User{},
 		hosts:                map[string]*ResolvedHost{},
 		domains:              map[principal.Domain]struct{}{},
 		domainPolicies:       map[principal.Domain]domainPolicy{},
 		defaultPrincipalMode: opts.defaultPrincipalMode,
 	}
+	s.inventoryHash.Write([]byte(opts.defaultPrincipalMode))
 	for _, path := range paths {
 		if err := s.loadFile(path); err != nil {
 			return nil, err
@@ -147,6 +153,13 @@ func (s *Static) loadFile(path string) error {
 	if err := strictUnmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parsing inventory %s: %w", path, err)
 	}
+	usersJSON, _ := json.Marshal(doc.Users)
+	s.directoryHash.Write(usersJSON)
+	hostsJSON, _ := json.Marshal(struct {
+		Domains []string
+		Hosts   []hostEntry
+	}{doc.Domains, doc.Hosts})
+	s.inventoryHash.Write(hostsJSON)
 	for i, raw := range doc.Domains {
 		domain, err := principal.ParseNamedDomain(raw)
 		if err != nil {
@@ -165,12 +178,12 @@ func (s *Static) loadFile(path string) error {
 			return fmt.Errorf("%s: duplicate user %q", path, u.UserName)
 		}
 		if u.ID == "" {
-			return fmt.Errorf("%s: users[%d] (%q) has no id; use the verified id from epithet agent identity", path, i, u.UserName)
+			return fmt.Errorf("%s: users[%d] (%q) has no id; use the claim selected by your configured identity mode", path, i, u.UserName)
 		}
 		if previous, ok := s.ids[u.ID]; ok {
 			return fmt.Errorf("%s: duplicate id %q for users %q and %q", path, u.ID, previous.UserName, u.UserName)
 		}
-		s.users[u.UserName] = &eval.User{
+		s.users[u.UserName] = &directory.User{
 			UserName:     u.UserName,
 			ID:           u.ID,
 			Active:       u.Active == nil || *u.Active,
@@ -210,7 +223,7 @@ func (s *Static) loadFile(path string) error {
 		case h.Name != "":
 			// Loading is an ingress boundary: names are lowercased here
 			// so lookups stay byte compares.
-			name := il.HostName(h.Name)
+			name := hostpattern.NormalizeName(h.Name)
 			if _, ok := s.hosts[name]; ok {
 				return fmt.Errorf("%s: duplicate host %q", path, name)
 			}
@@ -223,7 +236,7 @@ func (s *Static) loadFile(path string) error {
 			if domain.IsGeneratedHost() {
 				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use generated host domain %q", path, i, h.Pattern, domain)
 			}
-			pattern, err := hostpattern.Parse(il.HostName(h.Pattern))
+			pattern, err := hostpattern.Parse(hostpattern.NormalizeName(h.Pattern))
 			if err != nil {
 				return fmt.Errorf("%s: hosts[%d] pattern %q: %w", path, i, h.Pattern, err)
 			}
@@ -241,8 +254,8 @@ func (s *Static) loadFile(path string) error {
 	return nil
 }
 
-// LookupUser implements Inventory.
-func (s *Static) LookupUser(_ context.Context, id string) (*eval.User, error) {
+// LookupUser implements directory.Directory.
+func (s *Static) LookupUser(_ context.Context, id string) (*directory.User, error) {
 	return s.ids[id], nil
 }
 
@@ -309,12 +322,12 @@ func (s *Static) recordDomainPolicy(domain principal.Domain, labels map[string]s
 		path, hostIndex, domain, previous.path, previous.hostIndex)
 }
 
-func resolvedPolicyHost(requestedName string, domain principal.Domain, labels map[string]string, accounts []string) eval.Host {
+func resolvedPolicyHost(requestedName string, domain principal.Domain, labels map[string]string, accounts []string) Host {
 	name := requestedName
 	if domain != "" && !domain.IsGeneratedHost() {
 		name = domain.String()
 	}
-	return eval.Host{Name: name, Labels: labels, Accounts: accounts}
+	return Host{Name: name, Labels: labels, Accounts: accounts}
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an
@@ -327,4 +340,11 @@ func strictUnmarshal(data []byte, target any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Static) DirectoryRevision() string {
+	return fmt.Sprintf("sha256:%x", s.directoryHash.Sum(nil))
+}
+func (s *Static) InventoryRevision() string {
+	return fmt.Sprintf("sha256:%x", s.inventoryHash.Sum(nil))
 }

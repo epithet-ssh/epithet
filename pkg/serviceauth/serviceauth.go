@@ -1,8 +1,6 @@
 // Package serviceauth mints and verifies short-lived, request-bound JWTs
-// that authenticate CA -> policy-server requests. It replaces RFC 9421 HTTP
-// message signatures (pkg/httpsig): the CA signs a JWT per request instead
-// of the request's HTTP fields, and the policy server verifies it against
-// the CA's SSH public key.
+// that authenticate CA requests to private services. Each service has a
+// distinct audience and verifies the token against the CA SSH public key.
 package serviceauth
 
 import (
@@ -20,15 +18,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"golang.org/x/crypto/ssh"
-
-	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
 // Audience is the aud claim on every service token.
 const Audience = "epithet-policy"
+const InventoryAudience = "epithet-inventory"
 
 // TokenTTL bounds how long a minted request token is accepted.
 const TokenTTL = 60 * time.Second
@@ -58,10 +56,18 @@ type requestClaims struct {
 type Signer struct {
 	signer      jose.Signer
 	fingerprint string
+	audience    string
 }
 
 // NewSigner creates a Signer from an SSH private key.
 func NewSigner(privateKey sshcert.RawPrivateKey) (*Signer, error) {
+	return NewSignerFor(privateKey, Audience)
+}
+
+func NewSignerFor(privateKey sshcert.RawPrivateKey, audience string) (*Signer, error) {
+	if audience == "" {
+		return nil, fmt.Errorf("service audience is required")
+	}
 	sshSigner, err := ssh.ParsePrivateKey([]byte(privateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH private key: %w", err)
@@ -83,7 +89,7 @@ func NewSigner(privateKey sshcert.RawPrivateKey) (*Signer, error) {
 		return nil, fmt.Errorf("failed to create JWT signer: %w", err)
 	}
 
-	return &Signer{signer: joseSigner, fingerprint: fingerprint}, nil
+	return &Signer{signer: joseSigner, fingerprint: fingerprint, audience: audience}, nil
 }
 
 // Authorize mints a request-bound JWT and sets the Authorization header.
@@ -104,7 +110,7 @@ func (s *Signer) authorizeAt(req *http.Request, body []byte, now time.Time) erro
 
 	claims := requestClaims{
 		Issuer:   s.fingerprint,
-		Audience: Audience,
+		Audience: s.audience,
 		IssuedAt: now.Unix(),
 		Expiry:   now.Add(TokenTTL).Unix(),
 		ID:       hex.EncodeToString(jti),
@@ -126,12 +132,20 @@ func (s *Signer) authorizeAt(req *http.Request, body []byte, now time.Time) erro
 type Verifier struct {
 	// key is a concrete crypto public key (ed25519.PublicKey, *rsa.PublicKey,
 	// or *ecdsa.PublicKey); go-jose type-switches on it, so `any` is fine.
-	key any
-	alg jose.SignatureAlgorithm
+	key      any
+	alg      jose.SignatureAlgorithm
+	audience string
 }
 
 // NewVerifier creates a Verifier from an SSH public key.
 func NewVerifier(publicKey sshcert.RawPublicKey) (*Verifier, error) {
+	return NewVerifierFor(publicKey, Audience)
+}
+
+func NewVerifierFor(publicKey sshcert.RawPublicKey, audience string) (*Verifier, error) {
+	if audience == "" {
+		return nil, fmt.Errorf("service audience is required")
+	}
 	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH public key: %w", err)
@@ -143,7 +157,7 @@ func NewVerifier(publicKey sshcert.RawPublicKey) (*Verifier, error) {
 		return nil, err
 	}
 
-	return &Verifier{key: verifyKey, alg: alg}, nil
+	return &Verifier{key: verifyKey, alg: alg, audience: audience}, nil
 }
 
 // Verify checks the request's Authorization header JWT: signature, aud,
@@ -169,7 +183,7 @@ func (v *Verifier) Verify(req *http.Request, body []byte) error {
 		return fmt.Errorf("failed to verify request token: %w", err)
 	}
 
-	if claims.Audience != Audience {
+	if claims.Audience != v.audience {
 		return fmt.Errorf("unexpected audience %q", claims.Audience)
 	}
 

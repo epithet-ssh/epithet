@@ -466,3 +466,23 @@ func TestLegacySubjectKeysAreRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectoryAndHostRevisionsAreIndependent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inventory.yaml")
+	load := func(user, host string) *Static {
+		require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: alice\n    userName: "+user+"\nhosts:\n  - name: "+host+"\n"), 0600))
+		inv, err := NewStatic([]string{path})
+		require.NoError(t, err)
+		return inv
+	}
+	original := load("alice@example.com", "host")
+	same := load("alice@example.com", "host")
+	renamed := load("alice-renamed@example.com", "host")
+	newHost := load("alice@example.com", "other")
+	require.Equal(t, original.DirectoryRevision(), same.DirectoryRevision())
+	require.Equal(t, original.InventoryRevision(), same.InventoryRevision())
+	require.NotEqual(t, original.DirectoryRevision(), renamed.DirectoryRevision())
+	require.Equal(t, original.InventoryRevision(), renamed.InventoryRevision())
+	require.Equal(t, original.DirectoryRevision(), newHost.DirectoryRevision())
+	require.NotEqual(t, original.InventoryRevision(), newHost.InventoryRevision())
+}

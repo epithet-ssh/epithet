@@ -1,12 +1,11 @@
 openapi: 3.0.3
 info:
   title: Epithet Policy Server API
-  version: 3.0.0
+  version: 4.0.0
   description: |
     The Policy Server API is called by the Epithet CA to make authorization decisions
-    for SSH certificate requests, and to serve the anonymous OIDC bootstrap config the
-    CA passes through on its own `/discovery` endpoint. Your policy server receives
-    the user's authentication token (always a JWT) and connection details, and returns
+    for SSH certificate requests. Your policy server receives normalized authentication
+    and inventory facts plus connection details, and returns
     certificate parameters if the request is approved.
 
     This OpenAPI specification can be used to:
@@ -17,11 +16,11 @@ info:
 
     ## Security
 
-    Every request — GET and POST alike — carries a short-lived JWT the CA mints per
+    Every request carries a short-lived JWT the CA mints per
     request and signs with its own SSH private key (`pkg/serviceauth`). Your policy
     server MUST verify this token (signature, audience, freshness, body hash, method,
     and target) before processing the request. There is no unauthenticated variant of
-    either route.
+    this route.
 
   contact:
     name: Epithet Project
@@ -36,45 +35,6 @@ servers:
 
 paths:
   /:
-    get:
-      operationId: getDiscovery
-      summary: Anonymous OIDC bootstrap config
-      description: |
-        Called by the CA to populate its own anonymous `GET /discovery` endpoint,
-        which clients fetch once at startup to learn how to authenticate. Still
-        requires the CA's service JWT (see Security), even though the payload
-        itself carries no user secrets — this endpoint has no unauthenticated
-        variant in epithet's own implementation.
-      security:
-        - ServiceJWT: []
-      responses:
-        '200':
-          description: OIDC bootstrap config
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Discovery'
-              examples:
-                typical:
-                  value:
-                    auth:
-                      issuer: "https://accounts.google.com"
-                      client_id: "123456.apps.googleusercontent.com"
-        '401':
-          description: Invalid or missing service JWT
-          content:
-            text/plain:
-              schema:
-                type: string
-              example: "request verification failed: token expired"
-        '405':
-          description: Method not allowed (only GET and POST are supported on this route)
-          content:
-            text/plain:
-              schema:
-                type: string
-              example: "Method not allowed"
-
     post:
       operationId: evaluatePolicy
       summary: Evaluate certificate request policy
@@ -84,9 +44,10 @@ paths:
 
         The policy server should:
         1. Verify the CA's service JWT (see Security)
-        2. Validate the user's token (JWT: signature, issuer, audience, expiry)
-        3. Check authorization (can this identity access this host as the requested user?)
-        4. Set exactly one principal, encoding the requested user according to the resolved host's mode, plus expiration, notAfter, and extensions
+        2. Require unexpired normalized authentication from inventory
+        3. Bind the directory record to the authenticated ID and the host to the connection
+        4. Check authorization (can this identity access this host as the requested user?)
+        5. Set exactly one principal, encoding the requested user according to the resolved host's mode, plus expiration, notAfter, and extensions
 
       security:
         - ServiceJWT: []
@@ -97,17 +58,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/PolicyRequest'
-            examples:
-              typical:
-                summary: Typical policy request
-                value:
-                  token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  connection:
-                    remoteHost: "prod-web-01.example.com"
-                    remoteUser: "deploy"
-                    port: 22
-                    proxyJump: ""
-                    hash: "a1b2c3d4e5f67890"
 
       responses:
         '200':
@@ -138,12 +88,12 @@ paths:
               example: "Invalid JSON: unexpected end of JSON input"
 
         '401':
-          description: Invalid service JWT, or invalid/expired user token
+          description: Invalid service JWT
           content:
             text/plain:
               schema:
                 type: string
-              example: "Invalid token: token is expired"
+              example: "request verification failed"
 
         '403':
           description: User not authorized for this access
@@ -154,7 +104,7 @@ paths:
               example: "User alice not authorized for deploy@prod-web-01.example.com"
 
         '405':
-          description: Method not allowed (only GET and POST are supported on this route)
+          description: Method not allowed (only POST is supported on this route)
           content:
             text/plain:
               schema:
@@ -179,44 +129,14 @@ paths:
 
 components:
   schemas:
-    Discovery:
-      type: object
-      properties:
-        auth:
-          $ref: '#/components/schemas/AuthConfig'
-
-    AuthConfig:
-      type: object
-      required:
-        - issuer
-        - client_id
-      properties:
-        issuer:
-          type: string
-          description: OIDC issuer URL
-          example: "https://accounts.google.com"
-        client_id:
-          type: string
-          description: OAuth2 client ID. Required — audience checking can never be silently skipped.
-          example: "123456.apps.googleusercontent.com"
-        client_secret:
-          type: string
-          description: OAuth2 client secret, only present for confidential clients. Omitted (not empty-stringed) when unset.
-          example: ""
-
     PolicyRequest:
       type: object
       required:
-        - token
         - connection
+        - facts
       properties:
-        token:
-          type: string
-          description: |
-            The user's ID token. Always a JWT, end to end — there is no other
-            token shape in epithet.
-          example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-
+        facts:
+          $ref: 'inventory-api.yaml#/components/schemas/Resolution'
         connection:
           $ref: '#/components/schemas/Connection'
 
@@ -266,6 +186,16 @@ components:
       required:
         - certParams
       properties:
+        id:
+          type: string
+          description: Resolved inventory ID; if supplied must match the resolved record
+        policyId:
+          type: string
+          description: Content ID of the compiled policy, for audit
+        directoryRevision:
+          type: string
+        inventoryRevision:
+          type: string
         certParams:
           $ref: '#/components/schemas/CertParams'
 
@@ -291,9 +221,9 @@ components:
             returns exactly one entry: either connection.remoteUser or its
             destination-bound derivation, according to the resolved host's
             mode. Certificates are minted per connection and never reused
-            across a different host/user pair. A custom policy server may
-            return more, but epithet's client-side code never relies on more
-            than the one it asked for.
+            across a different host/user pair. The CA rejects a response
+            that has more than one principal or does not match the requested
+            account and resolved host principal mode.
           items:
             type: string
           example: ["deploy"]
@@ -315,10 +245,10 @@ components:
           format: date-time
           description: |
             Absolute ceiling on certificate validity (RFC 3339), typically
-            derived from the user token's own expiry. The CA signs with
+            bounded by inventory's authentication.expiresAt. The CA signs with
             `min(now + expiration, notAfter)`, so a certificate can never
             outlive the auth session that requested it. Omit (or send the
-            zero time) for no additional ceiling beyond `expiration`.
+            zero time) to use the expiry independently verified by the CA.
           example: "2026-08-13T18:30:00Z"
 
         extensions:

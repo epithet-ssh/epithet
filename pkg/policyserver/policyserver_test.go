@@ -6,31 +6,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
-
-// newTestValidator builds a real validator against a fake IdP, so handler
-// tests exercise the actual token-validation path rather than a stub.
-func newTestValidator(t *testing.T) (*oidc.Validator, *oidctest.IdP) {
-	t.Helper()
-	idp := oidctest.New(t)
-	v, err := oidc.NewValidator(context.Background(), oidc.Config{
-		Issuer:   idp.Issuer(),
-		ClientID: oidctest.ClientID,
-	})
-	require.NoError(t, err)
-	return v, idp
-}
 
 // newHandler builds a policyserver handler configured with a freshly
 // generated CA keypair, and returns a sign func that stamps requests the way
@@ -56,11 +43,13 @@ func newHandler(t *testing.T, config policyserver.Config) (http.Handler, func(*h
 
 // mockEvaluator is a simple test evaluator.
 type mockEvaluator struct {
+	calls    int
 	response *wire.PolicyResponse
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
+func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, authExpiry time.Time, conn policy.Connection, facts *inventoryapi.Resolution) (*wire.PolicyResponse, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -68,7 +57,6 @@ func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, tokenExpi
 }
 
 func TestHandler_Success(t *testing.T) {
-	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		response: &wire.PolicyResponse{
 			CertParams: wire.CertParams{
@@ -83,18 +71,17 @@ func TestHandler_Success(t *testing.T) {
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
 		},
 	}
+	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -121,24 +108,22 @@ func TestHandler_Unauthorized(t *testing.T) {
 	// Evaluator-forced 401: the token itself is valid, but the evaluator
 	// rejects it (e.g. a policy-layer authentication concern). Confirms the
 	// handler passes evaluator errors through unchanged.
-	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		err: &wire.PolicyError{StatusCode: http.StatusUnauthorized, Message: "Invalid token"},
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
 		},
 	}
+	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -152,25 +137,22 @@ func TestHandler_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestHandler_InvalidToken(t *testing.T) {
-	// Real 401 from the validator itself: an expired token must be rejected
-	// before the evaluator ever runs.
-	validator, idp := newTestValidator(t)
+func TestHandler_ExpiredAuthentication(t *testing.T) {
+	// Expired authentication facts must never reach evaluation.
 	evaluator := &mockEvaluator{}
 
 	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: idp.MintIDToken("test@example.com", time.Now().Add(-time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
 		},
 	}
+	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(-time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -179,30 +161,29 @@ func TestHandler_InvalidToken(t *testing.T) {
 
 	handler.ServeHTTP(w, httpReq)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d: %s", w.Code, w.Body.String())
 	}
+	require.Zero(t, evaluator.calls)
 }
 
 func TestHandler_Forbidden(t *testing.T) {
-	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		err: policyserver.Forbidden("Access denied by policy"),
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
 		},
 	}
+	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -217,24 +198,22 @@ func TestHandler_Forbidden(t *testing.T) {
 }
 
 func TestHandler_NotHandled(t *testing.T) {
-	validator, idp := newTestValidator(t)
 	evaluator := &mockEvaluator{
 		err: &wire.PolicyError{StatusCode: http.StatusUnprocessableEntity, Message: "connection not handled by this policy server"},
 	}
 
 	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
 		Evaluator: evaluator,
 	})
 
 	req := wire.PolicyRequest{
-		Token: idp.MintIDToken("test@example.com", time.Now().Add(time.Minute)),
 		Connection: policy.Connection{
 			RemoteHost: "unknown.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
 		},
 	}
+	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -249,9 +228,7 @@ func TestHandler_NotHandled(t *testing.T) {
 }
 
 func TestHandler_InvalidJSON(t *testing.T) {
-	validator, _ := newTestValidator(t)
 	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
 		Evaluator: &mockEvaluator{},
 	})
 
@@ -267,37 +244,16 @@ func TestHandler_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandlerAcceptsBareToken(t *testing.T) {
-	validator, idp := newTestValidator(t)
-	evaluator := &mockEvaluator{
-		response: &wire.PolicyResponse{
-			CertParams: wire.CertParams{
-				Identity:   "alice@example.com",
-				Names:      []string{"alice"},
-				Expiration: 5 * time.Minute,
-				Extensions: map[string]string{
-					"permit-pty": "",
-				},
-			},
-		},
-	}
-
-	handler, sign := newHandler(t, policyserver.Config{
-		Validator: validator,
-		Evaluator: evaluator,
-	})
-
-	token := idp.MintIDToken("alice@example.com", time.Now().Add(time.Minute))
-	body, _ := json.Marshal(wire.PolicyRequest{Token: token})
+func TestHandlerRejectsBearerTokenField(t *testing.T) {
+	evaluator := &mockEvaluator{}
+	handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
+	body := []byte(`{"token":"not-for-policy","connection":{"remote_host":"host"}}`)
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
 	sign(req, body)
 	rec := httptest.NewRecorder()
-
 	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
+	require.Equal(t, 400, rec.Code)
+	require.Zero(t, evaluator.calls)
 }
 
 func TestNewHandler_RequiresCAPublicKey(t *testing.T) {
@@ -339,4 +295,40 @@ func TestOversizedRequestReportsTooLarge(t *testing.T) {
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 	require.Contains(t, rec.Body.String(), "too large")
+}
+
+func TestPolicyRejectsMismatchedInventoryFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*wire.PolicyRequest)
+	}{
+		{"missing", func(r *wire.PolicyRequest) { r.Facts = nil }},
+		{"different user", func(r *wire.PolicyRequest) { r.Facts.Authentication.ID = "mallory" }},
+		{"expired authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication.ExpiresAt = time.Now().Add(-time.Minute) }},
+		{"missing authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication = inventoryapi.Authentication{} }},
+		{"different target", func(r *wire.PolicyRequest) { r.Facts.Host = "production" }},
+		{"substituted record", func(r *wire.PolicyRequest) { r.Facts.Directory.User.ID = "mallory" }},
+		{"missing active", func(r *wire.PolicyRequest) { r.Facts.Directory.User.Active = nil }},
+		{"missing accounts", func(r *wire.PolicyRequest) { r.Facts.Inventory.Host.Resource.Accounts = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evaluator := &mockEvaluator{response: &wire.PolicyResponse{}}
+			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
+			active := true
+			auth := inventoryapi.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
+			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &inventoryapi.Resolution{Version: 1, Authentication: auth, Host: "host", ResolvedAt: time.Now(), Directory: inventoryapi.DirectorySnapshot{Revision: "d1", User: &inventoryapi.User{Schemas: []string{inventoryapi.UserSchema}, ID: auth.ID, UserName: "alice", Active: &active}}, Inventory: inventoryapi.HostSnapshot{Revision: "h1", Host: &inventoryapi.Host{Resource: inventoryapi.HostResource{Name: "host", Accounts: json.RawMessage(`null`)}, Principal: inventoryapi.Principal{Mode: "account-name"}}}}}
+			tc.change(&r)
+			body, err := json.Marshal(r)
+			require.NoError(t, err)
+			if tc.name == "missing accounts" {
+				body = []byte(strings.Replace(string(body), `,"accounts":null`, "", 1))
+			}
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+			sign(req, body)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			require.Equal(t, 400, w.Code, w.Body.String())
+			require.Zero(t, evaluator.calls)
+		})
+	}
 }

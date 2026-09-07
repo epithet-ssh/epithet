@@ -64,7 +64,7 @@ func (s *caServer) Handler() http.Handler {
 }
 
 // DiscoveryHandler returns an http.Handler that serves the /discovery
-// endpoint: an anonymous pass-through of the policy server's auth config.
+// endpoint: an anonymous pass-through of the inventory service's auth config.
 // There is no authenticated variant — clients need this before they have a
 // token, so it is never gated.
 func (s *caServer) DiscoveryHandler() http.Handler {
@@ -76,7 +76,7 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 
 		discovery, err := s.c.FetchDiscovery(r.Context())
 		if err != nil {
-			s.log.Warn("failed to fetch discovery from policy server", "error", err)
+			s.log.Warn("failed to fetch discovery from inventory service", "error", err)
 			s.fail(w, http.StatusBadGateway, "failed to fetch discovery: %v", err)
 			return
 		}
@@ -247,6 +247,7 @@ func (s *caServer) logCertIssuance(
 	certFP := ssh.FingerprintSHA256(parsedCert)
 
 	event := &CertEvent{
+		PolicyID: policyResp.PolicyID, DirectoryRevision: policyResp.DirectoryRevision, InventoryRevision: policyResp.InventoryRevision,
 		Timestamp:            time.Now(),
 		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
 		UserName:             policyResp.CertParams.Identity,

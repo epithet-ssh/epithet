@@ -39,12 +39,13 @@ var cli struct {
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
 	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
-	Agent  AgentCLI        `cmd:"agent" aliases:"a,ag" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
-	Match  MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
-	CA     CACLI           `cmd:"ca" help:"Run the epithet CA server"`
-	Host   HostCLI         `cmd:"host" help:"Manage and authorize Epithet hosts"`
-	Policy PolicyServerCLI `cmd:"policy" help:"Run the policy server with OIDC-based authorization"`
-	Server ServerCLI       `cmd:"server" help:"Run CA and policy as supervised subprocesses behind a single port"`
+	Agent     AgentCLI        `cmd:"agent" aliases:"a,ag" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
+	Match     MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
+	CA        CACLI           `cmd:"ca" help:"Run the epithet CA server"`
+	Host      HostCLI         `cmd:"host" help:"Manage and authorize Epithet hosts"`
+	Inventory InventoryCLI    `cmd:"inventory" help:"Serve the user directory and host inventory"`
+	Policy    PolicyServerCLI `cmd:"policy" help:"Run the policy server evaluating normalized facts"`
+	Server    ServerCLI       `cmd:"server" help:"Run CA, policy, and inventory as supervised subprocesses behind a single port"`
 }
 
 func main() {

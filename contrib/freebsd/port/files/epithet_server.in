@@ -11,7 +11,7 @@
 . /etc/rc.subr
 
 name=epithet_server
-desc="Epithet combined CA and policy server"
+desc="Epithet combined CA, policy, and inventory server"
 rcvar=epithet_server_enable
 
 load_rc_config $name
@@ -35,10 +35,12 @@ epithet_server_precmd()
 {
 	load_rc_config epithet_ca
 	load_rc_config epithet_policy
+	load_rc_config epithet_inventory
 	: ${epithet_ca_enable:=NO}
 	: ${epithet_policy_enable:=NO}
-	if checkyesno epithet_ca_enable || checkyesno epithet_policy_enable; then
-		echo "epithet_server cannot run while epithet_ca or epithet_policy is enabled" >&2
+	: ${epithet_inventory_enable:=NO}
+	if checkyesno epithet_ca_enable || checkyesno epithet_policy_enable || checkyesno epithet_inventory_enable; then
+		echo "epithet_server cannot run while epithet_ca, epithet_policy, or epithet_inventory is enabled" >&2
 		return 1
 	fi
 

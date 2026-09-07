@@ -1,6 +1,6 @@
 # Example static inventory: SCIM-shaped users, labeled hosts.
 #
-# policy.oidc.identity-mode selects how a verified token resolves to id.
+# inventory.oidc.identity-mode selects how a verified token resolves to id.
 # stable-id (default): sub for Google/Okta/generic OIDC; oid for Entra.
 # verified-email: exact email, requiring email_verified: true in the token.
 # `epithet agent identity` reports subject, optional oid/email/email_verified

@@ -48,6 +48,7 @@ sequenceDiagram
     box out on the internet
         participant ca
         participant policy
+        participant inventory
     end
 
     ssh ->> match: Match final tagged epithet-<name> exec ...
@@ -58,9 +59,12 @@ sequenceDiagram
         oidc -->> broker: id_token (JWT)
     end
 
-    broker ->> ca: POST / {"token", "connection"} — Authorization: Bearer <jwt>
-    ca ->> policy: POST / {"token","connection"} — Authorization: Bearer <service JWT>
-    policy ->> policy: verify user JWT (JWKS); verify service JWT (CA pubkey)
+    broker ->> ca: POST / {"publicKey", "connection"} — Authorization: Bearer <jwt>
+    ca ->> inventory: POST /v1/resolve {token, host} + service JWT
+    inventory ->> inventory: Verify OIDC token; map ID; resolve user and host
+    inventory -->> ca: Authentication expiry, ID, and facts with separate revisions
+    ca ->> policy: POST / {connection, facts} + service JWT
+    policy ->> policy: Verify CA JWT; check normalized facts and expiry; evaluate Writ
     policy ->> ca: {"id": inventory ID, "certParams": {identity, principals, expiration, notAfter, extensions}}
     ca ->> broker: {"certificate"}
 
@@ -116,7 +120,7 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 ### epithet ca
 
 ```
-epithet ca --policy <url> --key <path> --listen <addr>
+epithet ca --inventory <url> --policy <url> --key <path> --listen <addr>
 ```
 
 - Runs the CA server as a standalone HTTP service
@@ -124,18 +128,28 @@ epithet ca --policy <url> --key <path> --listen <addr>
 - Reads CA private key from file
 - `GET /` returns the CA's public key and advertises the auth config via a
   relative `Link` header; `POST /` signs a certificate
-- `GET /discovery` is an anonymous pass-through of the policy server's own discovery response
-- The CA never validates the user's JWT itself — it forwards it to the policy server and signs whatever `CertParams` comes back
+- `GET /discovery` exposes the inventory discovery `auth` object
+- CA sends the JWT to inventory, then forwards normalized facts to policy. It checks returned identity/principal parameters and clamps token validity before signing.
 
 ### epithet policy
 
 ```
-epithet policy --policy-file <policy.writ> --inventory <inventory.yaml> --ca-pubkey <key> --oidc-issuer <url> --oidc-client-id <id> --listen <addr>
+epithet policy --policy-file <policy.writ> --ca-pubkey <key> --listen <addr>
 ```
 
-- Runs the policy server: validates OIDC tokens and evaluates a writ policy against a user/host inventory
-- Policy and inventory are loaded once at startup; reload is a process restart (`--check` validates without serving)
+- Runs the policy server: evaluates a writ policy against normalized authentication, user, and host facts
+- Policy loads compiled Writ once at startup; inventory data belongs to the inventory service. Each has its own offline `--check`.
 - See [policy-server.md](policy-server.md) for the policy language, inventory format, and HTTP API
+
+### epithet inventory
+
+```
+epithet inventory --static <inventory.yaml> --oidc-issuer <url> --oidc-client-id <id> --ca-pubkey <key> --listen <addr>
+```
+
+Serves CA-authenticated user and host resolution at `/v1/resolve`. Directory and
+host facts have independent revisions. Static files are immutable until restart;
+`--check` validates them offline. See [inventory.md](inventory.md).
 
 ### epithet server
 
@@ -143,12 +157,12 @@ epithet policy --policy-file <policy.writ> --inventory <inventory.yaml> --ca-pub
 epithet server --listen <addr> --ca-key <path>
 ```
 
-- Runs the CA and policy server as supervised subprocesses behind a single public port; the policy server listens on an internal unix socket the CA proxies to
+- Runs CA, policy, and inventory as supervised subprocesses. CA is public; policy and inventory each have a private Unix socket.
 - The CA/policy process boundary is otherwise deliberate — this mode is a convenience wrapper, not a merged implementation
 
 ## Core components
 
-1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and passes it through unvalidated to the policy server, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Signs public keys into certificates using the `CertParams` the policy server returns, clamping validity to `min(now + expiration, NotAfter)`.
+1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Signs public keys into certificates using the `CertParams` the policy server returns, clamping validity to `min(now + expiration, NotAfter)`.
 
 2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
@@ -181,8 +195,8 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 3. If not: broker gets a JWT (cached, proactively refreshed, or freshly acquired via OIDC)
 4. Broker generates an ephemeral keypair for this connection
 5. Broker requests a certificate from the CA, sending the JWT and connection details
-6. CA authenticates itself to the policy server with a service JWT and forwards the user's JWT and connection details unvalidated
-7. Policy server validates the user's JWT (JWKS, issuer, audience, expiry, nonempty subject), maps the configured user-ID claim to inventory `id` under the single configured provider/tenant, then evaluates Writ for the resolved user's name/groups/attributes. Provider defaults use stable identifiers; there is no email or userName fallback.
+6. CA sends the user JWT and target to inventory. Inventory verifies authentication, maps the ID, and returns normalized authentication and user/host facts. CA forwards connection and facts to policy; both calls use distinct request-bound service JWTs.
+7. Policy verifies the CA request, checks fact binding and authentication expiry, and evaluates Writ against the normalized user's ID, name, groups, and attributes.
 8. Policy server returns `CertParams` — identity, one account-name or destination-bound principal according to the resolved host's mode, expiration, `NotAfter`, extensions
 9. CA signs a certificate clamped to `min(now + expiration, NotAfter)` and returns it
 10. Broker starts (or reuses) a per-connection agent socket serving this certificate
@@ -203,7 +217,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 Newline-framed JSON over the broker's unix socket — no gRPC, no protobuf. Both peers are the same binary, and the socket is 0700 in the profile rundir, so there is no cross-version or cross-language contract to protect.
 
 - `epithet match` sends one line: `{"match": {"remoteHost":...,"remoteUser":...,"port":...,"proxyJump":...,"hash":...}}`. The broker streams zero or more `{"output": "<text>"}` events (auth progress, e.g. the authorization URL to visit, written to the user's stderr) followed by exactly one `{"result": {"allow": bool, "error": "..."}}`.
-- `epithet agent identity` sends `{"identity": {}}`. The broker authenticates through its shared token cache and streams login progress as `output` events, followed by `{"identity": {"identity": {"issuer": "...", "subject": "..."}}}` or an `identity.error`. It verifies the token using the agent's configured issuer and audience, and includes optional `oid`, `email`, and `email_verified` diagnostic claims. Inventory identity mapping is owned by the policy server and is not advertised to the agent. Tokens stay inside the agent, and no certificate is requested.
+- `epithet agent identity` sends `{"identity": {}}`. The broker authenticates through its shared token cache and streams login progress as `output` events, followed by `{"identity": {"identity": {"issuer": "...", "subject": "..."}}}` or an `identity.error`. It verifies the token using the agent's configured issuer and audience, and includes optional `oid`, `email`, and `email_verified` diagnostic claims. Inventory identity mapping is owned by the inventory service and is not advertised to the agent. Tokens stay inside the agent, and no certificate is requested.
 - `epithet agent inspect` sends `{"inspect": {}}` and receives one `{"inspect": {...}}` response describing the broker's current agents (including each agent's host, user, port, ProxyJump, and `%C` hash) and CA endpoint states.
 - `epithet agent kill AGENT_ID` sends `{"kill": {"id":"..."}}` and receives one `{"kill": {"id":"...","connection":{...}}}` response. A failed lookup returns the same typed response with an `error` field.
 
@@ -213,9 +227,20 @@ The broker requests certificates from the CA over HTTP with the user's JWT in `A
 
 **Error codes**: 401 (token rejected — triggers the single forced-refresh retry), 403 (policy denied), 422 (connection not handled by this CA), 5xx (CA unavailable, triggers failover).
 
+### CA → inventory protocol
+
+The CA uses `/v1/resolve` and the `epithet-inventory` service-token audience.
+Both services trust the CA public key, but tokens cannot cross service audiences.
+Inventory validates the user token, then sends normalized authentication and
+versioned directory and host facts, host binding, and separate revisions. The
+bearer credential goes only to inventory; it never appears in the response. See the
+[protocol and deployment decision](../adr/inventory-service.md).
+
 ### CA → policy server protocol
 
-The CA authenticates to the policy server with a short-lived JWT it mints itself, signed with the CA's SSH private key (`pkg/serviceauth`), replacing the old RFC 9421 HTTP message signatures. Claims: `iss` (CA's SSH fingerprint), `aud: "epithet-policy"`, `iat`, `exp` (~60s), `jti`, `bh` (base64url-raw sha256 of the request body), `htm` (method), `htu` (host+path) — the last two bind the token to the exact request it was minted for, closing a same-body replay window body-hashing alone would leave open. The signing algorithm is derived from the CA key type (ed25519→EdDSA, RSA→PS256, ECDSA→ES256/ES384). The policy server verifies this service token on every request, in addition to validating the user's own JWT.
+The CA authenticates to the policy server with a short-lived JWT it mints itself, signed with the CA's SSH private key (`pkg/serviceauth`), replacing the old RFC 9421 HTTP message signatures. Claims: `iss` (CA's SSH fingerprint), `aud: "epithet-policy"`, `iat`, `exp` (~60s), `jti`, `bh` (base64url-raw sha256 of the request body), `htm` (method), `htu` (host+path) — the last two bind the token to the exact request it was minted for, closing a same-body replay window body-hashing alone would leave open. The signing algorithm is derived from the CA key type (ed25519→EdDSA, RSA→PS256, ECDSA→ES256/ES384). The policy server verifies this service token on every request, then evaluates normalized facts supplied by the CA.
+
+The signed request body includes connection and normalized inventory facts. Policy checks the authenticated ID, expiry, record binding, and target. Inventory owns OIDC configuration and login discovery.
 
 See [policy-server.md](policy-server.md) for the full HTTP API specification.
 

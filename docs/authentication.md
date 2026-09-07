@@ -12,11 +12,12 @@ One rule holds everywhere: the auth token is always a JWT.
 - The broker acquires it in-process via the OIDC authorization-code-with-PKCE
   flow and sends it verbatim as `Authorization: Bearer <jwt>` when it
   requests a certificate.
-- The CA passes it through untouched — no parsing, no validation. All trust
-  decisions live in the policy server.
-- The policy server is the sole validator: it checks the JWT's signature
-  against the issuer's JWKS, its issuer, its audience (`client_id`, which is
-  required configuration), and its expiry.
+- The CA passes it to inventory with the requested host.
+- Inventory validates the JWT signature against the issuer's JWKS, issuer,
+  audience (required client ID), and expiry, then maps the authenticated ID.
+- The CA sends normalized authentication and directory/host facts to policy.
+  Policy verifies the CA service request and evaluates those facts without
+  receiving the user's bearer token or knowing the OIDC configuration.
 
 Because the token is always a JWT, there is no wrapping or encoding step
 between acquisition and use — a JWT is already base64url-segmented ASCII.
@@ -59,8 +60,9 @@ ca-url  https://whee.example.com/epithet/ca
 ```
 
 Both requests are anonymous — a fresh client has no token — and the CA serves
-the second as a pass-through of the policy server's own `GET /` discovery
-response. There are no server-advertised host-match patterns in this document;
+the second with only the `auth` object from inventory discovery.
+Identity mapping remains internal to inventory. There are no server-advertised
+host-match patterns in this document;
 which hosts epithet handles is decided entirely by the user's own ssh config
 (see [architecture.md](architecture.md)).
 
@@ -82,7 +84,7 @@ which drives an authorization-code flow with PKCE:
 3. Exchanges the code for tokens and returns the ID token (a JWT).
 
 Scopes are not configurable: the client always requests `openid profile email`.
-The policy server resolves inventory `id` using `policy.oidc.identity-mode`.
+The inventory service resolves `id` using `inventory.oidc.identity-mode`.
 The default, `stable-id`, uses `sub` for Google, Okta, and generic providers,
 and `oid` for tenant-specific Microsoft Entra issuers. `user-id-claim` can
 select another claim, including `email` without checking verification.
@@ -101,8 +103,8 @@ email does not prevent this diagnostic command from reporting identity.
 Browser-login progress goes to stderr. It works before an inventory record
 exists and does not request a certificate. Use `agent --name work identity`
 for a named profile or `--broker` to select an explicit socket. Start the
-agent first. Inventory mapping changes require a policy-server restart,
-not an agent restart. The standalone `epithet identity` command has been removed.
+agent first. Inventory mapping changes require restarting inventory. Changing login issuer
+or client settings also requires restarting agents to refresh their discovery. The standalone `epithet identity` command has been removed.
 
 On later calls, `prev` carries the previous `oauth2.Token` (including its
 refresh token). `Authenticate` reuses a still-valid access token or uses the
@@ -152,7 +154,7 @@ restarting `epithet agent` also forces full re-authentication.
 
 **"Invalid token" from the CA / connection refused**
 
-The policy server rejected the JWT — check its logs. Common causes: issuer
+The inventory service rejected the JWT — check its logs. Common causes: issuer
 mismatch, expired token, or `client_id` not matching the token's audience.
 
 See the [OIDC setup guide](oidc-setup.md) for provider-specific

@@ -1,6 +1,7 @@
 package policyserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,23 +9,24 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // PolicyEvaluator makes authorization decisions based on inventory ID and connection details.
-// The handler has verified the token against the single configured OIDC issuer.
+// The handler trusts normalized authentication facts supplied by the CA.
 // Implementations must:
 // - Make authorization decision (allow/deny) based on identity
 // - Return certificate parameters (principals, expiration, extensions) for the matching host pattern
 // - Return appropriate errors for different failure modes
 type PolicyEvaluator interface {
-	// Evaluate resolves the mapped, validated OIDC user ID to an inventory user and
-	// makes an authorization decision for that user and connection.
-	// tokenExpiry is the auth token's expiry, used to clamp the issued
+	// Evaluate makes an authorization decision using validated, CA-supplied
+	// directory and host facts. It has no inventory access.
+	// authExpiry is the verified authentication expiry, used to clamp the issued
 	// certificate's validity so it can never outlive the auth session that
 	// requested it.
 	// Returns:
@@ -34,7 +36,7 @@ type PolicyEvaluator interface {
 	// Error handling:
 	// - Return policyserver.Forbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(ctx context.Context, userID string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error)
+	Evaluate(ctx context.Context, userID string, authExpiry time.Time, conn policy.Connection, facts *inventoryapi.Resolution) (*wire.PolicyResponse, error)
 }
 
 // Forbidden returns a 403 error with the given message.
@@ -48,15 +50,7 @@ type Config struct {
 	// JWT (pkg/serviceauth) on every request. Required.
 	CAPublicKey sshcert.RawPublicKey
 
-	// Validator validates tokens and extracts identity (authentication).
-	Validator *oidc.Validator
-
-	// Evaluator makes authorization decisions based on identity.
 	Evaluator PolicyEvaluator
-
-	// Discovery is the configuration returned on GET / requests.
-	// The CA fetches this to serve discovery data to clients.
-	Discovery *wire.Discovery
 }
 
 // handler holds the config and implements the HTTP handler methods.
@@ -68,8 +62,7 @@ type handler struct {
 // NewHandler creates an HTTP handler for the policy server.
 // The handler supports:
 //
-//	GET /  — returns discovery data (auth config for the OIDC bootstrap)
-//	POST / — evaluates a cert request (token + connection)
+//	POST / — evaluates a cert request (normalized facts + connection)
 //
 // Every request must carry a valid CA-minted request token (pkg/serviceauth);
 // CAPublicKey is therefore required.
@@ -114,8 +107,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.Method {
-	case http.MethodGet:
-		h.handleDiscovery(w, r)
 	case http.MethodPost:
 		h.handleCertRequest(w, r, body)
 	default:
@@ -123,36 +114,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleDiscovery returns discovery data as JSON.
-// This endpoint is called by the CA to populate its /discovery endpoint.
-func (h *handler) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
-	if h.config.Discovery == nil {
-		h.writeError(w, http.StatusNotFound, "discovery not configured")
-		return
-	}
-
-	w.Header().Set("Cache-Control", "max-age=300")
-	h.writeJSON(w, http.StatusOK, h.config.Discovery)
-}
-
 // handleCertRequest processes a cert evaluation request. body was already
 // read (and verified) by ServeHTTP.
 func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req wire.PolicyRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 		return
 	}
 
-	// Validate token and extract identity (authentication).
-	claims, err := h.config.Validator.Validate(r.Context(), req.Token)
-	if err != nil {
-		h.writeError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid token: %v", err))
+	if err := dec.Decode(new(any)); err != io.EOF {
+		h.writeError(w, http.StatusBadRequest, "invalid trailing JSON")
 		return
 	}
-
+	if err := req.Facts.Validate(hostpattern.NormalizeName(req.Connection.RemoteHost)); err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Evaluate policy based on identity (authorization).
-	resp, err := h.config.Evaluator.Evaluate(r.Context(), claims.UserID, claims.ExpiresAt, req.Connection)
+	resp, err := h.config.Evaluator.Evaluate(r.Context(), req.Facts.Authentication.ID, req.Facts.Authentication.ExpiresAt, req.Connection, req.Facts)
 	if err != nil {
 		if policyErr, ok := err.(*wire.PolicyError); ok {
 			h.writeError(w, policyErr.StatusCode, policyErr.Message)

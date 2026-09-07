@@ -11,8 +11,8 @@ The service account must be able to read the private key. One suitable setup is:
   chown root:epithet /usr/local/etc/epithet/ca.key
   chmod 0640 /usr/local/etc/epithet/ca.key
 
-Use epithet_server for the combined process, or enable both epithet_policy and
-epithet_ca for split operation. Do not enable the combined and split modes at
+Use epithet_server for combined operation, or enable epithet_inventory,
+epithet_policy, and epithet_ca for split operation. Do not enable the combined and split modes at
 the same time.
 EOM
 }
@@ -20,9 +20,11 @@ EOM
   type: upgrade
   maximum_version: "0.23.1_1"
   message: <<EOM
-This upgrade adds disabled-by-default epithet_server, epithet_ca, and
-epithet_policy rc.d services. Configure /usr/local/etc/epithet/server.yaml
-before enabling either the combined service or both split services.
+This upgrade adds the disabled-by-default epithet_inventory rc.d service.
+Move policy.inventory to inventory.static, move policy.principal-mode to
+inventory.principal-mode, and move policy.oidc to inventory.oidc. Split CA deployments also
+need ca.inventory. Enable inventory alongside policy and CA for split operation.
+See docs/inventory.md for the complete migration.
 EOM
 }
 {

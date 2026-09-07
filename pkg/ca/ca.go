@@ -15,7 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -25,6 +29,7 @@ import (
 
 // CA performs CA operations.
 type CA struct {
+	inventory  *inventoryserver.Client
 	signer     ssh.Signer
 	privateKey sshcert.RawPrivateKey
 	policyURL  string
@@ -70,6 +75,8 @@ func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) 
 			Timeout: tlsconfig.DefaultTimeout,
 		}
 	}
+
+	ca.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	// When the policy URL is a unix socket, configure the HTTP transport to
 	// dial the socket and rewrite the URL to http://localhost.
@@ -124,74 +131,38 @@ func (c *CA) PublicKey() sshcert.RawPublicKey {
 	return sshcert.RawPublicKey(string(ssh.MarshalAuthorizedKey(pk)))
 }
 
-// FetchDiscovery fetches discovery data from the policy server.
-// The request carries a CA-minted, request-bound JWT (pkg/serviceauth). The
-// response's Cache-Control header is preserved on the returned Discovery so
-// callers (the CA server's /discovery handler) can pass it through to
-// clients; this CA client itself does not cache.
+// FetchDiscovery obtains login configuration from inventory.
 func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
-	req, err := http.NewRequest("GET", c.policyURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
+	if c.inventory == nil {
+		return nil, fmt.Errorf("inventory service is required")
 	}
-
-	// GET has no body, so the token's bh claim covers the empty string.
-	if err := c.svcSigner.Authorize(req, nil); err != nil {
-		return nil, fmt.Errorf("error signing request: %w", err)
-	}
-
-	if c.logger != nil {
-		c.logger.Debug("http request", "method", "GET", "url", c.policyURL, "purpose", "discovery")
-	}
-
-	start := time.Now()
-	res, err := c.httpClient.Do(req.WithContext(ctx))
-	duration := time.Since(start)
-	if err != nil {
-		if c.logger != nil {
-			c.logger.Debug("http request failed", "method", "GET", "url", c.policyURL, "duration_ms", duration.Milliseconds(), "error", err)
-		}
-		return nil, fmt.Errorf("error fetching discovery: %w", err)
-	}
-	defer res.Body.Close()
-
-	if c.logger != nil {
-		c.logger.Debug("http response", "method", "GET", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
-	}
-
-	buf, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
-	if err != nil {
-		return nil, fmt.Errorf("error reading discovery response: %w", err)
-	}
-
-	// Check if policy server response exceeds the limit.
-	if len(buf) > wire.MaxBodySize {
-		return nil, fmt.Errorf("policy server response exceeds %d bytes", wire.MaxBodySize)
-	}
-
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("policy server returned %d for discovery: %s", res.StatusCode, string(buf))
-	}
-
-	var discovery wire.Discovery
-	if err := json.Unmarshal(buf, &discovery); err != nil {
-		return nil, fmt.Errorf("error parsing discovery response: %w", err)
-	}
-
-	// Preserve Cache-Control from the policy server for passthrough to clients.
-	discovery.CacheControl = res.Header.Get("Cache-Control")
-
-	return &discovery, nil
+	return c.inventory.FetchDiscovery(ctx)
 }
 
 // RequestPolicy requests policy from the policy server for a cert request.
 // The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
 func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*wire.PolicyResponse, error) {
-	body, err := json.Marshal(wire.PolicyRequest{Token: token, Connection: conn})
+	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
+	defer cancel()
+	if c.inventory == nil {
+		return nil, fmt.Errorf("inventory service is required")
+	}
+	lookup := inventoryapi.ResolveRequest{Token: token, Host: hostpattern.NormalizeName(conn.RemoteHost)}
+	facts, err := c.inventory.Resolve(ctx, lookup)
+	if err != nil {
+		return nil, fmt.Errorf("resolving inventory: %w", err)
+	}
+	if err := facts.Validate(lookup.Host); err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(wire.PolicyRequest{Connection: conn, Facts: facts})
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling request body: %w", err)
 	}
 
+	if len(body) > wire.MaxBodySize {
+		return nil, fmt.Errorf("policy request too large")
+	}
 	if c.logger != nil {
 		c.logger.Debug("http request", "method", "POST", "url", c.policyURL, "body_size", len(body))
 	}
@@ -243,6 +214,30 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err != nil {
 		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
 	}
+	user, host := facts.Directory.User, facts.Inventory.Host
+	if user == nil || user.Active == nil || !*user.Active || host == nil {
+		return nil, fmt.Errorf("policy issued for absent or inactive inventory records")
+	}
+	expected := conn.RemoteUser
+	if host.Principal.Mode == "epithet-principal-v1" {
+		expected, err = principal.DeriveV1(principal.Domain(host.Principal.Domain), conn.RemoteUser)
+		if err != nil {
+			return nil, err
+		}
+	}
+	params := &policyResp.CertParams
+	if len(params.Names) != 1 || params.Names[0] != expected || params.Identity != user.UserName || params.Expiration <= 0 {
+		return nil, fmt.Errorf("policy certificate parameters do not match resolved identity and target")
+	}
+	if policyResp.ID != "" && policyResp.ID != user.ID {
+		return nil, fmt.Errorf("policy response inventory ID mismatch")
+	}
+	if params.NotAfter.IsZero() || params.NotAfter.After(facts.Authentication.ExpiresAt) {
+		params.NotAfter = facts.Authentication.ExpiresAt
+	}
+	policyResp.ID = user.ID
+	policyResp.DirectoryRevision = facts.Directory.Revision
+	policyResp.InventoryRevision = facts.Inventory.Revision
 	return policyResp, nil
 }
 
@@ -296,4 +291,16 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertPara
 		return "", errors.New("unknown problem marshaling certificate")
 	}
 	return sshcert.RawCertificate(string(rawCert)), nil
+}
+
+// WithInventory configures the authentication, discovery, and resolution service.
+func WithInventory(endpoint string, cfg tlsconfig.Config) Option {
+	return optionFunc(func(c *CA) error {
+		client, err := inventoryserver.NewClient(endpoint, c.privateKey, cfg)
+		if err != nil {
+			return err
+		}
+		c.inventory = client
+		return nil
+	})
 }

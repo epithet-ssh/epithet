@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"io"
 	"log/slog"
 	"net"
@@ -16,6 +15,7 @@ import (
 	"github.com/alecthomas/kong"
 	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -199,16 +199,16 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 	}
 }
 
-func TestPolicyUserIDClaimConfigAndCLI(t *testing.T) {
+func TestInventoryUserIDClaimConfigAndCLI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("policy:\n  oidc:\n    issuer: https://issuer.example\n    user-id-claim: directory_id\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  oidc:\n    issuer: https://issuer.example\n    user-id-claim: directory_id\n"), 0600))
 	for _, override := range []bool{false, true} {
 		var root struct {
-			Policy PolicyServerCLI `cmd:"policy"`
+			Inventory InventoryCLI `cmd:"inventory"`
 		}
 		parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
 		require.NoError(t, err)
-		args := []string{"policy"}
+		args := []string{"inventory"}
 		want := "directory_id"
 		if override {
 			args = append(args, "--oidc-user-id-claim", "oid")
@@ -216,13 +216,13 @@ func TestPolicyUserIDClaimConfigAndCLI(t *testing.T) {
 		}
 		_, err = parser.Parse(args)
 		require.NoError(t, err)
-		require.Equal(t, want, root.Policy.OIDC.UserIDClaim)
+		require.Equal(t, want, root.Inventory.OIDC.UserIDClaim)
 	}
 }
 
-func TestPolicyIdentityModeConfigPrecedence(t *testing.T) {
+func TestInventoryIdentityModeConfigPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("policy:\n  oidc:\n    identity-mode: verified-email\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  oidc:\n    identity-mode: verified-email\n"), 0600))
 	for _, tc := range []struct {
 		name, env, flag string
 		want            oidc.IdentityMode
@@ -233,9 +233,9 @@ func TestPolicyIdentityModeConfigPrecedence(t *testing.T) {
 		{"flag", "stable-id", "verified-email", oidc.VerifiedEmail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("EPITHET_POLICY_OIDC_IDENTITY_MODE", tc.env)
+			t.Setenv("EPITHET_INVENTORY_OIDC_IDENTITY_MODE", tc.env)
 			var root struct {
-				Policy PolicyServerCLI `cmd:"policy"`
+				Inventory InventoryCLI `cmd:"inventory"`
 			}
 			var options []kong.Option
 			if tc.name != "env-only" {
@@ -243,24 +243,22 @@ func TestPolicyIdentityModeConfigPrecedence(t *testing.T) {
 			}
 			parser, err := kong.New(&root, options...)
 			require.NoError(t, err)
-			args := []string{"policy"}
+			args := []string{"inventory"}
 			if tc.flag != "" {
 				args = append(args, "--oidc-identity-mode", tc.flag)
 			}
 			_, err = parser.Parse(args)
 			require.NoError(t, err)
-			mode, _, err := oidc.ResolveIdentity("", root.Policy.OIDC.IdentityMode, "")
+			mode, _, err := oidc.ResolveIdentity("", root.Inventory.OIDC.IdentityMode, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.want, mode)
 		})
 	}
 }
 
-func TestPolicyCheckIdentityModes(t *testing.T) {
+func TestInventoryCheckIdentityModes(t *testing.T) {
 	dir := t.TempDir()
-	policyPath, invPath := filepath.Join(dir, "policy.writ"), filepath.Join(dir, "inventory.yaml")
-	require.NoError(t, os.WriteFile(policyPath, []byte(`allow userName:alice -> root@host.example
-`), 0600))
+	invPath := filepath.Join(dir, "inventory.yaml")
 	require.NoError(t, os.WriteFile(invPath, []byte(`users:
   - userName: alice
     id: alice@example.com
@@ -276,8 +274,8 @@ hosts:
 		{"", "", true}, {oidc.StableID, "email", true}, {oidc.VerifiedEmail, "", true},
 		{oidc.VerifiedEmail, "email", false}, {"typo", "", false},
 	} {
-		c := PolicyServerCLI{Check: true, PolicyFile: policyPath, Inventory: []string{invPath},
-			OIDC: PolicyOIDCConfig{Issuer: "https://invalid.invalid", IdentityMode: tc.mode, UserIDClaim: tc.claim}}
+		c := InventoryCLI{Check: true, Static: []string{invPath},
+			OIDC: InventoryOIDCConfig{Issuer: "https://invalid.invalid", IdentityMode: tc.mode, UserIDClaim: tc.claim}}
 		err := c.Run(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{})
 		if tc.valid {
 			require.NoError(t, err)

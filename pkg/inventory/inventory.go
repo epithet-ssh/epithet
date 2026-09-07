@@ -1,9 +1,5 @@
-// Package inventory resolves the entities a writ policy matches
-// against: users (SCIM-shaped, RFC 7643) and hosts (name + labels +
-// optional account list). The interface is the pluggability seam —
-// today's implementation is a static file, later ones may be databases
-// or live SCIM stores, and implementations are free to synthesize hosts
-// (e.g. pattern-derived labels for short-lived VMs).
+// Package inventory owns host facts and static loading. The static loader
+// also implements the independent directory.Directory user lookup interface.
 package inventory
 
 import (
@@ -11,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/epithet-ssh/epithet/pkg/principal"
-	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 )
 
 // PrincipalMode selects how an allowed account@host tuple is represented in
@@ -54,26 +49,19 @@ func (m PrincipalMode) Effective() PrincipalMode {
 // shared named domain, Policy.Name is the domain rather than the requested
 // hostname because the resulting credential is portable across every member.
 type ResolvedHost struct {
-	Policy        eval.Host
+	Policy        Host
 	PrincipalMode PrincipalMode
 	Domain        principal.Domain
 }
 
-// Inventory looks up users and hosts at evaluation time.
-//
-// A (nil, nil) return means "no such entity" — a structural non-match
-// that the evaluator turns into a 403, not an error. A non-nil error
-// means the lookup itself failed and the evaluation must fail closed
-// (500).
-type Inventory interface {
-	// LookupUser resolves the mapped ID within the configured provider/tenant.
-	// The caller must validate the OIDC token before extracting this ID.
-	// Compare IDs byte-for-byte, never falling back to userName or email.
-	// The resolved ID is immutable and non-reassignable; UserName is mutable.
-	LookupUser(ctx context.Context, id string) (*eval.User, error)
+// Host contains authorization attributes, separate from principal metadata.
+type Host struct {
+	Name     string
+	Labels   map[string]string
+	Accounts []string
+}
 
-	// LookupHost resolves a requested host name. Callers must pass the
-	// name through il.HostName first; implementations may synthesize a
-	// host for names they can derive attributes for.
-	LookupHost(ctx context.Context, name string) (*ResolvedHost, error)
+// Hosts resolves machines independently of the user directory.
+type Hosts interface {
+	LookupHost(context.Context, string) (*ResolvedHost, error)
 }

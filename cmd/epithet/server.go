@@ -10,19 +10,18 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
 )
 
 // ServerCLI defines the CLI flags for the combined server command.
-// It runs both the CA and policy server as subprocesses, with the CA
-// listening on the public port. The CA handles all client traffic
-// (including /discovery) and communicates with the policy server
-// internally via a Unix domain socket.
+// It supervises CA, policy, and inventory subprocesses. Only the CA listens
+// on the public port; it contacts both private services over Unix sockets.
 type ServerCLI struct {
 	Listen string `help:"Public address to listen on" short:"l" default:":8080"`
 	CAKey  string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
@@ -33,9 +32,9 @@ type ServerCLI struct {
 	PolicyFile string            `help:"Path to the writ policy file" name:"policy-file"`
 	Inventory  []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
 	Extension  map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
-	// Leave unset to inherit policy configuration (including its default).
+	// Leave unset to inherit inventory configuration (including its default).
 	// Validate in Run so Kong does not require an enum default here.
-	PrincipalMode string `help:"Override policy principal mode: account-name or epithet-principal-v1 (default: inherit policy configuration)" name:"principal-mode"`
+	PrincipalMode string `help:"Override inventory principal mode: account-name or epithet-principal-v1 (default: inherit inventory configuration)" name:"principal-mode"`
 }
 
 func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
@@ -73,81 +72,79 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	// Build global flags to pass through to subprocesses.
 	globalArgs := buildGlobalArgs()
 
-	// Start policy subprocess first — the CA depends on it.
-	policyArgs := c.policyArgs(globalArgs, policySock, caPubkey)
-	policyCmd := exec.CommandContext(ctx, os.Args[0], policyArgs...)
-	policyCmd.Stdout = os.Stdout
-	policyCmd.Stderr = os.Stderr
-	if err := policyCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start policy subprocess: %w", err)
+	inventorySock := filepath.Join(tmpDir, "inventory.sock")
+	type child struct {
+		name   string
+		args   []string
+		socket string
 	}
-	logger.Info("started policy subprocess", "pid", policyCmd.Process.Pid, "socket", policySock)
-
-	if err := waitForSocket(ctx, policySock, 10*time.Second); err != nil {
-		_ = policyCmd.Process.Kill()
-		return fmt.Errorf("policy subprocess failed to become ready: %w", err)
+	children := []child{
+		{"inventory", c.inventoryArgs(globalArgs, inventorySock, caPubkey), inventorySock},
+		{"policy", c.policyArgs(globalArgs, policySock, caPubkey), policySock},
+		{"ca", append(append([]string{}, globalArgs...), "ca", "--listen", c.Listen, "--policy", "unix://"+policySock, "--inventory", "unix://"+inventorySock, "--key", caKeyPath), ""},
 	}
-	logger.Info("policy subprocess ready")
-
-	// Start CA subprocess — listens directly on the public port.
-	// The CA handles all client traffic including /discovery.
-	caArgs := append(globalArgs, "ca",
-		"--listen", c.Listen,
-		"--policy", "unix://"+policySock,
-		"--key", caKeyPath,
-	)
-	caCmd := exec.CommandContext(ctx, os.Args[0], caArgs...)
-	caCmd.Stdout = os.Stdout
-	caCmd.Stderr = os.Stderr
-	if err := caCmd.Start(); err != nil {
-		_ = policyCmd.Process.Kill()
-		return fmt.Errorf("failed to start ca subprocess: %w", err)
+	var wg sync.WaitGroup
+	exited := make(chan error, len(children))
+	// Every started child is reaped, including startup failures and signals.
+	defer func() { cancel(); wg.Wait() }()
+	for _, child := range children {
+		cmd := exec.CommandContext(ctx, os.Args[0], child.args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("starting %s: %w", child.name, err)
+		}
+		logger.Info("started subprocess", "service", child.name, "pid", cmd.Process.Pid)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := cmd.Wait()
+			exited <- fmt.Errorf("%s subprocess exited: %v", child.name, err)
+		}()
+		if child.socket != "" {
+			ready := make(chan error, 1)
+			go func() { ready <- waitForSocket(ctx, child.socket, 10*time.Second) }()
+			select {
+			case err := <-ready:
+				if err != nil {
+					return err
+				}
+			case err := <-exited:
+				return err
+			case <-ctx.Done():
+				return nil
+			}
+		}
 	}
-	logger.Info("started ca subprocess", "pid", caCmd.Process.Pid, "listen", c.Listen)
-
-	// Wait for either subprocess to exit or signal.
-	// The goroutines call Wait() which reaps the process, so we must not
-	// call Wait() again in the shutdown path.
-	errCh := make(chan error, 2)
-	go func() { errCh <- caCmd.Wait() }()
-	go func() { errCh <- policyCmd.Wait() }()
-
-	var subprocessErr error
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
-	case subprocessErr = <-errCh:
-		cancel()
-		if subprocessErr != nil {
-			logger.Error("subprocess exited with error", "error", subprocessErr)
-		}
+		return nil
+	case err := <-exited:
+		return err
 	}
+}
 
-	// Graceful shutdown: signal both subprocesses. The goroutines above
-	// will reap them via Wait(). Drain the channel to avoid leaking goroutines.
-	_ = caCmd.Process.Signal(syscall.SIGTERM)
-	_ = policyCmd.Process.Signal(syscall.SIGTERM)
-	<-errCh // Wait for the second subprocess goroutine to finish.
-
-	logger.Info("shutdown complete")
-	return subprocessErr
+func (c *ServerCLI) inventoryArgs(globalArgs []string, socket, key string) []string {
+	args := append(append([]string{}, globalArgs...), "inventory", "--listen", "unix://"+socket, "--ca-pubkey", key)
+	for _, path := range c.Inventory {
+		args = append(args, "--static", path)
+	}
+	if c.PrincipalMode != "" {
+		args = append(args, "--principal-mode", c.PrincipalMode)
+	}
+	return args
 }
 
 // policyArgs builds the subprocess command. Only explicit server overrides
 // should be forwarded; the policy subprocess reads its own configuration.
 func (c *ServerCLI) policyArgs(globalArgs []string, policySock, caPubkey string) []string {
-	policyArgs := append(globalArgs, "policy",
+	policyArgs := append(append([]string{}, globalArgs...), "policy",
 		"--listen", "unix://"+policySock,
 		"--ca-pubkey", caPubkey,
 	)
 	if c.PolicyFile != "" {
 		policyArgs = append(policyArgs, "--policy-file", c.PolicyFile)
-	}
-	for _, inv := range c.Inventory {
-		policyArgs = append(policyArgs, "--inventory", inv)
-	}
-	if c.PrincipalMode != "" {
-		policyArgs = append(policyArgs, "--principal-mode", c.PrincipalMode)
 	}
 	for name, value := range c.Extension {
 		policyArgs = append(policyArgs, "--extension", name+"="+value)

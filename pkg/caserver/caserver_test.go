@@ -7,38 +7,54 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
-// newTestCAWithPolicyURL creates a CA instance pointed at the given policy
-// server URL, generating a fresh CA keypair.
-func newTestCAWithPolicyURL(t *testing.T, policyURL string) *ca.CA {
+// newTestCAWithInventoryURL creates a CA instance pointed at the given inventory
+// service URL, generating a fresh CA keypair.
+func newTestCAWithInventoryURL(t *testing.T, inventoryURL string) *ca.CA {
 	t.Helper()
 
 	_, caPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	caInstance, err := ca.New(caPrivateKey, policyURL)
+	caInstance, err := ca.New(caPrivateKey, "https://unused-policy.invalid", ca.WithInventory(inventoryURL, tlsconfig.Config{Insecure: true}))
 	require.NoError(t, err)
 
 	return caInstance
 }
 
 // newTestCAServer creates a CA server backed by a mock policy server for testing.
-func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server, func()) {
+func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server, func(), string) {
 	t.Helper()
 
-	policyServer := httptest.NewServer(policyHandler)
-
-	caInstance := newTestCAWithPolicyURL(t, policyServer.URL)
+	idp := oidctest.New(t)
+	pub, priv, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "inventory.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:test-user\n    userName: test-user\nhosts:\n  - pattern: \"**\"\n"), 0600))
+	inv, err := inventory.NewStatic([]string{path})
+	require.NoError(t, err)
+	is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
+	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		policyHandler.ServeHTTP(w, r)
+	}))
+	caInstance, err := ca.New(priv, policyServer.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+	require.NoError(t, err)
 
 	logger := slog.Default()
 	server := caserver.New(caInstance, logger, nil)
@@ -54,26 +70,26 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server
 		policyServer.Close()
 	}
 
-	return caHTTPServer, cleanup
+	return caHTTPServer, cleanup, idp.MintIDToken("test-user", time.Now().Add(time.Hour))
 }
 
 // TestDiscoveryIsAnonymousPassThrough verifies GET /discovery is a plain,
-// unauthenticated pass-through of the policy server's auth config — no
-// token parsing, no probe request to the policy server, no Vary header.
+// unauthenticated pass-through of the inventory service's auth config — no
+// token parsing, no probe request to policy, no Vary header.
 func TestDiscoveryIsAnonymousPassThrough(t *testing.T) {
-	// Stub policy server returning a slim discovery doc.
-	policySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Stub inventory service returning a slim discovery doc.
+	inventorySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			w.Header().Set("Cache-Control", "max-age=120")
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`)
+			fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"},"identityMapping":{"mode":"stable-id","claim":"email"}}`)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
-	defer policySrv.Close()
+	defer inventorySrv.Close()
 
-	c := newTestCAWithPolicyURL(t, policySrv.URL)
+	c := newTestCAWithInventoryURL(t, inventorySrv.URL)
 	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
 
 	req := httptest.NewRequest("GET", "/discovery", nil) // no Authorization header
@@ -85,19 +101,20 @@ func TestDiscoveryIsAnonymousPassThrough(t *testing.T) {
 	var d wire.Discovery
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &d))
 	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+	require.NotContains(t, rec.Body.String(), "identityMapping")
 	require.Empty(t, rec.Header().Get("Vary"))
 }
 
 // TestDiscoveryHandler_FallbackCacheControl verifies the 5-minute default is
-// used when the policy server doesn't set Cache-Control.
+// used when the inventory service doesn't set Cache-Control.
 func TestDiscoveryHandler_FallbackCacheControl(t *testing.T) {
-	policySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	inventorySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"}}`)
+		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"},"identityMapping":{"mode":"stable-id","claim":"email"}}`)
 	}))
-	defer policySrv.Close()
+	defer inventorySrv.Close()
 
-	c := newTestCAWithPolicyURL(t, policySrv.URL)
+	c := newTestCAWithInventoryURL(t, inventorySrv.URL)
 	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
 
 	req := httptest.NewRequest("GET", "/discovery", nil)
@@ -113,7 +130,7 @@ func TestDiscoveryHandler_FallbackCacheControl(t *testing.T) {
 func TestGetPubKeyAdvertisesAuthLink(t *testing.T) {
 	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
-	caHTTPServer, cleanup := newTestCAServer(t, policyHandler)
+	caHTTPServer, cleanup, _ := newTestCAServer(t, policyHandler)
 	defer cleanup()
 
 	resp, err := http.Get(caHTTPServer.URL)
@@ -129,7 +146,7 @@ func TestGetPubKeyAdvertisesAuthLink(t *testing.T) {
 func TestGetPubKey(t *testing.T) {
 	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
-	caHTTPServer, cleanup := newTestCAServer(t, policyHandler)
+	caHTTPServer, cleanup, _ := newTestCAServer(t, policyHandler)
 	defer cleanup()
 
 	resp, err := http.Get(caHTTPServer.URL)
@@ -156,7 +173,7 @@ func TestCreateCert_Success(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	caHTTPServer, cleanup := newTestCAServer(t, policyHandler)
+	caHTTPServer, cleanup, token := newTestCAServer(t, policyHandler)
 	defer cleanup()
 
 	userPubKey, _, err := sshcert.GenerateKeys()
@@ -175,7 +192,7 @@ func TestCreateCert_Success(t *testing.T) {
 	req, err := http.NewRequest("POST", caHTTPServer.URL, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -192,7 +209,7 @@ func TestCreateCert_PolicyError(t *testing.T) {
 		w.Write([]byte("access denied by policy"))
 	})
 
-	caHTTPServer, cleanup := newTestCAServer(t, policyHandler)
+	caHTTPServer, cleanup, token := newTestCAServer(t, policyHandler)
 	defer cleanup()
 
 	userPubKey, _, err := sshcert.GenerateKeys()
@@ -211,7 +228,7 @@ func TestCreateCert_PolicyError(t *testing.T) {
 	req, err := http.NewRequest("POST", caHTTPServer.URL, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -221,7 +238,7 @@ func TestCreateCert_PolicyError(t *testing.T) {
 }
 
 func TestCreateCert_MissingPublicKey(t *testing.T) {
-	caHTTPServer, cleanup := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	caHTTPServer, cleanup, _ := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer cleanup()
 
 	certReq := caserver.CreateCertRequest{
@@ -242,7 +259,7 @@ func TestCreateCert_MissingPublicKey(t *testing.T) {
 }
 
 func TestCreateCert_MissingConnection(t *testing.T) {
-	caHTTPServer, cleanup := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	caHTTPServer, cleanup, _ := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer cleanup()
 
 	userPubKey, _, err := sshcert.GenerateKeys()
@@ -269,7 +286,7 @@ func TestCreateCert_EmptyBody(t *testing.T) {
 	// The old hello shape (both fields absent) is gone: an empty body is
 	// just a request missing both required fields, and gets a 400 like any
 	// other incomplete request.
-	caHTTPServer, cleanup := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	caHTTPServer, cleanup, _ := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer cleanup()
 
 	req, err := http.NewRequest("POST", caHTTPServer.URL, bytes.NewReader([]byte("{}")))

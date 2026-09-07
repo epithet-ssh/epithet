@@ -12,7 +12,7 @@ LICENSE=	APACHE20
 LICENSE_FILE=	${WRKSRC}/LICENSE-2.0.txt
 
 USES=		go:1.25+,modules
-USE_RC_SUBR=	epithet_server epithet_ca epithet_policy
+USE_RC_SUBR=	epithet_server epithet_ca epithet_policy epithet_inventory
 GO_MODULE=	github.com/epithet-ssh/epithet
 GO_TARGET=	./cmd/epithet
 GO_LDFLAGS=	-X main.version=${DISTVERSION}

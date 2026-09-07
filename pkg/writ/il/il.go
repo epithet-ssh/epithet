@@ -11,6 +11,8 @@ package il
 import (
 	"fmt"
 	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 )
 
 // Schema is the IL schema version carried by every policy.
@@ -129,17 +131,4 @@ type DenyRule struct {
 // (SPEC §12 q9): ASCII A-Z→a-z only, never Unicode folding. Apply it at
 // every ingress boundary — inventory load, request resolution, and
 // policy compilation — so matching stays a byte compare.
-func HostName(s string) string {
-	lowered := []byte(s)
-	changed := false
-	for i, c := range lowered {
-		if c >= 'A' && c <= 'Z' {
-			lowered[i] = c + ('a' - 'A')
-			changed = true
-		}
-	}
-	if !changed {
-		return s
-	}
-	return string(lowered)
-}
+func HostName(s string) string { return hostpattern.NormalizeName(s) }

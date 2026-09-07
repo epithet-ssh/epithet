@@ -1,0 +1,60 @@
+package inventoryserver
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+)
+
+// Resolver combines independently owned directory and host snapshots. Static
+// data is immutable for the lifetime of this resolver; future dynamic sources
+// must supply coherent snapshot reads and explicit freshness semantics.
+type Resolver struct {
+	Directory         directory.Directory
+	Hosts             inventory.Hosts
+	DirectoryRevision string
+	InventoryRevision string
+}
+
+func (s *Resolver) Resolve(ctx context.Context, auth inventoryapi.Authentication, host string) (*inventoryapi.Resolution, error) {
+	u, err := s.Directory.LookupUser(ctx, auth.ID)
+	if err != nil {
+		return nil, fmt.Errorf("looking up user: %w", err)
+	}
+	h, err := s.Hosts.LookupHost(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("looking up host: %w", err)
+	}
+	r := &inventoryapi.Resolution{Version: 1, Authentication: auth, Host: host, ResolvedAt: time.Now().UTC(),
+		Directory: inventoryapi.DirectorySnapshot{Revision: s.DirectoryRevision},
+		Inventory: inventoryapi.HostSnapshot{Revision: s.InventoryRevision}}
+	if u != nil {
+		active := u.Active
+		user := &inventoryapi.User{Schemas: []string{inventoryapi.UserSchema}, ID: u.ID, UserName: u.UserName, Active: &active, UserType: u.UserType}
+		for _, g := range u.Groups {
+			user.Groups = append(user.Groups, inventoryapi.Group{Value: g, Display: g})
+		}
+		if u.Department != "" || u.Organization != "" {
+			user.Schemas = append(user.Schemas, inventoryapi.EnterpriseSchema)
+			user.Enterprise = &inventoryapi.Enterprise{Department: u.Department, Organization: u.Organization}
+		}
+		r.Directory.User = user
+	}
+	if h != nil {
+		accounts, err := json.Marshal(h.Policy.Accounts)
+		if err != nil {
+			return nil, err
+		}
+		r.Inventory.Host = &inventoryapi.Host{Resource: inventoryapi.HostResource{Name: h.Policy.Name, Labels: h.Policy.Labels, Accounts: accounts},
+			Principal: inventoryapi.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}
+	}
+	if err := r.Validate(host); err != nil {
+		return nil, err
+	}
+	return r, nil
+}

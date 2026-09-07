@@ -23,6 +23,7 @@ agent:
 # CA server configuration (epithet ca)
 # ca:
 #   policy: https://policy.example.com
+#   inventory: https://inventory.example.com
 #   key: /etc/epithet/ca.key
 #   listen: "0.0.0.0:8080"
 
@@ -33,6 +34,10 @@ agent:
 #   ca-pubkey: ssh-ed25519 AAAAC3...  # or URL like https://ca.example.com/pubkey
 #   default-expiration: "5m"
 #
+#   policy-file: /etc/epithet/policy.writ
+#
+# Inventory service configuration (epithet inventory)
+# inventory:
 #   # OIDC configuration for token validation - client-id is required so
 #   # audience checking can never be silently skipped. Config-file keys
 #   # here are kebab-case (derived from the CLI flag names).
@@ -40,28 +45,9 @@ agent:
 #     issuer: "https://accounts.google.com"
 #     client-id: "your-client-id"
 #
-#   # Map users (by email) to tags (roles/teams)
-#   users:
-#     alice@example.com: [admin, eng]
-#     bob@example.com: [eng]
+#   ca-pubkey: /etc/epithet/ca.pub
+#   static: [/etc/epithet/inventory.yaml]
+#   principal-mode: account-name
 #
-#   # Default policy settings (apply to all hosts)
-#   defaults:
-#     allow:
-#       wheel: [admin]         # users with "admin" tag get "wheel" principal
-#       developers: [eng]      # users with "eng" tag get "developers" principal
-#     extensions:
-#       permit-pty: ""
-#       permit-agent-forwarding: ""
-#
-#   # Per-host policy overrides. Host patterns are label-aware: "*" and "?"
-#   # do not cross dots, while a whole-label "**" crosses labels. Character
-#   # classes, brace alternatives, and escapes are not supported.
-#   hosts:
-#     "*.prod.example.com":
-#       expiration: "2m"       # shorter expiration for production
-#       allow:
-#         root: [admin]        # only admins can access as root
-
 # Note: Broker socket and agent directories are automatically managed
 # in ~/.epithet/run/<name>/ - no configuration needed!

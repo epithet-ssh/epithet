@@ -71,13 +71,14 @@ func TestServerEndToEnd(t *testing.T) {
   ca-key: %s
 policy:
   ca-pubkey: "%s"
+  policy-file: %s
+inventory:
   oidc:
     issuer: "%s"
     client-id: "%s"
-  policy-file: %s
-  inventory:
+  static:
     - %s
-`, caKeyPath, strings.TrimSpace(string(caPubkey)), mockURL, oidctest.ClientID, policyPath, inventoryPath)
+`, caKeyPath, strings.TrimSpace(string(caPubkey)), policyPath, mockURL, oidctest.ClientID, inventoryPath)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)

@@ -20,18 +20,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/lmittmann/tint"
@@ -67,11 +67,6 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	require.NoError(t, err)
 
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer:   idp.Issuer(),
-		ClientID: oidctest.ClientID,
-	})
-	require.NoError(t, err)
 
 	// The policy authorizes the current OS user's account on any host; the
 	// default compatibility mode carries that account name as the cert
@@ -85,21 +80,19 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	inv, err := inventory.NewStatic([]string{invPath})
 	require.NoError(t, err)
 
+	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
+	require.NoError(t, err)
+	is := inventorytest.Serve(t, inv, idp.Issuer(), caPublicKey)
 	policyHandler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: caPublicKey,
-		Validator:   validator,
-		Evaluator:   writpolicy.NewForTesting(pol, inv),
-		Discovery: &wire.Discovery{Auth: &wire.AuthConfig{
-			Issuer:   idp.Issuer(),
-			ClientID: oidctest.ClientID,
-		}},
+		Evaluator:   evaluator,
 	})
 	require.NoError(t, err)
 	policyServer := httptest.NewServer(policyHandler)
 	t.Cleanup(policyServer.Close)
 
 	// Create CA.
-	caInstance, err := ca.New(caPrivateKey, policyServer.URL)
+	caInstance, err := ca.New(caPrivateKey, policyServer.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 	require.NoError(t, err)
 
 	casrv := caserver.New(caInstance, logger, nil)

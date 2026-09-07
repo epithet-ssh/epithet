@@ -3,7 +3,7 @@
 # Rules read: allow <users> -> <account>@<hosts>, <clauses...>
 # Evaluation is order-independent, and deny always wins.
 # Validate with:
-#   epithet policy --check --policy-file policy.writ --inventory inventory.yaml
+#   epithet policy --check --policy-file policy.writ
 
 # ── vocabulary ──────────────────────────────────────────
 user admins = group:Admins

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
@@ -31,8 +32,8 @@ type CertParams struct {
 
 // PolicyRequest is the CA→policy-server cert evaluation request body.
 type PolicyRequest struct {
-	Token      string            `json:"token"`
-	Connection policy.Connection `json:"connection"`
+	Facts      *inventoryapi.Resolution `json:"facts"`
+	Connection policy.Connection        `json:"connection"`
 }
 
 // PolicyResponse is the policy server's answer to a PolicyRequest. It carries
@@ -42,8 +43,11 @@ type PolicyRequest struct {
 type PolicyResponse struct {
 	// ID is the resolved inventory ID for audit logs, not a certificate field.
 	// Older or custom policy servers may omit it.
-	ID         string     `json:"id,omitempty"`
-	CertParams CertParams `json:"certParams"`
+	ID                string     `json:"id,omitempty"`
+	PolicyID          string     `json:"policyId,omitempty"`
+	DirectoryRevision string     `json:"directoryRevision,omitempty"`
+	InventoryRevision string     `json:"inventoryRevision,omitempty"`
+	CertParams        CertParams `json:"certParams"`
 }
 
 // AuthConfig tells a client how to authenticate: OIDC issuer and client

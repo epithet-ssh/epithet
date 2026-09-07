@@ -1,18 +1,20 @@
 # Policy server guide
 
-This guide explains how to set up and use epithet's built-in policy server with OIDC-based authorization.
+This guide explains how to set up and use epithet's built-in policy server with inventory-authenticated users.
+
+Inventory runs in a separate service; see the [inventory service guide](inventory.md) for combined deployment, standalone configuration, and migration.
 
 ## Overview
 
-The epithet policy server validates OIDC tokens and makes authorization decisions by evaluating a **writ policy file** against an **inventory** of users and hosts. Policy rules say who may reach which account on which hosts; the inventory says who the users are (SCIM-shaped records) and what the hosts are (names plus labels).
+The epithet policy server makes authorization decisions by evaluating a **writ policy file** against CA-supplied **inventory facts** about users and hosts. Policy rules say who may reach which account on which hosts; the inventory says who the users are (SCIM-shaped records) and what the hosts are (names plus labels).
 
 **Key features:**
-- OIDC token validation (works with Google Workspace, Okta, Azure AD, etc.)
+- Inventory handles OIDC validation (Google Workspace, Okta, Azure AD, etc.)
 - A readable, order-independent policy language (`.writ`) with explicit `allow`/`deny` rules — deny always wins
 - SCIM-modeled user inventory (groups, userType, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
 - Certificates minted per connection, using either compatible account-name principals or destination-bound hashed principals
 - Certificate validity clamped to the auth token's remaining lifetime
-- `epithet policy --check` validates policy + inventory without starting a server
+- `epithet policy --check` validates policy; `epithet inventory --check` validates inventory
 - Built-in to the epithet binary (no separate deployment needed)
 
 **Security boundary:** `account-name`, the compatibility default,
@@ -97,17 +99,13 @@ hosts:
 
 ```bash
 # Validate without starting a server
-epithet policy --check \
-  --policy-file ~/.epithet/policy.writ \
-  --inventory ~/.epithet/inventory.yaml
+epithet policy --check --policy-file ~/.epithet/policy.writ
+epithet inventory --check --static ~/.epithet/inventory.yaml
 
 # Start (flags may instead come from the policy: config section)
 epithet policy \
   --policy-file ~/.epithet/policy.writ \
-  --inventory ~/.epithet/inventory.yaml \
   --ca-pubkey "$(curl -s http://localhost:8080/)" \
-  --oidc-issuer https://accounts.google.com \
-  --oidc-client-id your-client-id \
   --listen 0.0.0.0:9999
 ```
 
@@ -117,6 +115,8 @@ A certificate is minted fresh for every connection past the broker's local
 cache of still-valid agents. Destination binding only applies when the
 resolved host's effective mode is `epithet-principal-v1` and the target is
 configured to validate the derived principal.
+
+Start inventory with the OIDC configuration in the [inventory service guide](inventory.md).
 
 ### 5. Configure the CA to use the policy server
 
@@ -191,7 +191,7 @@ Cert **extensions** are deliberately not in the language: they are deployment co
 
 ## The inventory
 
-The inventory answers two questions at evaluation time: who is this identity, and what is this host? It is pluggable by design (databases are the expected future); the built-in implementation is one or more static YAML files given via `--inventory` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
+The inventory answers two questions at evaluation time: who is this identity, and what is this host? It is pluggable by design (databases are the expected future); the built-in implementation is one or more static YAML files served by `epithet inventory --static` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
 
 ### Users
 
@@ -208,12 +208,12 @@ users:
     organization: Acme            # matched by organization:
 ```
 
-The policy server verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then resolves the identity using `policy.oidc.identity-mode` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
+The inventory service verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then resolves the identity using `inventory.oidc.identity-mode` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
 
-Configure the identity mode once on the policy server. `stable-id` is the default; explicitly setting it makes the choice visible:
+Configure the identity mode once on the inventory service. `stable-id` is the default; explicitly setting it makes the choice visible:
 
 ```yaml
-policy:
+inventory:
   oidc:
     identity-mode: stable-id
 ```
@@ -221,7 +221,7 @@ policy:
 In `stable-id` mode, `user-id-claim` overrides the provider default. For example:
 
 ```yaml
-policy:
+inventory:
   oidc:
     issuer: "https://login.microsoftonline.com/YOUR-TENANT-ID/v2.0"
     client-id: "your-client-id"
@@ -229,7 +229,7 @@ policy:
     user-id-claim: oid
 ```
 
-The CLI equivalent is `epithet policy --oidc-user-id-claim oid`. An explicit value overrides the provider default:
+The CLI equivalent is `epithet inventory --oidc-user-id-claim oid`. An explicit value overrides the provider default:
 
 | Configured provider | Default claim |
 |---|---|
@@ -245,7 +245,7 @@ Overrides name a literal top-level claim (including namespaced claim names), not
 For address-based inventory with enforced email verification, select `verified-email`:
 
 ```yaml
-policy:
+inventory:
   oidc:
     identity-mode: verified-email
 ```
@@ -317,7 +317,7 @@ epithet agent identity
 epithet agent --name work identity
 ```
 
-`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the policy server. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout defaults to tab-delimited field/value rows:
+`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the inventory service. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout defaults to tab-delimited field/value rows:
 
 ```text
 issuer	https://issuer.example
@@ -334,14 +334,15 @@ Use `epithet agent identity --json` (or `-j`) for JSON output:
 
 The agent verifies the token before returning these claims. It reports issuer and subject, plus `oid`, `email`, and `email_verified` when present with the expected types. A false verification value is shown as false; missing or malformed optional claims are omitted. No mapped inventory `id` is returned. The command does not request a certificate or need an inventory entry, and bearer tokens, refresh tokens, and client secrets remain inside the agent.
 
-Confirm the issuer and signed-in account, then use the field appropriate to your policy configuration: `subject` for the default `sub` mapping, `oid` for Entra's default, or `email` for verified-email mode. The command describes only the current user, does not establish policy acceptance, and does not display arbitrary custom ID claims. Keep the intended inventory `userName` and groups. Migrate old name-based Writ `id:` rules to `userName:` as described above.
+Confirm the issuer and signed-in account, then use the field appropriate to your inventory configuration: `subject` for the default `sub` mapping, `oid` for Entra's default, or `email` for verified-email mode. The command describes only the current user, does not establish policy acceptance, and does not display arbitrary custom ID claims. Keep the intended inventory `userName` and groups. Migrate old name-based Writ `id:` rules to `userName:` as described above.
 
-The former standalone `epithet identity` command is removed. Start the agent first and restart existing agents after upgrading to get the new diagnostic output. Changes to inventory identity modes or claim mapping require restarting the policy server; the agent does not consume these settings.
+The former standalone `epithet identity` command is removed. Start the agent first and restart existing agents after upgrading to get the new diagnostic output. Changes to identity modes or claim mapping require restarting CA and policy; the agent does not consume these settings.
 
 Prepare the inventory separately, then validate it with the new binary and existing policy:
 
 ```sh
-epithet policy --check --policy-file /path/to/policy.writ --inventory /path/to/updated-inventory.yaml
+epithet policy --check --policy-file /path/to/policy.writ
+epithet inventory --check --static /path/to/updated-inventory.yaml
 ```
 
 Include your configured `--principal-mode` if hosts inherit a nondefault mode. Install the new binary and updated inventory together, restart the policy service (or combined server), and verify a fresh issuance. Older binaries reject the new inventory field; newer binaries reject the old unbound user records. Keep a working administrative SSH session during the switch. A cached certificate does not test the new binding: use a fresh agent profile or evict the relevant certificate before checking issuance.
@@ -394,41 +395,43 @@ individual member hostname.
 
 ## Configuration
 
-All policy-server settings can live under the `policy:` section of `/etc/epithet/*.yaml` or `~/.epithet/*.yaml` (or a file given with `--config`). Keys use the CLI flag names verbatim (kebab-case):
+Policy and inventory settings can live under the `policy:` and `inventory:` sections of `/etc/epithet/*.yaml` or `~/.epithet/*.yaml` (or a file given with `--config`). Keys use the CLI flag names verbatim (kebab-case):
 
 ```yaml
 policy:
   listen: "0.0.0.0:9999"
+  ca-pubkey: "ssh-ed25519 AAAA..."
+  policy-file: /etc/epithet/policy.writ
+  default-expiration: 5m
+inventory:
   ca-pubkey: "ssh-ed25519 AAAA..."
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "your-client-id"
     identity-mode: stable-id  # or verified-email
     # user-id-claim: sub  # stable-id override; Entra defaults to oid
-  policy-file: /etc/epithet/policy.writ
-  inventory:
+  static:
     - /etc/epithet/inventory.yaml
   principal-mode: epithet-principal-v1
-  default-expiration: 5m
 ```
 
 - **`listen`** (optional): address to listen on (default `0.0.0.0:9999`). A `unix:///path/to/policy.sock` value listens on a Unix domain socket; this is how `epithet server` wires its subprocesses together.
 - **`ca-pubkey`** (required): the CA's SSH public key (URL, file path, or literal), used to verify the CA's service JWT.
-- **`oidc`** (required): `issuer` and `client-id` — `client-id` is required so audience checking can never be silently skipped.
-- **`oidc.identity-mode`** (optional): `stable-id` (default) or `verified-email`, as described under [Users](#users). CLI: `--oidc-identity-mode`; environment: `EPITHET_POLICY_OIDC_IDENTITY_MODE`.
-- **`oidc.user-id-claim`** (optional): top-level claim mapped to inventory `id` in `stable-id` mode; overrides the provider default. Even `email` is allowed without checking verification. CLI: `--oidc-user-id-claim`; environment: `EPITHET_POLICY_OIDC_USER_ID_CLAIM`. Flags override file configuration; environment variables supply defaults when the file omits a setting.
+- **`inventory.oidc`** (inventory service, required): `issuer` and `client-id` — `client-id` is required so audience checking can never be silently skipped.
+- **`inventory.oidc.identity-mode`** (inventory service, optional): `stable-id` (default) or `verified-email`, as described under [Users](#users). CLI: `--oidc-identity-mode`; environment: `EPITHET_INVENTORY_OIDC_IDENTITY_MODE`.
+- **`inventory.oidc.user-id-claim`** (inventory service, optional): top-level claim mapped to inventory `id` in `stable-id` mode; overrides the provider default. Even `email` is allowed without checking verification. CLI: `--oidc-user-id-claim`; environment: `EPITHET_INVENTORY_OIDC_USER_ID_CLAIM`. Flags override file configuration; environment variables supply defaults when the file omits a setting.
 - **`policy-file`** (required): the writ policy file.
-- **`inventory`** (required): inventory file paths or globs.
-- **`principal-mode`** (optional): deployment default, either `account-name` (the compatibility default) or `epithet-principal-v1`. A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
+- **`inventory.static`** (inventory service): inventory file paths or globs.
+- **`inventory.principal-mode`** (inventory service): deployment default, either `account-name` (the compatibility default) or `epithet-principal-v1`. A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
 - **`default-expiration`** (optional): cert TTL when no satisfied rule sets a `ttl` (default `5m`). Always further clamped to the auth token's remaining lifetime.
 - **`extension`** (flag only): repeatable `name=value` cert extensions.
 
-When using `epithet server`, `policy.principal-mode` also supplies the default
-for the policy subprocess. An explicitly configured `server.principal-mode`
+When using `epithet server`, `inventory.principal-mode` also supplies the default
+for the inventory subprocess. An explicitly configured `server.principal-mode`
 overrides it, and `epithet server --principal-mode ...` overrides both config
-settings. If none is set, the policy default remains `account-name`.
+settings. If none is set, the inventory default remains `account-name`.
 
-Policy and inventory are read once at startup; picking up changes is a process restart. `epithet policy --check` validates the pair (parse and compile errors with positions, unknown require/when/notify references, warnings such as unused macros or already-expired `until` rules) and exits non-zero on errors.
+Policy and inventory are read by their respective services once at startup; restart the relevant service to pick up changes. `epithet inventory --check` validates inventory, and `epithet policy --check` validates policy (parse and compile errors with positions, unknown require/when/notify references, warnings such as unused macros or already-expired `until` rules) and exits non-zero on errors.
 
 ## Authorization logic
 
@@ -601,7 +604,8 @@ sudo systemctl start epithet-policy
 
 Validate config changes before restarting:
 ```bash
-epithet policy --check --policy-file /etc/epithet/policy.writ --inventory /etc/epithet/inventory.yaml
+epithet policy --check --policy-file /etc/epithet/policy.writ
+epithet inventory --check --static /etc/epithet/inventory.yaml
 ```
 
 ## Troubleshooting
@@ -626,7 +630,7 @@ epithet policy --check --policy-file /etc/epithet/policy.writ --inventory /etc/e
 - The policy uses `require`, `when`, or `notify` but no plugin with that name is registered — the static server currently registers none
 
 **"Invalid token" (401)**
-- User JWT signature verification failed, token expired, or issuer/audience mismatch
+- Inventory rejected the user JWT: signature verification failed, token expired, or issuer/audience mismatch
 - Check system clock synchronization
 
 **"request verification failed" (401)**
@@ -647,35 +651,10 @@ The CA server communicates with the policy server over HTTP. This section docume
 
 ### HTTP endpoint
 
-A single route, `/`, handles both methods:
-
-- **`GET /`** — anonymous discovery: returns the OIDC bootstrap config the CA passes through on its own `/discovery` endpoint
-- **`POST /`** — cert evaluation request
-
-Both require a valid CA-minted service JWT (see [Service authentication](#service-authentication-ca--policy-server)) — there is no unauthenticated variant of either.
-
-### Discovery request
-
-```
-GET /
-Authorization: Bearer <service JWT>
-```
-
-Response (`HTTP 200`):
-
-```json
-{
-  "auth": {
-    "issuer": "https://accounts.google.com",
-    "client_id": "your-client-id"
-  }
-}
-```
-
-Discovery supplies authentication settings only. Inventory identity modes and claim mapping remain private to the policy server.
-`client_secret` is included (unencrypted) only if configured. There are no
-host-match patterns in this response — host gating lives entirely in the
-user's own ssh config.
+`POST /` evaluates a certificate request. It requires a valid CA-minted service
+JWT (see [Service authentication](#service-authentication-ca--policy-server)).
+Login discovery is served by inventory and forwarded publicly by CA; policy
+has no discovery endpoint or OIDC configuration.
 
 ### Cert evaluation request format
 
@@ -687,19 +666,54 @@ Content-Type: application/json
 
 ```json
 {
-  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
   "connection": {
     "remoteHost": "server.example.com",
     "remoteUser": "ubuntu",
     "port": 22,
     "proxyJump": "",
     "hash": "a1b2c3d4e5f6"
+  },
+  "facts": {
+    "version": 1,
+    "host": "server.example.com",
+    "authentication": {
+      "id": "provider-user-id",
+      "expiresAt": "2026-09-07T12:05:00Z"
+    },
+    "resolvedAt": "2026-09-07T12:00:00Z",
+    "directory": {
+      "revision": "sha256:directory-content",
+      "user": {
+        "schemas": [
+          "urn:ietf:params:scim:schemas:core:2.0:User"
+        ],
+        "id": "provider-user-id",
+        "userName": "alice@example.com",
+        "active": true,
+        "groups": []
+      }
+    },
+    "inventory": {
+      "revision": "sha256:host-content",
+      "host": {
+        "resource": {
+          "name": "server.example.com",
+          "labels": {},
+          "accounts": [
+            "ubuntu"
+          ]
+        },
+        "principal": {
+          "mode": "account-name"
+        }
+      }
+    }
   }
 }
 ```
 
 **Fields:**
-- `token` (string): The user's ID token — always a JWT
+- `facts` (object, required): the [v1 inventory resolution](inventory-api.yaml). Policy requires unexpired `authentication.expiresAt`, a directory record matching `authentication.id`, and a host matching the connection.
 - `connection` (object): SSH connection parameters
   - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
   - `remoteUser` (string): Target account name on the remote server (OpenSSH `%r`); the policy server encodes this account according to the resolved host's principal mode
@@ -718,6 +732,9 @@ parse error.
 ```json
 {
   "id": "provider-user-id",
+  "policyId": "sha256:compiled-policy-content",
+  "directoryRevision": "sha256:directory-content",
+  "inventoryRevision": "sha256:host-content",
   "certParams": {
     "identity": "alice@example.com",
     "principals": ["ubuntu"],
@@ -733,11 +750,13 @@ parse error.
 ```
 
 **Fields:**
-- `id` (string, optional for older/custom policy servers): Resolved inventory `id`, logged by the CA as `id` in the certificate issuance event. Empty in the log if omitted; never inferred from a token or username.
+- `id` (string): Resolved inventory ID. CA rejects a conflicting value and supplies it from the resolved record if a custom policy omits it.
+- `policyId` (string): SHA-256 content ID of the compiled Writ policy, included in issuance logs.
+- `directoryRevision` and `inventoryRevision` (strings): The snapshot revisions used for the decision. CA records its resolved revisions in issuance logs.
 - `certParams.identity` (string): Inventory `userName`, used as certificate Key ID and logged as `userName` alongside `id`
 - `certParams.principals` ([]string): Exactly one entry — either the requested account name or a destination-bound derived principal, according to the resolved host's mode
 - `certParams.expiration` (integer): Certificate validity, in **nanoseconds** (this is `time.Duration` marshaled by Go's default `encoding/json`, i.e. an integer, not a duration string like `"5m"`)
-- `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, derived from the user token's expiry. The CA signs with `min(now + expiration, notAfter)`. Omitted (zero value) means no ceiling beyond `expiration`.
+- `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, bounded by inventory's `authentication.expiresAt`. The CA signs with `min(now + expiration, notAfter)`. The CA enforces the inventory bound even when a custom policy omits this value.
 - `certParams.extensions` (map[string]string): SSH certificate extensions to grant
 
 **Denial (HTTP 401, 403, or 500):**
@@ -755,7 +774,7 @@ certificate request.
 
 ### Service authentication (CA → policy server)
 
-Every request — `GET /` and `POST /` alike — must carry a short-lived JWT the CA mints per request, signed with the CA's own SSH private key:
+Every `POST /` request must carry a short-lived JWT the CA mints per request, signed with the CA's own SSH private key:
 
 ```
 Authorization: Bearer <jwt>

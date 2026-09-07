@@ -71,7 +71,7 @@ assert_service_files() {
 		echo "package did not install the shared default configuration" >&2
 		exit 1
 	}
-	for service in epithet_server epithet_ca epithet_policy; do
+	for service in epithet_server epithet_ca epithet_policy epithet_inventory; do
 		script="$root/usr/local/etc/rc.d/$service"
 		[ -x "$script" ] || {
 			echo "package did not install executable rc.d service $service" >&2
@@ -102,6 +102,7 @@ pkg_cmd install -y -r Epithet epithet
 assert_version
 assert_service_files
 $root/usr/local/bin/epithet host enroll --help >/dev/null
+$root/usr/local/bin/epithet inventory --help >/dev/null
 pkg_cmd delete -y epithet
 [ ! -e "$root/usr/local/bin/epithet" ]
 [ ! -e "$root/usr/local/etc/epithet/server.yaml" ]

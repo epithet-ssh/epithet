@@ -2,15 +2,17 @@ package writpolicy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
@@ -34,10 +36,10 @@ type Options struct {
 // writ policy. The policy is immutable after construction — reload is
 // a process restart.
 type Evaluator struct {
-	pol  *il.Policy
-	inv  inventory.Inventory
-	reg  *Registry
-	opts Options
+	pol      *il.Policy
+	policyID string
+	reg      *Registry
+	opts     Options
 }
 
 // New builds an evaluator, validating every require/when/notify
@@ -45,7 +47,7 @@ type Evaluator struct {
 // and collecting non-blocking warnings: an allow whose `until` is
 // already past matches nothing, which is safe, so it warns rather than
 // bricking a restart.
-func New(pol *il.Policy, inv inventory.Inventory, reg *Registry, opts Options) (*Evaluator, []string, error) {
+func New(pol *il.Policy, reg *Registry, opts Options) (*Evaluator, []string, error) {
 	if err := pol.ValidateUserSelectors(); err != nil {
 		return nil, nil, err
 	}
@@ -77,42 +79,44 @@ func New(pol *il.Policy, inv inventory.Inventory, reg *Registry, opts Options) (
 				ruleRef(a.Label, a.ContentID()), a.Until.UTC().Format(time.RFC3339)))
 		}
 	}
-	return &Evaluator{pol: pol, inv: inv, reg: reg, opts: opts}, warnings, nil
-}
-
-// NewForTesting builds an evaluator with an empty registry and default
-// options, panicking on validation failure. Tests only.
-func NewForTesting(pol *il.Policy, inv inventory.Inventory) *Evaluator {
-	e, _, err := New(pol, inv, &Registry{}, Options{})
+	encoded, err := json.Marshal(pol)
 	if err != nil {
-		panic(err)
+		return nil, nil, err
 	}
-	return e
+	return &Evaluator{pol: pol, policyID: fmt.Sprintf("sha256:%x", sha256.Sum256(encoded)), reg: reg, opts: opts}, warnings, nil
 }
 
-// Evaluate implements policyserver.PolicyEvaluator: resolve the request
-// tuple through the inventory, run the writ evaluation, and map the
-// decision onto the wire. Inventory and resolver failures return plain
-// errors (500, fail closed); policy denials return 403; pending
+// Evaluate implements policyserver.PolicyEvaluator using supplied facts.
+// Policy denials return 403; pending
 // requirements return 202.
-func (e *Evaluator) Evaluate(ctx context.Context, userID string, tokenExpiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
-	user, err := e.inv.LookupUser(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("looking up user: %w", err)
+func (e *Evaluator) Evaluate(ctx context.Context, userID string, authExpiry time.Time, conn policy.Connection, facts *inventoryapi.Resolution) (*wire.PolicyResponse, error) {
+	if facts == nil {
+		return nil, fmt.Errorf("inventory facts are required")
 	}
-	if user == nil {
+	u := facts.Directory.User
+	if u == nil {
 		return nil, policyserver.Forbidden("OIDC user ID is not bound to an inventory user")
 	}
-	identity := user.UserName
-	hostName := il.HostName(conn.RemoteHost)
-	host, err := e.inv.LookupHost(ctx, hostName)
-	if err != nil {
-		return nil, fmt.Errorf("looking up host: %w", err)
+	if u.ID != userID || u.Active == nil {
+		return nil, fmt.Errorf("inventory user does not match authenticated identity")
 	}
-
+	user := &eval.User{ID: u.ID, UserName: u.UserName, Active: *u.Active, UserType: u.UserType}
+	for _, g := range u.Groups {
+		user.Groups = append(user.Groups, g.Value)
+	}
+	if u.Enterprise != nil {
+		user.Department = u.Enterprise.Department
+		user.Organization = u.Enterprise.Organization
+	}
+	identity := user.UserName
+	host := facts.Inventory.Host
 	var policyHost *eval.Host
 	if host != nil {
-		policyHost = &host.Policy
+		accounts, err := host.Resource.AccountList()
+		if err != nil {
+			return nil, err
+		}
+		policyHost = &eval.Host{Name: host.Resource.Name, Labels: host.Resource.Labels, Accounts: accounts}
 	}
 	req := eval.Request{User: user, Host: policyHost, Account: conn.RemoteUser}
 	decision, err := eval.Decide(e.pol, req, e.opts.Clock(),
@@ -134,13 +138,14 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, tokenExpiry tim
 		}
 		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		return &wire.PolicyResponse{
-			ID: user.ID,
+			ID:       user.ID,
+			PolicyID: e.policyID, DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
 			CertParams: wire.CertParams{
 				Identity:   identity,
 				Names:      names,
 				Expiration: ttl,
 				Extensions: e.opts.Extensions,
-				NotAfter:   tokenExpiry,
+				NotAfter:   authExpiry,
 			},
 		}, nil
 	case eval.Pending:
@@ -159,24 +164,21 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, tokenExpiry tim
 	}
 }
 
-func certificatePrincipals(host *inventory.ResolvedHost, account string) ([]string, error) {
+func certificatePrincipals(host *inventoryapi.Host, account string) ([]string, error) {
 	if host == nil {
 		return nil, fmt.Errorf("cannot issue a certificate for an unresolved host")
 	}
-	if err := host.PrincipalMode.Validate(); err != nil {
-		return nil, fmt.Errorf("host %q: %w", host.Policy.Name, err)
-	}
-	switch host.PrincipalMode.Effective() {
-	case inventory.AccountNamePrincipals:
+	switch host.Principal.Mode {
+	case "account-name":
 		return []string{account}, nil
-	case inventory.EpithetPrincipalV1:
-		name, err := principal.DeriveV1(host.Domain, account)
+	case "epithet-principal-v1":
+		name, err := principal.DeriveV1(principal.Domain(host.Principal.Domain), account)
 		if err != nil {
-			return nil, fmt.Errorf("deriving principal for %s@%s: %w", account, host.Policy.Name, err)
+			return nil, fmt.Errorf("deriving principal: %w", err)
 		}
 		return []string{name}, nil
 	default:
-		panic("validated principal mode was not handled")
+		return nil, fmt.Errorf("unknown principal mode %q", host.Principal.Mode)
 	}
 }
 

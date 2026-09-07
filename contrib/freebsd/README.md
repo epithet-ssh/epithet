@@ -5,13 +5,13 @@ Epithet publishes a native package for `FreeBSD:15:amd64` at
 FreeBSD build host; a Bastille jail serves the completed repository over
 HTTPS.
 
-The package installs the `epithet` binary and three rc.d services:
+The package installs the `epithet` binary and four rc.d services:
 
-- `epithet_server` runs the combined CA and policy server.
-- `epithet_ca` and `epithet_policy` run the same components as separate
+- `epithet_server` runs the combined CA, policy, and inventory server.
+- `epithet_ca`, `epithet_policy`, and `epithet_inventory` run the same components as separate
   processes.
 
-All three services are disabled by default, run as the dedicated `epithet`
+All four services are disabled by default, run as the dedicated `epithet`
 account, and read `/usr/local/etc/epithet/server.yaml` unless overridden in
 `rc.conf`. The package installs that file from a sample on first installation
 and preserves operator changes across upgrades and deletion. Enrollment state
@@ -49,25 +49,27 @@ chown root:epithet /usr/local/etc/epithet/ca.key
 chmod 0640 /usr/local/etc/epithet/ca.key
 ```
 
-For the normal single-process deployment, enable only the combined service:
+For the normal combined deployment, enable only the combined service:
 
 ```sh
 sysrc epithet_server_enable=YES
 service epithet_server start
 ```
 
-For split operation, enable the policy server and CA instead:
+For split operation, enable inventory, policy, and CA instead:
 
 ```sh
+sysrc epithet_inventory_enable=YES
 sysrc epithet_policy_enable=YES
 sysrc epithet_ca_enable=YES
+service epithet_inventory start
 service epithet_policy start
 service epithet_ca start
 ```
 
-The split services communicate over `/var/run/epithet/policy.sock`. The rc.d
+The split services communicate over `/var/run/epithet/policy.sock` and `/var/run/epithet/inventory.sock`. The rc.d
 scripts reject a configuration that enables `epithet_server` together with
-either split service. Logs are written under `/var/log/epithet/`.
+any split service. Logs are written under `/var/log/epithet/`.
 
 The checked-in [`ops/Epithet.conf`](ops/Epithet.conf) expands `${ABI}` on the
 client and requires repository metadata signed by the bootstrapped public key.

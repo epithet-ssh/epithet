@@ -1,0 +1,50 @@
+#!/bin/sh
+
+# PROVIDE: epithet_inventory
+# REQUIRE: NETWORKING
+# BEFORE: epithet_ca
+# KEYWORD: shutdown
+#
+# Add this line to /etc/rc.conf to enable the inventory service:
+#
+# epithet_inventory_enable="YES"
+
+. /etc/rc.subr
+
+name=epithet_inventory
+desc="Epithet inventory server"
+rcvar=epithet_inventory_enable
+
+load_rc_config $name
+
+: ${epithet_inventory_enable:=NO}
+: ${epithet_inventory_config:=%%PREFIX%%/etc/epithet/server.yaml}
+: ${epithet_inventory_runas:=epithet}
+: ${epithet_inventory_runas_group:=epithet}
+: ${epithet_inventory_pidfile:=/var/run/epithet/inventory.pid}
+: ${epithet_inventory_logfile:=/var/log/epithet/inventory.log}
+: ${epithet_inventory_args:=""}
+
+command=/usr/sbin/daemon
+procname=%%PREFIX%%/bin/epithet
+pidfile=${epithet_inventory_pidfile}
+command_args="-f -p ${pidfile} -o ${epithet_inventory_logfile} -u ${epithet_inventory_runas} ${procname} --config ${epithet_inventory_config} inventory ${epithet_inventory_args}"
+required_files=${epithet_inventory_config}
+start_precmd=epithet_inventory_precmd
+
+epithet_inventory_precmd()
+{
+	load_rc_config epithet_server
+	: ${epithet_server_enable:=NO}
+	if checkyesno epithet_server_enable; then
+		echo "epithet_inventory cannot run while epithet_server is enabled" >&2
+		return 1
+	fi
+
+	install -d -m 0750 -o "${epithet_inventory_runas}" -g "${epithet_inventory_runas_group}" /var/run/epithet /var/log/epithet
+	if [ ! -e "${epithet_inventory_logfile}" ]; then
+		install -m 0640 -o "${epithet_inventory_runas}" -g "${epithet_inventory_runas_group}" /dev/null "${epithet_inventory_logfile}"
+	fi
+}
+
+run_rc_command "$1"

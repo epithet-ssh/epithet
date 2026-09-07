@@ -11,10 +11,10 @@ import (
 // The JSON wire shape is a compatibility contract for third-party policy
 // servers; pin it.
 func TestPolicyRequestWireShape(t *testing.T) {
-	req := PolicyRequest{Token: "tok"}
+	req := PolicyRequest{}
 	out, err := json.Marshal(req)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"token":"tok","connection":{"remoteHost":"","remoteUser":"","port":0,"proxyJump":"","hash":""}}`, string(out))
+	require.JSONEq(t, `{"facts":null,"connection":{"remoteHost":"","remoteUser":"","port":0,"proxyJump":"","hash":""}}`, string(out))
 }
 
 func TestCertParamsRoundTrip(t *testing.T) {

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # PROVIDE: epithet_ca
-# REQUIRE: NETWORKING epithet_policy
+# REQUIRE: NETWORKING epithet_policy epithet_inventory
 # KEYWORD: shutdown
 #
 # Add this line to /etc/rc.conf to enable the CA service:

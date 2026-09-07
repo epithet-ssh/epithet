@@ -1,0 +1,211 @@
+openapi: 3.0.3
+info:
+  title: Epithet Inventory Resolver API
+  version: 1.0.0
+  description: >-
+    CA-authenticated OIDC validation and static resolution. No provisioning, administration, or
+    enrollment routes. Requests and responses are limited to 64 KiB. Responses
+    are not cached. Directory and host revisions are independent snapshots.
+paths:
+  /:
+    get:
+      operationId: inventoryDiscovery
+      summary: Login configuration forwarded by CA to agents
+      security:
+        - ServiceJWT: []
+      responses:
+        '200':
+          description: Login discovery; Cache-Control max-age=300
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discovery'
+        '403':
+          description: Invalid or missing CA service token
+  /v1/resolve:
+    post:
+      operationId: resolveInventory
+      security:
+        - ServiceJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveRequest'
+      responses:
+        '200':
+          description: Resolution; missing entities are explicit null records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resolution'
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid or expired user authentication token
+        '403':
+          description: Invalid or missing CA service token; CA treats this as infrastructure failure
+        '413':
+          description: Request too large
+        '500':
+          description: Lookup or response validation failure; issuance must fail closed
+components:
+  securitySchemes:
+    ServiceJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Request-bound JWT signed by the CA SSH key. Verify signature, audience
+        epithet-inventory, issued-at/expiry, method, host+path, and SHA-256 body
+        hash using pkg/serviceauth. This grants resolution reads only.
+  schemas:
+    Authentication:
+      type: object
+      required: [id, expiresAt]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: Inventory-mapped, verified user ID
+        expiresAt:
+          type: string
+          format: date-time
+          description: Verified session expiry; must be in the future, and bounds certificate validity
+    AuthConfig:
+      type: object
+      required: [issuer, client_id]
+      properties:
+        issuer:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          description: Included only if configured; forwarded in public CA login discovery
+    Discovery:
+      type: object
+      properties:
+        auth:
+          $ref: '#/components/schemas/AuthConfig'
+    ResolveRequest:
+      type: object
+      required: [token, host]
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          description: Original user OIDC ID token; never echoed in the response or sent to policy
+        host:
+          type: string
+          minLength: 1
+          description: Requested host with ASCII case folding
+    Resolution:
+      type: object
+      required: [version, authentication, host, resolvedAt, directory, inventory]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        authentication:
+          $ref: '#/components/schemas/Authentication'
+        host:
+          type: string
+          minLength: 1
+          description: Must match the requested host
+        resolvedAt:
+          type: string
+          format: date-time
+          description: Lookup time, not an upstream freshness guarantee
+        directory:
+          type: object
+          required: [revision, user]
+          properties:
+            revision:
+              type: string
+              minLength: 1
+            user:
+              $ref: '#/components/schemas/User'
+        inventory:
+          type: object
+          required: [revision, host]
+          properties:
+            revision:
+              type: string
+              minLength: 1
+            host:
+              $ref: '#/components/schemas/Host'
+    User:
+      type: object
+      nullable: true
+      required: [schemas, id, userName, active]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+          description: Includes urn:ietf:params:scim:schemas:core:2.0:User
+        id:
+          type: string
+          minLength: 1
+        userName:
+          type: string
+          minLength: 1
+        active:
+          type: boolean
+        userType:
+          type: string
+        groups:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required: [value, display]
+            properties:
+              value:
+                type: string
+                minLength: 1
+              display:
+                type: string
+        'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User':
+          type: object
+          properties:
+            department:
+              type: string
+            organization:
+              type: string
+    Host:
+      type: object
+      nullable: true
+      required: [resource, principal]
+      properties:
+        resource:
+          type: object
+          required: [name, accounts]
+          properties:
+            name:
+              type: string
+              minLength: 1
+              description: Requested host, or named shared principal domain
+            labels:
+              type: object
+              nullable: true
+              additionalProperties:
+                type: string
+            accounts:
+              type: array
+              nullable: true
+              items:
+                type: string
+              description: Must be present; null means ungrounded and [] permits no accounts
+        principal:
+          type: object
+          required: [mode]
+          properties:
+            mode:
+              type: string
+              enum: [account-name, epithet-principal-v1]
+            domain:
+              type: string
+              description: Canonical domain, required for epithet-principal-v1

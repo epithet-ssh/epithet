@@ -14,16 +14,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -255,7 +256,12 @@ func countingHandler(hits *int32, h http.Handler) http.Handler {
 // writEvaluator compiles writ policy source and a static inventory into
 // the real writpolicy evaluator - the same evaluator `epithet policy`
 // runs, not a stub.
-func writEvaluator(t *testing.T, policySrc, inventoryYAML string) policyserver.PolicyEvaluator {
+type evaluatorFixture struct {
+	policyserver.PolicyEvaluator
+	inv *inventory.Static
+}
+
+func writEvaluator(t *testing.T, policySrc, inventoryYAML string) evaluatorFixture {
 	t.Helper()
 	pol, diags := writ.Load(policySrc)
 	require.NotNil(t, pol, "policy failed to load: %v", diags)
@@ -263,37 +269,32 @@ func writEvaluator(t *testing.T, policySrc, inventoryYAML string) policyserver.P
 	require.NoError(t, os.WriteFile(invPath, []byte(inventoryYAML), 0o600))
 	inv, err := inventory.NewStatic([]string{invPath})
 	require.NoError(t, err)
-	return writpolicy.NewForTesting(pol, inv)
+	e, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
+	require.NoError(t, err)
+	return evaluatorFixture{e, inv}
 }
 
-// realCAAndPolicy wires a real ca.CA, a real policyserver.NewHandler (real
-// OIDC validator against idp + a real evaluator), and a counting wrapper
+// realCAAndPolicy wires a real ca.CA, inventory authentication against idp, a real policy evaluator, and a counting wrapper
 // around the CA's HTTP handler. It returns the CA HTTP server's URL and the
 // hit counter, so callers can assert exactly how many times the CA was
 // actually asked to mint a certificate - not just that the broker's match
 // calls succeeded.
-func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, eval policyserver.PolicyEvaluator) (caURL string, hits *int32) {
+func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, eval evaluatorFixture) (caURL string, hits *int32) {
 	t.Helper()
 
 	caPub, caPriv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
-		Issuer:   idp.Issuer(),
-		ClientID: oidctest.ClientID,
-	})
-	require.NoError(t, err)
-
 	policyHandler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: caPub,
-		Validator:   validator,
-		Evaluator:   eval,
+		Evaluator:   eval.PolicyEvaluator,
 	})
 	require.NoError(t, err)
 	policySrv := httptest.NewServer(policyHandler)
 	t.Cleanup(policySrv.Close)
 
-	caInstance, err := ca.New(caPriv, policySrv.URL)
+	is := inventorytest.Serve(t, eval.inv, idp.Issuer(), caPub)
+	caInstance, err := ca.New(caPriv, policySrv.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 	require.NoError(t, err)
 
 	casrv := caserver.New(caInstance, testLogger(t), nil)

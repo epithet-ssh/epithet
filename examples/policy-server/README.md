@@ -1,6 +1,6 @@
 # Policy server example deployment
 
-This example shows how to deploy epithet with the built-in OIDC-based policy server for a small team.
+This example shows how to deploy epithet with the built-in inventory and policy services for a small team.
 
 ## Quick start
 
@@ -31,18 +31,20 @@ Update:
 Then validate the pair:
 
 ```bash
-./epithet policy --check --policy-file policy.writ --inventory inventory.yaml
+./epithet policy --check --policy-file policy.writ
+./epithet inventory --check --static inventory.yaml
 ```
 
 You also need a small config file (`policy.yaml`) for the server settings:
 
 ```yaml
 policy:
+  policy-file: ./policy.writ
+inventory:
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "your-client-id"
-  policy-file: ./policy.writ
-  inventory:
+  static:
     - ./inventory.yaml
   # Compatibility default. See "Destination-bound mode" below before changing.
   principal-mode: account-name
@@ -55,9 +57,15 @@ policy:
 ./epithet ca \
   --key ./ca_key \
   --policy http://localhost:9999 \
+  --inventory http://localhost:9998 \
+  --insecure \
   --listen :8080
 
-# Terminal 2: Start policy server
+# Terminal 2: Start inventory server
+./epithet inventory --config policy.yaml --ca-pubkey "$(cat ca_key.pub)" \
+  --listen 127.0.0.1:9998
+
+# Terminal 3: Start policy server
 ./epithet policy \
   --config policy.yaml \
   --ca-pubkey "$(cat ca_key.pub)" \
@@ -137,23 +145,24 @@ sudo chmod 600 /etc/epithet/ca_key
 sudo chmod 640 /etc/epithet/policy.yaml /etc/epithet/policy.writ /etc/epithet/inventory.yaml
 ```
 
-Two processes need supervising, and the CA depends on the policy server:
+Three processes need supervising; the CA depends on inventory and policy:
 
 ```bash
+epithet inventory --config /etc/epithet/policy.yaml
 epithet policy --config /etc/epithet/policy.yaml
-epithet ca --key /etc/epithet/ca_key --policy http://localhost:9999 --listen :8080
+epithet ca --key /etc/epithet/ca_key --policy http://localhost:9999 --inventory http://localhost:9998 --insecure --listen :8080
 ```
 
-Put `ca-pubkey` in the policy config file rather than passing it as a flag —
+Put `ca-pubkey` in both the policy and inventory config sections rather than passing it as a flag —
 most supervisors run `ExecStart`-style command lines without a shell, so a
 `$(cat ca_key.pub)` substitution would be passed through literally.
 
-For a single-process alternative that supervises both itself, see `epithet
+For one command that supervises all three processes, see `epithet
 server` in the [architecture guide](../../docs/architecture.md#epithet-server).
 On FreeBSD, the package installs disabled-by-default `epithet_server`,
-`epithet_ca`, and `epithet_policy` rc.d services. They share
+`epithet_ca`, `epithet_inventory`, and `epithet_policy` rc.d services. They share
 `/usr/local/etc/epithet/server.yaml`; enable `epithet_server` for combined mode,
-or enable both `epithet_policy` and `epithet_ca` for split mode.
+or enable `epithet_inventory`, `epithet_policy`, and `epithet_ca` for split mode.
 
 ## Configuring target hosts
 
@@ -183,7 +192,7 @@ hosts:
     domain: "epithet-host-id-v1:..."
 ```
 
-Set `policy.principal-mode: epithet-principal-v1` to make this the deployment
+Set `inventory.principal-mode: epithet-principal-v1` to make this the deployment
 default. Entries that inherit that default still need a `domain`. Static
 ephemeral patterns may share a declared human-readable domain:
 

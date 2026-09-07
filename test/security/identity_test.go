@@ -4,7 +4,6 @@ package security_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -19,12 +18,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -62,7 +62,6 @@ func TestEmailModesControlCertificateIssuance(t *testing.T) {
 }
 
 func testMappedIDIssuance(t *testing.T, userIDClaim string, mode oidc.IdentityMode) {
-	ctx := context.Background()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key},
@@ -87,11 +86,7 @@ func testMappedIDIssuance(t *testing.T, userIDClaim string, mode oidc.IdentityMo
 	}))
 	t.Cleanup(idp.Close)
 	issuer = idp.URL
-	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: issuer, ClientID: "review-client", UserIDClaim: userIDClaim, IdentityMode: mode,
-		TLSConfig: tlsconfigFor(t, idp),
-	})
-	require.NoError(t, err)
+
 	pub, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
@@ -119,14 +114,16 @@ hosts:
 	require.NoError(t, err)
 	pol, diags := writ.Load("allow id:\"" + inventoryID + "\" -> root@prod.example.com\nallow userName:\"inactive@example.com\" -> root@prod.example.com\n")
 	require.NotNil(t, pol, "%v", diags)
-	evaluator := writpolicy.NewForTesting(pol, inv)
+	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
+	require.NoError(t, err)
+	is := inventorytest.ServeWithConfig(t, inv, oidc.Config{Issuer: issuer, ClientID: "review-client", IdentityMode: mode, UserIDClaim: userIDClaim, TLSConfig: tlsconfigFor(t, idp)}, pub)
 	ph, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: pub, Validator: validator, Evaluator: evaluator,
+		CAPublicKey: pub, Evaluator: evaluator,
 	})
 	require.NoError(t, err)
 	ps := httptest.NewTLSServer(ph)
 	t.Cleanup(ps.Close)
-	authority, err := ca.New(priv, ps.URL, ca.WithTLSConfig(tlsconfigFor(t, ps)))
+	authority, err := ca.New(priv, ps.URL, ca.WithTLSConfig(tlsconfigFor(t, ps)), ca.WithInventory(is.URL, tlsconfigFor(t, is)))
 	require.NoError(t, err)
 	var issuanceLog bytes.Buffer
 	certLogger := caserver.NewSlogCertLogger(slog.New(slog.NewJSONHandler(&issuanceLog, nil)))

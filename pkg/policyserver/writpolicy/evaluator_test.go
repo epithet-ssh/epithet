@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
-	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
 	"github.com/stretchr/testify/require"
 )
@@ -21,12 +23,12 @@ const evaluatorDomain = principal.Domain("production-database")
 
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
-	users map[string]*eval.User
+	users map[string]*directory.User
 	hosts map[string]*inventory.ResolvedHost
 	err   error
 }
 
-func (f *fakeInv) LookupUser(_ context.Context, identity string) (*eval.User, error) {
+func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.User, error) {
 	return f.users[identity], f.err
 }
 
@@ -36,11 +38,11 @@ func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.Resolve
 
 func testInv() *fakeInv {
 	return &fakeInv{
-		users: map[string]*eval.User{
+		users: map[string]*directory.User{
 			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []string{"SRE"}, UserType: "employee"},
 		},
 		hosts: map[string]*inventory.ResolvedHost{
-			"prod-db-1": {Policy: eval.Host{Name: "prod-db-1", Labels: map[string]string{"env": "prod"}}},
+			"prod-db-1": {Policy: inventory.Host{Name: "prod-db-1", Labels: map[string]string{"env": "prod"}}},
 		},
 	}
 }
@@ -103,9 +105,10 @@ func TestIssueDerivesHashedPrincipal(t *testing.T) {
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	inv.hosts["prod-db-1"].Domain = evaluatorDomain
+	inv.hosts["prod-db-1"].Policy.Name = string(evaluatorDomain)
 	e := NewForTesting(pol, inv)
 
-	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{"epithet-principal-v1-ytLZdjJ27kR56wJQB7SL4EZyr7leVrxIkDa1wZg_Uog"},
@@ -118,7 +121,7 @@ func TestIssueHashedPrincipalWithoutDomainFailsClosed(t *testing.T) {
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	e := NewForTesting(pol, inv)
 
-	_, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.ErrorContains(t, err, "invalid principal domain")
 	var perr *wire.PolicyError
 	require.False(t, errors.As(err, &perr), "issuance configuration errors are 500s, not policy denials")
@@ -130,27 +133,27 @@ func TestIssueUnknownPrincipalModeFailsClosed(t *testing.T) {
 	inv.hosts["prod-db-1"].PrincipalMode = "mystery"
 	e := NewForTesting(pol, inv)
 
-	_, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
 }
 
 func TestRuleTTLOverridesDefault(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}, ttl 2m\n")
 	e := NewForTesting(pol, testInv())
-	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t, 2*time.Minute, resp.CertParams.Expiration)
 }
 
 func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
-	e, warnings, err := New(pol, testInv(), nil, Options{
+	e, warnings, err := newWithInventory(pol, testInv(), nil, Options{
 		DefaultTTL: 10 * time.Minute,
 		Extensions: map[string]string{"permit-pty": ""},
 	})
 	require.NoError(t, err)
 	require.Empty(t, warnings)
-	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t, 10*time.Minute, resp.CertParams.Expiration)
 	require.Equal(t, map[string]string{"permit-pty": ""}, resp.CertParams.Extensions)
@@ -159,7 +162,7 @@ func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
 func TestUnknownUserIsForbidden(t *testing.T) {
 	pol := mustPolicy(t, "allow * -> *@*\n")
 	e := NewForTesting(pol, testInv())
-	_, err := e.Evaluate(context.Background(), "nobody@example.com", time.Now(), conn("root", "prod-db-1"))
+	_, err := e.Evaluate(context.Background(), "nobody@example.com", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	var perr *wire.PolicyError
 	require.ErrorAs(t, err, &perr)
 	require.Equal(t, http.StatusForbidden, perr.StatusCode)
@@ -168,7 +171,7 @@ func TestUnknownUserIsForbidden(t *testing.T) {
 func TestUnknownHostIsForbidden(t *testing.T) {
 	pol := mustPolicy(t, "allow * -> *@*\n")
 	e := NewForTesting(pol, testInv())
-	_, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "mystery-host"))
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "mystery-host"))
 	var perr *wire.PolicyError
 	require.ErrorAs(t, err, &perr)
 	require.Equal(t, http.StatusForbidden, perr.StatusCode)
@@ -178,14 +181,14 @@ func TestUnknownHostIsForbidden(t *testing.T) {
 func TestHostNameLowercasedAtRequest(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@prod-db-1\n")
 	e := NewForTesting(pol, testInv())
-	_, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "PROD-DB-1"))
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "PROD-DB-1"))
 	require.NoError(t, err)
 }
 
 func TestDenyRuleNamesItselfInMessage(t *testing.T) {
 	pol := mustPolicy(t, "allow * -> *@*\ndeny userType:employee -> root@{env=prod}, label \"no-emp-root\"\n")
 	e := NewForTesting(pol, testInv())
-	_, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	var perr *wire.PolicyError
 	require.ErrorAs(t, err, &perr)
 	require.Equal(t, http.StatusForbidden, perr.StatusCode)
@@ -197,7 +200,7 @@ func TestInventoryErrorFailsClosed(t *testing.T) {
 	inv := testInv()
 	inv.err = errors.New("database down")
 	e := NewForTesting(pol, inv)
-	_, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.Error(t, err)
 	var perr *wire.PolicyError
 	require.False(t, errors.As(err, &perr), "an inventory failure is a 500, not a policy denial")
@@ -207,7 +210,7 @@ func TestInventoryErrorFailsClosed(t *testing.T) {
 
 func TestUnknownRequirementFailsAtConstruction(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@*, require oncall, label \"sre-root\"\n")
-	_, _, err := New(pol, testInv(), &Registry{}, Options{})
+	_, _, err := newWithInventory(pol, testInv(), &Registry{}, Options{})
 	require.ErrorContains(t, err, "unknown requirement")
 	require.ErrorContains(t, err, "oncall")
 	require.ErrorContains(t, err, "sre-root")
@@ -215,7 +218,7 @@ func TestUnknownRequirementFailsAtConstruction(t *testing.T) {
 
 func TestUnknownFlagAndNotifyFailAtConstruction(t *testing.T) {
 	pol := mustPolicy(t, "deny * -> *@*, when freeze, notify \"alerts\"\n")
-	_, _, err := New(pol, testInv(), &Registry{}, Options{})
+	_, _, err := newWithInventory(pol, testInv(), &Registry{}, Options{})
 	require.ErrorContains(t, err, "unknown flag")
 	require.ErrorContains(t, err, "freeze")
 	require.ErrorContains(t, err, "unknown notify target")
@@ -224,13 +227,13 @@ func TestUnknownFlagAndNotifyFailAtConstruction(t *testing.T) {
 
 func TestUnlabeledRuleNamedByShortID(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@*, require oncall\n")
-	_, _, err := New(pol, testInv(), &Registry{}, Options{})
+	_, _, err := newWithInventory(pol, testInv(), &Registry{}, Options{})
 	require.ErrorContains(t, err, il.ShortID(pol.Allows[0].ContentID()))
 }
 
 func TestPastUntilWarnsButLoads(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@*, until \"2020-01-01T00:00Z\", label \"expired\"\n")
-	e, warnings, err := New(pol, testInv(), nil, Options{})
+	e, warnings, err := newWithInventory(pol, testInv(), nil, Options{})
 	require.NoError(t, err, "a past until is a warning, not a startup failure")
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "expired")
@@ -258,25 +261,25 @@ func (s *staticFact) Check(_ context.Context, req FactRequest) (FactResult, erro
 
 func TestRegisteredFlagGatesDeny(t *testing.T) {
 	pol := mustPolicy(t, "allow * -> *@*\ndeny * -> *@{env=prod}, when freeze\n")
-	frozen, _, err := New(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(true)}}, Options{})
+	frozen, _, err := newWithInventory(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(true)}}, Options{})
 	require.NoError(t, err)
-	_, err = frozen.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err = frozen.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	var perr *wire.PolicyError
 	require.ErrorAs(t, err, &perr)
 	require.Equal(t, http.StatusForbidden, perr.StatusCode)
 
-	thawed, _, err := New(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(false)}}, Options{})
+	thawed, _, err := newWithInventory(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(false)}}, Options{})
 	require.NoError(t, err)
-	_, err = thawed.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err = thawed.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 }
 
 func TestPendingRequirementReturns202(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@*, require approval\n")
 	fact := &staticFact{status: Pending}
-	e, _, err := New(pol, testInv(), &Registry{Requirements: map[string]RequirementHandler{"approval": fact}}, Options{})
+	e, _, err := newWithInventory(pol, testInv(), &Registry{Requirements: map[string]RequirementHandler{"approval": fact}}, Options{})
 	require.NoError(t, err)
-	_, err = e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	_, err = e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	var perr *wire.PolicyError
 	require.ErrorAs(t, err, &perr)
 	require.Equal(t, http.StatusAccepted, perr.StatusCode)
@@ -287,9 +290,9 @@ func TestPendingRequirementReturns202(t *testing.T) {
 
 func TestSatisfiedRequirementIssues(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@*, require approval\n")
-	e, _, err := New(pol, testInv(), &Registry{Requirements: map[string]RequirementHandler{"approval": &staticFact{status: Satisfied}}}, Options{})
+	e, _, err := newWithInventory(pol, testInv(), &Registry{Requirements: map[string]RequirementHandler{"approval": &staticFact{status: Satisfied}}}, Options{})
 	require.NoError(t, err)
-	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now(), conn("root", "prod-db-1"))
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, resp.CertParams.Names)
 }
@@ -306,9 +309,9 @@ func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
 		require.Equal(t, name, resp.CertParams.Identity)
 	}
 	// Reusing the old name gives the replacement a different inventory ID.
-	inv.users["replacement-id"] = &eval.User{UserName: "alice@example.com", ID: "replacement-id", Active: true}
+	inv.users["replacement-id"] = &directory.User{UserName: "alice@example.com", ID: "replacement-id", Active: true}
 	for _, other := range []string{"replacement-id", "alice@example.com", "unmapped-oidc-subject"} {
-		_, err := e.Evaluate(ctx, other, time.Now(), conn("root", "prod-db-1"))
+		_, err := e.Evaluate(ctx, other, time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 		var denied *wire.PolicyError
 		require.ErrorAs(t, err, &denied)
 		require.Equal(t, http.StatusForbidden, denied.StatusCode)
@@ -316,7 +319,7 @@ func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
 	// Deleting the original record never transfers its ID grant.
 	delete(inv.users, id)
 	for _, candidate := range []string{id, "replacement-id"} {
-		_, err := e.Evaluate(ctx, candidate, time.Now(), conn("root", "prod-db-1"))
+		_, err := e.Evaluate(ctx, candidate, time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 		var denied *wire.PolicyError
 		require.ErrorAs(t, err, &denied)
 		require.Equal(t, http.StatusForbidden, denied.StatusCode)
@@ -326,10 +329,36 @@ func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
 func TestNewRejectsLegacyIL(t *testing.T) {
 	p := mustPolicy(t, "allow * -> root@*\ndeny userName:alice -> root@*\n")
 	p.Schema = 1
-	_, _, err := New(p, testInv(), nil, Options{})
+	_, _, err := newWithInventory(p, testInv(), nil, Options{})
 	require.ErrorContains(t, err, "recompile")
 	p.Schema = il.Schema
 	p.Denies[0].Users.Or[0].Kind = il.MatcherKind("uid")
-	_, _, err = New(p, testInv(), nil, Options{})
+	_, _, err = newWithInventory(p, testInv(), nil, Options{})
 	require.ErrorContains(t, err, "user selectors")
+}
+
+// Resolve test fixtures before invoking the production fact-only evaluator.
+type fixtureEvaluator struct {
+	*Evaluator
+	inv *fakeInv
+}
+
+func newWithInventory(pol *il.Policy, inv *fakeInv, reg *Registry, opts Options) (*fixtureEvaluator, []string, error) {
+	e, w, err := New(pol, reg, opts)
+	return &fixtureEvaluator{e, inv}, w, err
+}
+func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
+	e, _, err := newWithInventory(pol, inv, nil, Options{})
+	if err != nil {
+		panic(err)
+	}
+	return e
+}
+func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
+	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv, DirectoryRevision: "d1", InventoryRevision: "h1"}
+	facts, err := resolver.Resolve(ctx, inventoryapi.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
+	if err != nil {
+		return nil, err
+	}
+	return e.Evaluator.Evaluate(ctx, id, expiry, conn, facts)
 }

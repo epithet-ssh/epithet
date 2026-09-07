@@ -2,7 +2,6 @@ package policy_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/inventorytest"
+	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -26,15 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newIntegrationHandler builds the real policy HTTP handler the same way the
-// `epithet policy` command does: write a .writ policy file and a static
-// inventory file, compile them with writ.Load + inventory.NewStatic, build
-// the real writpolicy evaluator + OIDC validator (which performs real HTTP
-// discovery against idp, exercising the actual token-validation path end to
-// end), and wire policyserver.NewHandler. Returns the handler, the IdP used
-// to mint tokens, and a sign func that service-signs requests exactly like
-// the real CA does (Config.CAPublicKey requires every request be signed).
-func newIntegrationHandler(t *testing.T) (http.Handler, *oidctest.IdP, func(*http.Request, []byte)) {
+// newIntegrationHandler wires real inventory authentication, policy evaluation, and CA coordination.
+func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	t.Helper()
 
 	idp := oidctest.New(t)
@@ -61,50 +53,36 @@ func newIntegrationHandler(t *testing.T) (http.Handler, *oidctest.IdP, func(*htt
 	// The default TTL stays at the deployment default (5m), deliberately
 	// distinct from the 2m token minted below so the NotAfter assertion
 	// discriminates (see TestPolicyIntegration_ValidToken_ReturnsCertParams).
-	eval, warnings, err := writpolicy.New(pol, inv, &writpolicy.Registry{}, writpolicy.Options{})
+	eval, warnings, err := writpolicy.New(pol, &writpolicy.Registry{}, writpolicy.Options{})
 	require.NoError(t, err)
 	require.Empty(t, warnings)
 
-	// oidc.NewValidator performs real OIDC discovery against idp - the
-	// same construction path `epithet policy` uses, not a stub validator.
-	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
-		Issuer:    idp.Issuer(),
-		ClientID:  oidctest.ClientID,
-		TLSConfig: tlsconfig.Config{},
-	})
-	require.NoError(t, err)
-
 	handler, err := policyserver.NewHandler(policyserver.Config{
 		CAPublicKey: caPub,
-		Validator:   validator,
 		Evaluator:   eval,
-		Discovery: &wire.Discovery{Auth: &wire.AuthConfig{
-			Issuer:   idp.Issuer(),
-			ClientID: oidctest.ClientID,
-		}},
 	})
 	require.NoError(t, err)
 
-	signer, err := serviceauth.NewSigner(caPriv)
+	ps := httptest.NewServer(handler)
+	t.Cleanup(ps.Close)
+	is := inventorytest.Serve(t, inv, idp.Issuer(), caPub)
+	authority, err := ca.New(caPriv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 	require.NoError(t, err)
-	sign := func(req *http.Request, body []byte) {
-		require.NoError(t, signer.Authorize(req, body))
-	}
-
-	return handler, idp, sign
+	return authority, idp
 }
 
-// doPolicyRequest POSTs a service-signed cert evaluation request and returns
-// the recorded response.
-func doPolicyRequest(t *testing.T, handler http.Handler, sign func(*http.Request, []byte), token string, conn policy.Connection) *httptest.ResponseRecorder {
+func doPolicyRequest(t *testing.T, authority *ca.CA, token string, conn policy.Connection) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(wire.PolicyRequest{Token: token, Connection: conn})
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	sign(req, body)
+	response, err := authority.RequestPolicy(t.Context(), token, conn)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	if err != nil {
+		var pe *wire.PolicyError
+		require.ErrorAs(t, err, &pe)
+		w.WriteHeader(pe.StatusCode)
+		w.WriteString(pe.Message)
+	} else {
+		require.NoError(t, json.NewEncoder(w).Encode(response))
+	}
 	return w
 }
 
@@ -122,12 +100,12 @@ func doPolicyRequest(t *testing.T, handler http.Handler, sign func(*http.Request
 // assertion would pass either way. A mismatched pair makes the WithinDuration
 // check below actually discriminate between the two.
 func TestPolicyIntegration_ValidToken_ReturnsCertParams(t *testing.T) {
-	handler, idp, sign := newIntegrationHandler(t)
+	handler, idp := newIntegrationHandler(t)
 
 	exp := time.Now().Add(2 * time.Minute).Truncate(time.Second)
 	token := idp.MintIDToken("alice@example.com", exp)
 
-	w := doPolicyRequest(t, handler, sign, token, policy.Connection{
+	w := doPolicyRequest(t, handler, token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 		Port:       22,
@@ -145,11 +123,11 @@ func TestPolicyIntegration_ValidToken_ReturnsCertParams(t *testing.T) {
 // enforcement: the token's exp claim is in the past, so the real OIDC
 // verifier must reject it before the evaluator ever runs.
 func TestPolicyIntegration_ExpiredToken_Returns401(t *testing.T) {
-	handler, idp, sign := newIntegrationHandler(t)
+	handler, idp := newIntegrationHandler(t)
 
 	token := idp.MintIDToken("alice@example.com", time.Now().Add(-time.Minute))
 
-	w := doPolicyRequest(t, handler, sign, token, policy.Connection{
+	w := doPolicyRequest(t, handler, token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	})
@@ -160,11 +138,11 @@ func TestPolicyIntegration_ExpiredToken_Returns401(t *testing.T) {
 // enforces the configured client_id as audience: a token signed by the same
 // IdP but for a different client must be rejected.
 func TestPolicyIntegration_WrongAudience_Returns401(t *testing.T) {
-	handler, idp, sign := newIntegrationHandler(t)
+	handler, idp := newIntegrationHandler(t)
 
 	token := idp.MintIDTokenWithAudience("alice@example.com", "someone-elses-client", time.Now().Add(time.Minute))
 
-	w := doPolicyRequest(t, handler, sign, token, policy.Connection{
+	w := doPolicyRequest(t, handler, token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	})
@@ -175,11 +153,11 @@ func TestPolicyIntegration_WrongAudience_Returns401(t *testing.T) {
 // token for an identity absent from the policy's users list is authenticated
 // fine but denied by authorization - a 403, not a 401.
 func TestPolicyIntegration_UnknownUser_Returns403(t *testing.T) {
-	handler, idp, sign := newIntegrationHandler(t)
+	handler, idp := newIntegrationHandler(t)
 
 	token := idp.MintIDToken("mallory@example.com", time.Now().Add(time.Minute))
 
-	w := doPolicyRequest(t, handler, sign, token, policy.Connection{
+	w := doPolicyRequest(t, handler, token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	})
@@ -208,14 +186,11 @@ func TestPolicyServerCommand(t *testing.T) {
 
 	// Verify help output contains expected flags
 	expectedStrings := []string{
-		"--oidc-issuer",
-		"--oidc-client-id",
 		"--ca-pubkey",
 		"--listen",
 		"--policy-file",
-		"--inventory",
 		"--check",
-		"OIDC-based authorization",
+		"normalized facts",
 	}
 
 	for _, expected := range expectedStrings {

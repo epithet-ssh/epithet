@@ -14,9 +14,10 @@ import (
 )
 
 type CACLI struct {
-	Policy string `help:"URL for policy service" short:"p" env:"POLICY_URL" required:"true"`
-	Key    string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
-	Listen string `help:"Address to listen on" short:"l" env:"PORT" default:"0.0.0.0:8080"`
+	Inventory string `help:"URL for inventory service" name:"inventory" required:"true"`
+	Policy    string `help:"URL for policy service" short:"p" env:"POLICY_URL" required:"true"`
+	Key       string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
+	Listen    string `help:"Address to listen on" short:"l" env:"PORT" default:"0.0.0.0:8080"`
 }
 
 func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
@@ -36,7 +37,7 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	logger.Info("policy_url", "url", c.Policy)
 
 	// Create CA.
-	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg), ca.WithLogger(logger))
+	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg), ca.WithLogger(logger), ca.WithInventory(c.Inventory, tlsCfg))
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}

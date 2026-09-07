@@ -42,8 +42,9 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 **Components:**
 
 - **Agent** (`epithet agent`): Daemon managing OIDC authentication state and certificate lifecycle. Creates per-connection SSH agents.
-- **CA Server** (`epithet ca`): Signs SSH certificates after passing the caller's token through to a policy server for validation.
-- **Policy Server** (`epithet policy`): Validates tokens and makes authorization decisions - who can access what hosts as which users.
+- **CA Server** (`epithet ca`): Coordinates inventory authentication and policy evaluation, and signs SSH certificates after policy authorization.
+- **Inventory Server** (`epithet inventory`): Validates OIDC tokens, maps directory IDs, and supplies user and host facts from static files. See the [inventory guide](docs/inventory.md).
+- **Policy Server** (`epithet policy`): Evaluates normalized facts and makes authorization decisions - who can access what hosts as which users.
 
 ## Documentation
 
