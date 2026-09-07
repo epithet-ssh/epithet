@@ -1,11 +1,13 @@
 # Example static inventory: SCIM-shaped users, labeled hosts.
 #
-# The verified claim selected by policy.oidc.user-id-claim is compared exactly
-# against id, within the configured provider/tenant. Defaults: sub for Google,
-# Okta, and generic OIDC; oid for Microsoft Entra. Copy id from
-# `epithet agent identity` after authenticating the running agent.
+# policy.oidc.identity-mode selects how a verified token resolves to id.
+# stable-id (default): sub for Google/Okta/generic OIDC; oid for Entra.
+# verified-email: exact email, requiring email_verified: true in the token.
+# `epithet agent identity` reports subject, optional oid/email/email_verified
+# for the current user. Copy the field selected by your policy configuration.
+# A stable-id user-id-claim override permits email without verification checks.
 # userName remains the readable Writ userName: and audit identity; id: matches
-# the stable ID. Unknown/inactive users are denied. Profile fields follow SCIM.
+# the selected inventory ID. Unknown/inactive users are denied.
 
 users:
   - userName: alice@example.com

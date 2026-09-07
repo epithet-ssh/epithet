@@ -24,14 +24,15 @@ import (
 
 // PolicyOIDCConfig holds OIDC configuration for the policy server.
 type PolicyOIDCConfig struct {
-	UserIDClaim  string `help:"OIDC claim mapped to inventory id (default: oid for Microsoft Entra, sub otherwise)" name:"user-id-claim"`
-	Issuer       string `help:"OIDC issuer URL" name:"issuer"`
-	ClientID     string `help:"OIDC client ID" name:"client-id"`
-	ClientSecret string `help:"OIDC client secret (for confidential clients)" name:"client-secret"`
+	IdentityMode oidc.IdentityMode `help:"Inventory identity mode: stable-id (default) or verified-email" name:"identity-mode" env:"EPITHET_POLICY_OIDC_IDENTITY_MODE"`
+	UserIDClaim  string            `help:"JWT claim mapped to inventory id in stable-id mode, including email without verification checks (default: oid for Microsoft Entra, sub otherwise)" name:"user-id-claim" env:"EPITHET_POLICY_OIDC_USER_ID_CLAIM"`
+	Issuer       string            `help:"OIDC issuer URL" name:"issuer"`
+	ClientID     string            `help:"OIDC client ID" name:"client-id"`
+	ClientSecret string            `help:"OIDC client secret (for confidential clients)" name:"client-secret"`
 }
 
 // PolicyServerCLI defines the CLI flags for the policy server.
-// Configuration comes from CLI flags, env vars, or config files
+// Configuration comes from CLI flags, config files, or tagged env vars
 // (resolved by Kong in that precedence order); config-file keys under
 // `policy:` use the flag names verbatim (kebab-case).
 type PolicyServerCLI struct {
@@ -55,6 +56,9 @@ type PolicyServerCLI struct {
 }
 
 func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	if _, _, err := oidc.ResolveIdentity(c.OIDC.Issuer, c.OIDC.IdentityMode, c.OIDC.UserIDClaim); err != nil {
+		return fmt.Errorf("invalid OIDC identity configuration: %w", err)
+	}
 	eval, err := c.buildEvaluator(logger)
 	if err != nil {
 		return err
@@ -71,6 +75,7 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 		OIDC: policyserver.OIDCConfig{
 			Issuer:       c.OIDC.Issuer,
 			UserIDClaim:  c.OIDC.UserIDClaim,
+			IdentityMode: c.OIDC.IdentityMode,
 			ClientID:     c.OIDC.ClientID,
 			ClientSecret: c.OIDC.ClientSecret,
 		},
@@ -91,10 +96,11 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 	}
 
 	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
-		Issuer:      serverCfg.OIDC.Issuer,
-		UserIDClaim: serverCfg.OIDC.UserIDClaim,
-		ClientID:    serverCfg.OIDC.ClientID,
-		TLSConfig:   tlsCfg,
+		Issuer:       serverCfg.OIDC.Issuer,
+		UserIDClaim:  serverCfg.OIDC.UserIDClaim,
+		IdentityMode: serverCfg.OIDC.IdentityMode,
+		ClientID:     serverCfg.OIDC.ClientID,
+		TLSConfig:    tlsCfg,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create OIDC validator: %w", err)

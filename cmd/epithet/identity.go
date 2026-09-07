@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
@@ -84,16 +84,16 @@ func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress
 // OIDC discovery happens on demand; starting an agent does not require login.
 func makeAgentIdentityVerifier(auth wire.AuthConfig, tlsCfg tlsconfig.Config) broker.IdentityVerifier {
 	var mu sync.Mutex
-	var cached *oidc.Validator
-	getValidator := func(ctx context.Context) (*oidc.Validator, error) {
+	var cached *oidc.Verifier
+	getValidator := func(ctx context.Context) (*oidc.Verifier, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if cached != nil {
 			return cached, nil
 		}
-		v, err := oidc.NewValidator(ctx, oidc.Config{
-			Issuer: auth.Issuer, ClientID: auth.ClientID,
-			UserIDClaim: auth.UserIDClaim, TLSConfig: tlsCfg,
+		v, err := oidc.NewVerifier(ctx, oidc.Config{
+			IssuerURL: auth.Issuer, ClientID: auth.ClientID,
+			TLSConfig: tlsCfg,
 		})
 		if err == nil {
 			cached = v // Reuse the HTTP connection pool and signing-key cache.
@@ -105,10 +105,20 @@ func makeAgentIdentityVerifier(auth wire.AuthConfig, tlsCfg tlsconfig.Config) br
 		if err != nil {
 			return nil, err
 		}
-		claims, err := validator.Validate(ctx, token)
+		claims, err := validator.Verify(ctx, token)
 		if err != nil {
 			return nil, err
 		}
-		return &broker.Identity{ID: claims.UserID, Issuer: claims.Issuer, Subject: claims.Subject}, nil
+		var raw map[string]any
+		if err := claims.Claims(&raw); err != nil {
+			return nil, fmt.Errorf("decoding OIDC claims: %w", err)
+		}
+		identity := &broker.Identity{Issuer: auth.Issuer, Subject: claims.Subject}
+		identity.OID, _ = raw["oid"].(string)
+		identity.Email, _ = raw["email"].(string)
+		if verified, ok := raw["email_verified"].(bool); ok {
+			identity.EmailVerified = &verified
+		}
+		return identity, nil
 	}
 }

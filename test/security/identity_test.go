@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,11 +52,16 @@ func tlsconfigFor(t *testing.T, server *httptest.Server) tlsconfig.Config {
 
 func TestMappedIDControlsCertificateIssuance(t *testing.T) {
 	for _, claim := range []string{"sub", "oid"} {
-		t.Run(claim, func(t *testing.T) { testMappedIDIssuance(t, claim) })
+		t.Run(claim, func(t *testing.T) { testMappedIDIssuance(t, claim, oidc.StableID) })
 	}
 }
 
-func testMappedIDIssuance(t *testing.T, userIDClaim string) {
+func TestEmailModesControlCertificateIssuance(t *testing.T) {
+	t.Run("verified-email", func(t *testing.T) { testMappedIDIssuance(t, "", oidc.VerifiedEmail) })
+	t.Run("email-override", func(t *testing.T) { testMappedIDIssuance(t, "email", oidc.StableID) })
+}
+
+func testMappedIDIssuance(t *testing.T, userIDClaim string, mode oidc.IdentityMode) {
 	ctx := context.Background()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -82,26 +88,36 @@ func testMappedIDIssuance(t *testing.T, userIDClaim string) {
 	t.Cleanup(idp.Close)
 	issuer = idp.URL
 	validator, err := oidc.NewValidator(ctx, oidc.Config{
-		Issuer: issuer, ClientID: "review-client", UserIDClaim: userIDClaim,
+		Issuer: issuer, ClientID: "review-client", UserIDClaim: userIDClaim, IdentityMode: mode,
 		TLSConfig: tlsconfigFor(t, idp),
 	})
 	require.NoError(t, err)
 	pub, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
-	require.NoError(t, os.WriteFile(invPath, []byte(`domains: [prod.example.com]
+	inventoryYAML := `domains: [prod.example.com]
 users:
   - userName: victim@example.com
     id: victim-subject
+  - userName: inactive@example.com
+    id: inactive@example.com
+    active: false
 hosts:
   - name: prod.example.com
     domain: prod.example.com
     principal-mode: epithet-principal-v1
     accounts: [root]
-`), 0600))
+`
+	emailMode := mode == oidc.VerifiedEmail || userIDClaim == "email"
+	inventoryID := "victim-subject"
+	if emailMode {
+		inventoryID = "victim@example.com"
+	}
+	inventoryYAML = strings.ReplaceAll(inventoryYAML, "id: victim-subject", "id: "+inventoryID)
+	require.NoError(t, os.WriteFile(invPath, []byte(inventoryYAML), 0600))
 	inv, err := inventory.NewStatic([]string{invPath})
 	require.NoError(t, err)
-	pol, diags := writ.Load("allow id:\"victim-subject\" -> root@prod.example.com\n")
+	pol, diags := writ.Load("allow id:\"" + inventoryID + "\" -> root@prod.example.com\nallow userName:\"inactive@example.com\" -> root@prod.example.com\n")
 	require.NotNil(t, pol, "%v", diags)
 	evaluator := writpolicy.NewForTesting(pol, inv)
 	ph, err := policyserver.NewHandler(policyserver.Config{
@@ -135,13 +151,25 @@ hosts:
 		{"renamed-email", "victim-subject", "new-name@example.com", true, http.StatusOK},
 		{"bound-subject-unverified-email", "victim-subject", "victim@example.com", false, http.StatusOK},
 		{"bound-subject-no-email", "victim-subject", "", nil, http.StatusOK},
+		{"email-case-differs", "attacker-subject", "Victim@example.com", true, http.StatusForbidden},
+		{"inactive", "inactive@example.com", "inactive@example.com", true, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if emailMode {
+				switch {
+				case tc.subject == "" || tc.email == "" || (mode == oidc.VerifiedEmail && tc.verified != true):
+					tc.status = http.StatusUnauthorized
+				case tc.email == inventoryID:
+					tc.status = http.StatusOK
+				default:
+					tc.status = http.StatusForbidden
+				}
+			}
 			claims := map[string]any{
 				"iss": issuer, "aud": "review-client", "sub": tc.subject,
 				"email": tc.email, "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
 			}
-			if userIDClaim != "sub" {
+			if !emailMode && userIDClaim != "sub" {
 				claims[userIDClaim] = tc.subject
 				if tc.subject != "" {
 					claims["sub"] = "victim-subject" // Must not select this record when oid differs.

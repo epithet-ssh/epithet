@@ -288,7 +288,7 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 		if actual != token {
 			return nil, fmt.Errorf("not the agent's token")
 		}
-		return &Identity{ID: "directory-id", Issuer: idp.Issuer(), Subject: "login-subject"}, nil
+		return &Identity{OID: "directory-id", Issuer: idp.Issuer(), Subject: "login-subject"}, nil
 	}))
 	for i := 0; i < 2; i++ {
 		conn := dialBroker(t, b)
@@ -309,7 +309,7 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 		}
 		require.NotNil(t, terminal)
 		require.Empty(t, terminal.Error)
-		require.Equal(t, "directory-id", terminal.Identity.ID)
+		require.Equal(t, "directory-id", terminal.Identity.OID)
 		if i == 0 {
 			require.Contains(t, progress, "authenticate agent")
 		} else {

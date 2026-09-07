@@ -82,20 +82,26 @@ which drives an authorization-code flow with PKCE:
 3. Exchanges the code for tokens and returns the ID token (a JWT).
 
 Scopes are not configurable: the client always requests `openid profile email`.
-The policy server maps the verified claim selected by `policy.oidc.user-id-claim`
-to inventory `id`: Google, Okta, and generic providers default to `sub`;
-tenant-specific Microsoft Entra issuers default to `oid`. No alternate claim is
-tried if the selected value is missing or invalid. Inventory supplies groups
-and policy-visible profile attributes. See [inventory configuration](policy-server.md#users).
+The policy server resolves inventory `id` using `policy.oidc.identity-mode`.
+The default, `stable-id`, uses `sub` for Google, Okta, and generic providers,
+and `oid` for tenant-specific Microsoft Entra issuers. `user-id-claim` can
+select another claim, including `email` without checking verification.
+`verified-email` instead requires a nonempty `email` and boolean
+`email_verified: true`; claim overrides are not accepted in that mode.
+Neither mode falls back when its selected claim is missing or invalid.
+Inventory supplies groups and policy-visible profile attributes.
+See [inventory configuration](policy-server.md#users).
 
 `epithet agent identity` authenticates the running agent through its shared
-login/refresh cache, then verifies the token and prints its inventory `id`,
-issuer, and OIDC subject as JSON. Browser-login progress goes to stderr. It
-works before an inventory record exists and does not request a certificate.
-Use `agent --name work identity` for a named profile or `--broker` to select
-an explicit socket. Start the agent first, and restart it after claim-mapping
-changes so it reloads the discovery configuration. The standalone `epithet identity`
-command has been removed.
+login/refresh cache, then verifies the token and prints issuer and subject,
+plus optional `oid`, `email`, and `email_verified` claims as JSON. It does
+not map an inventory ID or decide policy acceptance. Missing or unverified
+email does not prevent this diagnostic command from reporting identity.
+Browser-login progress goes to stderr. It works before an inventory record
+exists and does not request a certificate. Use `agent --name work identity`
+for a named profile or `--broker` to select an explicit socket. Start the
+agent first. Inventory mapping changes require a policy-server restart,
+not an agent restart. The standalone `epithet identity` command has been removed.
 
 On later calls, `prev` carries the previous `oauth2.Token` (including its
 refresh token). `Authenticate` reuses a still-valid access token or uses the

@@ -1,6 +1,9 @@
 package policyserver_test
 
 import (
+	"encoding/json"
+	"github.com/epithet-ssh/epithet/pkg/policyserver/oidc"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
@@ -97,16 +100,28 @@ func TestServerConfig_BootstrapAuth(t *testing.T) {
 	}
 }
 
-func TestBootstrapAdvertisesEffectiveUserIDClaim(t *testing.T) {
-	for _, tc := range []struct{ issuer, override, want string }{
-		{"https://accounts.google.com", "", "sub"},
-		{"https://login.microsoftonline.com/tenant/v2.0", "", "oid"},
-		{"https://login.microsoftonline.com/tenant/v2.0", "sub", "sub"},
-		{"https://idp.example", "directory_id", "directory_id"},
+func TestBootstrapOmitsInventoryMapping(t *testing.T) {
+	cfg := policyserver.ServerConfig{OIDC: policyserver.OIDCConfig{Issuer: "https://issuer", IdentityMode: oidc.StableID, UserIDClaim: "email"}}
+	encoded, err := json.Marshal(cfg.BootstrapAuth())
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "user_id_claim")
+	require.NotContains(t, string(encoded), "identity_mode")
+}
+
+func TestServerConfigIdentitySettings(t *testing.T) {
+	for _, tc := range []struct {
+		mode  oidc.IdentityMode
+		claim string
+		valid bool
+	}{
+		{"", "email", true}, {oidc.StableID, "email", true}, {oidc.VerifiedEmail, "", true},
+		{oidc.VerifiedEmail, "email", false}, {"typo", "", false},
 	} {
-		cfg := policyserver.ServerConfig{OIDC: policyserver.OIDCConfig{Issuer: tc.issuer, UserIDClaim: tc.override}}
-		if got := cfg.BootstrapAuth().UserIDClaim; got != tc.want {
-			t.Errorf("issuer %s override %s: got %s want %s", tc.issuer, tc.override, got, tc.want)
+		cfg := policyserver.ServerConfig{CAPublicKey: "key", OIDC: policyserver.OIDCConfig{Issuer: "https://issuer", ClientID: "client", IdentityMode: tc.mode, UserIDClaim: tc.claim}}
+		if tc.valid {
+			require.NoError(t, cfg.Validate())
+		} else {
+			require.Error(t, cfg.Validate())
 		}
 	}
 }

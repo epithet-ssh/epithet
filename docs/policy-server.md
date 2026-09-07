@@ -195,7 +195,7 @@ The inventory answers two questions at evaluation time: who is this identity, an
 
 ### Users
 
-User profile fields follow the SCIM (RFC 7643) shape. The required `id` is the stable provider identifier used both for authentication lookup and Writ `id:` selectors:
+User profile fields follow the SCIM (RFC 7643) shape. The required `id` is the provider-scoped identifier selected by the identity mode, used both for authentication lookup and Writ `id:` selectors:
 
 ```yaml
 users:
@@ -208,15 +208,24 @@ users:
     organization: Acme            # matched by organization:
 ```
 
-The policy server verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then reads the claim selected by `policy.oidc.user-id-claim` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
+The policy server verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then resolves the identity using `policy.oidc.identity-mode` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
 
-Configure the mapping once on the policy server:
+Configure the identity mode once on the policy server. `stable-id` is the default; explicitly setting it makes the choice visible:
+
+```yaml
+policy:
+  oidc:
+    identity-mode: stable-id
+```
+
+In `stable-id` mode, `user-id-claim` overrides the provider default. For example:
 
 ```yaml
 policy:
   oidc:
     issuer: "https://login.microsoftonline.com/YOUR-TENANT-ID/v2.0"
     client-id: "your-client-id"
+    identity-mode: stable-id
     user-id-claim: oid
 ```
 
@@ -231,11 +240,30 @@ The CLI equivalent is `epithet policy --oidc-user-id-claim oid`. An explicit val
 
 Entra detection uses the configured HTTPS issuer: tenant-specific `/TENANT/v2.0` paths on `login.microsoftonline.com`, `login.microsoftonline.us`, `login.partner.microsoftonline.cn`, or `login.chinacloudapi.cn`, and v1 `sts.windows.net/TENANT/`. Use the exact tenant-specific issuer from discovery, not `common`, `organizations`, or `consumers`. Token issuer verification remains exact; IDs from different tenants are not interchangeable. Microsoft documents the distinction between application-specific `sub` and directory `oid` in its [ID-token claims reference](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference).
 
-Overrides name a literal top-level claim (including namespaced claim names), not a JSON path or expression. Choose a stable, non-reassignable user identifier. The operator is responsible for the semantics of an override; using a mutable email or username would defeat stable identity binding. Groups and profile attributes still come from inventory. The original OIDC subject remains separate from the mapped ID.
+Overrides name a literal top-level claim (including namespaced claim names), not a JSON path or expression. Choose a stable, non-reassignable user identifier when available. Any claim override, including `user-id-claim: email`, is permitted in `stable-id` mode and requires only a nonempty string. An email override does **not** check `email_verified`; the administrator owns that trust decision. Groups and profile attributes still come from inventory. The original OIDC subject remains separate from the mapped ID.
+
+For address-based inventory with enforced email verification, select `verified-email`:
+
+```yaml
+policy:
+  oidc:
+    identity-mode: verified-email
+```
+
+```yaml
+users:
+  - id: suzie@example.com
+    userName: suzie
+    groups: [Engineering]
+```
+
+This mode always uses the token's nonempty `email` string and requires `email_verified` to be the JSON boolean `true`. Missing, false, null, or other types (including the string `"true"`) fail authentication. Do not configure `user-id-claim` in this mode; conflicting settings and unknown modes fail startup and `--check`. The CLI equivalent is `--oidc-identity-mode verified-email`.
+
+Email matching is byte-for-byte: there is no case folding, whitespace trimming, alias resolution, or domain inference. Verification is an assertion from the configured issuer that the address was verified, not a promise of perpetual ownership or organization membership. Addresses can change or be reassigned; email-based grants follow the configured address. Switching modes or claims requires reviewing inventory IDs and affected Writ `id:` selectors. The mode names retain their semantics independently of any future change to the default.
 
 `userName` remains an administrator-controlled, readable name for Writ's `userName:` selector and certificate/audit identity. A token's email change does not rename it. An intentional inventory rename changes which `userName:` rules match; group and attribute selectors continue to evaluate the same user's configured attributes.
 
-Writ `id:"provider-user-id"` matches the same `id` supplied in static YAML. Keep it stable across `userName` renames and never reuse it for replacement users. Static inventory supplies the internal schema directly; future provisioning adapters will map provider fields into it. SCIM provisioning and its field mapping are not yet implemented.
+Writ `id:"provider-user-id"` matches the same `id` supplied in static YAML. In stable-ID deployments, keep it stable across `userName` renames and never reuse it for replacement users. Static inventory supplies the internal schema directly; future provisioning adapters will map provider fields into it. SCIM provisioning and its field mapping are not yet implemented.
 
 **Writ selector migration (breaking, pre-1.0):** Use the SCIM field names
 for scalar selectors; keep `group:` singular for a membership test. Replace the previous shorthand as follows:
@@ -289,15 +317,17 @@ epithet agent identity
 epithet agent --name work identity
 ```
 
-`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's CA configuration and advertised ID-claim mapping. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout is JSON:
+`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the policy server. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout is JSON:
 
 ```json
-{"id":"provider-user-id","issuer":"https://issuer.example","subject":"oidc-subject"}
+{"issuer":"https://issuer.example","subject":"oidc-subject","email":"alice@example.com","email_verified":true}
 ```
 
-The agent verifies the token before returning these identifiers. The command does not request a certificate or need an inventory entry, and bearer tokens, refresh tokens, and client secrets remain inside the agent. Confirm the issuer and signed-in account, then copy `id` into the user's inventory record, keeping the intended `userName` and groups. Migrate old name-based Writ `id:` rules to `userName:` as described above.
+The agent verifies the token before returning these claims. It reports issuer and subject, plus `oid`, `email`, and `email_verified` when present with the expected types. A false verification value is shown as false; missing or malformed optional claims are omitted. No mapped inventory `id` is returned. The command does not request a certificate or need an inventory entry, and bearer tokens, refresh tokens, and client secrets remain inside the agent.
 
-The former standalone `epithet identity` command is removed. If the agent is not running, start it first. Restart existing agents after upgrading or changing the policy server's claim mapping so they rediscover the current configuration. An older policy server does not advertise overrides; upgrade it before obtaining IDs for a custom mapping.
+Confirm the issuer and signed-in account, then use the field appropriate to your policy configuration: `subject` for the default `sub` mapping, `oid` for Entra's default, or `email` for verified-email mode. The command describes only the current user, does not establish policy acceptance, and does not display arbitrary custom ID claims. Keep the intended inventory `userName` and groups. Migrate old name-based Writ `id:` rules to `userName:` as described above.
+
+The former standalone `epithet identity` command is removed. Start the agent first and restart existing agents after upgrading to get the new diagnostic output. Changes to inventory identity modes or claim mapping require restarting the policy server; the agent does not consume these settings.
 
 Prepare the inventory separately, then validate it with the new binary and existing policy:
 
@@ -364,7 +394,8 @@ policy:
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "your-client-id"
-    # user-id-claim: sub  # optional override; Entra defaults to oid
+    identity-mode: stable-id  # or verified-email
+    # user-id-claim: sub  # stable-id override; Entra defaults to oid
   policy-file: /etc/epithet/policy.writ
   inventory:
     - /etc/epithet/inventory.yaml
@@ -375,7 +406,8 @@ policy:
 - **`listen`** (optional): address to listen on (default `0.0.0.0:9999`). A `unix:///path/to/policy.sock` value listens on a Unix domain socket; this is how `epithet server` wires its subprocesses together.
 - **`ca-pubkey`** (required): the CA's SSH public key (URL, file path, or literal), used to verify the CA's service JWT.
 - **`oidc`** (required): `issuer` and `client-id` — `client-id` is required so audience checking can never be silently skipped.
-- **`oidc.user-id-claim`** (optional): verified top-level claim mapped to inventory `id`; overrides the provider default described under [Users](#users).
+- **`oidc.identity-mode`** (optional): `stable-id` (default) or `verified-email`, as described under [Users](#users). CLI: `--oidc-identity-mode`; environment: `EPITHET_POLICY_OIDC_IDENTITY_MODE`.
+- **`oidc.user-id-claim`** (optional): top-level claim mapped to inventory `id` in `stable-id` mode; overrides the provider default. Even `email` is allowed without checking verification. CLI: `--oidc-user-id-claim`; environment: `EPITHET_POLICY_OIDC_USER_ID_CLAIM`. Flags override file configuration; environment variables supply defaults when the file omits a setting.
 - **`policy-file`** (required): the writ policy file.
 - **`inventory`** (required): inventory file paths or globs.
 - **`principal-mode`** (optional): deployment default, either `account-name` (the compatibility default) or `epithet-principal-v1`. A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
@@ -626,13 +658,12 @@ Response (`HTTP 200`):
 {
   "auth": {
     "issuer": "https://accounts.google.com",
-    "client_id": "your-client-id",
-    "user_id_claim": "sub"
+    "client_id": "your-client-id"
   }
 }
 ```
 
-`user_id_claim` advertises the effective mapping for agent identity lookup.
+Discovery supplies authentication settings only. Inventory identity modes and claim mapping remain private to the policy server.
 `client_secret` is included (unencrypted) only if configured. There are no
 host-match patterns in this response — host gating lives entirely in the
 user's own ssh config.

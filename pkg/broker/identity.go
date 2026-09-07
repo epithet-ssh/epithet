@@ -6,11 +6,14 @@ import (
 	"io"
 )
 
-// Identity contains only the verified identifiers, never bearer credentials.
+// Identity reports selected claims from a verified token, never bearer credentials.
+// EmailVerified is the issuer assertion, not an inventory authorization decision.
 type Identity struct {
-	ID      string `json:"id"`
-	Issuer  string `json:"issuer"`
-	Subject string `json:"subject"`
+	Issuer        string `json:"issuer"`
+	Subject       string `json:"subject"`
+	OID           string `json:"oid,omitempty"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified *bool  `json:"email_verified,omitempty"`
 }
 
 // IdentityResponse is the terminal event for an identity request.
@@ -19,12 +22,12 @@ type IdentityResponse struct {
 	Error    string    `json:"error,omitempty"`
 }
 
-// IdentityVerifier verifies the agent's ID token and maps its inventory ID.
+// IdentityVerifier verifies the agent's ID token and extracts diagnostic claims.
 // It must be safe for concurrent calls and must not return token contents in errors.
 type IdentityVerifier func(context.Context, string) (*Identity, error)
 
 // WithIdentityVerifier enables identity requests using the agent's configured
-// issuer, audience, and inventory ID mapping.
+// issuer and audience.
 func WithIdentityVerifier(verify IdentityVerifier) Option {
 	return optionFunc(func(b *Broker) error {
 		if verify == nil {

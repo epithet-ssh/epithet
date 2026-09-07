@@ -17,7 +17,7 @@ import (
 )
 
 // Scopes is the fixed set requested during browser authentication.
-// Policy maps a verified stable ID claim to inventory; profile includes Entra oid.
+// Policy maps a verified token to inventory using its configured identity mode.
 var Scopes = []string{"openid", "profile", "email"}
 
 // openBrowser is a seam over browser.OpenURL so tests can stub it out —

@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -164,6 +165,93 @@ func TestValidateMappedUserID(t *testing.T) {
 				token := idp.MintIDTokenWithClaims("alice@example.com", time.Now().Add(time.Minute), overrides)
 				_, err := v.Validate(context.Background(), token)
 				require.Error(t, err, "mapping must not bypass standard validation")
+			}
+		})
+	}
+}
+
+func TestIdentityModeResolution(t *testing.T) {
+	for _, tc := range []struct {
+		mode      IdentityMode
+		claim     string
+		wantMode  IdentityMode
+		wantClaim string
+		invalid   bool
+	}{
+		{"", "", StableID, "sub", false},
+		{StableID, "", StableID, "sub", false},
+		{"", "email", StableID, "email", false},
+		{StableID, "custom_id", StableID, "custom_id", false},
+		{VerifiedEmail, "", VerifiedEmail, "email", false},
+		{VerifiedEmail, "email", "", "", true},
+		{VerifiedEmail, "sub", "", "", true},
+		{"invalid", "", "", "", true},
+	} {
+		mode, claim, err := ResolveIdentity("https://issuer.example", tc.mode, tc.claim)
+		if tc.invalid {
+			require.Error(t, err)
+			_, err = NewValidator(context.Background(), Config{Issuer: "https://invalid.invalid", ClientID: "client", IdentityMode: tc.mode, UserIDClaim: tc.claim})
+			require.ErrorContains(t, err, "mode") // Config rejected before discovery.
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, tc.wantMode, mode)
+			require.Equal(t, tc.wantClaim, claim)
+		}
+	}
+}
+
+func TestEmailIdentityModes(t *testing.T) {
+	idp := oidctest.New(t)
+	otherIDP := oidctest.New(t)
+	for _, mode := range []IdentityMode{VerifiedEmail, StableID} {
+		t.Run(string(mode), func(t *testing.T) {
+			cfg := Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, IdentityMode: mode}
+			if mode == StableID {
+				cfg.UserIDClaim = "email"
+			}
+			v, err := NewValidator(context.Background(), cfg)
+			require.NoError(t, err)
+			_, err = v.Validate(context.Background(), otherIDP.MintIDTokenWithClaims("alice@example.com", time.Now().Add(time.Minute), map[string]any{"iss": idp.Issuer()}))
+			require.Error(t, err, "claims with an untrusted signature must fail")
+			for _, tc := range []struct {
+				name                          string
+				email, verified               any
+				validEmail, validVerification bool
+			}{
+				{"verified", "Alice@Example.com", true, true, true},
+				{"false", "Alice@Example.com", false, true, false},
+				{"absent", "Alice@Example.com", nil, true, false},
+				{"null", "Alice@Example.com", json.RawMessage("null"), true, false},
+				{"string", "Alice@Example.com", "true", true, false},
+				{"number", "Alice@Example.com", 1, true, false},
+				{"array", "Alice@Example.com", []bool{true}, true, false},
+				{"object", "Alice@Example.com", map[string]bool{"value": true}, true, false},
+				{"no-email", nil, true, false, true},
+				{"null-email", json.RawMessage("null"), true, false, true},
+				{"empty-email", "", true, false, true},
+				{"numeric-email", 42, true, false, true},
+				{"array-email", []string{"alice@example.com"}, true, false, true},
+				{"boolean-email", true, true, false, true},
+				{"object-email", map[string]string{"value": "alice@example.com"}, true, false, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					token := idp.MintIDTokenWithClaims("alice@example.com", time.Now().Add(time.Minute), map[string]any{"email": tc.email, "email_verified": tc.verified})
+					claims, err := v.Validate(context.Background(), token)
+					if !tc.validEmail || (mode == VerifiedEmail && !tc.validVerification) {
+						require.Error(t, err)
+						require.Nil(t, claims)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tc.email, claims.UserID) // Exact case preserved.
+					require.Equal(t, oidctest.Subject("alice@example.com"), claims.Subject)
+				})
+			}
+			for _, overrides := range []map[string]any{
+				{"iss": "https://wrong.example"}, {"aud": "wrong"}, {"sub": nil}, {"exp": time.Now().Add(-time.Minute).Unix()},
+			} {
+				_, err := v.Validate(context.Background(), idp.MintIDTokenWithClaims("alice@example.com", time.Now().Add(time.Minute), overrides))
+				require.Error(t, err)
 			}
 		})
 	}

@@ -30,14 +30,14 @@ func (c *ServerConfig) Validate() error {
 		return fmt.Errorf("oidc.client_id is required")
 	}
 
-	return nil
+	_, _, err := oidc.ResolveIdentity(c.OIDC.Issuer, c.OIDC.IdentityMode, c.OIDC.UserIDClaim)
+	return err
 }
 
 // BootstrapAuth returns the auth configuration for the bootstrap endpoint.
 func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
 	return wire.AuthConfig{
 		Issuer:       c.OIDC.Issuer,
-		UserIDClaim:  oidc.ResolveUserIDClaim(c.OIDC.Issuer, c.OIDC.UserIDClaim),
 		ClientID:     c.OIDC.ClientID,
 		ClientSecret: c.OIDC.ClientSecret,
 	}
@@ -45,10 +45,11 @@ func (c *ServerConfig) BootstrapAuth() wire.AuthConfig {
 
 // OIDCConfig represents OIDC configuration for token validation
 type OIDCConfig struct {
-	UserIDClaim  string `yaml:"user_id_claim,omitempty" json:"user_id_claim,omitempty"`
-	Issuer       string `yaml:"issuer" json:"issuer"`
-	ClientID     string `yaml:"client_id" json:"client_id"`
-	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"` // Optional, for confidential clients
+	IdentityMode oidc.IdentityMode `yaml:"identity_mode,omitempty" json:"identity_mode,omitempty"`
+	UserIDClaim  string            `yaml:"user_id_claim,omitempty" json:"user_id_claim,omitempty"`
+	Issuer       string            `yaml:"issuer" json:"issuer"`
+	ClientID     string            `yaml:"client_id" json:"client_id"`
+	ClientSecret string            `yaml:"client_secret,omitempty" json:"client_secret,omitempty"` // Optional, for confidential clients
 }
 
 // DefaultExtensions returns the default SSH certificate extensions

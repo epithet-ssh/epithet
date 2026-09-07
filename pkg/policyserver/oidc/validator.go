@@ -7,15 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
+	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // Validator validates OIDC JWT tokens.
 type Validator struct {
-	verifier    *oidc.IDTokenVerifier
-	issuer      string
-	userIDClaim string
+	verifier     *authoidc.Verifier
+	issuer       string
+	userIDClaim  string
+	identityMode IdentityMode
 }
 
 // Config configures the OIDC validator.
@@ -26,6 +27,9 @@ type Config struct {
 	// ClientID is the expected audience claim. Required: without it, any
 	// token issued by the provider for any client would be accepted.
 	ClientID string
+
+	// IdentityMode selects how verified claims resolve to an inventory ID.
+	IdentityMode IdentityMode
 
 	// UserIDClaim selects a top-level string claim to map to inventory ID.
 	// Empty selects the provider default (oid for Entra, sub otherwise).
@@ -51,32 +55,22 @@ type Claims struct {
 // NewValidator creates a new OIDC token validator.
 // It performs OIDC discovery to fetch the provider's JWKS (public keys).
 func NewValidator(ctx context.Context, config Config) (*Validator, error) {
-	if config.Issuer == "" {
-		return nil, fmt.Errorf("issuer is required")
-	}
-	if config.ClientID == "" {
-		return nil, fmt.Errorf("client_id is required")
-	}
-
-	// Create HTTP client with TLS config and inject into context.
-	httpClient, err := tlsconfig.NewHTTPClient(config.TLSConfig)
+	mode, claim, err := ResolveIdentity(config.Issuer, config.IdentityMode, config.UserIDClaim)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+		return nil, err
 	}
-	ctx = oidc.ClientContext(ctx, httpClient)
-
-	// Perform OIDC discovery.
-	provider, err := oidc.NewProvider(ctx, config.Issuer)
+	verifier, err := authoidc.NewVerifier(ctx, authoidc.Config{
+		IssuerURL: config.Issuer, ClientID: config.ClientID, TLSConfig: config.TLSConfig,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OIDC provider for %s: %w", config.Issuer, err)
+		return nil, err
 	}
-
-	verifier := provider.Verifier(&oidc.Config{ClientID: config.ClientID})
 
 	return &Validator{
-		verifier:    verifier,
-		issuer:      config.Issuer,
-		userIDClaim: ResolveUserIDClaim(config.Issuer, config.UserIDClaim),
+		verifier:     verifier,
+		issuer:       config.Issuer,
+		userIDClaim:  claim,
+		identityMode: mode,
 	}, nil
 }
 
@@ -86,12 +80,9 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 	// Verify token signature and standard claims (including audience and expiry).
 	idToken, err := v.verifier.Verify(ctx, tokenString)
 	if err != nil {
-		return nil, fmt.Errorf("token verification failed: %w", err)
+		return nil, err
 	}
 
-	if idToken.Subject == "" {
-		return nil, fmt.Errorf("OIDC token has no subject")
-	}
 	var raw map[string]any
 	if err := idToken.Claims(&raw); err != nil {
 		return nil, fmt.Errorf("decoding OIDC claims: %w", err)
@@ -99,6 +90,12 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 	userID, ok := raw[v.userIDClaim].(string)
 	if !ok || userID == "" {
 		return nil, fmt.Errorf("OIDC user ID claim %q must be a nonempty string", v.userIDClaim)
+	}
+	if v.identityMode == VerifiedEmail {
+		verified, ok := raw["email_verified"].(bool)
+		if !ok || !verified {
+			return nil, fmt.Errorf("OIDC email_verified must be the boolean true in verified-email mode")
+		}
 	}
 	return &Claims{
 		Issuer:    v.issuer,
