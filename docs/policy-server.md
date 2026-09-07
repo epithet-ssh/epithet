@@ -317,7 +317,16 @@ epithet agent identity
 epithet agent --name work identity
 ```
 
-`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the policy server. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout is JSON:
+`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the policy server. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout defaults to tab-delimited field/value rows:
+
+```text
+issuer	https://issuer.example
+subject	oidc-subject
+email	alice@example.com
+email_verified	true
+```
+
+Use `epithet agent identity --json` (or `-j`) for JSON output:
 
 ```json
 {"issuer":"https://issuer.example","subject":"oidc-subject","email":"alice@example.com","email_verified":true}

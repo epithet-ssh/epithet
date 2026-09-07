@@ -109,8 +109,21 @@ func TestAgentIdentityVerifier(t *testing.T) {
 }
 
 func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "failure"}[fail], func(t *testing.T) {
+	verified := false
+	for _, tc := range []struct {
+		name     string
+		json     bool
+		fail     bool
+		verified *bool
+	}{
+		{name: "tab-delimited"},
+		{name: "tab-delimited-unverified", verified: &verified},
+		{name: "json", json: true},
+		{name: "json-unverified", json: true, verified: &verified},
+		{name: "failure", fail: true},
+		{name: "json-failure", json: true, fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("/tmp", "epithet-id-")
 			require.NoError(t, err)
 			t.Cleanup(func() { os.RemoveAll(dir) })
@@ -138,8 +151,8 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 				}
 				enc := json.NewEncoder(conn)
 				_ = enc.Encode(broker.Event{Output: "visit login URL\n"})
-				resp := &broker.IdentityResponse{Identity: &broker.Identity{OID: "directory-id", Issuer: "issuer", Subject: "subject"}}
-				if fail {
+				resp := &broker.IdentityResponse{Identity: &broker.Identity{OID: "directory-id", Issuer: "issuer", Subject: "subject", Email: "alice@example.com", EmailVerified: tc.verified}}
+				if tc.fail {
 					resp = &broker.IdentityResponse{Error: "login failed"}
 				}
 				_ = enc.Encode(broker.Event{Identity: resp})
@@ -147,18 +160,41 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 			var out, progress bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err = (&AgentIdentityCLI{}).run(ctx, socket, &out, &progress)
+			var root struct {
+				Agent AgentCLI `cmd:"agent"`
+			}
+			parser, err := kong.New(&root)
+			require.NoError(t, err)
+			args := []string{"agent", "identity"}
+			if tc.json {
+				args = append(args, "--json")
+			}
+			_, err = parser.Parse(args)
+			require.NoError(t, err)
+			err = root.Agent.Identity.run(ctx, socket, &out, &progress)
 			<-done
 			require.Equal(t, "visit login URL\n", progress.String())
-			if fail {
+			if tc.fail {
 				require.ErrorContains(t, err, "login failed")
 				require.Empty(t, out.String())
 				return
 			}
 			require.NoError(t, err)
-			var fields map[string]string
-			require.NoError(t, json.Unmarshal(out.Bytes(), &fields))
-			require.Equal(t, map[string]string{"oid": "directory-id", "issuer": "issuer", "subject": "subject"}, fields)
+			if tc.json {
+				var fields map[string]any
+				require.NoError(t, json.Unmarshal(out.Bytes(), &fields))
+				want := map[string]any{"oid": "directory-id", "issuer": "issuer", "subject": "subject", "email": "alice@example.com"}
+				if tc.verified != nil {
+					want["email_verified"] = false
+				}
+				require.Equal(t, want, fields)
+			} else {
+				want := "issuer\tissuer\nsubject\tsubject\noid\tdirectory-id\nemail\talice@example.com\n"
+				if tc.verified != nil {
+					want += "email_verified\tfalse\n"
+				}
+				require.Equal(t, want, out.String())
+			}
 		})
 	}
 }

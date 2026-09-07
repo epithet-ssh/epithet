@@ -94,7 +94,8 @@ See [inventory configuration](policy-server.md#users).
 
 `epithet agent identity` authenticates the running agent through its shared
 login/refresh cache, then verifies the token and prints issuer and subject,
-plus optional `oid`, `email`, and `email_verified` claims as JSON. It does
+plus optional `oid`, `email`, and `email_verified` claims as tab-delimited
+field/value rows. Use `epithet agent identity --json` for JSON output. It does
 not map an inventory ID or decide policy acceptance. Missing or unverified
 email does not prevent this diagnostic command from reporting identity.
 Browser-login progress goes to stderr. It works before an inventory record

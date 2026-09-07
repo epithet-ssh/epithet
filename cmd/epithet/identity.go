@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 // AgentIdentityCLI authenticates the running agent and reports its identity.
 type AgentIdentityCLI struct {
 	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b"`
+	JSON   bool   `help:"Output in JSON format instead of tab-delimited fields" short:"j"`
 }
 
 func (c *AgentIdentityCLI) Run(parent *AgentCLI) error {
@@ -65,7 +67,10 @@ func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress
 			if event.Identity.Identity == nil {
 				return fmt.Errorf("agent returned no identity")
 			}
-			return json.NewEncoder(out).Encode(event.Identity.Identity)
+			if c.JSON {
+				return json.NewEncoder(out).Encode(event.Identity.Identity)
+			}
+			return writeAgentIdentity(out, event.Identity.Identity)
 		}
 		if event.Result != nil {
 			return fmt.Errorf("agent identity: %s (restart the agent if it predates identity support)", event.Result.Error)
@@ -78,6 +83,22 @@ func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress
 		return fmt.Errorf("reading agent identity: %w", err)
 	}
 	return fmt.Errorf("agent closed connection without an identity")
+}
+
+func writeAgentIdentity(out io.Writer, identity *broker.Identity) error {
+	var rows strings.Builder
+	fmt.Fprintf(&rows, "issuer\t%s\nsubject\t%s\n", identity.Issuer, identity.Subject)
+	if identity.OID != "" {
+		fmt.Fprintf(&rows, "oid\t%s\n", identity.OID)
+	}
+	if identity.Email != "" {
+		fmt.Fprintf(&rows, "email\t%s\n", identity.Email)
+	}
+	if identity.EmailVerified != nil {
+		fmt.Fprintf(&rows, "email_verified\t%t\n", *identity.EmailVerified)
+	}
+	_, err := io.WriteString(out, rows.String())
+	return err
 }
 
 // makeAgentIdentityVerifier uses the running agent's discovery configuration.
