@@ -61,7 +61,7 @@ sequenceDiagram
     broker ->> ca: POST / {"token", "connection"} — Authorization: Bearer <jwt>
     ca ->> policy: POST / {"token","connection"} — Authorization: Bearer <service JWT>
     policy ->> policy: verify user JWT (JWKS); verify service JWT (CA pubkey)
-    policy ->> ca: {"certParams": {identity, principals, expiration, notAfter, extensions}}
+    policy ->> ca: {"id": inventory ID, "certParams": {identity, principals, expiration, notAfter, extensions}}
     ca ->> broker: {"certificate"}
 
     create participant agent

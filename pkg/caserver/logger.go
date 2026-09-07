@@ -17,7 +17,8 @@ type CertLogger interface {
 type CertEvent struct {
 	Timestamp            time.Time
 	SerialNumber         string
-	Identity             string
+	ID                   string // Resolved inventory ID; empty if the policy server omitted it.
+	UserName             string
 	Principals           []string
 	Connection           policy.Connection
 	ValidAfter           time.Time
@@ -42,7 +43,8 @@ func NewSlogCertLogger(logger *slog.Logger) *SlogCertLogger {
 func (l *SlogCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
 	l.logger.InfoContext(ctx, "certificate issued",
 		slog.String("serial", event.SerialNumber),
-		slog.String("identity", event.Identity),
+		slog.String("userName", event.UserName),
+		slog.String("id", event.ID),
 		slog.Any("principals", event.Principals),
 		slog.String("remote_host", event.Connection.RemoteHost),
 		slog.String("remote_user", event.Connection.RemoteUser),

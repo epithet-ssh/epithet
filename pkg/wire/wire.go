@@ -36,10 +36,13 @@ type PolicyRequest struct {
 }
 
 // PolicyResponse is the policy server's answer to a PolicyRequest. It carries
-// only the cert parameters for this one connection - there is no
+// cert parameters and audit metadata for this one connection - there is no
 // authorization map on the wire, since certs are minted per-connection and
 // never cached or reused by the client.
 type PolicyResponse struct {
+	// ID is the resolved inventory ID for audit logs, not a certificate field.
+	// Older or custom policy servers may omit it.
+	ID         string     `json:"id,omitempty"`
 	CertParams CertParams `json:"certParams"`
 }
 

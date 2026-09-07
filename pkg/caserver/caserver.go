@@ -249,7 +249,8 @@ func (s *caServer) logCertIssuance(
 	event := &CertEvent{
 		Timestamp:            time.Now(),
 		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
-		Identity:             policyResp.CertParams.Identity,
+		UserName:             policyResp.CertParams.Identity,
+		ID:                   policyResp.ID,
 		Principals:           policyResp.CertParams.Names,
 		Connection:           conn,
 		ValidAfter:           time.Unix(int64(parsedCert.ValidAfter), 0),

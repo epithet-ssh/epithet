@@ -128,7 +128,9 @@ hosts:
 	t.Cleanup(ps.Close)
 	authority, err := ca.New(priv, ps.URL, ca.WithTLSConfig(tlsconfigFor(t, ps)))
 	require.NoError(t, err)
-	ch := caserver.New(authority, slog.New(slog.NewTextHandler(io.Discard, nil)), nil).Handler()
+	var issuanceLog bytes.Buffer
+	certLogger := caserver.NewSlogCertLogger(slog.New(slog.NewJSONHandler(&issuanceLog, nil)))
+	ch := caserver.New(authority, slog.New(slog.NewTextHandler(io.Discard, nil)), certLogger).Handler()
 	attackerPub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	requestBody, err := json.Marshal(caserver.CreateCertRequest{
@@ -155,6 +157,7 @@ hosts:
 		{"inactive", "inactive@example.com", "inactive@example.com", true, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			issuanceLog.Reset()
 			if emailMode {
 				switch {
 				case tc.subject == "" || tc.email == "" || (mode == oidc.VerifiedEmail && tc.verified != true):
@@ -167,6 +170,7 @@ hosts:
 			}
 			claims := map[string]any{
 				"iss": issuer, "aud": "review-client", "sub": tc.subject,
+				"id":    "untrusted-token-id",
 				"email": tc.email, "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
 			}
 			if !emailMode && userIDClaim != "sub" {
@@ -189,8 +193,17 @@ hosts:
 			ch.ServeHTTP(resp, req)
 			require.Equal(t, tc.status, resp.Code, "%s", resp.Body.String())
 			if tc.status != http.StatusOK {
+				require.Empty(t, issuanceLog.String())
 				return
 			}
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(issuanceLog.Bytes(), &entry))
+			require.Equal(t, inventoryID, entry["id"])
+			require.Equal(t, "victim@example.com", entry["userName"])
+			require.NotContains(t, entry, "identity")
+			require.NotContains(t, entry, "user_id")
+			require.NotContains(t, issuanceLog.String(), token)
+			require.NotContains(t, issuanceLog.String(), "untrusted-token-id")
 			var issued caserver.CreateCertResponse
 			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &issued))
 			parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(issued.Certificate))

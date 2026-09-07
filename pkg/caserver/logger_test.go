@@ -23,7 +23,8 @@ func TestSlogCertLogger(t *testing.T) {
 	event := &CertEvent{
 		Timestamp:    time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
 		SerialNumber: "12345",
-		Identity:     "alice@example.com",
+		UserName:     "alice@example.com",
+		ID:           "directory-alice",
 		Principals:   []string{"alice", "admin"},
 		Connection: policy.Connection{
 			RemoteHost: "server.example.com",
@@ -58,8 +59,11 @@ func TestSlogCertLogger(t *testing.T) {
 	if logEntry["serial"] != "12345" {
 		t.Errorf("Expected serial=12345, got %v", logEntry["serial"])
 	}
-	if logEntry["identity"] != "alice@example.com" {
-		t.Errorf("Expected identity=alice@example.com, got %v", logEntry["identity"])
+	if logEntry["userName"] != "alice@example.com" {
+		t.Errorf("Expected userName=alice@example.com, got %v", logEntry["userName"])
+	}
+	if logEntry["id"] != "directory-alice" {
+		t.Errorf("Expected id=directory-alice, got %v", logEntry["id"])
 	}
 	if logEntry["remote_host"] != "server.example.com" {
 		t.Errorf("Expected remote_host=server.example.com, got %v", logEntry["remote_host"])

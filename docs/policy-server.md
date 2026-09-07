@@ -708,6 +708,7 @@ parse error.
 
 ```json
 {
+  "id": "provider-user-id",
   "certParams": {
     "identity": "alice@example.com",
     "principals": ["ubuntu"],
@@ -723,7 +724,8 @@ parse error.
 ```
 
 **Fields:**
-- `certParams.identity` (string): Certificate identity/key ID (for audit logs)
+- `id` (string, optional for older/custom policy servers): Resolved inventory `id`, logged by the CA as `id` in the certificate issuance event. Empty in the log if omitted; never inferred from a token or username.
+- `certParams.identity` (string): Inventory `userName`, used as certificate Key ID and logged as `userName` alongside `id`
 - `certParams.principals` ([]string): Exactly one entry — either the requested account name or a destination-bound derived principal, according to the resolved host's mode
 - `certParams.expiration` (integer): Certificate validity, in **nanoseconds** (this is `time.Duration` marshaled by Go's default `encoding/json`, i.e. an integer, not a duration string like `"5m"`)
 - `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, derived from the user token's expiry. The CA signs with `min(now + expiration, notAfter)`. Omitted (zero value) means no ceiling beyond `expiration`.

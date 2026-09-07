@@ -134,6 +134,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, tokenExpiry tim
 		}
 		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		return &wire.PolicyResponse{
+			ID: user.ID,
 			CertParams: wire.CertParams{
 				Identity:   identity,
 				Names:      names,

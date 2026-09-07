@@ -64,6 +64,7 @@ func TestIssueMapsToCertParams(t *testing.T) {
 	resp, err := e.Evaluate(context.Background(), "alice-id", expiry, conn("root", "prod-db-1"))
 	require.NoError(t, err)
 	require.Equal(t, "alice@example.com", resp.CertParams.Identity)
+	require.Equal(t, "alice-id", resp.ID)
 	require.Equal(t, []string{"root"}, resp.CertParams.Names, "exactly one principal: the requested account")
 	require.Equal(t, expiry, resp.CertParams.NotAfter, "cert clamped to token expiry")
 	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration, "deployment default TTL")
@@ -87,6 +88,7 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 			if tc.allowed {
 				require.NoError(t, err)
 				require.Equal(t, "renamed-user", resp.CertParams.Identity)
+				require.Equal(t, "alice-id", resp.ID)
 			} else {
 				var denied *wire.PolicyError
 				require.ErrorAs(t, err, &denied)
