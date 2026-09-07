@@ -8,18 +8,19 @@ Epithet is an SSH certificate authority that replaces static authorized_keys wit
 ```bash
 git clone https://github.com/epithet-ssh/epithet.git
 cd epithet
-make build
+make
 ```
 
 **2. Start the agent:**
 ```bash
-epithet agent --ca-url https://your-ca.example.com
+epithet agent --ca-url https://your-ca.example.com/
 ```
 
 The agent discovers its OIDC issuer and client ID from the CA's Link header
 on the root response — nothing to configure locally.
 
 **3. Tag the hosts this profile should handle, then include the generated config** (`~/.ssh/config`):
+
 ```ssh_config
 Host *.example.com
     Tag epithet
