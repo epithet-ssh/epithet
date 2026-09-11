@@ -60,7 +60,7 @@ func (m *mockEvaluator) Evaluate(ctx context.Context, conn policy.Connection, fa
 func TestHandler_Success(t *testing.T) {
 	evaluator := &mockEvaluator{
 		response: &wire.PolicyResponse{
-			TTL:        5 * time.Minute,
+			TTLSeconds: 300,
 			Extensions: map[string]string{"permit-pty": ""},
 		},
 	}
@@ -94,7 +94,7 @@ func TestHandler_Success(t *testing.T) {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	require.Equal(t, 5*time.Minute, resp.TTL)
+	require.Equal(t, int64(300), resp.TTLSeconds)
 	require.Equal(t, map[string]string{"permit-pty": ""}, resp.Extensions)
 }
 
@@ -338,7 +338,7 @@ func TestPolicyRejectsOmittedRecordsAndTransportFields(t *testing.T) {
 		`"user":null,"host":{"name":"host","accounts":null,"principal":{"mode":"account-name"}}`,
 	} {
 		t.Run(extra, func(t *testing.T) {
-			evaluator := &mockEvaluator{response: &wire.PolicyResponse{TTL: time.Minute}}
+			evaluator := &mockEvaluator{response: &wire.PolicyResponse{TTLSeconds: 60}}
 			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
 			body := []byte(fmt.Sprintf(`{"connection":{"remoteHost":"host"},"facts":{"target":"host","authentication":{"id":"alice","expiresAt":%q},%s}}`, time.Now().Add(time.Minute).UTC().Format(time.RFC3339), extra))
 			req := httptest.NewRequest("POST", "/", bytes.NewReader(body))

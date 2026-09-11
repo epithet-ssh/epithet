@@ -21,12 +21,16 @@ type PolicyRequest struct {
 	Connection policy.Connection `json:"connection"`
 }
 
+// MaxTTLSeconds is the largest whole-second lifetime representable by Go's
+// time.Duration. CA validates before converting policy-controlled seconds.
+const MaxTTLSeconds int64 = (1<<63 - 1) / int64(time.Second)
+
 // PolicyResponse grants this one connection with policy-owned limits. HTTP
 // 200 means authorized; other outcomes use PolicyError. CA constructs the
 // certificate identity and principal from its original inventory facts.
 type PolicyResponse struct {
-	// TTL is a positive duration in nanoseconds, measured from CA signing.
-	TTL        time.Duration     `json:"ttl"`
+	// TTLSeconds is a positive whole-second lifetime, measured from CA signing.
+	TTLSeconds int64             `json:"ttlSeconds"`
 	Extensions map[string]string `json:"extensions"`
 	// NotAfter is an optional absolute policy deadline. It may tighten, but
 	// never extend, the authentication expiry independently enforced by CA.

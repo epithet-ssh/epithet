@@ -46,19 +46,27 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
 			for _, tc := range []struct {
 				name        string
-				ttl         time.Duration
+				ttlSeconds  int64
+				body        string
 				notAfter    time.Time
 				wantCeiling time.Time
 				invalid     bool
 			}{
-				{name: "TTL from signing", ttl: time.Minute, wantCeiling: expiry},
-				{name: "authentication ceiling without policy deadline", ttl: time.Hour, wantCeiling: expiry},
-				{name: "tighter policy deadline", ttl: time.Hour, notAfter: deadline, wantCeiling: deadline},
-				{name: "TTL tighter than both deadlines", ttl: time.Minute, notAfter: deadline, wantCeiling: deadline},
-				{name: "policy cannot extend authentication", ttl: time.Hour, notAfter: expiry.Add(time.Hour), wantCeiling: expiry},
+				{name: "TTL from signing", ttlSeconds: 60, wantCeiling: expiry},
+				{name: "authentication ceiling without policy deadline", ttlSeconds: 3600, wantCeiling: expiry},
+				{name: "tighter policy deadline", ttlSeconds: 3600, notAfter: deadline, wantCeiling: deadline},
+				{name: "TTL tighter than both deadlines", ttlSeconds: 60, notAfter: deadline, wantCeiling: deadline},
+				{name: "policy cannot extend authentication", ttlSeconds: 3600, notAfter: expiry.Add(time.Hour), wantCeiling: expiry},
 				{name: "zero TTL", invalid: true},
-				{name: "negative TTL", ttl: -time.Minute, invalid: true},
-				{name: "expired policy deadline", ttl: time.Hour, notAfter: time.Now().Add(-time.Minute), invalid: true},
+				{name: "one second", ttlSeconds: 1, wantCeiling: expiry},
+				{name: "maximum duration", ttlSeconds: wire.MaxTTLSeconds, wantCeiling: expiry},
+				{name: "overflowing seconds", ttlSeconds: wire.MaxTTLSeconds + 1, invalid: true},
+				{name: "fractional seconds", body: `{"ttlSeconds":1.5}`, invalid: true},
+				{name: "duration string", body: `{"ttlSeconds":"5s"}`, invalid: true},
+				{name: "missing lifetime", body: `{"extensions":{}}`, invalid: true},
+				{name: "legacy nanoseconds", body: `{"ttl":300000000000}`, invalid: true},
+				{name: "negative TTL", ttlSeconds: -60, invalid: true},
+				{name: "expired policy deadline", ttlSeconds: 3600, notAfter: time.Now().Add(-time.Minute), invalid: true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					ps := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +83,10 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						}
 						assert.Equal(t, expiry, request.Facts.Authentication.ExpiresAt)
 						assert.Equal(t, "subject:alice", request.Facts.User.ID)
+						if tc.body != "" {
+							w.Write([]byte(tc.body))
+							return
+						}
 						// Inventory transport, principal construction, and audit metadata stay at CA.
 						for _, field := range []string{"version", "resolvedAt", "revision", "directoryRevision", "inventoryRevision", "principal", "domain"} {
 							assert.NotContains(t, string(data), `"`+field+`"`)
@@ -85,7 +97,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						} else {
 							assert.Equal(t, "host", request.Facts.Host.Name)
 						}
-						response := wire.PolicyResponse{PolicyID: "sha256:policy", TTL: tc.ttl, NotAfter: tc.notAfter, Extensions: map[string]string{"permit-pty": ""}}
+						response := wire.PolicyResponse{PolicyID: "sha256:policy", TTLSeconds: tc.ttlSeconds, NotAfter: tc.notAfter, Extensions: map[string]string{"permit-pty": ""}}
 						json.NewEncoder(w).Encode(response)
 					}))
 					defer ps.Close()
@@ -113,7 +125,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 					require.Equal(t, "Alice", cert.KeyId)
 					require.Equal(t, []string{expected}, cert.ValidPrincipals)
 					require.Equal(t, map[string]string{"permit-pty": ""}, cert.Extensions)
-					earliest, latest := before.Add(tc.ttl), after.Add(tc.ttl)
+					earliest, latest := before.Add(time.Duration(tc.ttlSeconds)*time.Second), after.Add(time.Duration(tc.ttlSeconds)*time.Second)
 					if tc.wantCeiling.Before(earliest) {
 						earliest = tc.wantCeiling
 					}
@@ -158,7 +170,7 @@ func TestCARejectsGrantsOutsideInventoryRestrictions(t *testing.T) {
 			require.NoError(t, err)
 			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
 			ps := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(wire.PolicyResponse{TTL: time.Minute})
+				json.NewEncoder(w).Encode(wire.PolicyResponse{TTLSeconds: 60})
 			}))
 			defer ps.Close()
 			authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))

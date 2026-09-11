@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Epithet Policy Server API
-  version: 6.0.0
+  version: 7.0.0
   description: |
     The Policy Server API is called by the Epithet CA to make authorization decisions
     for SSH certificate requests. Your policy server receives normalized authentication
@@ -50,7 +50,7 @@ paths:
         5. Return a positive TTL, permitted extensions, policy content ID, and optionally a tighter absolute deadline
 
         CA derives exactly one principal and the certificate Key ID from its original
-        inventory facts. Expiry is min(signing time + ttl, authentication.expiresAt,
+        inventory facts. Expiry is min(signing time + ttlSeconds seconds, authentication.expiresAt,
         optional notAfter). Non-200 responses never authorize signing.
         CA validates inventory host/domain binding before projection. Policy sees
         the requested target and the policy host resource; a shared domain name
@@ -78,7 +78,7 @@ paths:
                 approved:
                   summary: Approved with standard permissions
                   value:
-                    ttl: 300000000000
+                    ttlSeconds: 300
                     policyId: "sha256:compiled-policy-content"
                     extensions:
                       permit-pty: ""
@@ -287,20 +287,24 @@ components:
         inventory and connection facts and independently enforces authentication
         expiry, active-user, host, and account restrictions.
       required:
-        - ttl
+        - ttlSeconds
         - extensions
       properties:
-        ttl:
+        ttlSeconds:
           type: integer
           format: int64
           minimum: 1
+          maximum: 9223372036
           description: |
-            Maximum certificate lifetime in nanoseconds (Go time.Duration),
+            Maximum certificate lifetime in whole seconds,
             measured from CA signing, not evaluation. Must be positive. CA
             further clamps expiry to authentication.expiresAt and any notAfter.
             SSH timestamps have whole-second precision; an interval leaving
-            no usable lifetime after truncation is rejected.
-          example: 300000000000
+            no usable lifetime after truncation is rejected. The upper limit
+            prevents overflow when converting seconds into Go time.Duration.
+            Built-in policy rounds fractional deployment defaults down and rejects
+            results below one second. Strings and fractional numbers are invalid.
+          example: 300
         extensions:
           type: object
           description: |

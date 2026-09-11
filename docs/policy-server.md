@@ -441,7 +441,7 @@ For each request `(identity, account@host)` the evaluator (`pkg/policyserver/wri
 2. **Structural gates** — the identity must resolve to an `active` inventory user; the host must resolve in the inventory; if the host lists accounts, the requested account must be among them. Any failure → 403, regardless of policy text.
 3. **Collects matching rules** — a rule matches when its user, account, and host expressions all match.
 4. **Deny wins** — any matching deny → 403, always; no allow can override. The denial names the rule's label (or content id).
-5. **Authorizes issuance** if any allow survives: the response `ttl` is the minimum `ttl` among satisfied allows (else the default), and `extensions` are the deployment set. CA constructs the certificate Key ID and exactly one requested principal, and independently caps its expiry at the authentication expiry from inventory. Built-in Writ policy supplies no additional absolute deadline; Writ `until` continues to control rule eligibility at evaluation time.
+5. **Authorizes issuance** if any allow survives: the response `ttlSeconds` is the whole-second value of the minimum `ttl` among satisfied allows (else the default), and `extensions` are the deployment set. CA constructs the certificate Key ID and exactly one requested principal, and independently caps its expiry at the authentication expiry from inventory. Built-in Writ policy supplies no additional absolute deadline; Writ `until` continues to control rule eligibility at evaluation time.
 
 Evaluator or inventory failures fail **closed** (500), never "treat as no match".
 
@@ -731,7 +731,7 @@ parse error.
 ```json
 {
   "policyId": "sha256:compiled-policy-content",
-  "ttl": 300000000000,
+  "ttlSeconds": 300,
   "extensions": {
     "permit-pty": "",
     "permit-agent-forwarding": "",
@@ -742,7 +742,7 @@ parse error.
 
 **Fields:**
 
-- `ttl` (positive integer): Maximum certificate lifetime from **CA signing time**, in nanoseconds (`time.Duration` in Go). This is an integer, not a duration string such as `"5m"`.
+- `ttlSeconds` (integer, 1–9223372036): Maximum certificate lifetime from **CA signing time**, in whole seconds. For example, `300` means five minutes. Fractional numbers and duration strings are invalid.
 - `extensions` (map[string]string): SSH certificate extensions to grant. An empty map grants none.
 - `notAfter` (RFC 3339 string, optional): An additional absolute deadline owned by policy, for example `"2026-09-11T17:00:00Z"`. Omit it (or send the zero time) when no additional deadline applies. An expired deadline prevents issuance.
 - `policyId` (string): Content ID of the compiled policy, retained in private issuance logs. Built-in Writ supplies its SHA-256 content ID.
@@ -752,8 +752,14 @@ principal from the requested account and the resolved host's principal mode/doma
 It checks active-user, host, and account restrictions, and signs with:
 
 ```text
-expiry = min(signing time + ttl, inventory authentication expiry, optional notAfter)
+expiry = min(signing time + ttlSeconds seconds, inventory authentication expiry, optional notAfter)
 ```
+
+Writ and deployment configuration retain duration syntax such as `5m`.
+Writ durations already use whole seconds. The built-in policy rounds fractional
+deployment defaults down (`1500ms` becomes `1`) and rejects results below one second. CA checks the integer range
+before converting it to its internal duration; it never interprets legacy `ttl`
+values as seconds.
 
 A policy deadline cannot extend the authentication lifetime. TTL must be positive;
 SSH timestamps are truncated to whole seconds and an interval leaving no usable
@@ -763,10 +769,15 @@ The built-in policy omits `notAfter`; it no longer echoes authentication expiry.
 Writ `until` still controls rule eligibility at evaluation time, not certificate
 expiry. No Writ language semantics change here.
 
-### Custom policy migration (API 6)
+### Custom policy migration (API 7)
 
 Upgrade CA, inventory, and policy together, including separately deployed services.
-API 6 replaces the inventory envelope in `facts` with the projection above:
+API 7 replaces the response `ttl` (nanoseconds) with integer `ttlSeconds`.
+Divide old durations by 1,000,000,000, rounding down; reject results below one
+second or above 9223372036. The signing-time origin and absolute expiry limits
+are unchanged. Go policy responses now use `TTLSeconds int64`.
+
+The API 6 input cleanup is retained. It replaces the inventory envelope in `facts` with the projection above:
 
 - Move `facts.directory.user` to `facts.user` and `facts.inventory.host.resource` to `facts.host`.
 - Rename the requested host string from `facts.host` to `facts.target`; retain `facts.authentication` unchanged.
@@ -777,7 +788,7 @@ API 6 replaces the inventory envelope in `facts` with the projection above:
 The output-ownership change introduced in API 5 is retained. The old
 `certParams` response is no longer accepted as an authorization grant:
 
-- Move `certParams.expiration` to top-level `ttl`, keeping nanosecond units and the signing-time origin.
+- Convert `certParams.expiration` from nanoseconds to top-level `ttlSeconds` as described above, retaining the signing-time origin.
 - Move `certParams.extensions` to top-level `extensions`.
 - Move any intentionally tighter `certParams.notAfter` to top-level `notAfter`. Remove it if it only echoed authentication expiry; CA enforces that bound independently.
 - Remove response `id`, `certParams.identity`, and `certParams.principals`. CA obtains the ID and username from inventory and derives the sole requested principal itself.

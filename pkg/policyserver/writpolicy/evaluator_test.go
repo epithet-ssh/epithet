@@ -67,7 +67,7 @@ func TestIssueReturnsPolicyLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.NotAfter.IsZero(), "authentication expiry is enforced independently by CA")
 	require.NotEmpty(t, resp.PolicyID)
-	require.Equal(t, 5*time.Minute, resp.TTL, "deployment default TTL")
+	require.Equal(t, int64(300), resp.TTLSeconds, "deployment default TTL")
 	require.Contains(t, resp.Extensions, "permit-pty")
 }
 
@@ -107,7 +107,7 @@ func TestIssueAuthorizesDomainHost(t *testing.T) {
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Positive(t, resp.TTL)
+	require.Positive(t, resp.TTLSeconds)
 }
 
 func TestIssueHashedPrincipalWithoutDomainFailsClosed(t *testing.T) {
@@ -137,7 +137,7 @@ func TestRuleTTLOverridesDefault(t *testing.T) {
 	e := NewForTesting(pol, testInv())
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t, 2*time.Minute, resp.TTL)
+	require.Equal(t, int64(120), resp.TTLSeconds)
 }
 
 func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
@@ -150,7 +150,7 @@ func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
 	require.Empty(t, warnings)
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t, 10*time.Minute, resp.TTL)
+	require.Equal(t, int64(600), resp.TTLSeconds)
 	require.Equal(t, map[string]string{"permit-pty": ""}, resp.Extensions)
 }
 
@@ -289,7 +289,7 @@ func TestSatisfiedRequirementIssues(t *testing.T) {
 	require.NoError(t, err)
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Positive(t, resp.TTL)
+	require.Positive(t, resp.TTLSeconds)
 }
 
 func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
@@ -385,6 +385,33 @@ func TestProjectedHostPreservesAccountGrounding(t *testing.T) {
 				var denied *wire.PolicyError
 				require.ErrorAs(t, err, &denied)
 				require.Equal(t, http.StatusForbidden, denied.StatusCode)
+			}
+		})
+	}
+}
+
+func TestPolicyTTLUsesWholeSecondsWithoutExtendingLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name, rule string
+		defaultTTL time.Duration
+		seconds    int64
+		invalid    bool
+	}{
+		{name: "default fractional seconds", defaultTTL: 1500 * time.Millisecond, seconds: 1},
+		{name: "default below one second", defaultTTL: 500 * time.Millisecond, invalid: true},
+		{name: "one-second rule", rule: ", ttl 1s", seconds: 1},
+		{name: "rule overrides subsecond default", rule: ", ttl 2s", defaultTTL: 500 * time.Millisecond, seconds: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _, err := newWithInventory(mustPolicy(t, "allow group:SRE -> root@*"+tc.rule+"\n"), testInv(), nil, Options{DefaultTTL: tc.defaultTTL})
+			require.NoError(t, err)
+			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+			if tc.invalid {
+				require.ErrorContains(t, err, "at least one whole second")
+				require.Nil(t, response)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.seconds, response.TTLSeconds)
 			}
 		})
 	}

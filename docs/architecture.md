@@ -65,7 +65,7 @@ sequenceDiagram
     inventory -->> ca: Authentication expiry, ID, and facts with separate revisions
     ca ->> policy: POST / {connection, facts: {authentication, target, user, host}} + service JWT
     policy ->> policy: Verify CA JWT; check normalized facts and expiry; evaluate Writ
-    policy ->> ca: {ttl, extensions, optional notAfter, policyId}
+    policy ->> ca: {ttlSeconds, extensions, optional notAfter, policyId}
     ca ->> broker: {"certificate"}
 
     create participant agent
@@ -162,7 +162,7 @@ epithet server --listen <addr> --ca-key <path>
 
 ## Core components
 
-1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Constructs identity and the sole requested principal from inventory, then signs using policy TTL/extensions and optional deadline, clamping expiry to `min(signing time + ttl, authentication expiry, optional policy deadline)`.
+1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Constructs identity and the sole requested principal from inventory, then signs using policy TTL/extensions and optional deadline, clamping expiry to `min(signing time + ttlSeconds seconds, authentication expiry, optional policy deadline)`.
 
 2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
@@ -197,7 +197,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 5. Broker requests a certificate from the CA, sending the JWT and connection details
 6. CA sends the user JWT and target to inventory. Inventory verifies authentication, maps the ID, and returns normalized authentication and user/host facts. CA retains snapshot revisions and principal metadata, and projects authentication/target/user/host facts plus the connection to policy; both calls use distinct request-bound service JWTs.
 7. Policy verifies the CA request, checks fact binding and authentication expiry, and evaluates Writ against the normalized user's ID, name, groups, and attributes.
-8. Policy server authorizes with a positive TTL, extensions, optional absolute policy deadline, and policy content ID
+8. Policy server authorizes with a positive whole-second `ttlSeconds`, extensions, optional absolute policy deadline, and policy content ID
 9. CA constructs identity and exactly one principal from inventory/connection facts, signs with expiry bounded by TTL, authentication expiry, and any policy deadline, and returns the certificate
 10. Broker starts (or reuses) a per-connection agent socket serving this certificate
 11. OpenSSH uses the certificate from the agent socket to establish the connection

@@ -257,8 +257,8 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 			return nil, err
 		}
 	}
-	if policyResp.TTL <= 0 {
-		return nil, fmt.Errorf("policy TTL must be positive")
+	if policyResp.TTLSeconds <= 0 || policyResp.TTLSeconds > wire.MaxTTLSeconds {
+		return nil, fmt.Errorf("policy ttlSeconds must be between 1 and %d", wire.MaxTTLSeconds)
 	}
 	notAfter := facts.Authentication.ExpiresAt
 	if !policyResp.NotAfter.IsZero() && policyResp.NotAfter.Before(notAfter) {
@@ -272,7 +272,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
 		CertParams: CertParams{
 			Identity: user.UserName, Names: []string{expected},
-			Expiration: policyResp.TTL, Extensions: policyResp.Extensions, NotAfter: notAfter,
+			Expiration: time.Duration(policyResp.TTLSeconds) * time.Second, Extensions: policyResp.Extensions, NotAfter: notAfter,
 		},
 	}, nil
 }

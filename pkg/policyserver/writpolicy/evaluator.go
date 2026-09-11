@@ -130,10 +130,14 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts 
 		if ttl == 0 {
 			ttl = e.opts.DefaultTTL
 		}
+		ttlSeconds := int64(ttl / time.Second)
+		if ttlSeconds < 1 {
+			return nil, fmt.Errorf("policy TTL must allow at least one whole second")
+		}
 		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		return &wire.PolicyResponse{
-			PolicyID: e.policyID,
-			TTL:      ttl, Extensions: e.opts.Extensions,
+			PolicyID:   e.policyID,
+			TTLSeconds: ttlSeconds, Extensions: e.opts.Extensions,
 		}, nil
 	case eval.Pending:
 		return nil, &wire.PolicyError{

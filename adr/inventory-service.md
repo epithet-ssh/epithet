@@ -17,7 +17,7 @@ target, user, and host policy resource plus the connection to policy. It retains
 principal construction metadata and snapshot revisions; no bearer token, transport
 version, or audit revision is sent to policy.
 Policy verifies the CA service request, checks authentication expiry and fact
-binding, then evaluates Writ. Policy returns a positive TTL measured from CA
+binding, then evaluates Writ. Policy returns positive integer `ttlSeconds` measured from CA
 signing, permitted extensions, its content ID, and an optional tighter absolute
 deadline. CA constructs identity and exactly one principal from the resolved
 records and connection, checks active-user/host/account restrictions, and bounds
@@ -27,7 +27,7 @@ and any policy deadline. Client-supplied inventory facts are ignored.
 The built-in policy no longer echoes authentication expiry as a deadline. Writ
 `until` remains an evaluation-time rule condition. Custom policies can supply a
 tighter absolute deadline; CA always enforces authentication expiry independently.
-The policy API 6 migration is documented in docs/policy-server.md.
+The policy API 7 migration is documented in docs/policy-server.md.
 
 Both services trust the CA public key. Requests use the existing request-bound
 service JWT, with distinct `epithet-inventory` and `epithet-policy` audiences.

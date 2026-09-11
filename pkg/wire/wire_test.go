@@ -20,10 +20,10 @@ func TestPolicyRequestWireShape(t *testing.T) {
 
 func TestPolicyResponseWireShape(t *testing.T) {
 	deadline := time.Date(2026, 9, 11, 17, 0, 0, 0, time.UTC)
-	p := PolicyResponse{TTL: 5 * time.Minute, Extensions: map[string]string{"permit-pty": ""}, NotAfter: deadline, PolicyID: "sha256:policy"}
+	p := PolicyResponse{TTLSeconds: 300, Extensions: map[string]string{"permit-pty": ""}, NotAfter: deadline, PolicyID: "sha256:policy"}
 	out, err := json.Marshal(p)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"ttl":300000000000,"extensions":{"permit-pty":""},"notAfter":"2026-09-11T17:00:00Z","policyId":"sha256:policy"}`, string(out))
+	require.JSONEq(t, `{"ttlSeconds":300,"extensions":{"permit-pty":""},"notAfter":"2026-09-11T17:00:00Z","policyId":"sha256:policy"}`, string(out))
 	var back PolicyResponse
 	require.NoError(t, json.Unmarshal(out, &back))
 	require.Equal(t, p, back)
