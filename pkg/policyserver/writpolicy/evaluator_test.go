@@ -2,6 +2,7 @@ package writpolicy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -359,7 +360,18 @@ func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.
 	if resolution.Inventory.Host != nil {
 		input.Host = &resolution.Inventory.Host.HostResource
 	}
-	return e.Evaluator.Evaluate(ctx, conn, input)
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	var decoded wire.PolicyFacts
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, err
+	}
+	if err := decoded.Validate(conn.RemoteHost); err != nil {
+		return nil, err
+	}
+	return e.Evaluator.Evaluate(ctx, conn, &decoded)
 }
 
 func TestProjectedHostPreservesAccountGrounding(t *testing.T) {
@@ -412,6 +424,55 @@ func TestPolicyTTLUsesWholeSecondsWithoutExtendingLimits(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.seconds, response.TTLSeconds)
+			}
+		})
+	}
+}
+
+// These decisions exercise directory projection and the policy JSON boundary,
+// including exact matching of values that must not be normalized in transit.
+func TestUserFactsPreserveAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name, selector            string
+		inactive, absent, allowed bool
+	}{
+		{name: "ID", selector: "id:alice-id", allowed: true},
+		{name: "ID case differs", selector: "id:Alice-id"},
+		{name: "username", selector: "userName:\"Alice Example\"", allowed: true},
+		{name: "username case differs", selector: "userName:\"alice example\""},
+		{name: "group", selector: "group:\" Platform \"", allowed: true},
+		{name: "group whitespace differs", selector: "group:Platform"},
+		{name: "group case differs", selector: "group:\" platform \""},
+		{name: "user type", selector: "userType:employee", allowed: true},
+		{name: "other user type", selector: "userType:contractor"},
+		{name: "department", selector: "department:Engineering", allowed: true},
+		{name: "other department", selector: "department:Sales"},
+		{name: "organization", selector: "organization:Example", allowed: true},
+		{name: "other organization", selector: "organization:Other"},
+		{name: "inactive", selector: "*", inactive: true},
+		{name: "absent", selector: "*", absent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := testInv()
+			user := inv.users["alice-id"]
+			user.UserName = "Alice Example"
+			user.Groups = []string{" Platform "}
+			user.Department = "Engineering"
+			user.Organization = "Example"
+			user.Active = !tc.inactive
+			if tc.absent {
+				delete(inv.users, "alice-id")
+			}
+			e := NewForTesting(mustPolicy(t, "allow "+tc.selector+" -> root@*\n"), inv)
+			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+			if tc.allowed {
+				require.NoError(t, err)
+				require.NotNil(t, response)
+			} else {
+				var denied *wire.PolicyError
+				require.ErrorAs(t, err, &denied)
+				require.Equal(t, http.StatusForbidden, denied.StatusCode)
+				require.Nil(t, response)
 			}
 		})
 	}

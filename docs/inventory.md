@@ -85,7 +85,14 @@ facts. Inventory responses now use top-level `target` instead of `host`;
 CA and inventory must be upgraded together for this rename. The lookup request
 still uses `{token, host}`. Host responses are also flattened: move the old
 `inventory.host.resource` fields (`name`, `labels`, `accounts`) directly into
-`inventory.host`, alongside `principal`. CA still forwards only the policy fields. Policy API 7 uses projected policy facts and authorization
+`inventory.host`, alongside `principal`. CA still forwards only the policy fields.
+
+User responses no longer carry SCIM schema URIs: remove `schemas`, replace
+group objects with membership strings, and move `department` and `organization`
+directly into `directory.user`. The same user shape is projected to policy.
+Static YAML and authorization matching semantics are unchanged.
+
+Policy API 7 uses projected policy facts and authorization
 limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-7).
 Client and agent identity output are unchanged by the extraction.
 

@@ -45,7 +45,10 @@ not provider claims or verification rules. Authentication is intentionally concr
 OIDC support, without a generic authentication framework.
 
 Static users retain explicit `id` and `userName`. Both stable-id and verified-email
-semantics are preserved. SCIM-shaped protocol records do not imply a SCIM endpoint.
+semantics are preserved. User facts carry plain `id`, `userName`, `active`,
+`groups` (membership strings), `userType`, `department`, and `organization`
+fields. SCIM schema URIs and redundant group display values are not part of
+the internal protocol. Future SCIM adapters translate at the inventory boundary.
 
 ## Protocol and snapshots
 
@@ -84,7 +87,7 @@ unexpired authentication ID. CA validates inventory host/domain binding before
 projection: the policy host resource may name a shared domain rather than an
 individual target. User/host fields must be present; null denotes absence and
 leads to structural denial. Shared fact shapes live in `pkg/facts` without
-transport metadata. SCIM shape simplification remains separate work.
+transport metadata.
 
 ## Deployment
 

@@ -26,7 +26,7 @@ editor policy.writ inventory.yaml
 
 Update:
 - `policy.writ`: the access rules (who reaches which account on which hosts)
-- `inventory.yaml`: your team members (SCIM-shaped) and your hosts (names/patterns + labels)
+- `inventory.yaml`: your team members (directory records) and your hosts (names/patterns + labels)
 
 Then validate the pair:
 

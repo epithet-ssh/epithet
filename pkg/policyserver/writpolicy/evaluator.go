@@ -98,13 +98,10 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts 
 	if u.ID != facts.Authentication.ID || u.Active == nil {
 		return nil, fmt.Errorf("inventory user does not match authenticated identity")
 	}
-	user := &eval.User{ID: u.ID, UserName: u.UserName, Active: *u.Active, UserType: u.UserType}
-	for _, g := range u.Groups {
-		user.Groups = append(user.Groups, g.Value)
-	}
-	if u.Enterprise != nil {
-		user.Department = u.Enterprise.Department
-		user.Organization = u.Enterprise.Organization
+	user := &eval.User{
+		ID: u.ID, UserName: u.UserName, Active: *u.Active,
+		Groups: u.Groups, UserType: u.UserType,
+		Department: u.Department, Organization: u.Organization,
 	}
 	identity := user.UserName
 	host := facts.Host

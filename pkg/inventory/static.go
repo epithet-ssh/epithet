@@ -18,7 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Static is a file-backed inventory: SCIM-shaped users and hosts loaded
+// Static is a file-backed inventory: directory users and hosts loaded
 // once at startup. Reload is a process restart, like the policy itself.
 //
 // Host entries come in two forms. An exact entry (`name:`) is one

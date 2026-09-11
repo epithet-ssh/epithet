@@ -35,15 +35,11 @@ func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host 
 		Inventory: inventoryapi.HostSnapshot{Revision: s.InventoryRevision}}
 	if u != nil {
 		active := u.Active
-		user := &facts.User{Schemas: []string{facts.UserSchema}, ID: u.ID, UserName: u.UserName, Active: &active, UserType: u.UserType}
-		for _, g := range u.Groups {
-			user.Groups = append(user.Groups, facts.Group{Value: g, Display: g})
+		r.Directory.User = &facts.User{
+			ID: u.ID, UserName: u.UserName, Active: &active,
+			Groups: u.Groups, UserType: u.UserType,
+			Department: u.Department, Organization: u.Organization,
 		}
-		if u.Department != "" || u.Organization != "" {
-			user.Schemas = append(user.Schemas, facts.EnterpriseSchema)
-			user.Enterprise = &facts.Enterprise{Department: u.Department, Organization: u.Organization}
-		}
-		r.Directory.User = user
 	}
 	if h != nil {
 		accounts, err := json.Marshal(h.Policy.Accounts)

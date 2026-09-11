@@ -64,17 +64,17 @@ all three inventories, which is what makes inventory-aware linting
 possible.
 
 **Users** resolve through inventory independently of policy selectors. The
-policy view is SCIM-shaped; Epithet currently supplies it from static YAML.
+policy view uses plain user facts; Epithet currently supplies them from static YAML.
 SCIM provisioning remains future integration work.
 
 | Matcher | Inventory source |
 |---|---|
 | `userName:"..."` | Current, mutable `userName` |
 | `id:"..."` | Immutable, non-reassignable inventory ID within the configured provider/tenant |
-| `group:...` | Group `displayName` |
+| `group:...` | Membership string in `groups` |
 | `userType:...` | `userType` |
-| `department:...` | Enterprise extension `department` |
-| `organization:...` | Enterprise extension `organization` |
+| `department:...` | `department` |
+| `organization:...` | `organization` |
 
 Both userName and id selectors compare opaque strings byte-for-byte, without
 case folding, normalization, or globbing. A quoted wildcard is literal.

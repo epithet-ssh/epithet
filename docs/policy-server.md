@@ -6,12 +6,12 @@ Inventory runs in a separate service; see the [inventory service guide](inventor
 
 ## Overview
 
-The epithet policy server makes authorization decisions by evaluating a **writ policy file** against CA-supplied **inventory facts** about users and hosts. Policy rules say who may reach which account on which hosts; the inventory says who the users are (SCIM-shaped records) and what the hosts are (names plus labels).
+The epithet policy server makes authorization decisions by evaluating a **writ policy file** against CA-supplied **inventory facts** about users and hosts. Policy rules say who may reach which account on which hosts; the inventory says who the users are (directory records) and what the hosts are (names plus labels).
 
 **Key features:**
 - Inventory handles OIDC validation (Google Workspace, Okta, Azure AD, etc.)
 - A readable, order-independent policy language (`.writ`) with explicit `allow`/`deny` rules — deny always wins
-- SCIM-modeled user inventory (groups, userType, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
+- User inventory (groups, userType, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
 - Certificates minted per connection, using either compatible account-name principals or destination-bound hashed principals
 - Certificate validity clamped to the auth token's remaining lifetime
 - `epithet policy --check` validates policy; `epithet inventory --check` validates inventory
@@ -195,7 +195,7 @@ The inventory answers two questions at evaluation time: who is this identity, an
 
 ### Users
 
-User profile fields follow the SCIM (RFC 7643) shape. The required `id` is the provider-scoped identifier selected by the identity mode, used both for authentication lookup and Writ `id:` selectors:
+User facts use plain fields for identity, activity, group memberships, and profile attributes. The required `id` is the provider-scoped identifier selected by the identity mode, used both for authentication lookup and Writ `id:` selectors:
 
 ```yaml
 users:
@@ -289,10 +289,10 @@ username, and no language-version declaration is required. The other old
 shorthands are rejected. Name reuse deliberately transfers `userName:`
 matches to the new holder.
 
-Scalar selectors use SCIM attribute names, with Writ matching semantics.
+Scalar selectors use the user fact field names, with Writ matching semantics.
 The singular `group:` tests one membership in the plural inventory `groups`
 field; `groups:` is not a selector. The `department:` and
-`organization:` refer to Enterprise User extension fields. Writ does not
+`organization:` selectors refer to plain user fields. Writ does not
 parse arbitrary SCIM filters or JSON paths.
 
 Replace the old static `subject` (or `oidc-subject`) key with `id`. The old keys are rejected, including when `id` is also present. For the `sub` mapping, retain the value. For Entra's default `oid` mapping or an explicit override, obtain the newly selected identifier; do not merely rename the key and assume the old subject is correct.
@@ -680,13 +680,13 @@ Content-Type: application/json
     },
     "target": "server.example.com",
     "user": {
-      "schemas": [
-        "urn:ietf:params:scim:schemas:core:2.0:User"
-      ],
       "id": "provider-user-id",
       "userName": "alice@example.com",
       "active": true,
-      "groups": []
+      "groups": ["engineering"],
+      "userType": "employee",
+      "department": "Engineering",
+      "organization": "Example"
     },
     "host": {
       "name": "server.example.com",
@@ -772,6 +772,13 @@ expiry. No Writ language semantics change here.
 ### Custom policy migration (API 7)
 
 Upgrade CA, inventory, and policy together, including separately deployed services.
+User facts now use plain fields in both inventory responses and policy requests.
+Remove `schemas`; replace each group object with its `value` string; move
+`department` and `organization` out of the enterprise-extension URI property
+and directly into the user object. Group display values are no longer carried.
+Identity and group strings retain byte-exact matching. Static YAML is unchanged;
+future SCIM adapters translate external records at the inventory boundary.
+
 API 7 replaces the response `ttl` (nanoseconds) with integer `ttlSeconds`.
 Divide old durations by 1,000,000,000, rounding down; reject results below one
 second or above 9223372036. The signing-time origin and absolute expiry limits

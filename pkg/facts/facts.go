@@ -8,31 +8,23 @@ import (
 	"time"
 )
 
-const UserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
-const EnterpriseSchema = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
-
 // Authentication contains inventory's verified identity and session bound.
 // It deliberately contains no bearer credentials or provider-specific claims.
 type Authentication struct {
 	ID        string    `json:"id"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
-type Group struct {
-	Value   string `json:"value"`
-	Display string `json:"display"`
-}
-type Enterprise struct {
-	Department   string `json:"department,omitempty"`
-	Organization string `json:"organization,omitempty"`
-}
+
+// User contains the directory attributes used by policy. External directory
+// protocols are translated into these facts at the inventory boundary.
 type User struct {
-	Schemas    []string    `json:"schemas"`
-	ID         string      `json:"id"`
-	UserName   string      `json:"userName"`
-	Active     *bool       `json:"active"`
-	Groups     []Group     `json:"groups"`
-	UserType   string      `json:"userType,omitempty"`
-	Enterprise *Enterprise `json:"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User,omitempty"`
+	ID           string   `json:"id"`
+	UserName     string   `json:"userName"`
+	Active       *bool    `json:"active"`
+	Groups       []string `json:"groups"`
+	UserType     string   `json:"userType,omitempty"`
+	Department   string   `json:"department,omitempty"`
+	Organization string   `json:"organization,omitempty"`
 }
 type HostResource struct {
 	Name   string            `json:"name"`
@@ -56,17 +48,8 @@ func (u *User) Validate(authenticatedID string) error {
 	if u.ID != authenticatedID || u.UserName == "" || u.Active == nil {
 		return fmt.Errorf("invalid inventory user")
 	}
-	found := false
-	for _, schema := range u.Schemas {
-		if schema == UserSchema {
-			found = true
-		}
-	}
-	if !found {
-		return fmt.Errorf("inventory user schema is required")
-	}
 	for _, group := range u.Groups {
-		if group.Value == "" {
+		if group == "" {
 			return fmt.Errorf("empty inventory group ID")
 		}
 	}

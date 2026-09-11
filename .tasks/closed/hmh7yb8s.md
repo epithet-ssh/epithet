@@ -3,7 +3,7 @@ yatl_version: 1
 title: Remove SCIM protocol scaffolding from internal inventory user facts
 id: hmh7yb8s
 created: 2026-09-08T02:35:09.321602Z
-updated: 2026-09-08T02:35:09.325118Z
+updated: 2026-09-11T03:09:48.196591Z
 author: Brian McCallister
 priority: high
 tags:
@@ -27,3 +27,13 @@ Acceptance:
 # Log: 2026-09-08T02:35:09Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-11T03:06:24Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-11T03:09:48Z Brian McCallister
+
+Closed: Simplify shared user facts to plain fields and string group memberships; remove SCIM schemas and enterprise wrapper. Update resolver, policy projection, API schemas, examples, and migration docs. Preserve static YAML and authorization semantics, verified through JSON-boundary regression tests, make build, explicit go build, and make test.

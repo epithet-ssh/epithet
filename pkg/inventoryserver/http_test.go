@@ -33,6 +33,8 @@ func fixture(t *testing.T) (*inventory.Static, inventoryapi.ResolveRequest, *oid
     userName: alice@example.com
     groups: [Admins]
     department: Platform
+    organization: Example
+    userType: employee
 hosts:
   - name: ungrounded
   - name: empty
@@ -66,13 +68,18 @@ func TestResolverAuthenticationAndGrounding(t *testing.T) {
 			accounts, err := result.Inventory.Host.AccountList()
 			require.NoError(t, err)
 			require.Equal(t, tc.accounts, accounts)
-			require.Equal(t, "Platform", result.Directory.User.Enterprise.Department)
-			require.Equal(t, "Admins", result.Directory.User.Groups[0].Value)
+			require.Equal(t, "Platform", result.Directory.User.Department)
+			require.Equal(t, "Example", result.Directory.User.Organization)
+			require.Equal(t, "employee", result.Directory.User.UserType)
+			require.Equal(t, "Admins", result.Directory.User.Groups[0])
 			require.Equal(t, "subject:alice", result.Authentication.ID)
 			data, err := json.Marshal(result)
 			require.NoError(t, err)
 			require.NotContains(t, string(data), req.Token)
 			require.NotContains(t, string(data), `"token"`)
+			require.NotContains(t, string(data), "schemas")
+			require.NotContains(t, string(data), "urn:")
+			require.Contains(t, string(data), `"groups":["Admins"]`)
 
 		})
 	}
@@ -137,6 +144,9 @@ func TestClientRejectsMalformedAndUnavailableInventory(t *testing.T) {
 		name, body string
 		status     int
 	}{
+		{"missing active", strings.Replace(string(encoded), `,"active":true`, "", 1), 200},
+		{"empty group", strings.Replace(string(encoded), `"groups":["Admins"]`, `"groups":[""]`, 1), 200},
+		{"legacy group objects", strings.Replace(string(encoded), `"groups":["Admins"]`, `"groups":[{"value":"Admins","display":"Admins"}]`, 1), 200},
 		{"missing accounts", strings.Replace(string(encoded), `,"accounts":["root"]`, "", 1), 200},
 		{"wrong subject", strings.Replace(string(encoded), "subject:alice", "mallory-id", 1), 200},
 		{"wrong target", strings.Replace(string(encoded), `"target":"grounded"`, `"target":"other"`, 1), 200},

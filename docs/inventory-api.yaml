@@ -135,13 +135,8 @@ components:
     User:
       type: object
       nullable: true
-      required: [schemas, id, userName, active]
+      required: [id, userName, active]
       properties:
-        schemas:
-          type: array
-          items:
-            type: string
-          description: Includes urn:ietf:params:scim:schemas:core:2.0:User
         id:
           type: string
           minLength: 1
@@ -156,21 +151,13 @@ components:
           type: array
           nullable: true
           items:
-            type: object
-            required: [value, display]
-            properties:
-              value:
-                type: string
-                minLength: 1
-              display:
-                type: string
-        'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User':
-          type: object
-          properties:
-            department:
-              type: string
-            organization:
-              type: string
+            type: string
+            minLength: 1
+          description: Group membership identifiers matched byte-for-byte
+        department:
+          type: string
+        organization:
+          type: string
     Host:
       type: object
       nullable: true
