@@ -50,10 +50,11 @@ semantics are preserved. SCIM-shaped protocol records do not imply a SCIM endpoi
 ## Protocol and snapshots
 
 `POST /v1/resolve` accepts `{token, host}`. Hosts use ASCII case folding, shared
-with Writ. Version 1 returns `host`, `authentication: {id, expiresAt}`,
+with Writ. Version 1 returns `target`, `authentication: {id, expiresAt}`,
 `directory: {revision, user}`, and `inventory: {revision, host}`. User records use
 SCIM core User/group-reference fields and the enterprise extension. Host facts
-separate `resource` from `principal`. This protocol has no Writ Go types.
+contain `name`, `labels`, `accounts`, and `principal` directly. CA explicitly
+selects the first three fields for policy and retains `principal` for signing. This protocol has no Writ Go types.
 
 Each static revision is a SHA-256 digest of the loaded data for that component;
 host revision also includes the effective default principal mode. Revisions are

@@ -783,7 +783,7 @@ The API 6 input cleanup is retained. It replaces the inventory envelope in `fact
 - Rename the requested host string from `facts.host` to `facts.target`; retain `facts.authentication` unchanged.
 - Remove `facts.version`, `facts.resolvedAt`, snapshot wrappers/revisions, and principal metadata. CA validates inventory-to-target binding before projecting facts and signs the projection with the connection.
 - Remove `directoryRevision` and `inventoryRevision` from policy responses. CA combines its original revisions with policy's `policyId` for private issuance audit.
-- Inventory resolution no longer returns `resolvedAt`; it retains its protocol version and separate directory/host revisions. No upstream freshness guarantee was attached to the removed timestamp.
+- Inventory resolution uses top-level `target` for the requested host, flattens `inventory.host.resource` fields directly into `inventory.host` alongside `principal`, and no longer returns `resolvedAt`; it retains its protocol version and separate directory/host revisions. No upstream freshness guarantee was attached to the removed timestamp.
 
 The output-ownership change introduced in API 5 is retained. The old
 `certParams` response is no longer accepted as an authorization grant:

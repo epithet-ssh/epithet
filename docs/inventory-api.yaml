@@ -103,17 +103,17 @@ components:
           description: Requested host with ASCII case folding
     Resolution:
       type: object
-      required: [version, authentication, host, directory, inventory]
+      required: [version, authentication, target, directory, inventory]
       properties:
         version:
           type: integer
           enum: [1]
         authentication:
           $ref: '#/components/schemas/Authentication'
-        host:
+        target:
           type: string
           minLength: 1
-          description: Must match the requested host
+          description: Requested connection target; must match the request host after ASCII case folding
         directory:
           type: object
           required: [revision, user]
@@ -174,27 +174,23 @@ components:
     Host:
       type: object
       nullable: true
-      required: [resource, principal]
+      required: [name, accounts, principal]
       properties:
-        resource:
+        name:
+          type: string
+          minLength: 1
+          description: Requested host, or named shared principal domain
+        labels:
           type: object
-          required: [name, accounts]
-          properties:
-            name:
-              type: string
-              minLength: 1
-              description: Requested host, or named shared principal domain
-            labels:
-              type: object
-              nullable: true
-              additionalProperties:
-                type: string
-            accounts:
-              type: array
-              nullable: true
-              items:
-                type: string
-              description: Must be present; null means ungrounded and [] permits no accounts
+          nullable: true
+          additionalProperties:
+            type: string
+        accounts:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: Must be present; null means ungrounded and [] permits no accounts
         principal:
           type: object
           required: [mode]

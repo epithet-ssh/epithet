@@ -355,9 +355,9 @@ func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.
 	if err != nil {
 		return nil, err
 	}
-	input := &wire.PolicyFacts{Authentication: resolution.Authentication, Target: resolution.Host, User: resolution.Directory.User}
+	input := &wire.PolicyFacts{Authentication: resolution.Authentication, Target: resolution.Target, User: resolution.Directory.User}
 	if resolution.Inventory.Host != nil {
-		input.Host = &resolution.Inventory.Host.Resource
+		input.Host = &resolution.Inventory.Host.HostResource
 	}
 	return e.Evaluator.Evaluate(ctx, conn, input)
 }

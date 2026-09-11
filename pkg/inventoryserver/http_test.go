@@ -62,7 +62,8 @@ func TestResolverAuthenticationAndGrounding(t *testing.T) {
 			request.Host = tc.host
 			result, err := client.Resolve(t.Context(), request)
 			require.NoError(t, err)
-			accounts, err := result.Inventory.Host.Resource.AccountList()
+			require.Equal(t, request.Host, result.Target)
+			accounts, err := result.Inventory.Host.AccountList()
 			require.NoError(t, err)
 			require.Equal(t, tc.accounts, accounts)
 			require.Equal(t, "Platform", result.Directory.User.Enterprise.Department)
@@ -130,13 +131,15 @@ func TestClientRejectsMalformedAndUnavailableInventory(t *testing.T) {
 	encoded, err := json.Marshal(valid)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "resolvedAt")
+	require.NotContains(t, string(encoded), `"resource"`)
+	require.Contains(t, string(encoded), `"target":"grounded"`)
 	for _, tc := range []struct {
 		name, body string
 		status     int
 	}{
 		{"missing accounts", strings.Replace(string(encoded), `,"accounts":["root"]`, "", 1), 200},
 		{"wrong subject", strings.Replace(string(encoded), "subject:alice", "mallory-id", 1), 200},
-		{"wrong target", strings.Replace(string(encoded), `"host":"grounded"`, `"host":"other"`, 1), 200},
+		{"wrong target", strings.Replace(string(encoded), `"target":"grounded"`, `"target":"other"`, 1), 200},
 		{"missing revision", strings.Replace(string(encoded), `"revision":"`+inv.DirectoryRevision()+`"`, `"revision":""`, 1), 200},
 		{"missing user", strings.Replace(string(encoded), `"user":`, `"unexpected":`, 1), 200},
 		{"bad version", strings.Replace(string(encoded), `"version":1`, `"version":2`, 1), 200},

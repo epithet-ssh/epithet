@@ -176,9 +176,9 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err := facts.Validate(lookup.Host); err != nil {
 		return nil, err
 	}
-	policyFacts := &wire.PolicyFacts{Authentication: facts.Authentication, Target: facts.Host, User: facts.Directory.User}
+	policyFacts := &wire.PolicyFacts{Authentication: facts.Authentication, Target: facts.Target, User: facts.Directory.User}
 	if facts.Inventory.Host != nil {
-		policyFacts.Host = &facts.Inventory.Host.Resource
+		policyFacts.Host = &facts.Inventory.Host.HostResource
 	}
 	body, err := json.Marshal(wire.PolicyRequest{Connection: conn, Facts: policyFacts})
 	if err != nil {
@@ -243,7 +243,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if user == nil || user.Active == nil || !*user.Active || host == nil {
 		return nil, fmt.Errorf("policy issued for absent or inactive inventory records")
 	}
-	accounts, err := host.Resource.AccountList()
+	accounts, err := host.AccountList()
 	if err != nil {
 		return nil, err
 	}

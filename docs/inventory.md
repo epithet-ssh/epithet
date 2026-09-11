@@ -81,15 +81,21 @@ Restart inventory after editing its files; restart policy after editing Writ.
 Restart inventory when changing OIDC identity mapping. Restart agents if changing
 the login issuer or client settings they discovered at startup. Combined deployments can restart `epithet server`.
 Upgrade these services together: older policy requests do not carry the required
-facts. Policy API 7 uses projected policy facts and authorization
+facts. Inventory responses now use top-level `target` instead of `host`;
+CA and inventory must be upgraded together for this rename. The lookup request
+still uses `{token, host}`. Host responses are also flattened: move the old
+`inventory.host.resource` fields (`name`, `labels`, `accounts`) directly into
+`inventory.host`, alongside `principal`. CA still forwards only the policy fields. Policy API 7 uses projected policy facts and authorization
 limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-7).
 Client and agent identity output are unchanged by the extraction.
 
 ## Resolution and audit
 
 The [v1 API](inventory-api.yaml) returns separate directory and inventory
-snapshots with content revisions, the normalized authenticated `id`, and an
-`expiresAt` bound. Inventory never returns the bearer token. CA validates the
+snapshots with content revisions, the requested connection `target`, the normalized
+authenticated `id`, and an `expiresAt` bound. `target` must match the request
+`host`; `inventory.host.name` is the policy resource and may instead name
+a shared domain. Inventory never returns the bearer token. CA validates the
 full resolution, retains both revisions and principal metadata,
 and sends only authentication, requested target, user, and host resource fields to
 policy with the connection. Policy has no OIDC configuration or inventory envelope.

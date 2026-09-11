@@ -19,8 +19,8 @@ type Principal struct {
 	Domain string `json:"domain,omitempty"`
 }
 type Host struct {
-	Resource  facts.HostResource `json:"resource"`
-	Principal Principal          `json:"principal"`
+	facts.HostResource
+	Principal Principal `json:"principal"`
 }
 type DirectorySnapshot struct {
 	Revision string      `json:"revision"`
@@ -33,7 +33,7 @@ type HostSnapshot struct {
 type Resolution struct {
 	Version        int                  `json:"version"`
 	Authentication facts.Authentication `json:"authentication"`
-	Host           string               `json:"host"`
+	Target         string               `json:"target"`
 	Directory      DirectorySnapshot    `json:"directory"`
 	Inventory      HostSnapshot         `json:"inventory"`
 }
@@ -44,7 +44,7 @@ func (r *Resolution) Validate(host string) error {
 	if r == nil || r.Version != 1 {
 		return fmt.Errorf("inventory resolution version 1 is required")
 	}
-	if r.Host != host || host == "" || r.Authentication.ID == "" {
+	if r.Target != host || host == "" || r.Authentication.ID == "" {
 		return fmt.Errorf("inventory facts do not match authenticated identity and target")
 	}
 	if err := r.Authentication.Validate(); err != nil {
@@ -59,12 +59,12 @@ func (r *Resolution) Validate(host string) error {
 		}
 	}
 	if h := r.Inventory.Host; h != nil {
-		if err := h.Resource.Validate(); err != nil {
+		if err := h.HostResource.Validate(); err != nil {
 			return err
 		}
 		switch h.Principal.Mode {
 		case "account-name":
-			if h.Resource.Name != host {
+			if h.Name != host {
 				return fmt.Errorf("invalid account-name host binding")
 			}
 		case "epithet-principal-v1":
@@ -76,7 +76,7 @@ func (r *Resolution) Validate(host string) error {
 			if domain.IsGeneratedHost() {
 				expected = host
 			}
-			if h.Resource.Name != expected {
+			if h.Name != expected {
 				return fmt.Errorf("invalid principal-domain host binding")
 			}
 		default:
