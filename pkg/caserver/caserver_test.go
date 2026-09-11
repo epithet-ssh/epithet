@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +40,7 @@ func newTestCAWithInventoryURL(t *testing.T, inventoryURL string) *ca.CA {
 }
 
 // newTestCAServer creates a CA server backed by a mock policy server for testing.
-func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server, func(), string) {
+func newTestCAServer(t *testing.T, policyHandler http.Handler, loggers ...*slog.Logger) (*httptest.Server, func(), string) {
 	t.Helper()
 
 	idp := oidctest.New(t)
@@ -57,6 +58,9 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler) (*httptest.Server
 	require.NoError(t, err)
 
 	logger := slog.Default()
+	if len(loggers) != 0 {
+		logger = loggers[0]
+	}
 	server := caserver.New(caInstance, logger, nil)
 
 	mux := http.NewServeMux()
@@ -196,6 +200,15 @@ func TestCreateCert_Success(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Empty(t, resp.Header.Get("Link"))
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &fields))
+	require.Len(t, fields, 1)
+	var cert sshcert.RawCertificate
+	require.NoError(t, json.Unmarshal(fields["certificate"], &cert))
+	_, err = sshcert.Parse(cert)
+	require.NoError(t, err)
 }
 
 func TestCreateCert_PolicyError(t *testing.T) {

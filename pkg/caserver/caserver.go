@@ -58,7 +58,7 @@ func (s *caServer) Handler() http.Handler {
 		case "POST":
 			s.createCert(w, r)
 		default:
-			s.fail(w, http.StatusMethodNotAllowed, "Method not allowed")
+			s.fail(w, http.StatusMethodNotAllowed)
 		}
 	})
 }
@@ -70,14 +70,14 @@ func (s *caServer) Handler() http.Handler {
 func (s *caServer) DiscoveryHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
-			s.fail(w, http.StatusMethodNotAllowed, "Method not allowed")
+			s.fail(w, http.StatusMethodNotAllowed)
 			return
 		}
 
 		discovery, err := s.c.FetchDiscovery(r.Context())
 		if err != nil {
 			s.log.Warn("failed to fetch discovery from inventory service", "error", err)
-			s.fail(w, http.StatusBadGateway, "failed to fetch discovery: %v", err)
+			s.failError(w, err)
 			return
 		}
 
@@ -86,11 +86,11 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 		out, err := json.Marshal(resp)
 		if err != nil {
 			s.log.Warn("unable to jsonify discovery response", "error", err)
-			s.fail(w, http.StatusInternalServerError, "unable to jsonify discovery response")
+			s.fail(w, http.StatusInternalServerError)
 			return
 		}
 
-		// Pass through the policy server's Cache-Control header so clients
+		// Pass through the inventory service's Cache-Control header so clients
 		// respect the upstream's caching intent. Fall back to 5 minutes.
 		cc := discovery.CacheControl
 		if cc == "" {
@@ -103,11 +103,50 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 	})
 }
 
-// fail writes a plain-text error response.
-func (s *caServer) fail(w http.ResponseWriter, code int, format string, args ...any) {
+// fail writes only fixed public messages. Diagnostics must be logged separately.
+func (s *caServer) fail(w http.ResponseWriter, code int) {
+	message := ""
+	switch code {
+	case http.StatusAccepted:
+		message = "authorization pending; try again later"
+	case http.StatusBadRequest:
+		message = "invalid certificate request"
+	case http.StatusUnauthorized:
+		message = "invalid or expired authentication"
+	case http.StatusForbidden:
+		message = "access denied"
+	case http.StatusMethodNotAllowed:
+		message = "method not allowed"
+	case http.StatusRequestEntityTooLarge:
+		message = "request too large"
+	case http.StatusBadGateway:
+		message = "CA dependency unavailable"
+	default:
+		code = http.StatusInternalServerError
+		message = "internal CA error"
+	}
 	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
-	fmt.Fprintf(w, format, args...)
+	io.WriteString(w, message)
+}
+
+// failError maps trusted CA error classes, never upstream HTTP statuses or bodies.
+func (s *caServer) failError(w http.ResponseWriter, err error) {
+	code := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, ca.ErrInvalidAuthentication):
+		code = http.StatusUnauthorized
+	case errors.Is(err, ca.ErrAccessDenied):
+		code = http.StatusForbidden
+	case errors.Is(err, ca.ErrAuthorizationPending):
+		code = http.StatusAccepted
+	case errors.Is(err, ca.ErrDependency):
+		code = http.StatusBadGateway
+	case errors.Is(err, ca.ErrInvalidPublicKey):
+		code = http.StatusBadRequest
+	}
+	s.fail(w, code)
 }
 
 // CreateCertRequest asks for a signed cert. Both fields are required.
@@ -145,49 +184,50 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	// Extract token from Authorization header.
 	token, err := parseAuthHeader(r)
 	if err != nil {
-		s.fail(w, http.StatusUnauthorized, "%s", err.Error())
+		s.log.Warn("invalid authorization header", "error", err)
+		s.fail(w, http.StatusUnauthorized)
 		return
 	}
 
 	ccr := CreateCertRequest{}
 	body, err := io.ReadAll(io.LimitReader(r.Body, wire.MaxBodySize+1))
 	if err != nil {
-		s.fail(w, http.StatusBadRequest, "unable to read body: %s", err)
+		s.log.Warn("unable to read certificate request", "error", err)
+		s.fail(w, http.StatusBadRequest)
 		return
 	}
 
 	// Check if request body exceeds the limit to report a distinct "too large"
 	// error instead of a confusing JSON parse failure.
 	if len(body) > wire.MaxBodySize {
-		s.fail(w, http.StatusRequestEntityTooLarge, "Request body too large")
+		s.fail(w, http.StatusRequestEntityTooLarge)
 		return
 	}
 
 	err = json.Unmarshal(body, &ccr)
 	if err != nil {
-		s.fail(w, http.StatusBadRequest, "unable to parse body: %s", err)
+		s.log.Warn("unable to parse certificate request", "error", err)
+		s.fail(w, http.StatusBadRequest)
 		return
 	}
 
-	if ccr.PublicKey == "" || ccr.Connection.RemoteHost == "" {
-		s.fail(w, http.StatusBadRequest, "publicKey and connection.remoteHost are required")
+	if ccr.PublicKey == "" || ccr.Connection.RemoteHost == "" || ccr.Connection.RemoteUser == "" {
+		s.log.Warn("certificate request requires publicKey, connection.remoteHost, and connection.remoteUser")
+		s.fail(w, http.StatusBadRequest)
 		return
 	}
 
 	policyResp, err := s.c.RequestPolicy(r.Context(), token, ccr.Connection)
 	if err != nil {
-		var policyErr *wire.PolicyError
-		if errors.As(err, &policyErr) {
-			s.fail(w, policyErr.StatusCode, "%s", policyErr.Message)
-			return
-		}
-		s.fail(w, http.StatusInternalServerError, "%s\nerror retrieving policy: %s", s.c.PolicyURL(), err)
+		s.log.Warn("certificate authorization failed", "error", err)
+		s.failError(w, err)
 		return
 	}
 
 	cert, err := s.c.SignPublicKey(ccr.PublicKey, &policyResp.CertParams)
 	if err != nil {
-		s.fail(w, http.StatusBadRequest, "error generating crt: %s", err)
+		s.log.Warn("certificate signing failed", "error", err)
+		s.failError(w, err)
 		return
 	}
 
@@ -202,7 +242,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 	out, err := json.Marshal(&resp)
 	if err != nil {
 		s.log.Warn("unable to jsonify response", "error", err)
-		s.fail(w, http.StatusInternalServerError, "unable to jsonify response")
+		s.fail(w, http.StatusInternalServerError)
 		return
 	}
 

@@ -3,7 +3,7 @@ yatl_version: 1
 title: Define supported public behavior for pending policy decisions
 id: twperd14
 created: 2026-09-08T02:35:09.359650Z
-updated: 2026-09-08T02:35:09.363018Z
+updated: 2026-09-11T03:27:48.624197Z
 author: Brian McCallister
 priority: high
 tags:
@@ -29,3 +29,13 @@ Acceptance:
 # Log: 2026-09-08T02:35:09Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-11T03:17:00Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-11T03:27:48Z Brian McCallister
+
+Closed: User requested a pending outcome without descriptive policy leakage. Implement generic public 202 authorization pending; try again later and caclient.PolicyPendingError. No cert, forced refresh, automatic polling, or failover; later explicit requests retry. Fix breaker recovery to preserve non-infrastructure outcomes. Document CLI plugin limitations, no approval store or retry-delay protocol, and client migration. Full suite, recovery regressions, and broker/breakerpool race checks passed.

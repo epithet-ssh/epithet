@@ -157,7 +157,11 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 	if c.inventory == nil {
 		return nil, fmt.Errorf("inventory service is required")
 	}
-	return c.inventory.FetchDiscovery(ctx)
+	discovery, err := c.inventory.FetchDiscovery(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: fetching inventory discovery: %w", ErrDependency, err)
+	}
+	return discovery, nil
 }
 
 // RequestPolicy requests policy from the policy server for a cert request.
@@ -171,10 +175,14 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	lookup := inventoryapi.ResolveRequest{Token: token, Host: hostpattern.NormalizeName(conn.RemoteHost)}
 	facts, err := c.inventory.Resolve(ctx, lookup)
 	if err != nil {
-		return nil, fmt.Errorf("resolving inventory: %w", err)
+		var policyErr *wire.PolicyError
+		if errors.As(err, &policyErr) && policyErr.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w: resolving inventory: %w", ErrInvalidAuthentication, err)
+		}
+		return nil, fmt.Errorf("%w: resolving inventory: %w", ErrDependency, err)
 	}
 	if err := facts.Validate(lookup.Host); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDependency, err)
 	}
 	policyFacts := &wire.PolicyFacts{Authentication: facts.Authentication, Target: facts.Target, User: facts.Directory.User}
 	if facts.Inventory.Host != nil {
@@ -209,7 +217,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		if c.logger != nil {
 			c.logger.Debug("http request failed", "method", "POST", "url", c.policyURL, "duration_ms", duration.Milliseconds(), "error", err)
 		}
-		return nil, fmt.Errorf("error executing request: %w", err)
+		return nil, fmt.Errorf("%w: executing policy request: %w", ErrDependency, err)
 	}
 	defer res.Body.Close()
 
@@ -219,36 +227,41 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 
 	buf, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
 	if err != nil {
-		return nil, fmt.Errorf("error reading response: %w", err)
+		return nil, fmt.Errorf("%w: reading policy response: %w", ErrDependency, err)
 	}
 
 	// Check if policy server response exceeds the limit.
 	if len(buf) > wire.MaxBodySize {
-		return nil, fmt.Errorf("policy server response exceeds %d bytes", wire.MaxBodySize)
+		return nil, fmt.Errorf("%w: policy server response exceeds %d bytes", ErrDependency, wire.MaxBodySize)
 	}
 
-	if res.StatusCode != 200 {
-		return nil, &wire.PolicyError{
-			StatusCode: res.StatusCode,
-			Message:    string(buf),
+	if res.StatusCode != http.StatusOK {
+		// Only a policy 403 means denial. In particular, a policy 401 rejects
+		// the CA's service credential; refreshing the user's token cannot fix it.
+		kind := ErrDependency
+		if res.StatusCode == http.StatusForbidden {
+			kind = ErrAccessDenied
+		} else if res.StatusCode == http.StatusAccepted {
+			kind = ErrAuthorizationPending
 		}
+		return nil, fmt.Errorf("%w: policy returned HTTP %d: %s", kind, res.StatusCode, buf)
 	}
 
 	policyResp := &wire.PolicyResponse{}
 	err = json.Unmarshal(buf, policyResp)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing response from %s: %w", c.policyURL, err)
+		return nil, fmt.Errorf("%w: parsing response from %s: %w", ErrDependency, c.policyURL, err)
 	}
 	user, host := facts.Directory.User, facts.Inventory.Host
 	if user == nil || user.Active == nil || !*user.Active || host == nil {
-		return nil, fmt.Errorf("policy issued for absent or inactive inventory records")
+		return nil, fmt.Errorf("%w: policy issued for absent or inactive inventory records", ErrDependency)
 	}
 	accounts, err := host.AccountList()
 	if err != nil {
 		return nil, err
 	}
 	if conn.RemoteUser == "" || (accounts != nil && !slices.Contains(accounts, conn.RemoteUser)) {
-		return nil, fmt.Errorf("policy issued for an account outside the resolved host restrictions")
+		return nil, fmt.Errorf("%w: policy issued for an account outside the resolved host restrictions", ErrDependency)
 	}
 	expected := conn.RemoteUser
 	if host.Principal.Mode == "epithet-principal-v1" {
@@ -258,14 +271,14 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		}
 	}
 	if policyResp.TTLSeconds <= 0 || policyResp.TTLSeconds > wire.MaxTTLSeconds {
-		return nil, fmt.Errorf("policy ttlSeconds must be between 1 and %d", wire.MaxTTLSeconds)
+		return nil, fmt.Errorf("%w: policy ttlSeconds must be between 1 and %d", ErrDependency, wire.MaxTTLSeconds)
 	}
 	notAfter := facts.Authentication.ExpiresAt
 	if !policyResp.NotAfter.IsZero() && policyResp.NotAfter.Before(notAfter) {
 		notAfter = policyResp.NotAfter
 	}
 	if !notAfter.After(time.Now()) {
-		return nil, fmt.Errorf("certificate authorization has expired")
+		return nil, fmt.Errorf("%w: certificate authorization has expired", ErrDependency)
 	}
 	return &Authorization{
 		ID: user.ID, PolicyID: policyResp.PolicyID,
@@ -292,7 +305,7 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (
 
 	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(rawPubKey))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalidPublicKey, err)
 	}
 
 	// Anchor TTL at signing, after key parsing and entropy acquisition. Recheck

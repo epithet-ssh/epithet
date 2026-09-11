@@ -40,6 +40,9 @@ type Pool[T, S any] struct {
 
 	// tierIndex tracks round-robin position within each priority tier
 	tierIndex map[int]int
+
+	// Preserve outcome classification when probing with all breakers open.
+	isSuccessful func(error) bool
 }
 
 // New creates a new Pool with the given entries and default circuit breaker settings.
@@ -47,12 +50,16 @@ type Pool[T, S any] struct {
 //   - Uses entry.Settings if non-nil, otherwise uses defaults
 //   - Uses entry.Priority if non-zero, otherwise uses DefaultPriority
 func New[T, S any](entries []Entry[S], defaults gobreaker.Settings) *Pool[T, S] {
+	if defaults.IsSuccessful == nil {
+		defaults.IsSuccessful = func(err error) bool { return err == nil }
+	}
 	if len(entries) == 0 {
 		return &Pool[T, S]{
-			entries:   nil,
-			breakers:  nil,
-			tiers:     nil,
-			tierIndex: make(map[int]int),
+			entries:      nil,
+			breakers:     nil,
+			tiers:        nil,
+			tierIndex:    make(map[int]int),
+			isSuccessful: defaults.IsSuccessful,
 		}
 	}
 
@@ -103,10 +110,11 @@ func New[T, S any](entries []Entry[S], defaults gobreaker.Settings) *Pool[T, S] 
 	}
 
 	return &Pool[T, S]{
-		entries:   sortedEntries,
-		breakers:  breakers,
-		tiers:     tiers,
-		tierIndex: tierIndex,
+		entries:      sortedEntries,
+		breakers:     breakers,
+		tiers:        tiers,
+		tierIndex:    tierIndex,
+		isSuccessful: defaults.IsSuccessful,
 	}
 }
 
@@ -176,6 +184,9 @@ func (p *Pool[T, S]) Execute(fn func(S) (T, error)) (T, error) {
 					if err == nil {
 						return result, nil
 					}
+					if p.isSuccessful(err) {
+						return zero, err
+					}
 					lastErr = err
 				}
 			}
@@ -196,6 +207,9 @@ func (p *Pool[T, S]) Execute(fn func(S) (T, error)) (T, error) {
 				// Breaker is open, try next entry
 				lastErr = err
 				continue
+			}
+			if p.isSuccessful(err) {
+				return zero, err
 			}
 
 			// Check if this error tripped the breaker (via IsSuccessful)

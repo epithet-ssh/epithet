@@ -164,7 +164,7 @@ epithet server --listen <addr> --ca-key <path>
 
 1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Constructs identity and the sole requested principal from inventory, then signs using policy TTL/extensions and optional deadline, clamping expiry to `min(signing time + ttlSeconds seconds, authentication expiry, optional policy deadline)`.
 
-2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
+2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `PolicyPendingError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
 3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and OIDC authentication on endpoints. Communicates with `epithet match` and `epithet agent identity`/`inspect`/`kill` over newline-framed JSON on a unix socket — see [Protocols](#protocols). Implements per-connection agent creation and automatic expiry cleanup. Its agent map holds routing and expiry metadata, not copies of credentials.
 
@@ -210,7 +210,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 - **`ca.Authorization` / `ca.CertParams`**: Local CA signing inputs and private issuance audit, assembled from trusted facts and policy limits
 - **`policy.Connection`**: Connection details (`%h`, `%p`, `%r`, `%C`, `%j`) passed through `match` → broker → CA → policy server
 - **`agent.Credential`**: Private key + certificate pair used by the agent
-- **`caclient.InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`**: Domain-specific error types for CA failures
+- **`caclient.InvalidTokenError`, `PolicyDeniedError`, `PolicyPendingError`, `CAUnavailableError`**: Domain-specific error types for CA failures
 
 ## Protocols
 
@@ -227,7 +227,7 @@ Newline-framed JSON over the broker's unix socket — no gRPC, no protobuf. Both
 
 The broker requests certificates from the CA over HTTP with the user's JWT in `Authorization: Bearer`. `POST /` with `{"publicKey","connection"}` returns `{"certificate"}`.
 
-**Error codes**: 401 (token rejected — triggers the single forced-refresh retry), 403 (policy denied), 422 (connection not handled by this CA), 5xx (CA unavailable, triggers failover).
+**Error codes**: 401 (token rejected — triggers the single forced-refresh retry), 403 (policy denied), 202 (authorization pending), 5xx (CA unavailable, triggers failover).
 
 ### CA → inventory protocol
 
@@ -272,15 +272,20 @@ When epithet cannot obtain a certificate (auth failures, CA errors, agent creati
 
 ### CA error handling
 
+See [the public CA error contract](ca-errors.md) for fixed messages and private
+service status mapping. A rejected CA service credential is public 502; only
+user-authentication rejection is public 401.
+
 **HTTP 401 Unauthorized** - token rejected:
 1. Broker forces exactly one refresh via `Auth.ForceRefresh` and retries once
 2. If the retry also fails, fail the Match with a clear error
 
 **HTTP 403 Forbidden** - policy denied the request:
-1. Fail the Match with a clear error explaining the denial; do not retry
+1. Fail the Match with generic `access denied`; detailed reasons stay in server logs.
 
-**HTTP 422 Unprocessable Content** - this CA/policy server does not handle the connection:
-1. Fail the Match; do not retry; SSH falls through to other auth methods
+**HTTP 202 Accepted** - authorization is pending:
+1. Fail the current Match with `authorization pending; try again later`.
+2. Do not refresh authentication, fail over, or poll automatically; a later explicit attempt evaluates again.
 
 **HTTP 5xx Server Error** - transient CA/policy server issue:
 1. Fail the Match; user can retry the SSH connection (or a different CA endpoint takes over via the circuit breaker)

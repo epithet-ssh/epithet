@@ -84,6 +84,14 @@ paths:
                       permit-pty: ""
                       permit-agent-forwarding: ""
 
+        '202':
+          description: Authorization pending; no certificate. CA exposes only a generic pending message.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "waiting on approval (private diagnostic)"
+
         '400':
           description: Malformed request body (not valid JSON, or the read itself failed)
           content:
@@ -93,7 +101,7 @@ paths:
               example: "Invalid JSON: unexpected end of JSON input"
 
         '401':
-          description: Invalid service JWT
+          description: Invalid service JWT; CA maps this to public 502, never user-token refresh
           content:
             text/plain:
               schema:
@@ -101,7 +109,7 @@ paths:
               example: "request verification failed"
 
         '403':
-          description: User not authorized for this access
+          description: User not authorized; details are private and CA returns only access denied
           content:
             text/plain:
               schema:

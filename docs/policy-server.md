@@ -440,7 +440,7 @@ For each request `(identity, account@host)` the evaluator (`pkg/policyserver/wri
 1. **Validates the OIDC token** — signature against the provider's JWKS, expiry, issuer, audience — and extracts the identity and token expiry.
 2. **Structural gates** — the identity must resolve to an `active` inventory user; the host must resolve in the inventory; if the host lists accounts, the requested account must be among them. Any failure → 403, regardless of policy text.
 3. **Collects matching rules** — a rule matches when its user, account, and host expressions all match.
-4. **Deny wins** — any matching deny → 403, always; no allow can override. The denial names the rule's label (or content id).
+4. **Deny wins** — any matching deny → 403, always; no allow can override. The private denial names the rule's label (or content id); the public CA response is only `access denied`.
 5. **Authorizes issuance** if any allow survives: the response `ttlSeconds` is the whole-second value of the minimum `ttl` among satisfied allows (else the default), and `extensions` are the deployment set. CA constructs the certificate Key ID and exactly one requested principal, and independently caps its expiry at the authentication expiry from inventory. Built-in Writ policy supplies no additional absolute deadline; Writ `until` continues to control rule eligibility at evaluation time.
 
 Evaluator or inventory failures fail **closed** (500), never "treat as no match".
@@ -612,6 +612,10 @@ epithet inventory --check --static /etc/epithet/inventory.yaml
 
 ### Common errors
 
+The detailed policy messages below are private diagnostics found in server
+logs. Public CA denials say only `access denied`; pending decisions say
+`authorization pending; try again later`. See [public CA errors](ca-errors.md).
+
 **"user does not resolve to an active inventory user" (403)**
 - The configured OIDC user-ID claim doesn't match any inventory `id` (byte-for-byte, case-sensitive), or the record has `active: false`
 - Verify the OIDC provider is sending the expected claim
@@ -633,7 +637,7 @@ epithet inventory --check --static /etc/epithet/inventory.yaml
 - Inventory rejected the user JWT: signature verification failed, token expired, or issuer/audience mismatch
 - Check system clock synchronization
 
-**"request verification failed" (401)**
+**"request verification failed" (private policy 401; public CA 502)**
 - The CA's service JWT failed verification: expired (>60s old), wrong `aud`, body-hash mismatch, method/target mismatch, or the wrong signing key
 - Check that `ca-pubkey` in the config matches the CA's actual public key
 
@@ -811,7 +815,7 @@ combines CA-constructed signing inputs with private audit metadata. Client-facin
 success responses still contain only the certificate. Combined deployment remains
 `epithet server`; static YAML and Writ syntax are unchanged.
 
-**Denial (HTTP 401, 403, or 500):**
+**Private non-issuance responses (HTTP 202, 401, 403, or 5xx):**
 
 Error responses are **plain text**, not JSON - the body is the message
 itself, with `Content-Type: text/plain` (see `writeError` in
@@ -821,8 +825,11 @@ itself, with `Content-Type: text/plain` (see `writeError` in
 alice@example.com is not authorized for deploy@prod-web-01.example.com: no policy rule allows this access
 ```
 
-Return any non-200 status code with a plain-text body to deny the
-certificate request.
+Return 403 for authorization denial or 202 for pending authorization.
+CA returns a fixed public message for each outcome and logs the private reason.
+A policy 401 rejects the CA service credential and becomes a public 502.
+Other non-200 statuses also become public infrastructure errors; none authorize
+a certificate. See [public CA errors and pending behavior](ca-errors.md).
 
 ### Service authentication (CA → policy server)
 

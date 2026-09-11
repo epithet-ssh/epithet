@@ -41,6 +41,14 @@ func (e *PolicyDeniedError) Error() string {
 	return fmt.Sprintf("access denied by policy: %s", e.Message)
 }
 
+// PolicyPendingError means authorization is not yet issuable. A later request
+// may succeed; this does not trigger token refresh, failover, or automatic polling.
+type PolicyPendingError struct{}
+
+func (e *PolicyPendingError) Error() string {
+	return "authorization pending; try again later"
+}
+
 // CAUnavailableError indicates the CA service is temporarily unavailable.
 // This is typically a transient infrastructure issue.
 type CAUnavailableError struct {
@@ -518,6 +526,8 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 
 	if res.StatusCode != 200 {
 		switch res.StatusCode {
+		case http.StatusAccepted:
+			return nil, &PolicyPendingError{}
 		case http.StatusUnauthorized:
 			return nil, &InvalidTokenError{Message: string(respBody)}
 		case http.StatusForbidden:
@@ -565,6 +575,10 @@ func isSuccessfulForCircuitBreaker(err error) bool {
 	var policyDenied *PolicyDeniedError
 	if errors.As(err, &policyDenied) {
 		return true // Don't trip breaker
+	}
+	var pending *PolicyPendingError
+	if errors.As(err, &pending) {
+		return true
 	}
 
 	// InvalidRequestError (4xx) - client issue, not infrastructure

@@ -91,6 +91,14 @@ individual target. User/host fields must be present; null denotes absence and
 leads to structural denial. Shared fact shapes live in `pkg/facts` without
 transport metadata.
 
+## Public outcomes
+
+CA maps private errors to the [public error contract](../docs/ca-errors.md).
+Denials return generic 403; pending authorization returns generic 202 and allows
+a later explicit retry without polling or token refresh. Private reasons stay
+in server logs. Policy service authentication failures become 502, while user
+token rejection from inventory resolution remains 401.
+
 ## Deployment
 
 `epithet server` supervises inventory, policy, and CA subprocesses, passes the

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
@@ -50,6 +51,15 @@ func TestClient_StatusCodes(t *testing.T) {
 		statusCode int
 		checkErr   func(t *testing.T, err error)
 	}{
+		{
+			"202 returns PolicyPendingError",
+			http.StatusAccepted,
+			func(t *testing.T, err error) {
+				var e *caclient.PolicyPendingError
+				require.ErrorAs(t, err, &e)
+				require.Equal(t, "authorization pending; try again later", e.Error())
+			},
+		},
 		{
 			"401 returns InvalidTokenError",
 			http.StatusUnauthorized,
@@ -130,6 +140,49 @@ func TestGetCert_ReturnsCertificate(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, sshcert.RawCertificate("ssh-ed25519-cert-v01@openssh.com AAAA..."), resp.Certificate)
+}
+
+func TestRecoveredCAOutcomesDoNotFailOver(t *testing.T) {
+	for _, status := range []int{http.StatusAccepted, http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var currentStatus, primaryCalls, backupCalls atomic.Int32
+			currentStatus.Store(http.StatusServiceUnavailable)
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				primaryCalls.Add(1)
+				w.WriteHeader(int(currentStatus.Load()))
+			}))
+			defer primary.Close()
+			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				backupCalls.Add(1)
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer backup.Close()
+			client, err := caclient.New([]caclient.CAEndpoint{{URL: primary.URL, Priority: 200}, {URL: backup.URL, Priority: 100}})
+			require.NoError(t, err)
+			req := &caserver.CreateCertRequest{PublicKey: "key", Connection: policy.Connection{RemoteHost: "host", RemoteUser: "root"}}
+			_, err = client.GetCert(t.Context(), "token", req)
+			var unavailable *caclient.AllCAsUnavailableError
+			require.ErrorAs(t, err, &unavailable)
+			currentStatus.Store(int32(status))
+			primaryCalls.Store(0)
+			backupCalls.Store(0)
+			response, err := client.GetCert(t.Context(), "token", req)
+			require.Nil(t, response)
+			switch status {
+			case http.StatusAccepted:
+				var pending *caclient.PolicyPendingError
+				require.ErrorAs(t, err, &pending)
+			case http.StatusUnauthorized:
+				var invalid *caclient.InvalidTokenError
+				require.ErrorAs(t, err, &invalid)
+			case http.StatusForbidden:
+				var denied *caclient.PolicyDeniedError
+				require.ErrorAs(t, err, &denied)
+			}
+			require.Equal(t, int32(1), primaryCalls.Load())
+			require.Zero(t, backupCalls.Load())
+		})
+	}
 }
 
 func TestGetRootReturnsCanonicalKeyAndLinkFields(t *testing.T) {

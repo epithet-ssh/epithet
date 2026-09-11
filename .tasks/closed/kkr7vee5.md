@@ -3,7 +3,7 @@ yatl_version: 1
 title: Distinguish service authentication failures from user authentication failures
 id: kkr7vee5
 created: 2026-09-08T02:35:09.311867Z
-updated: 2026-09-08T02:35:09.315346Z
+updated: 2026-09-11T03:27:48.613797Z
 author: Brian McCallister
 priority: high
 tags:
@@ -27,3 +27,13 @@ Acceptance:
 # Log: 2026-09-08T02:35:09Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-11T03:17:00Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-11T03:27:48Z Brian McCallister
+
+Closed: Classify inventory lookup user-token rejection as 401; map policy 401 and inventory service-authentication failure to dependency 502. Verify the full private-service to CA to client to broker path: no forced user refresh for service failures, correct infrastructure failover, and exactly one forced retry for user rejection. Preserve audience/request binding. Full suite and broker/breakerpool race checks passed.

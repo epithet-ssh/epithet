@@ -2,8 +2,6 @@ package policy_test
 
 import (
 	"bytes"
-	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -20,7 +18,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
 )
@@ -71,21 +68,6 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	return authority, idp
 }
 
-func doPolicyRequest(t *testing.T, authority *ca.CA, token string, conn policy.Connection) *httptest.ResponseRecorder {
-	t.Helper()
-	response, err := authority.RequestPolicy(t.Context(), token, conn)
-	w := httptest.NewRecorder()
-	if err != nil {
-		var pe *wire.PolicyError
-		require.ErrorAs(t, err, &pe)
-		w.WriteHeader(pe.StatusCode)
-		w.WriteString(pe.Message)
-	} else {
-		require.NoError(t, json.NewEncoder(w).Encode(response))
-	}
-	return w
-}
-
 // TestPolicyIntegration_ValidToken_ReturnsSigningInputs exercises inventory OIDC
 // validation, policy evaluation, and CA construction together. The CA derives
 // the requested principal and enforces the token expiry independently of TTL.
@@ -95,64 +77,61 @@ func TestPolicyIntegration_ValidToken_ReturnsSigningInputs(t *testing.T) {
 	exp := time.Now().Add(2 * time.Minute).Truncate(time.Second)
 	token := idp.MintIDToken("alice@example.com", exp)
 
-	w := doPolicyRequest(t, handler, token, policy.Connection{
+	resp, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 		Port:       22,
 	})
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	var resp ca.Authorization
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, resp.CertParams.Names)
 	require.Equal(t, "alice@example.com", resp.CertParams.Identity)
 	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration)
 	require.Equal(t, exp, resp.CertParams.NotAfter)
 }
 
-// TestPolicyIntegration_ExpiredToken_Returns401 verifies real expiry
+// TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError verifies real expiry
 // enforcement: the token's exp claim is in the past, so the real OIDC
 // verifier must reject it before the evaluator ever runs.
-func TestPolicyIntegration_ExpiredToken_Returns401(t *testing.T) {
+func TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
 	token := idp.MintIDToken("alice@example.com", time.Now().Add(-time.Minute))
 
-	w := doPolicyRequest(t, handler, token, policy.Connection{
+	_, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	})
-	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	require.ErrorIs(t, err, ca.ErrInvalidAuthentication)
 }
 
-// TestPolicyIntegration_WrongAudience_Returns401 verifies the validator
+// TestPolicyIntegration_WrongAudience_ReturnsAuthenticationError verifies the validator
 // enforces the configured client_id as audience: a token signed by the same
 // IdP but for a different client must be rejected.
-func TestPolicyIntegration_WrongAudience_Returns401(t *testing.T) {
+func TestPolicyIntegration_WrongAudience_ReturnsAuthenticationError(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
 	token := idp.MintIDTokenWithAudience("alice@example.com", "someone-elses-client", time.Now().Add(time.Minute))
 
-	w := doPolicyRequest(t, handler, token, policy.Connection{
+	_, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	})
-	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	require.ErrorIs(t, err, ca.ErrInvalidAuthentication)
 }
 
-// TestPolicyIntegration_UnknownUser_Returns403 verifies a validly signed
+// TestPolicyIntegration_UnknownUser_ReturnsDenial verifies a validly signed
 // token for an identity absent from the policy's users list is authenticated
 // fine but denied by authorization - a 403, not a 401.
-func TestPolicyIntegration_UnknownUser_Returns403(t *testing.T) {
+func TestPolicyIntegration_UnknownUser_ReturnsDenial(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
 	token := idp.MintIDToken("mallory@example.com", time.Now().Add(time.Minute))
 
-	w := doPolicyRequest(t, handler, token, policy.Connection{
+	_, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	})
-	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	require.ErrorIs(t, err, ca.ErrAccessDenied)
 }
 
 // TestPolicyServerCommand validates that the policy command exists and shows help

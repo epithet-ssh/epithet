@@ -3,7 +3,7 @@ yatl_version: 1
 title: Define public CA errors and keep internal diagnostics in server logs
 id: ms54kqbp
 created: 2026-09-08T02:35:09.301204Z
-updated: 2026-09-08T02:35:09.304922Z
+updated: 2026-09-11T03:27:48.601839Z
 author: Brian McCallister
 priority: high
 tags:
@@ -27,3 +27,13 @@ Acceptance:
 # Log: 2026-09-08T02:35:09Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-11T03:15:04Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-11T03:27:48Z Brian McCallister
+
+Closed: Define fixed public CA messages and trusted CA error classes. Keep policy denial/pending reasons, private URLs, and diagnostics in server logs; sanitize issuance and discovery failures, and preserve certificate-only success. Document status mappings and coordinated migration in docs/ca-errors.md and docs/inventory-cleanup-summary.md. make build, explicit go build, full make test, and broker/breakerpool race checks passed.
