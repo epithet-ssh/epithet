@@ -81,7 +81,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						if !assert.NoError(t, json.Unmarshal(data, &request)) {
 							return
 						}
-						assert.Equal(t, expiry, request.Facts.Authentication.ExpiresAt)
+						assert.WithinDuration(t, expiry, request.Facts.Authentication.ExpiresAt, 0)
 						assert.Equal(t, "subject:alice", request.Facts.User.ID)
 						if tc.body != "" {
 							w.Write([]byte(tc.body))
@@ -110,7 +110,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						return
 					}
 					require.NoError(t, err)
-					require.Equal(t, tc.wantCeiling, result.CertParams.NotAfter)
+					require.WithinDuration(t, tc.wantCeiling, result.CertParams.NotAfter, 0)
 					require.Equal(t, "subject:alice", result.ID)
 					require.Equal(t, "sha256:policy", result.PolicyID)
 					require.Equal(t, inv.DirectoryRevision(), result.DirectoryRevision)

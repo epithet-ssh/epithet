@@ -86,7 +86,7 @@ func TestPolicyIntegration_ValidToken_ReturnsSigningInputs(t *testing.T) {
 	require.Equal(t, []string{"root"}, resp.CertParams.Names)
 	require.Equal(t, "alice@example.com", resp.CertParams.Identity)
 	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration)
-	require.Equal(t, exp, resp.CertParams.NotAfter)
+	require.WithinDuration(t, exp, resp.CertParams.NotAfter, 0)
 }
 
 // TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError verifies real expiry
