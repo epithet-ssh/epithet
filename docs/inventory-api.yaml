@@ -103,7 +103,7 @@ components:
           description: Requested host with ASCII case folding
     Resolution:
       type: object
-      required: [version, authentication, host, resolvedAt, directory, inventory]
+      required: [version, authentication, host, directory, inventory]
       properties:
         version:
           type: integer
@@ -114,10 +114,6 @@ components:
           type: string
           minLength: 1
           description: Must match the requested host
-        resolvedAt:
-          type: string
-          format: date-time
-          description: Lookup time, not an upstream freshness guarantee
         directory:
           type: object
           required: [revision, user]

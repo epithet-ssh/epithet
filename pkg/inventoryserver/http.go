@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -92,7 +93,7 @@ func NewHandler(config Config) (http.Handler, error) {
 			http.Error(w, "invalid authentication token", 401)
 			return
 		}
-		resp, err := resolver.Resolve(r.Context(), inventoryapi.Authentication{ID: claims.UserID, ExpiresAt: claims.ExpiresAt}, req.Host)
+		resp, err := resolver.Resolve(r.Context(), facts.Authentication{ID: claims.UserID, ExpiresAt: claims.ExpiresAt}, req.Host)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

@@ -81,16 +81,18 @@ Restart inventory after editing its files; restart policy after editing Writ.
 Restart inventory when changing OIDC identity mapping. Restart agents if changing
 the login issuer or client settings they discovered at startup. Combined deployments can restart `epithet server`.
 Upgrade these services together: older policy requests do not carry the required
-facts. Policy API 5 also replaces certificate assembly fields with authorization
-limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-5).
+facts. Policy API 6 uses projected policy facts and authorization
+limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-6).
 Client and agent identity output are unchanged by the extraction.
 
 ## Resolution and audit
 
 The [v1 API](inventory-api.yaml) returns separate directory and inventory
 snapshots with content revisions, the normalized authenticated `id`, and an
-`expiresAt` bound. Inventory never returns the bearer token. The CA forwards
-these facts and the connection to policy; policy has no OIDC configuration.
+`expiresAt` bound. Inventory never returns the bearer token. CA validates the
+full resolution, retains both revisions and principal metadata,
+and sends only authentication, requested target, user, and host resource fields to
+policy with the connection. Policy has no OIDC configuration or inventory envelope.
 Inventory also serves authenticated `GET /` login discovery, which the CA exposes
 anonymously to agents. A missing user or host denies access; an
 unavailable or malformed service fails issuance as an infrastructure error.
@@ -99,8 +101,10 @@ limits the available accounts. The wire field cannot be omitted.
 
 Certificate issuance logs include `id`, `userName`, `policyId`,
 `directoryRevision`, and `inventoryRevision`. Certificate Key ID remains
-`userName`. Revisions identify the loaded facts; the lookup timestamp is not a
-guarantee about upstream freshness. No resolver cache is used.
+`userName`. Revisions identify the loaded facts and stay in CA's private audit records;
+policy neither receives nor echoes them. The unused `resolvedAt` field has been
+removed. Dynamic storage must define freshness semantics explicitly; no resolver
+cache is used.
 
 The [architecture decision](../adr/inventory-service.md) explains the trust and
 component boundaries.

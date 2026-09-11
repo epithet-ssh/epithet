@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
@@ -48,7 +49,7 @@ type mockEvaluator struct {
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, authExpiry time.Time, conn policy.Connection, facts *inventoryapi.Resolution) (*wire.PolicyResponse, error) {
+func (m *mockEvaluator) Evaluate(ctx context.Context, conn policy.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
 	m.calls++
 	if m.err != nil {
 		return nil, m.err
@@ -75,7 +76,7 @@ func TestHandler_Success(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
+	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -116,7 +117,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
+	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -145,7 +146,7 @@ func TestHandler_ExpiredAuthentication(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(-time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
+	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(-time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -176,7 +177,7 @@ func TestHandler_Forbidden(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
+	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -206,7 +207,7 @@ func TestHandler_NotHandled(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &inventoryapi.Resolution{Version: 1, ResolvedAt: time.Now(), Authentication: inventoryapi.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Host: req.Connection.RemoteHost, Directory: inventoryapi.DirectorySnapshot{Revision: "d1"}, Inventory: inventoryapi.HostSnapshot{Revision: "h1"}}
+	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -290,7 +291,7 @@ func TestOversizedRequestReportsTooLarge(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "too large")
 }
 
-func TestPolicyRejectsMismatchedInventoryFacts(t *testing.T) {
+func TestPolicyRejectsMismatchedFacts(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*wire.PolicyRequest)
@@ -298,18 +299,18 @@ func TestPolicyRejectsMismatchedInventoryFacts(t *testing.T) {
 		{"missing", func(r *wire.PolicyRequest) { r.Facts = nil }},
 		{"different user", func(r *wire.PolicyRequest) { r.Facts.Authentication.ID = "mallory" }},
 		{"expired authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication.ExpiresAt = time.Now().Add(-time.Minute) }},
-		{"missing authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication = inventoryapi.Authentication{} }},
-		{"different target", func(r *wire.PolicyRequest) { r.Facts.Host = "production" }},
-		{"substituted record", func(r *wire.PolicyRequest) { r.Facts.Directory.User.ID = "mallory" }},
-		{"missing active", func(r *wire.PolicyRequest) { r.Facts.Directory.User.Active = nil }},
-		{"missing accounts", func(r *wire.PolicyRequest) { r.Facts.Inventory.Host.Resource.Accounts = nil }},
+		{"missing authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication = facts.Authentication{} }},
+		{"different target", func(r *wire.PolicyRequest) { r.Facts.Target = "production" }},
+		{"substituted record", func(r *wire.PolicyRequest) { r.Facts.User.ID = "mallory" }},
+		{"missing active", func(r *wire.PolicyRequest) { r.Facts.User.Active = nil }},
+		{"missing accounts", func(r *wire.PolicyRequest) { r.Facts.Host.Accounts = nil }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			evaluator := &mockEvaluator{response: &wire.PolicyResponse{}}
 			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
 			active := true
-			auth := inventoryapi.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
-			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &inventoryapi.Resolution{Version: 1, Authentication: auth, Host: "host", ResolvedAt: time.Now(), Directory: inventoryapi.DirectorySnapshot{Revision: "d1", User: &inventoryapi.User{Schemas: []string{inventoryapi.UserSchema}, ID: auth.ID, UserName: "alice", Active: &active}}, Inventory: inventoryapi.HostSnapshot{Revision: "h1", Host: &inventoryapi.Host{Resource: inventoryapi.HostResource{Name: "host", Accounts: json.RawMessage(`null`)}, Principal: inventoryapi.Principal{Mode: "account-name"}}}}}
+			auth := facts.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
+			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{Schemas: []string{facts.UserSchema}, ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Name: "host", Accounts: json.RawMessage(`null`)}}}
 			tc.change(&r)
 			body, err := json.Marshal(r)
 			require.NoError(t, err)
@@ -321,6 +322,30 @@ func TestPolicyRejectsMismatchedInventoryFacts(t *testing.T) {
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 			require.Equal(t, 400, w.Code, w.Body.String())
+			require.Zero(t, evaluator.calls)
+		})
+	}
+}
+
+func TestPolicyRejectsOmittedRecordsAndTransportFields(t *testing.T) {
+	for _, extra := range []string{
+		`"user":null`,
+		`"host":null`,
+		`"user":null,"host":null,"version":1`,
+		`"user":null,"host":null,"resolvedAt":"2026-09-11T00:00:00Z"`,
+		`"user":null,"host":null,"directory":{"revision":"private"}`,
+		`"user":null,"host":null,"token":"bearer"`,
+		`"user":null,"host":{"name":"host","accounts":null,"principal":{"mode":"account-name"}}`,
+	} {
+		t.Run(extra, func(t *testing.T) {
+			evaluator := &mockEvaluator{response: &wire.PolicyResponse{TTL: time.Minute}}
+			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
+			body := []byte(fmt.Sprintf(`{"connection":{"remoteHost":"host"},"facts":{"target":"host","authentication":{"id":"alice","expiresAt":%q},%s}}`, time.Now().Add(time.Minute).UTC().Format(time.RFC3339), extra))
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+			sign(req, body)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 			require.Zero(t, evaluator.calls)
 		})
 	}

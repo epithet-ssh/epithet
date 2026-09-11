@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Epithet Policy Server API
-  version: 5.0.0
+  version: 6.0.0
   description: |
     The Policy Server API is called by the Epithet CA to make authorization decisions
     for SSH certificate requests. Your policy server receives normalized authentication
@@ -45,13 +45,17 @@ paths:
         The policy server should:
         1. Verify the CA's service JWT (see Security)
         2. Require unexpired normalized authentication from inventory
-        3. Bind the directory record to the authenticated ID and the host to the connection
+        3. Bind user.id to authentication.id and target to the normalized connection.remoteHost
         4. Check authorization (can this identity access this host as the requested user?)
         5. Return a positive TTL, permitted extensions, policy content ID, and optionally a tighter absolute deadline
 
         CA derives exactly one principal and the certificate Key ID from its original
         inventory facts. Expiry is min(signing time + ttl, authentication.expiresAt,
         optional notAfter). Non-200 responses never authorize signing.
+        CA validates inventory host/domain binding before projection. Policy sees
+        the requested target and the policy host resource; a shared domain name
+        may intentionally differ from the target. Principal mode/domain and
+        directory/host revisions remain private CA data.
 
       security:
         - ServiceJWT: []
@@ -137,9 +141,102 @@ components:
         - facts
       properties:
         facts:
-          $ref: 'inventory-api.yaml#/components/schemas/Resolution'
+          $ref: '#/components/schemas/PolicyFacts'
         connection:
           $ref: '#/components/schemas/Connection'
+
+    PolicyFacts:
+      type: object
+      additionalProperties: false
+      required: [authentication, target, user, host]
+      description: |
+        Normalized facts projected by CA after validating inventory resolution.
+        No inventory protocol version, timestamp, revisions, or principal metadata.
+        Explicit null user/host means absent and leads to structural denial;
+        omission is malformed. CA's service JWT binds all facts and the connection.
+      properties:
+        authentication:
+          $ref: '#/components/schemas/Authentication'
+        target:
+          type: string
+          minLength: 1
+          description: Must equal connection.remoteHost after ASCII case folding
+        user:
+          $ref: '#/components/schemas/User'
+        host:
+          $ref: '#/components/schemas/HostResource'
+
+    Authentication:
+      type: object
+      required: [id, expiresAt]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: Inventory-mapped, verified user ID
+        expiresAt:
+          type: string
+          format: date-time
+          description: Verified session expiry; must be in the future, and bounds certificate validity
+    User:
+      type: object
+      nullable: true
+      required: [schemas, id, userName, active]
+      properties:
+        schemas:
+          type: array
+          items:
+            type: string
+          description: Includes urn:ietf:params:scim:schemas:core:2.0:User
+        id:
+          type: string
+          minLength: 1
+        userName:
+          type: string
+          minLength: 1
+        active:
+          type: boolean
+        userType:
+          type: string
+        groups:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required: [value, display]
+            properties:
+              value:
+                type: string
+                minLength: 1
+              display:
+                type: string
+        'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User':
+          type: object
+          properties:
+            department:
+              type: string
+            organization:
+              type: string
+    HostResource:
+      type: object
+      nullable: true
+      required: [name, accounts]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Requested host, or named shared principal domain
+        labels:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: string
+        accounts:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: Must be present; null means ungrounded and [] permits no accounts
 
     Connection:
       type: object
@@ -157,9 +254,9 @@ components:
         remoteUser:
           type: string
           description: |
-            Target username on remote server (OpenSSH %r). The policy server
-            authorizes this account and encodes it as the certificate's one
-            principal according to the resolved host's principal mode.
+            Target username on remote server (OpenSSH %r). Policy authorizes
+            this account; CA encodes it as the certificate's sole principal
+            using the inventory principal mode/domain retained at CA.
           example: "deploy"
 
         port:
@@ -228,13 +325,6 @@ components:
         policyId:
           type: string
           description: Content ID of the compiled policy, for private issuance audit
-        directoryRevision:
-          type: string
-          description: Legacy revision echo; CA records its original inventory revision instead
-        inventoryRevision:
-          type: string
-          description: Legacy revision echo; CA records its original inventory revision instead
-
   securitySchemes:
     ServiceJWT:
       type: http

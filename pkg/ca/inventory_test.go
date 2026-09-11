@@ -74,9 +74,18 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 							return
 						}
 						assert.Equal(t, expiry, request.Facts.Authentication.ExpiresAt)
-						assert.Equal(t, "subject:alice", request.Facts.Directory.User.ID)
-						// CA owns the audit revisions even if policy echoes different ones.
-						response := wire.PolicyResponse{PolicyID: "sha256:policy", DirectoryRevision: "invented", InventoryRevision: "invented", TTL: tc.ttl, NotAfter: tc.notAfter, Extensions: map[string]string{"permit-pty": ""}}
+						assert.Equal(t, "subject:alice", request.Facts.User.ID)
+						// Inventory transport, principal construction, and audit metadata stay at CA.
+						for _, field := range []string{"version", "resolvedAt", "revision", "directoryRevision", "inventoryRevision", "principal", "domain"} {
+							assert.NotContains(t, string(data), `"`+field+`"`)
+						}
+						assert.Equal(t, "host", request.Facts.Target)
+						if mode == "epithet-principal-v1" {
+							assert.Equal(t, "production", request.Facts.Host.Name)
+						} else {
+							assert.Equal(t, "host", request.Facts.Host.Name)
+						}
+						response := wire.PolicyResponse{PolicyID: "sha256:policy", TTL: tc.ttl, NotAfter: tc.notAfter, Extensions: map[string]string{"permit-pty": ""}}
 						json.NewEncoder(w).Encode(response)
 					}))
 					defer ps.Close()

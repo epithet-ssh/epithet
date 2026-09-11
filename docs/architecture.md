@@ -63,9 +63,9 @@ sequenceDiagram
     ca ->> inventory: POST /v1/resolve {token, host} + service JWT
     inventory ->> inventory: Verify OIDC token; map ID; resolve user and host
     inventory -->> ca: Authentication expiry, ID, and facts with separate revisions
-    ca ->> policy: POST / {connection, facts} + service JWT
+    ca ->> policy: POST / {connection, facts: {authentication, target, user, host}} + service JWT
     policy ->> policy: Verify CA JWT; check normalized facts and expiry; evaluate Writ
-    policy ->> ca: {ttl, extensions, optional notAfter, policyId, revision echoes}
+    policy ->> ca: {ttl, extensions, optional notAfter, policyId}
     ca ->> broker: {"certificate"}
 
     create participant agent
@@ -129,7 +129,7 @@ epithet ca --inventory <url> --policy <url> --key <path> --listen <addr>
 - `GET /` returns the CA's public key and advertises the auth config via a
   relative `Link` header; `POST /` signs a certificate
 - `GET /discovery` exposes the inventory discovery `auth` object
-- CA sends the JWT to inventory, then forwards normalized facts to policy. It constructs identity/principal fields from inventory and applies policy limits plus authentication expiry before signing.
+- CA sends the JWT to inventory, then forwards normalized facts to policy. It retains revisions and principal metadata, and constructs identity/principal fields from inventory and applies policy limits plus authentication expiry before signing.
 
 ### epithet policy
 
@@ -195,7 +195,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 3. If not: broker gets a JWT (cached, proactively refreshed, or freshly acquired via OIDC)
 4. Broker generates an ephemeral keypair for this connection
 5. Broker requests a certificate from the CA, sending the JWT and connection details
-6. CA sends the user JWT and target to inventory. Inventory verifies authentication, maps the ID, and returns normalized authentication and user/host facts. CA forwards connection and facts to policy; both calls use distinct request-bound service JWTs.
+6. CA sends the user JWT and target to inventory. Inventory verifies authentication, maps the ID, and returns normalized authentication and user/host facts. CA retains snapshot revisions and principal metadata, and projects authentication/target/user/host facts plus the connection to policy; both calls use distinct request-bound service JWTs.
 7. Policy verifies the CA request, checks fact binding and authentication expiry, and evaluates Writ against the normalized user's ID, name, groups, and attributes.
 8. Policy server authorizes with a positive TTL, extensions, optional absolute policy deadline, and policy content ID
 9. CA constructs identity and exactly one principal from inventory/connection facts, signs with expiry bounded by TTL, authentication expiry, and any policy deadline, and returns the certificate
@@ -205,6 +205,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 ## Important types and abstractions
 
 - **`sshcert.RawPrivateKey`, `RawPublicKey`, `RawCertificate`**: Type-safe wrappers for SSH keys/certs in on-disk format (string-based)
+- **`wire.PolicyFacts`**: Normalized authentication, requested target, user, and host resource, without inventory metadata
 - **`wire.PolicyResponse`**: Policy-owned TTL, extensions, optional absolute deadline, and audit metadata
 - **`ca.Authorization` / `ca.CertParams`**: Local CA signing inputs and private issuance audit, assembled from trusted facts and policy limits
 - **`policy.Connection`**: Connection details (`%h`, `%p`, `%r`, `%C`, `%j`) passed through `match` → broker → CA → policy server

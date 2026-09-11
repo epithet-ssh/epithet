@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
@@ -351,9 +351,41 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 }
 func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
 	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv, DirectoryRevision: "d1", InventoryRevision: "h1"}
-	facts, err := resolver.Resolve(ctx, inventoryapi.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
+	resolution, err := resolver.Resolve(ctx, facts.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
 	if err != nil {
 		return nil, err
 	}
-	return e.Evaluator.Evaluate(ctx, id, expiry, conn, facts)
+	input := &wire.PolicyFacts{Authentication: resolution.Authentication, Target: resolution.Host, User: resolution.Directory.User}
+	if resolution.Inventory.Host != nil {
+		input.Host = &resolution.Inventory.Host.Resource
+	}
+	return e.Evaluator.Evaluate(ctx, conn, input)
+}
+
+func TestProjectedHostPreservesAccountGrounding(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accounts []string
+		allowed  bool
+	}{
+		{"ungrounded", nil, true},
+		{"empty", []string{}, false},
+		{"matching", []string{"root"}, true},
+		{"other account", []string{"ubuntu"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := testInv()
+			inv.hosts["prod-db-1"].Policy.Accounts = tc.accounts
+			e := NewForTesting(mustPolicy(t, "allow group:SRE -> root@*\n"), inv)
+			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+			if tc.allowed {
+				require.NoError(t, err)
+				require.NotNil(t, response)
+			} else {
+				var denied *wire.PolicyError
+				require.ErrorAs(t, err, &denied)
+				require.Equal(t, http.StatusForbidden, denied.StatusCode)
+			}
+		})
+	}
 }

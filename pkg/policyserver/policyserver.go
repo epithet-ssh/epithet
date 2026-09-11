@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/hostpattern"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -21,14 +18,13 @@ import (
 // The handler trusts normalized authentication facts supplied by the CA.
 // Implementations must:
 // - Make authorization decision (allow/deny) based on identity
-// - Return certificate parameters (principals, expiration, extensions) for the matching host pattern
+// - Return authorization limits (TTL, extensions, optional absolute deadline)
 // - Return appropriate errors for different failure modes
 type PolicyEvaluator interface {
 	// Evaluate makes an authorization decision using validated, CA-supplied
 	// directory and host facts. It has no inventory access.
-	// authExpiry is the verified authentication expiry, used to clamp the issued
-	// certificate's validity so it can never outlive the auth session that
-	// requested it.
+	// Authentication expiry is verified before evaluation and enforced by CA
+	// independently when signing.
 	// Returns:
 	// - *wire.PolicyResponse: Authorization limits and policy audit metadata if authorized
 	// - error: If authorization denied
@@ -36,7 +32,7 @@ type PolicyEvaluator interface {
 	// Error handling:
 	// - Return policyserver.Forbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(ctx context.Context, userID string, authExpiry time.Time, conn policy.Connection, facts *inventoryapi.Resolution) (*wire.PolicyResponse, error)
+	Evaluate(ctx context.Context, conn policy.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error)
 }
 
 // Forbidden returns a 403 error with the given message.
@@ -129,12 +125,12 @@ func (h *handler) handleCertRequest(w http.ResponseWriter, r *http.Request, body
 		h.writeError(w, http.StatusBadRequest, "invalid trailing JSON")
 		return
 	}
-	if err := req.Facts.Validate(hostpattern.NormalizeName(req.Connection.RemoteHost)); err != nil {
+	if err := req.Facts.Validate(req.Connection.RemoteHost); err != nil {
 		h.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// Evaluate policy based on identity (authorization).
-	resp, err := h.config.Evaluator.Evaluate(r.Context(), req.Facts.Authentication.ID, req.Facts.Authentication.ExpiresAt, req.Connection, req.Facts)
+	resp, err := h.config.Evaluator.Evaluate(r.Context(), req.Connection, req.Facts)
 	if err != nil {
 		if policyErr, ok := err.(*wire.PolicyError); ok {
 			h.writeError(w, policyErr.StatusCode, policyErr.Message)

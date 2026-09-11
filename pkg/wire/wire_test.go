@@ -5,16 +5,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/stretchr/testify/require"
 )
 
 // The JSON wire shape is a compatibility contract for third-party policy
 // servers; pin it.
 func TestPolicyRequestWireShape(t *testing.T) {
-	req := PolicyRequest{}
+	req := PolicyRequest{Facts: &PolicyFacts{Target: "host", Authentication: facts.Authentication{ID: "alice", ExpiresAt: time.Date(2026, 9, 11, 17, 0, 0, 0, time.UTC)}}}
 	out, err := json.Marshal(req)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"facts":null,"connection":{"remoteHost":"","remoteUser":"","port":0,"proxyJump":"","hash":""}}`, string(out))
+	require.JSONEq(t, `{"facts":{"target":"host","authentication":{"id":"alice","expiresAt":"2026-09-11T17:00:00Z"},"user":null,"host":null},"connection":{"remoteHost":"","remoteUser":"","port":0,"proxyJump":"","hash":""}}`, string(out))
 }
 
 func TestPolicyResponseWireShape(t *testing.T) {

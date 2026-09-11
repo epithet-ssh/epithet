@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -88,15 +87,15 @@ func New(pol *il.Policy, reg *Registry, opts Options) (*Evaluator, []string, err
 // Evaluate implements policyserver.PolicyEvaluator using supplied facts.
 // Policy denials return 403; pending
 // requirements return 202.
-func (e *Evaluator) Evaluate(ctx context.Context, userID string, authExpiry time.Time, conn policy.Connection, facts *inventoryapi.Resolution) (*wire.PolicyResponse, error) {
+func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
 	if facts == nil {
 		return nil, fmt.Errorf("inventory facts are required")
 	}
-	u := facts.Directory.User
+	u := facts.User
 	if u == nil {
 		return nil, policyserver.Forbidden("OIDC user ID is not bound to an inventory user")
 	}
-	if u.ID != userID || u.Active == nil {
+	if u.ID != facts.Authentication.ID || u.Active == nil {
 		return nil, fmt.Errorf("inventory user does not match authenticated identity")
 	}
 	user := &eval.User{ID: u.ID, UserName: u.UserName, Active: *u.Active, UserType: u.UserType}
@@ -108,14 +107,14 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, authExpiry time
 		user.Organization = u.Enterprise.Organization
 	}
 	identity := user.UserName
-	host := facts.Inventory.Host
+	host := facts.Host
 	var policyHost *eval.Host
 	if host != nil {
-		accounts, err := host.Resource.AccountList()
+		accounts, err := host.AccountList()
 		if err != nil {
 			return nil, err
 		}
-		policyHost = &eval.Host{Name: host.Resource.Name, Labels: host.Resource.Labels, Accounts: accounts}
+		policyHost = &eval.Host{Name: host.Name, Labels: host.Labels, Accounts: accounts}
 	}
 	req := eval.Request{User: user, Host: policyHost, Account: conn.RemoteUser}
 	decision, err := eval.Decide(e.pol, req, e.opts.Clock(),
@@ -133,8 +132,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, authExpiry time
 		}
 		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		return &wire.PolicyResponse{
-			PolicyID: e.policyID, DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
-			TTL: ttl, Extensions: e.opts.Extensions,
+			PolicyID: e.policyID,
+			TTL:      ttl, Extensions: e.opts.Extensions,
 		}, nil
 	case eval.Pending:
 		return nil, &wire.PolicyError{

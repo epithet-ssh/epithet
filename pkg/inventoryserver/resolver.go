@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 )
@@ -21,7 +21,7 @@ type Resolver struct {
 	InventoryRevision string
 }
 
-func (s *Resolver) Resolve(ctx context.Context, auth inventoryapi.Authentication, host string) (*inventoryapi.Resolution, error) {
+func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host string) (*inventoryapi.Resolution, error) {
 	u, err := s.Directory.LookupUser(ctx, auth.ID)
 	if err != nil {
 		return nil, fmt.Errorf("looking up user: %w", err)
@@ -30,18 +30,18 @@ func (s *Resolver) Resolve(ctx context.Context, auth inventoryapi.Authentication
 	if err != nil {
 		return nil, fmt.Errorf("looking up host: %w", err)
 	}
-	r := &inventoryapi.Resolution{Version: 1, Authentication: auth, Host: host, ResolvedAt: time.Now().UTC(),
+	r := &inventoryapi.Resolution{Version: 1, Authentication: auth, Host: host,
 		Directory: inventoryapi.DirectorySnapshot{Revision: s.DirectoryRevision},
 		Inventory: inventoryapi.HostSnapshot{Revision: s.InventoryRevision}}
 	if u != nil {
 		active := u.Active
-		user := &inventoryapi.User{Schemas: []string{inventoryapi.UserSchema}, ID: u.ID, UserName: u.UserName, Active: &active, UserType: u.UserType}
+		user := &facts.User{Schemas: []string{facts.UserSchema}, ID: u.ID, UserName: u.UserName, Active: &active, UserType: u.UserType}
 		for _, g := range u.Groups {
-			user.Groups = append(user.Groups, inventoryapi.Group{Value: g, Display: g})
+			user.Groups = append(user.Groups, facts.Group{Value: g, Display: g})
 		}
 		if u.Department != "" || u.Organization != "" {
-			user.Schemas = append(user.Schemas, inventoryapi.EnterpriseSchema)
-			user.Enterprise = &inventoryapi.Enterprise{Department: u.Department, Organization: u.Organization}
+			user.Schemas = append(user.Schemas, facts.EnterpriseSchema)
+			user.Enterprise = &facts.Enterprise{Department: u.Department, Organization: u.Organization}
 		}
 		r.Directory.User = user
 	}
@@ -50,7 +50,7 @@ func (s *Resolver) Resolve(ctx context.Context, auth inventoryapi.Authentication
 		if err != nil {
 			return nil, err
 		}
-		r.Inventory.Host = &inventoryapi.Host{Resource: inventoryapi.HostResource{Name: h.Policy.Name, Labels: h.Policy.Labels, Accounts: accounts},
+		r.Inventory.Host = &inventoryapi.Host{Resource: facts.HostResource{Name: h.Policy.Name, Labels: h.Policy.Labels, Accounts: accounts},
 			Principal: inventoryapi.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}
 	}
 	if err := r.Validate(host); err != nil {

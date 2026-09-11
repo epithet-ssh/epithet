@@ -12,8 +12,10 @@ write administration, and host admission/enrollment remain follow-up work.
 
 The CA is the caller of both private services. It sends the original OIDC token
 and requested host to inventory. Inventory validates authentication, maps the ID,
-and resolves directory and host records. The CA forwards normalized authentication
-and inventory facts plus the connection to policy, without the bearer token.
+and resolves directory and host records. CA validates the inventory resolution, then projects authentication, requested
+target, user, and host policy resource plus the connection to policy. It retains
+principal construction metadata and snapshot revisions; no bearer token, transport
+version, or audit revision is sent to policy.
 Policy verifies the CA service request, checks authentication expiry and fact
 binding, then evaluates Writ. Policy returns a positive TTL measured from CA
 signing, permitted extensions, its content ID, and an optional tighter absolute
@@ -25,7 +27,7 @@ and any policy deadline. Client-supplied inventory facts are ignored.
 The built-in policy no longer echoes authentication expiry as a deadline. Writ
 `until` remains an evaluation-time rule condition. Custom policies can supply a
 tighter absolute deadline; CA always enforces authentication expiry independently.
-The policy API 5 migration is documented in docs/policy-server.md.
+The policy API 6 migration is documented in docs/policy-server.md.
 
 Both services trust the CA public key. Requests use the existing request-bound
 service JWT, with distinct `epithet-inventory` and `epithet-policy` audiences.
@@ -48,7 +50,7 @@ semantics are preserved. SCIM-shaped protocol records do not imply a SCIM endpoi
 ## Protocol and snapshots
 
 `POST /v1/resolve` accepts `{token, host}`. Hosts use ASCII case folding, shared
-with Writ. Version 1 returns `host`, `authentication: {id, expiresAt}`, `resolvedAt`,
+with Writ. Version 1 returns `host`, `authentication: {id, expiresAt}`,
 `directory: {revision, user}`, and `inventory: {revision, host}`. User records use
 SCIM core User/group-reference fields and the enterprise extension. Host facts
 separate `resource` from `principal`. This protocol has no Writ Go types.
@@ -57,8 +59,8 @@ Each static revision is a SHA-256 digest of the loaded data for that component;
 host revision also includes the effective default principal mode. Revisions are
 stable across unchanged restarts. User and host snapshots are internally
 immutable but there is no promise of a transaction across future independent
-sources. `resolvedAt` is a lookup time, not an upstream freshness guarantee.
-Dynamic implementations must define freshness and snapshot reads before use.
+sources. The unused `resolvedAt` field is removed; it carried no upstream freshness
+guarantee. Dynamic implementations must define freshness and snapshot reads before use.
 
 Missing entities are explicit null records and produce authorization denial.
 An invalid user token returns 401; invalid CA service authentication returns 403
@@ -69,10 +71,19 @@ permits no accounts, and a list grounds matching. Bodies are bounded to 64 KiB;
 HTTP clients have deadlines and do not follow redirects. There is no resolution
 cache; responses carry `Cache-Control: no-store`.
 
-The policy response and certificate audit event include policy content ID,
-directory revision, and inventory revision. The policy ID hashes the compiled
-policy JSON; directory and inventory revisions describe the facts used. Those
-values are audit metadata, not certificate fields.
+The policy response supplies only its policy content ID alongside authorization
+limits. CA combines it with the original directory and inventory revisions in
+private certificate issuance audit. The policy ID hashes the compiled policy
+JSON; directory and inventory revisions describe the facts used. These values
+are never sent to public clients or encoded in certificates.
+
+Policy uses `wire.PolicyFacts`, independent of the inventory envelope/version.
+`target` must match the normalized connection host; `user.id` must match the
+unexpired authentication ID. CA validates inventory host/domain binding before
+projection: the policy host resource may name a shared domain rather than an
+individual target. User/host fields must be present; null denotes absence and
+leads to structural denial. Shared fact shapes live in `pkg/facts` without
+transport metadata. SCIM shape simplification remains separate work.
 
 ## Deployment
 

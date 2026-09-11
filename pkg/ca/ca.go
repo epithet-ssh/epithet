@@ -176,7 +176,11 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if err := facts.Validate(lookup.Host); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(wire.PolicyRequest{Connection: conn, Facts: facts})
+	policyFacts := &wire.PolicyFacts{Authentication: facts.Authentication, Target: facts.Host, User: facts.Directory.User}
+	if facts.Inventory.Host != nil {
+		policyFacts.Host = &facts.Inventory.Host.Resource
+	}
+	body, err := json.Marshal(wire.PolicyRequest{Connection: conn, Facts: policyFacts})
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling request body: %w", err)
 	}

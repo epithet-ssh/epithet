@@ -674,46 +674,45 @@ Content-Type: application/json
     "hash": "a1b2c3d4e5f6"
   },
   "facts": {
-    "version": 1,
-    "host": "server.example.com",
     "authentication": {
       "id": "provider-user-id",
       "expiresAt": "2026-09-07T12:05:00Z"
     },
-    "resolvedAt": "2026-09-07T12:00:00Z",
-    "directory": {
-      "revision": "sha256:directory-content",
-      "user": {
-        "schemas": [
-          "urn:ietf:params:scim:schemas:core:2.0:User"
-        ],
-        "id": "provider-user-id",
-        "userName": "alice@example.com",
-        "active": true,
-        "groups": []
-      }
+    "target": "server.example.com",
+    "user": {
+      "schemas": [
+        "urn:ietf:params:scim:schemas:core:2.0:User"
+      ],
+      "id": "provider-user-id",
+      "userName": "alice@example.com",
+      "active": true,
+      "groups": []
     },
-    "inventory": {
-      "revision": "sha256:host-content",
-      "host": {
-        "resource": {
-          "name": "server.example.com",
-          "labels": {},
-          "accounts": [
-            "ubuntu"
-          ]
-        },
-        "principal": {
-          "mode": "account-name"
-        }
-      }
+    "host": {
+      "name": "server.example.com",
+      "labels": {},
+      "accounts": [
+        "ubuntu"
+      ]
     }
   }
 }
 ```
 
 **Fields:**
-- `facts` (object, required): the [v1 inventory resolution](inventory-api.yaml). Policy requires unexpired `authentication.expiresAt`, a directory record matching `authentication.id`, and a host matching the connection.
+
+- `facts` (object, required): normalized policy inputs described below. Inventory transport metadata is not accepted.
+- `facts.authentication`: verified `id` and unexpired `expiresAt`. No bearer token or provider settings.
+- `facts.target`: the requested hostname, equal to `connection.remoteHost` after ASCII case folding.
+- `facts.user`: the user record, whose `id` must match `authentication.id`; explicit `null` means absent.
+- `facts.host`: the policy resource (`name`, `labels`, `accounts`); explicit `null` means absent. CA validates inventory's host/domain binding before supplying this resource. A shared domain's resource name can intentionally differ from `target`.
+
+Missing `user` or `host` fields are malformed, while explicit null records produce
+structural denial. `host.accounts` is required: null is ungrounded, [] permits no
+accounts, and a list restricts available accounts. CA's request-bound signature
+covers these facts and the connection. Principal mode/domain, transport version,
+and directory/host revisions stay at CA.
+
 - `connection` (object): SSH connection parameters
   - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
   - `remoteUser` (string): Target account name on the remote server (OpenSSH `%r`); CA encodes this account according to the resolved host's principal mode
@@ -732,8 +731,6 @@ parse error.
 ```json
 {
   "policyId": "sha256:compiled-policy-content",
-  "directoryRevision": "sha256:directory-content",
-  "inventoryRevision": "sha256:host-content",
   "ttl": 300000000000,
   "extensions": {
     "permit-pty": "",
@@ -749,7 +746,6 @@ parse error.
 - `extensions` (map[string]string): SSH certificate extensions to grant. An empty map grants none.
 - `notAfter` (RFC 3339 string, optional): An additional absolute deadline owned by policy, for example `"2026-09-11T17:00:00Z"`. Omit it (or send the zero time) when no additional deadline applies. An expired deadline prevents issuance.
 - `policyId` (string): Content ID of the compiled policy, retained in private issuance logs. Built-in Writ supplies its SHA-256 content ID.
-- `directoryRevision` and `inventoryRevision` (strings): Existing revision echoes. CA ignores these values and records its original resolved revisions. Removing these echoes is a separate cleanup.
 
 CA constructs certificate Key ID from inventory `userName` and exactly one
 principal from the requested account and the resolved host's principal mode/domain.
@@ -767,9 +763,18 @@ The built-in policy omits `notAfter`; it no longer echoes authentication expiry.
 Writ `until` still controls rule eligibility at evaluation time, not certificate
 expiry. No Writ language semantics change here.
 
-### Custom policy migration (API 5)
+### Custom policy migration (API 6)
 
-Upgrade CA and policy together, including separately deployed services. The old
+Upgrade CA, inventory, and policy together, including separately deployed services.
+API 6 replaces the inventory envelope in `facts` with the projection above:
+
+- Move `facts.directory.user` to `facts.user` and `facts.inventory.host.resource` to `facts.host`.
+- Rename the requested host string from `facts.host` to `facts.target`; retain `facts.authentication` unchanged.
+- Remove `facts.version`, `facts.resolvedAt`, snapshot wrappers/revisions, and principal metadata. CA validates inventory-to-target binding before projecting facts and signs the projection with the connection.
+- Remove `directoryRevision` and `inventoryRevision` from policy responses. CA combines its original revisions with policy's `policyId` for private issuance audit.
+- Inventory resolution no longer returns `resolvedAt`; it retains its protocol version and separate directory/host revisions. No upstream freshness guarantee was attached to the removed timestamp.
+
+The output-ownership change introduced in API 5 is retained. The old
 `certParams` response is no longer accepted as an authorization grant:
 
 - Move `certParams.expiration` to top-level `ttl`, keeping nanosecond units and the signing-time origin.
@@ -779,7 +784,11 @@ Upgrade CA and policy together, including separately deployed services. The old
 - Retain `policyId` for private audit. Continue authorizing the exact user/host/account request and enforcing policy-owned limits.
 
 Go integrations now use `wire.PolicyResponse` for policy limits and `ca.CertParams`
-for local signing inputs. `CA.RequestPolicy` returns `ca.Authorization`, which
+for local signing inputs. Policy evaluators implement
+`Evaluate(context.Context, policy.Connection, *wire.PolicyFacts)`; authentication
+comes from those facts rather than duplicate arguments. `pkg/facts` contains the
+shared user/authentication/host data types without inventory transport metadata.
+`CA.RequestPolicy` returns `ca.Authorization`, which
 combines CA-constructed signing inputs with private audit metadata. Client-facing
 success responses still contain only the certificate. Combined deployment remains
 `epithet server`; static YAML and Writ syntax are unchanged.

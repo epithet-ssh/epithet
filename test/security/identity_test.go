@@ -196,6 +196,13 @@ hosts:
 			var entry map[string]any
 			require.NoError(t, json.Unmarshal(issuanceLog.Bytes(), &entry))
 			require.Equal(t, inventoryID, entry["id"])
+			require.Equal(t, inv.DirectoryRevision(), entry["directoryRevision"])
+			require.Equal(t, inv.InventoryRevision(), entry["inventoryRevision"])
+			require.NotEmpty(t, entry["policyId"])
+			var publicResponse map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &publicResponse))
+			require.Len(t, publicResponse, 1)
+			require.Contains(t, publicResponse, "certificate")
 			require.Equal(t, "victim@example.com", entry["userName"])
 			require.NotContains(t, entry, "identity")
 			require.NotContains(t, entry, "user_id")
@@ -211,6 +218,11 @@ hosts:
 			require.NoError(t, err)
 			require.Equal(t, []string{expected}, cert.ValidPrincipals)
 			require.Equal(t, "victim@example.com", cert.KeyId)
+			require.Empty(t, cert.Reserved)
+			for _, key := range []string{"directoryRevision", "inventoryRevision", "policyId"} {
+				require.NotContains(t, cert.Extensions, key)
+				require.NotContains(t, cert.CriticalOptions, key)
+			}
 			checker := &ssh.CertChecker{}
 			require.NoError(t, checker.CheckCert(expected, cert))
 			require.Equal(t, string(pub), string(ssh.MarshalAuthorizedKey(cert.SignatureKey)))

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
@@ -18,8 +17,8 @@ const MaxBodySize = 64 * 1024
 
 // PolicyRequest is the CA→policy-server cert evaluation request body.
 type PolicyRequest struct {
-	Facts      *inventoryapi.Resolution `json:"facts"`
-	Connection policy.Connection        `json:"connection"`
+	Facts      *PolicyFacts      `json:"facts"`
+	Connection policy.Connection `json:"connection"`
 }
 
 // PolicyResponse grants this one connection with policy-owned limits. HTTP
@@ -31,10 +30,8 @@ type PolicyResponse struct {
 	Extensions map[string]string `json:"extensions"`
 	// NotAfter is an optional absolute policy deadline. It may tighten, but
 	// never extend, the authentication expiry independently enforced by CA.
-	NotAfter          time.Time `json:"notAfter,omitzero"`
-	PolicyID          string    `json:"policyId,omitempty"`
-	DirectoryRevision string    `json:"directoryRevision,omitempty"`
-	InventoryRevision string    `json:"inventoryRevision,omitempty"`
+	NotAfter time.Time `json:"notAfter,omitzero"`
+	PolicyID string    `json:"policyId,omitempty"`
 }
 
 // AuthConfig tells a client how to authenticate: OIDC issuer and client
