@@ -30,7 +30,7 @@ type PolicyEvaluator interface {
 	// certificate's validity so it can never outlive the auth session that
 	// requested it.
 	// Returns:
-	// - *wire.PolicyResponse: Certificate parameters and policy if authorized
+	// - *wire.PolicyResponse: Authorization limits and policy audit metadata if authorized
 	// - error: If authorization denied
 	//
 	// Error handling:

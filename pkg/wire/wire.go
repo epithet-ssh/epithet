@@ -16,38 +16,25 @@ import (
 // of magnitude of headroom before truncation.
 const MaxBodySize = 64 * 1024
 
-// CertParams are the certificate parameters decided by the policy server.
-type CertParams struct {
-	Identity   string            `json:"identity"`
-	Names      []string          `json:"principals"`
-	Expiration time.Duration     `json:"expiration"`
-	Extensions map[string]string `json:"extensions"`
-
-	// NotAfter is an absolute ceiling on certificate validity, derived from
-	// the auth token's expiry. It travels as an absolute time (not a
-	// duration) because a duration would decay during the time between
-	// policy evaluation and CA signing. Zero value means no ceiling.
-	NotAfter time.Time `json:"notAfter,omitempty"`
-}
-
 // PolicyRequest is the CA→policy-server cert evaluation request body.
 type PolicyRequest struct {
 	Facts      *inventoryapi.Resolution `json:"facts"`
 	Connection policy.Connection        `json:"connection"`
 }
 
-// PolicyResponse is the policy server's answer to a PolicyRequest. It carries
-// cert parameters and audit metadata for this one connection - there is no
-// authorization map on the wire, since certs are minted per-connection and
-// never cached or reused by the client.
+// PolicyResponse grants this one connection with policy-owned limits. HTTP
+// 200 means authorized; other outcomes use PolicyError. CA constructs the
+// certificate identity and principal from its original inventory facts.
 type PolicyResponse struct {
-	// ID is the resolved inventory ID for audit logs, not a certificate field.
-	// Older or custom policy servers may omit it.
-	ID                string     `json:"id,omitempty"`
-	PolicyID          string     `json:"policyId,omitempty"`
-	DirectoryRevision string     `json:"directoryRevision,omitempty"`
-	InventoryRevision string     `json:"inventoryRevision,omitempty"`
-	CertParams        CertParams `json:"certParams"`
+	// TTL is a positive duration in nanoseconds, measured from CA signing.
+	TTL        time.Duration     `json:"ttl"`
+	Extensions map[string]string `json:"extensions"`
+	// NotAfter is an optional absolute policy deadline. It may tighten, but
+	// never extend, the authentication expiry independently enforced by CA.
+	NotAfter          time.Time `json:"notAfter,omitzero"`
+	PolicyID          string    `json:"policyId,omitempty"`
+	DirectoryRevision string    `json:"directoryRevision,omitempty"`
+	InventoryRevision string    `json:"inventoryRevision,omitempty"`
 }
 
 // AuthConfig tells a client how to authenticate: OIDC issuer and client

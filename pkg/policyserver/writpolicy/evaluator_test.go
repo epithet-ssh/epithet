@@ -58,19 +58,17 @@ func conn(account, host string) policy.Connection {
 	return policy.Connection{RemoteHost: host, RemoteUser: account, Port: 22}
 }
 
-func TestIssueMapsToCertParams(t *testing.T) {
+func TestIssueReturnsPolicyLimits(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	e := NewForTesting(pol, testInv())
 	expiry := time.Now().Add(2 * time.Minute)
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", expiry, conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t, "alice@example.com", resp.CertParams.Identity)
-	require.Equal(t, "alice-id", resp.ID)
-	require.Equal(t, []string{"root"}, resp.CertParams.Names, "exactly one principal: the requested account")
-	require.Equal(t, expiry, resp.CertParams.NotAfter, "cert clamped to token expiry")
-	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration, "deployment default TTL")
-	require.Contains(t, resp.CertParams.Extensions, "permit-pty")
+	require.True(t, resp.NotAfter.IsZero(), "authentication expiry is enforced independently by CA")
+	require.NotEmpty(t, resp.PolicyID)
+	require.Equal(t, 5*time.Minute, resp.TTL, "deployment default TTL")
+	require.Contains(t, resp.Extensions, "permit-pty")
 }
 
 func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T) {
@@ -89,8 +87,7 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 			resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Minute), conn("root", "prod-db-1"))
 			if tc.allowed {
 				require.NoError(t, err)
-				require.Equal(t, "renamed-user", resp.CertParams.Identity)
-				require.Equal(t, "alice-id", resp.ID)
+				require.NotNil(t, resp)
 			} else {
 				var denied *wire.PolicyError
 				require.ErrorAs(t, err, &denied)
@@ -100,7 +97,7 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 	}
 }
 
-func TestIssueDerivesHashedPrincipal(t *testing.T) {
+func TestIssueAuthorizesDomainHost(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
@@ -110,9 +107,7 @@ func TestIssueDerivesHashedPrincipal(t *testing.T) {
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t,
-		[]string{"epithet-principal-v1-ytLZdjJ27kR56wJQB7SL4EZyr7leVrxIkDa1wZg_Uog"},
-		resp.CertParams.Names)
+	require.Positive(t, resp.TTL)
 }
 
 func TestIssueHashedPrincipalWithoutDomainFailsClosed(t *testing.T) {
@@ -142,7 +137,7 @@ func TestRuleTTLOverridesDefault(t *testing.T) {
 	e := NewForTesting(pol, testInv())
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t, 2*time.Minute, resp.CertParams.Expiration)
+	require.Equal(t, 2*time.Minute, resp.TTL)
 }
 
 func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
@@ -155,8 +150,8 @@ func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
 	require.Empty(t, warnings)
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t, 10*time.Minute, resp.CertParams.Expiration)
-	require.Equal(t, map[string]string{"permit-pty": ""}, resp.CertParams.Extensions)
+	require.Equal(t, 10*time.Minute, resp.TTL)
+	require.Equal(t, map[string]string{"permit-pty": ""}, resp.Extensions)
 }
 
 func TestUnknownUserIsForbidden(t *testing.T) {
@@ -294,7 +289,7 @@ func TestSatisfiedRequirementIssues(t *testing.T) {
 	require.NoError(t, err)
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.Equal(t, []string{"root"}, resp.CertParams.Names)
+	require.Positive(t, resp.TTL)
 }
 
 func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
@@ -306,7 +301,7 @@ func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
 		inv.users[id].UserName = name
 		resp, err := e.Evaluate(ctx, id, time.Now().Add(time.Minute), conn("root", "prod-db-1"))
 		require.NoError(t, err)
-		require.Equal(t, name, resp.CertParams.Identity)
+		require.NotNil(t, resp)
 	}
 	// Reusing the old name gives the replacement a different inventory ID.
 	inv.users["replacement-id"] = &directory.User{UserName: "alice@example.com", ID: "replacement-id", Active: true}

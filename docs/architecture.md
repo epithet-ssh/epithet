@@ -65,7 +65,7 @@ sequenceDiagram
     inventory -->> ca: Authentication expiry, ID, and facts with separate revisions
     ca ->> policy: POST / {connection, facts} + service JWT
     policy ->> policy: Verify CA JWT; check normalized facts and expiry; evaluate Writ
-    policy ->> ca: {"id": inventory ID, "certParams": {identity, principals, expiration, notAfter, extensions}}
+    policy ->> ca: {ttl, extensions, optional notAfter, policyId, revision echoes}
     ca ->> broker: {"certificate"}
 
     create participant agent
@@ -129,7 +129,7 @@ epithet ca --inventory <url> --policy <url> --key <path> --listen <addr>
 - `GET /` returns the CA's public key and advertises the auth config via a
   relative `Link` header; `POST /` signs a certificate
 - `GET /discovery` exposes the inventory discovery `auth` object
-- CA sends the JWT to inventory, then forwards normalized facts to policy. It checks returned identity/principal parameters and clamps token validity before signing.
+- CA sends the JWT to inventory, then forwards normalized facts to policy. It constructs identity/principal fields from inventory and applies policy limits plus authentication expiry before signing.
 
 ### epithet policy
 
@@ -162,7 +162,7 @@ epithet server --listen <addr> --ca-key <path>
 
 ## Core components
 
-1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Signs public keys into certificates using the `CertParams` the policy server returns, clamping validity to `min(now + expiration, NotAfter)`.
+1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Constructs identity and the sole requested principal from inventory, then signs using policy TTL/extensions and optional deadline, clamping expiry to `min(signing time + ttl, authentication expiry, optional policy deadline)`.
 
 2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
@@ -197,15 +197,16 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 5. Broker requests a certificate from the CA, sending the JWT and connection details
 6. CA sends the user JWT and target to inventory. Inventory verifies authentication, maps the ID, and returns normalized authentication and user/host facts. CA forwards connection and facts to policy; both calls use distinct request-bound service JWTs.
 7. Policy verifies the CA request, checks fact binding and authentication expiry, and evaluates Writ against the normalized user's ID, name, groups, and attributes.
-8. Policy server returns `CertParams` — identity, one account-name or destination-bound principal according to the resolved host's mode, expiration, `NotAfter`, extensions
-9. CA signs a certificate clamped to `min(now + expiration, NotAfter)` and returns it
+8. Policy server authorizes with a positive TTL, extensions, optional absolute policy deadline, and policy content ID
+9. CA constructs identity and exactly one principal from inventory/connection facts, signs with expiry bounded by TTL, authentication expiry, and any policy deadline, and returns the certificate
 10. Broker starts (or reuses) a per-connection agent socket serving this certificate
 11. OpenSSH uses the certificate from the agent socket to establish the connection
 
 ## Important types and abstractions
 
 - **`sshcert.RawPrivateKey`, `RawPublicKey`, `RawCertificate`**: Type-safe wrappers for SSH keys/certs in on-disk format (string-based)
-- **`wire.CertParams`**: Policy response containing identity, principals, expiration, absolute `NotAfter`, and extensions for a certificate
+- **`wire.PolicyResponse`**: Policy-owned TTL, extensions, optional absolute deadline, and audit metadata
+- **`ca.Authorization` / `ca.CertParams`**: Local CA signing inputs and private issuance audit, assembled from trusted facts and policy limits
 - **`policy.Connection`**: Connection details (`%h`, `%p`, `%r`, `%C`, `%j`) passed through `match` → broker → CA → policy server
 - **`agent.Credential`**: Private key + certificate pair used by the agent
 - **`caclient.InvalidTokenError`, `PolicyDeniedError`, `ConnectionNotHandledError`, `CAUnavailableError`**: Domain-specific error types for CA failures

@@ -230,7 +230,7 @@ func (s *caServer) logCertIssuance(
 	ctx context.Context,
 	cert sshcert.RawCertificate,
 	pubKey sshcert.RawPublicKey,
-	policyResp *wire.PolicyResponse,
+	policyResp *ca.Authorization,
 	conn policy.Connection,
 ) error {
 	parsedCert, err := sshcert.Parse(cert)

@@ -1,12 +1,12 @@
 openapi: 3.0.3
 info:
   title: Epithet Policy Server API
-  version: 4.0.0
+  version: 5.0.0
   description: |
     The Policy Server API is called by the Epithet CA to make authorization decisions
     for SSH certificate requests. Your policy server receives normalized authentication
     and inventory facts plus connection details, and returns
-    certificate parameters if the request is approved.
+    authorization limits if the request is approved. CA constructs the certificate.
 
     This OpenAPI specification can be used to:
     - Generate server stubs in your preferred language
@@ -40,14 +40,18 @@ paths:
       summary: Evaluate certificate request policy
       description: |
         Evaluate whether to approve an SSH certificate request and determine
-        the certificate parameters (principals, expiration, extensions).
+        the allowed TTL, extensions, and any optional absolute policy deadline.
 
         The policy server should:
         1. Verify the CA's service JWT (see Security)
         2. Require unexpired normalized authentication from inventory
         3. Bind the directory record to the authenticated ID and the host to the connection
         4. Check authorization (can this identity access this host as the requested user?)
-        5. Set exactly one principal, encoding the requested user according to the resolved host's mode, plus expiration, notAfter, and extensions
+        5. Return a positive TTL, permitted extensions, policy content ID, and optionally a tighter absolute deadline
+
+        CA derives exactly one principal and the certificate Key ID from its original
+        inventory facts. Expiry is min(signing time + ttl, authentication.expiresAt,
+        optional notAfter). Non-200 responses never authorize signing.
 
       security:
         - ServiceJWT: []
@@ -70,14 +74,11 @@ paths:
                 approved:
                   summary: Approved with standard permissions
                   value:
-                    certParams:
-                      identity: "alice@example.com"
-                      principals: ["deploy"]
-                      expiration: 300000000000
-                      notAfter: "2026-08-13T18:30:00Z"
-                      extensions:
-                        permit-pty: ""
-                        permit-agent-forwarding: ""
+                    ttl: 300000000000
+                    policyId: "sha256:compiled-policy-content"
+                    extensions:
+                      permit-pty: ""
+                      permit-agent-forwarding: ""
 
         '400':
           description: Malformed request body (not valid JSON, or the read itself failed)
@@ -183,90 +184,56 @@ components:
 
     PolicyResponse:
       type: object
+      description: |
+        HTTP 200 authorizes this connection under these limits. Policy does not
+        return user identity or principals. CA constructs those from trusted
+        inventory and connection facts and independently enforces authentication
+        expiry, active-user, host, and account restrictions.
       required:
-        - certParams
-      properties:
-        id:
-          type: string
-          description: Resolved inventory ID; if supplied must match the resolved record
-        policyId:
-          type: string
-          description: Content ID of the compiled policy, for audit
-        directoryRevision:
-          type: string
-        inventoryRevision:
-          type: string
-        certParams:
-          $ref: '#/components/schemas/CertParams'
-
-    CertParams:
-      type: object
-      required:
-        - identity
-        - principals
-        - expiration
+        - ttl
         - extensions
       properties:
-        identity:
-          type: string
-          description: |
-            Certificate identity/key ID used for audit logging and display.
-            Typically user email or username.
-          example: "alice@example.com"
-
-        principals:
-          type: array
-          description: |
-            The certificate's principals. Epithet's own evaluator always
-            returns exactly one entry: either connection.remoteUser or its
-            destination-bound derivation, according to the resolved host's
-            mode. Certificates are minted per connection and never reused
-            across a different host/user pair. The CA rejects a response
-            that has more than one principal or does not match the requested
-            account and resolved host principal mode.
-          items:
-            type: string
-          example: ["deploy"]
-          minItems: 1
-
-        expiration:
+        ttl:
           type: integer
           format: int64
+          minimum: 1
           description: |
-            Certificate validity **in nanoseconds**. This is Go's
-            `time.Duration` marshaled by the standard library's default
-            `encoding/json` behavior - an integer, not a duration string.
-            Recommended: 2-10 minutes (120000000000-600000000000 ns) for
-            short-lived certificates that limit exposure if compromised.
+            Maximum certificate lifetime in nanoseconds (Go time.Duration),
+            measured from CA signing, not evaluation. Must be positive. CA
+            further clamps expiry to authentication.expiresAt and any notAfter.
+            SSH timestamps have whole-second precision; an interval leaving
+            no usable lifetime after truncation is rejected.
           example: 300000000000
-
-        notAfter:
-          type: string
-          format: date-time
-          description: |
-            Absolute ceiling on certificate validity (RFC 3339), typically
-            bounded by inventory's authentication.expiresAt. The CA signs with
-            `min(now + expiration, notAfter)`, so a certificate can never
-            outlive the auth session that requested it. Omit (or send the
-            zero time) to use the expiry independently verified by the CA.
-          example: "2026-08-13T18:30:00Z"
-
         extensions:
           type: object
           description: |
-            SSH certificate extensions to grant. Keys are extension names,
-            values are typically empty strings. Common extensions:
-            - permit-pty: Allow terminal allocation
-            - permit-agent-forwarding: Allow SSH agent forwarding
-            - permit-port-forwarding: Allow port forwarding
-            - permit-user-rc: Allow executing ~/.ssh/rc
-            - permit-X11-forwarding: Allow X11 forwarding
+            SSH certificate extensions to grant, such as permit-pty,
+            permit-agent-forwarding, permit-port-forwarding, permit-user-rc,
+            and permit-X11-forwarding. Values are typically empty strings.
+            An empty map grants no extensions.
           additionalProperties:
             type: string
           example:
             permit-pty: ""
-            permit-agent-forwarding: ""
-          minProperties: 0
+        notAfter:
+          type: string
+          format: date-time
+          description: |
+            Optional absolute policy deadline (RFC 3339). This can tighten but
+            never extend the authentication expiry independently enforced by CA.
+            Omit (or send the zero time) for no additional policy deadline.
+            Expired deadlines reject issuance. Built-in Writ policy omits this;
+            it does not echo authentication expiry or reinterpret Writ until.
+          example: "2026-09-11T17:00:00Z"
+        policyId:
+          type: string
+          description: Content ID of the compiled policy, for private issuance audit
+        directoryRevision:
+          type: string
+          description: Legacy revision echo; CA records its original inventory revision instead
+        inventoryRevision:
+          type: string
+          description: Legacy revision echo; CA records its original inventory revision instead
 
   securitySchemes:
     ServiceJWT:

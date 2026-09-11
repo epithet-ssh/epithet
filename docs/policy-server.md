@@ -26,8 +26,8 @@ mode as issuance-time conditions and the effective credential scope as
 `account@CA-trust-domain`, not `account@host`.
 
 `epithet-principal-v1` makes issuance destination-bound using the v1 encoding.
-The policy server derives a versioned principal from the inventory principal domain and
-requested account name after authorizing the human-readable `account@host`
+The CA derives a versioned principal from the inventory principal domain and
+requested account name after policy authorizes the human-readable `account@host`
 tuple (or `account@domain` for a shared named domain). An offline
 `AuthorizedPrincipalsCommand` on the target derives the same
 value from its local domain and account name. It requires no per-account
@@ -441,7 +441,7 @@ For each request `(identity, account@host)` the evaluator (`pkg/policyserver/wri
 2. **Structural gates** — the identity must resolve to an `active` inventory user; the host must resolve in the inventory; if the host lists accounts, the requested account must be among them. Any failure → 403, regardless of policy text.
 3. **Collects matching rules** — a rule matches when its user, account, and host expressions all match.
 4. **Deny wins** — any matching deny → 403, always; no allow can override. The denial names the rule's label (or content id).
-5. **Issues** if any allow survives: `principals` contains exactly one value — either the requested account name or its destination-bound derivation, according to the resolved host's mode. `expiration` is the minimum `ttl` among satisfied allows (else the default), `notAfter` is the token's expiry, and `extensions` are the deployment set.
+5. **Authorizes issuance** if any allow survives: the response `ttl` is the minimum `ttl` among satisfied allows (else the default), and `extensions` are the deployment set. CA constructs the certificate Key ID and exactly one requested principal, and independently caps its expiry at the authentication expiry from inventory. Built-in Writ policy supplies no additional absolute deadline; Writ `until` continues to control rule eligibility at evaluation time.
 
 Evaluator or inventory failures fail **closed** (500), never "treat as no match".
 
@@ -716,7 +716,7 @@ Content-Type: application/json
 - `facts` (object, required): the [v1 inventory resolution](inventory-api.yaml). Policy requires unexpired `authentication.expiresAt`, a directory record matching `authentication.id`, and a host matching the connection.
 - `connection` (object): SSH connection parameters
   - `remoteHost` (string): Target SSH server hostname (OpenSSH `%h`)
-  - `remoteUser` (string): Target account name on the remote server (OpenSSH `%r`); the policy server encodes this account according to the resolved host's principal mode
+  - `remoteUser` (string): Target account name on the remote server (OpenSSH `%r`); CA encodes this account according to the resolved host's principal mode
   - `port` (uint): Target SSH port (OpenSSH `%p`)
   - `proxyJump` (string): ProxyJump configuration (OpenSSH `%j`), empty if not used
   - `hash` (string): OpenSSH `%C` hash - unique identifier for this connection
@@ -731,33 +731,58 @@ parse error.
 
 ```json
 {
-  "id": "provider-user-id",
   "policyId": "sha256:compiled-policy-content",
   "directoryRevision": "sha256:directory-content",
   "inventoryRevision": "sha256:host-content",
-  "certParams": {
-    "identity": "alice@example.com",
-    "principals": ["ubuntu"],
-    "expiration": 300000000000,
-    "notAfter": "2026-08-13T18:30:00Z",
-    "extensions": {
-      "permit-pty": "",
-      "permit-agent-forwarding": "",
-      "permit-user-rc": ""
-    }
+  "ttl": 300000000000,
+  "extensions": {
+    "permit-pty": "",
+    "permit-agent-forwarding": "",
+    "permit-user-rc": ""
   }
 }
 ```
 
 **Fields:**
-- `id` (string): Resolved inventory ID. CA rejects a conflicting value and supplies it from the resolved record if a custom policy omits it.
-- `policyId` (string): SHA-256 content ID of the compiled Writ policy, included in issuance logs.
-- `directoryRevision` and `inventoryRevision` (strings): The snapshot revisions used for the decision. CA records its resolved revisions in issuance logs.
-- `certParams.identity` (string): Inventory `userName`, used as certificate Key ID and logged as `userName` alongside `id`
-- `certParams.principals` ([]string): Exactly one entry — either the requested account name or a destination-bound derived principal, according to the resolved host's mode
-- `certParams.expiration` (integer): Certificate validity, in **nanoseconds** (this is `time.Duration` marshaled by Go's default `encoding/json`, i.e. an integer, not a duration string like `"5m"`)
-- `certParams.notAfter` (string, RFC 3339, optional): Absolute ceiling on certificate validity, bounded by inventory's `authentication.expiresAt`. The CA signs with `min(now + expiration, notAfter)`. The CA enforces the inventory bound even when a custom policy omits this value.
-- `certParams.extensions` (map[string]string): SSH certificate extensions to grant
+
+- `ttl` (positive integer): Maximum certificate lifetime from **CA signing time**, in nanoseconds (`time.Duration` in Go). This is an integer, not a duration string such as `"5m"`.
+- `extensions` (map[string]string): SSH certificate extensions to grant. An empty map grants none.
+- `notAfter` (RFC 3339 string, optional): An additional absolute deadline owned by policy, for example `"2026-09-11T17:00:00Z"`. Omit it (or send the zero time) when no additional deadline applies. An expired deadline prevents issuance.
+- `policyId` (string): Content ID of the compiled policy, retained in private issuance logs. Built-in Writ supplies its SHA-256 content ID.
+- `directoryRevision` and `inventoryRevision` (strings): Existing revision echoes. CA ignores these values and records its original resolved revisions. Removing these echoes is a separate cleanup.
+
+CA constructs certificate Key ID from inventory `userName` and exactly one
+principal from the requested account and the resolved host's principal mode/domain.
+It checks active-user, host, and account restrictions, and signs with:
+
+```text
+expiry = min(signing time + ttl, inventory authentication expiry, optional notAfter)
+```
+
+A policy deadline cannot extend the authentication lifetime. TTL must be positive;
+SSH timestamps are truncated to whole seconds and an interval leaving no usable
+lifetime is rejected. CA rechecks the ceiling at signing, so time spent waiting
+between policy evaluation and signing cannot extend either absolute deadline.
+The built-in policy omits `notAfter`; it no longer echoes authentication expiry.
+Writ `until` still controls rule eligibility at evaluation time, not certificate
+expiry. No Writ language semantics change here.
+
+### Custom policy migration (API 5)
+
+Upgrade CA and policy together, including separately deployed services. The old
+`certParams` response is no longer accepted as an authorization grant:
+
+- Move `certParams.expiration` to top-level `ttl`, keeping nanosecond units and the signing-time origin.
+- Move `certParams.extensions` to top-level `extensions`.
+- Move any intentionally tighter `certParams.notAfter` to top-level `notAfter`. Remove it if it only echoed authentication expiry; CA enforces that bound independently.
+- Remove response `id`, `certParams.identity`, and `certParams.principals`. CA obtains the ID and username from inventory and derives the sole requested principal itself.
+- Retain `policyId` for private audit. Continue authorizing the exact user/host/account request and enforcing policy-owned limits.
+
+Go integrations now use `wire.PolicyResponse` for policy limits and `ca.CertParams`
+for local signing inputs. `CA.RequestPolicy` returns `ca.Authorization`, which
+combines CA-constructed signing inputs with private audit metadata. Client-facing
+success responses still contain only the certificate. Combined deployment remains
+`epithet server`; static YAML and Writ syntax are unchanged.
 
 **Denial (HTTP 401, 403, or 500):**
 

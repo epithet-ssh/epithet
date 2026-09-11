@@ -81,7 +81,9 @@ Restart inventory after editing its files; restart policy after editing Writ.
 Restart inventory when changing OIDC identity mapping. Restart agents if changing
 the login issuer or client settings they discovered at startup. Combined deployments can restart `epithet server`.
 Upgrade these services together: older policy requests do not carry the required
-facts. Client and agent identity output are unchanged by the extraction.
+facts. Policy API 5 also replaces certificate assembly fields with authorization
+limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-5).
+Client and agent identity output are unchanged by the extraction.
 
 ## Resolution and audit
 

@@ -51,8 +51,8 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	require.NoError(t, err)
 
 	// The default TTL stays at the deployment default (5m), deliberately
-	// distinct from the 2m token minted below so the NotAfter assertion
-	// discriminates (see TestPolicyIntegration_ValidToken_ReturnsCertParams).
+	// distinct from the 2m token minted below so the CA expiry assertion
+	// discriminates (see TestPolicyIntegration_ValidToken_ReturnsSigningInputs).
 	eval, warnings, err := writpolicy.New(pol, &writpolicy.Registry{}, writpolicy.Options{})
 	require.NoError(t, err)
 	require.Empty(t, warnings)
@@ -86,20 +86,10 @@ func doPolicyRequest(t *testing.T, authority *ca.CA, token string, conn policy.C
 	return w
 }
 
-// TestPolicyIntegration_ValidToken_ReturnsCertParams exercises the full real
-// path (real JWT signed by a real IdP, real discovery/JWKS fetch, real
-// evaluator) end to end: a valid token for an authorized user/host/principal
-// combination gets a 200 with cert params clamped to the token's own expiry
-// and naming exactly the requested account in the default principal mode -
-// never a union of everything the user's tags could reach.
-//
-// The token is minted with a 2m lifetime, deliberately distinct from the
-// policy's own "defaults.expiration: 5m" (see newIntegrationHandler): if
-// NotAfter were ever computed from the policy's expiration duration instead
-// of the token's actual exp claim, both would land on ~5m and this
-// assertion would pass either way. A mismatched pair makes the WithinDuration
-// check below actually discriminate between the two.
-func TestPolicyIntegration_ValidToken_ReturnsCertParams(t *testing.T) {
+// TestPolicyIntegration_ValidToken_ReturnsSigningInputs exercises inventory OIDC
+// validation, policy evaluation, and CA construction together. The CA derives
+// the requested principal and enforces the token expiry independently of TTL.
+func TestPolicyIntegration_ValidToken_ReturnsSigningInputs(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
 	exp := time.Now().Add(2 * time.Minute).Truncate(time.Second)
@@ -112,11 +102,12 @@ func TestPolicyIntegration_ValidToken_ReturnsCertParams(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
-	var resp wire.PolicyResponse
+	var resp ca.Authorization
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Equal(t, []string{"root"}, resp.CertParams.Names)
-	require.WithinDuration(t, exp, resp.CertParams.NotAfter, time.Second,
-		"cert NotAfter must be clamped to the token's own expiry")
+	require.Equal(t, "alice@example.com", resp.CertParams.Identity)
+	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration)
+	require.Equal(t, exp, resp.CertParams.NotAfter)
 }
 
 // TestPolicyIntegration_ExpiredToken_Returns401 verifies real expiry

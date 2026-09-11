@@ -15,9 +15,17 @@ and requested host to inventory. Inventory validates authentication, maps the ID
 and resolves directory and host records. The CA forwards normalized authentication
 and inventory facts plus the connection to policy, without the bearer token.
 Policy verifies the CA service request, checks authentication expiry and fact
-binding, then evaluates Writ. The CA checks returned identity and principal
-parameters against the resolved records and bounds validity by inventory's verified
-authentication expiry before signing. Client-supplied inventory facts are ignored.
+binding, then evaluates Writ. Policy returns a positive TTL measured from CA
+signing, permitted extensions, its content ID, and an optional tighter absolute
+deadline. CA constructs identity and exactly one principal from the resolved
+records and connection, checks active-user/host/account restrictions, and bounds
+expiry by the earliest of signing time plus TTL, inventory authentication expiry,
+and any policy deadline. Client-supplied inventory facts are ignored.
+
+The built-in policy no longer echoes authentication expiry as a deadline. Writ
+`until` remains an evaluation-time rule condition. Custom policies can supply a
+tighter absolute deadline; CA always enforces authentication expiry independently.
+The policy API 5 migration is documented in docs/policy-server.md.
 
 Both services trust the CA public key. Requests use the existing request-bound
 service JWT, with distinct `epithet-inventory` and `epithet-policy` audiences.

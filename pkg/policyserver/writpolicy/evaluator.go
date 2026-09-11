@@ -13,7 +13,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
@@ -132,21 +131,10 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, authExpiry time
 		if ttl == 0 {
 			ttl = e.opts.DefaultTTL
 		}
-		names, err := certificatePrincipals(host, conn.RemoteUser)
-		if err != nil {
-			return nil, err
-		}
 		e.notify(ctx, "issued", identity, conn, issuedLabels(decision.Allowed))
 		return &wire.PolicyResponse{
-			ID:       user.ID,
 			PolicyID: e.policyID, DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
-			CertParams: wire.CertParams{
-				Identity:   identity,
-				Names:      names,
-				Expiration: ttl,
-				Extensions: e.opts.Extensions,
-				NotAfter:   authExpiry,
-			},
+			TTL: ttl, Extensions: e.opts.Extensions,
 		}, nil
 	case eval.Pending:
 		return nil, &wire.PolicyError{
@@ -161,24 +149,6 @@ func (e *Evaluator) Evaluate(ctx context.Context, userID string, authExpiry time
 		}
 		return nil, policyserver.Forbidden(fmt.Sprintf("%s is not authorized for %s@%s: %s",
 			identity, conn.RemoteUser, conn.RemoteHost, detail))
-	}
-}
-
-func certificatePrincipals(host *inventoryapi.Host, account string) ([]string, error) {
-	if host == nil {
-		return nil, fmt.Errorf("cannot issue a certificate for an unresolved host")
-	}
-	switch host.Principal.Mode {
-	case "account-name":
-		return []string{account}, nil
-	case "epithet-principal-v1":
-		name, err := principal.DeriveV1(principal.Domain(host.Principal.Domain), account)
-		if err != nil {
-			return nil, fmt.Errorf("deriving principal: %w", err)
-		}
-		return []string{name}, nil
-	default:
-		return nil, fmt.Errorf("unknown principal mode %q", host.Principal.Mode)
 	}
 }
 

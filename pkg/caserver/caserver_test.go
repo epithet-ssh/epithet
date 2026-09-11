@@ -163,12 +163,8 @@ func TestCreateCert_Success(t *testing.T) {
 	// Mock policy server that approves cert requests.
 	policyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := wire.PolicyResponse{
-			CertParams: wire.CertParams{
-				Identity:   "test-user",
-				Names:      []string{"testuser"},
-				Expiration: 5 * time.Minute,
-				Extensions: map[string]string{"permit-pty": ""},
-			},
+			TTL:        5 * time.Minute,
+			Extensions: map[string]string{"permit-pty": ""},
 		}
 		json.NewEncoder(w).Encode(resp)
 	})

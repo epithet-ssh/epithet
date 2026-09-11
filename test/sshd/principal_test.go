@@ -13,7 +13,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +36,7 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 
 	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	certificate, err := testCA.SignPublicKey(userPublicKey, &wire.CertParams{
+	certificate, err := testCA.SignPublicKey(userPublicKey, &ca.CertParams{
 		Identity:   "destination-binding-test",
 		Names:      []string{hostAPrincipal},
 		Expiration: time.Minute,
@@ -84,7 +83,7 @@ func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
 	require.NoError(t, err)
 	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	certificate, err := testCA.SignPublicKey(userPublicKey, &wire.CertParams{
+	certificate, err := testCA.SignPublicKey(userPublicKey, &ca.CertParams{
 		Identity:   "principal-domain-test",
 		Names:      []string{fleetPrincipal},
 		Expiration: time.Minute,

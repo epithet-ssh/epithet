@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,26 @@ type CA struct {
 
 	// svcSigner mints the request-bound JWT sent to the policy server.
 	svcSigner *serviceauth.Signer
+}
+
+// CertParams are assembled by CA from trusted inventory and policy limits.
+// They are local signing inputs, not the policy service's wire contract.
+type CertParams struct {
+	Identity   string
+	Names      []string
+	Expiration time.Duration
+	Extensions map[string]string
+	// NotAfter is the earlier of authentication expiry and any policy deadline.
+	NotAfter time.Time
+}
+
+// Authorization holds CA's signing inputs and private issuance audit metadata.
+type Authorization struct {
+	ID                string
+	PolicyID          string
+	DirectoryRevision string
+	InventoryRevision string
+	CertParams        CertParams
 }
 
 // PolicyURL returns the URL of the policy server.
@@ -141,7 +162,7 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 
 // RequestPolicy requests policy from the policy server for a cert request.
 // The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
-func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*wire.PolicyResponse, error) {
+func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*Authorization, error) {
 	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
 	defer cancel()
 	if c.inventory == nil {
@@ -218,6 +239,13 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if user == nil || user.Active == nil || !*user.Active || host == nil {
 		return nil, fmt.Errorf("policy issued for absent or inactive inventory records")
 	}
+	accounts, err := host.Resource.AccountList()
+	if err != nil {
+		return nil, err
+	}
+	if conn.RemoteUser == "" || (accounts != nil && !slices.Contains(accounts, conn.RemoteUser)) {
+		return nil, fmt.Errorf("policy issued for an account outside the resolved host restrictions")
+	}
 	expected := conn.RemoteUser
 	if host.Principal.Mode == "epithet-principal-v1" {
 		expected, err = principal.DeriveV1(principal.Domain(host.Principal.Domain), conn.RemoteUser)
@@ -225,28 +253,30 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 			return nil, err
 		}
 	}
-	params := &policyResp.CertParams
-	if len(params.Names) != 1 || params.Names[0] != expected || params.Identity != user.UserName || params.Expiration <= 0 {
-		return nil, fmt.Errorf("policy certificate parameters do not match resolved identity and target")
+	if policyResp.TTL <= 0 {
+		return nil, fmt.Errorf("policy TTL must be positive")
 	}
-	if policyResp.ID != "" && policyResp.ID != user.ID {
-		return nil, fmt.Errorf("policy response inventory ID mismatch")
+	notAfter := facts.Authentication.ExpiresAt
+	if !policyResp.NotAfter.IsZero() && policyResp.NotAfter.Before(notAfter) {
+		notAfter = policyResp.NotAfter
 	}
-	if params.NotAfter.IsZero() || params.NotAfter.After(facts.Authentication.ExpiresAt) {
-		params.NotAfter = facts.Authentication.ExpiresAt
+	if !notAfter.After(time.Now()) {
+		return nil, fmt.Errorf("certificate authorization has expired")
 	}
-	policyResp.ID = user.ID
-	policyResp.DirectoryRevision = facts.Directory.Revision
-	policyResp.InventoryRevision = facts.Inventory.Revision
-	return policyResp, nil
+	return &Authorization{
+		ID: user.ID, PolicyID: policyResp.PolicyID,
+		DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
+		CertParams: CertParams{
+			Identity: user.UserName, Names: []string{expected},
+			Expiration: policyResp.TTL, Extensions: policyResp.Extensions, NotAfter: notAfter,
+		},
+	}, nil
 }
 
 // SignPublicKey signs a key to generate a certificate.
-func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertParams) (sshcert.RawCertificate, error) {
-	// A ceiling already in the past can never produce a usable certificate,
-	// and signing one anyway would silently hand out a dead credential.
-	if !params.NotAfter.IsZero() && params.NotAfter.Before(time.Now()) {
-		return "", fmt.Errorf("certificate NotAfter %s is in the past", params.NotAfter)
+func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (sshcert.RawCertificate, error) {
+	if params.Expiration <= 0 {
+		return "", fmt.Errorf("certificate lifetime must be positive")
 	}
 
 	buf := make([]byte, 8)
@@ -261,12 +291,18 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertPara
 		return "", err
 	}
 
-	// The certificate must never outlive the auth session that requested it,
-	// so clamp its validity to NotAfter when that ceiling is tighter than
-	// the requested Expiration.
-	validBefore := time.Now().Add(params.Expiration)
+	// Anchor TTL at signing, after key parsing and entropy acquisition. Recheck
+	// absolute limits here because authorization may have expired since lookup.
+	now := time.Now()
+	if !params.NotAfter.IsZero() && !params.NotAfter.After(now) {
+		return "", fmt.Errorf("certificate NotAfter %s is in the past", params.NotAfter)
+	}
+	validBefore := now.Add(params.Expiration)
 	if !params.NotAfter.IsZero() && params.NotAfter.Before(validBefore) {
 		validBefore = params.NotAfter
+	}
+	if validBefore.Unix() <= now.Unix() {
+		return "", fmt.Errorf("certificate expiry leaves no usable lifetime")
 	}
 
 	certificate := ssh.Certificate{
@@ -274,7 +310,7 @@ func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *wire.CertPara
 		Key:             pubKey,
 		KeyId:           params.Identity,
 		ValidPrincipals: params.Names,
-		ValidAfter:      uint64(time.Now().Unix() - 60),
+		ValidAfter:      uint64(now.Unix() - 60),
 		ValidBefore:     uint64(validBefore.Unix()),
 		CertType:        ssh.UserCert,
 		Permissions: ssh.Permissions{

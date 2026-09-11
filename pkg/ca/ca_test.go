@@ -10,7 +10,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -70,7 +69,7 @@ func TestCA_Sign(t *testing.T) {
 	c, err := ca.New(caPrivKey, "")
 	require.NoError(err)
 
-	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &wire.CertParams{
+	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{
 		Identity:   "brianm",
 		Expiration: time.Second * 10000,
 		Names:      []string{"root", "deployer"},
@@ -95,7 +94,7 @@ func newTestCA(t *testing.T) *ca.CA {
 
 // signTestCert signs userPubKey with the given params and parses the result,
 // so tests can assert on the decoded certificate fields directly.
-func signTestCert(t *testing.T, c *ca.CA, params *wire.CertParams) *ssh.Certificate {
+func signTestCert(t *testing.T, c *ca.CA, params *ca.CertParams) *ssh.Certificate {
 	t.Helper()
 	rawCert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), params)
 	require.NoError(t, err)
@@ -114,7 +113,7 @@ func signTestCert(t *testing.T, c *ca.CA, params *wire.CertParams) *ssh.Certific
 func TestSignPublicKeyClampsToNotAfter(t *testing.T) {
 	c := newTestCA(t)
 	notAfter := time.Now().Add(90 * time.Second)
-	cert := signTestCert(t, c, &wire.CertParams{
+	cert := signTestCert(t, c, &ca.CertParams{
 		Identity:   "alice@example.com",
 		Names:      []string{"root"},
 		Expiration: 10 * time.Minute, // Would outlive the token.
@@ -128,7 +127,7 @@ func TestSignPublicKeyClampsToNotAfter(t *testing.T) {
 // validity.
 func TestSignPublicKeyUsesExpirationWhenNoNotAfter(t *testing.T) {
 	c := newTestCA(t)
-	cert := signTestCert(t, c, &wire.CertParams{
+	cert := signTestCert(t, c, &ca.CertParams{
 		Identity: "alice@example.com", Names: []string{"root"}, Expiration: 5 * time.Minute,
 	})
 	require.Greater(t, cert.ValidBefore, uint64(time.Now().Add(4*time.Minute).Unix()))
@@ -139,7 +138,7 @@ func TestSignPublicKeyUsesExpirationWhenNoNotAfter(t *testing.T) {
 // dead-on-arrival certificate.
 func TestSignPublicKeyRejectsPastNotAfter(t *testing.T) {
 	c := newTestCA(t)
-	_, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &wire.CertParams{
+	_, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{
 		Identity:   "alice@example.com",
 		Names:      []string{"root"},
 		Expiration: 5 * time.Minute,

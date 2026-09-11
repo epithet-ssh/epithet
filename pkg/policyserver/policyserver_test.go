@@ -59,14 +59,8 @@ func (m *mockEvaluator) Evaluate(ctx context.Context, identity string, authExpir
 func TestHandler_Success(t *testing.T) {
 	evaluator := &mockEvaluator{
 		response: &wire.PolicyResponse{
-			CertParams: wire.CertParams{
-				Identity:   "test@example.com",
-				Names:      []string{"testuser"},
-				Expiration: 5 * time.Minute,
-				Extensions: map[string]string{
-					"permit-pty": "",
-				},
-			},
+			TTL:        5 * time.Minute,
+			Extensions: map[string]string{"permit-pty": ""},
 		},
 	}
 
@@ -99,9 +93,8 @@ func TestHandler_Success(t *testing.T) {
 		t.Fatalf("failed to parse response: %v", err)
 	}
 
-	if resp.CertParams.Identity != "test@example.com" {
-		t.Errorf("expected identity 'test@example.com', got %q", resp.CertParams.Identity)
-	}
+	require.Equal(t, 5*time.Minute, resp.TTL)
+	require.Equal(t, map[string]string{"permit-pty": ""}, resp.Extensions)
 }
 
 func TestHandler_Unauthorized(t *testing.T) {
