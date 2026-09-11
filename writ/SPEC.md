@@ -131,14 +131,19 @@ A policy reference to a duplicated group `displayName` matches the
 union; sync warns loudly and points at the IdP as the thing to fix.
 
 **Hosts** resolve through the configured inventory. A resolved authorization
-resource has a unique `name`, a `map[string]string` of labels (k8s-style), and
-an optional list of local account names. An inventory implementation may carry
-other host data, but Writ does not observe it. The static inventory supports
-exact host entries and ordered name patterns for ephemeral fleets. When hosts
-share a destination-bound principal domain, inventory exposes the domain name
-as the resource name so policy cannot imply per-member isolation that SSH does
-not enforce. Policy matches resolved resources by name (globs allowed), or by
-label selector `{k=v, ...}` (entries AND).
+resource has a nonempty set of equivalent `names`, a `map[string]string` of labels
+(k8s-style), and an optional list of local account names. A hostname matcher or
+glob matches if any name matches. Negation is applied to that whole-host result:
+a negated matcher succeeds only when none of the names match. Thus a deny on
+one name applies through every other name of the same host.
+
+An inventory implementation may carry other host data, but Writ does not
+observe it. Static inventory supports exact host records with multiple DNS
+names and ordered patterns for ephemeral fleets. When hosts share a
+destination-bound principal domain, inventory exposes only that principal
+domain as the singleton names set so policy cannot imply per-member isolation
+that SSH does not enforce. A principal domain is independent of DNS domains.
+Label selector `{k=v, ...}` entries remain ANDed.
 
 **Accounts** are byte-exact local login names. If a resolved host supplies an
 account list, matching is **inventory-grounded**: the requested account must

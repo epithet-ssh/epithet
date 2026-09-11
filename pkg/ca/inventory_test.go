@@ -40,7 +40,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 				expected, err = principal.DeriveV1("production", "ubuntu")
 				require.NoError(t, err)
 			}
-			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("domains: [production]\nusers:\n  - id: subject:alice\n    userName: Alice\nhosts:\n  - name: host\n    accounts: [ubuntu]\n    principal-mode: %s\n%s", mode, domain)), 0600))
+			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("domains: [production]\nusers:\n  - id: subject:alice\n    userName: Alice\nhosts:\n  - names: [host]\n    accounts: [ubuntu]\n    principal-mode: %s\n%s", mode, domain)), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
 			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
@@ -93,9 +93,9 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						}
 						assert.Equal(t, "host", request.Facts.Target)
 						if mode == "epithet-principal-v1" {
-							assert.Equal(t, "production", request.Facts.Host.Name)
+							assert.Equal(t, []string{"production"}, request.Facts.Host.Names)
 						} else {
-							assert.Equal(t, "host", request.Facts.Host.Name)
+							assert.Equal(t, []string{"host"}, request.Facts.Host.Names)
 						}
 						response := wire.PolicyResponse{PolicyID: "sha256:policy", TTLSeconds: tc.ttlSeconds, NotAfter: tc.notAfter, Extensions: map[string]string{"permit-pty": ""}}
 						json.NewEncoder(w).Encode(response)
@@ -163,7 +163,7 @@ func TestCARejectsGrantsOutsideInventoryRestrictions(t *testing.T) {
 				src += "users:\n  - id: subject:alice\n    userName: Alice\n" + tc.user
 			}
 			if tc.host != "missing" {
-				src += "hosts:\n  - name: host\n" + tc.host
+				src += "hosts:\n  - names: [host]\n" + tc.host
 			}
 			require.NoError(t, os.WriteFile(path, []byte(src), 0600))
 			inv, err := inventory.NewStatic([]string{path})

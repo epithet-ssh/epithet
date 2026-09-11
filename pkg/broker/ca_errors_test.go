@@ -46,7 +46,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			pub, priv, err := sshcert.GenerateKeys()
 			require.NoError(t, err)
 			path := filepath.Join(t.TempDir(), "inventory.yaml")
-			require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:user\n    userName: user\nhosts:\n  - name: host\n"), 0600))
+			require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:user\n    userName: user\nhosts:\n  - names: [host]\n"), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
 			realInventory := inventorytest.Serve(t, inv, idp.Issuer(), pub)

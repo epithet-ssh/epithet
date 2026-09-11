@@ -21,11 +21,12 @@ import (
 // Static is a file-backed inventory: directory users and hosts loaded
 // once at startup. Reload is a process restart, like the policy itself.
 //
-// Host entries come in two forms. An exact entry (`name:`) is one
+// Host entries come in two forms. An exact entry (`names:`) is one
 // registered host. A pattern entry (`pattern:`) uses the same DNS-label-aware
-// hostname patterns as Writ host selectors. Account-name entries adopt the
-// requested name; destination-bound named domains expose that domain as the
-// Writ resource so policy cannot claim per-member isolation. Patterns are the
+// hostname patterns as Writ host selectors. Exact entries expose all their names;
+// pattern entries adopt the requested name. Destination-bound named domains
+// expose that domain as the Writ resource so policy cannot claim per-member
+// isolation. Patterns are the
 // escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
@@ -100,7 +101,7 @@ type userEntry struct {
 }
 
 type hostEntry struct {
-	Name          string            `yaml:"name"`
+	Names         []string          `yaml:"names"`
 	Pattern       string            `yaml:"pattern"`
 	Labels        map[string]string `yaml:"labels"`
 	Accounts      []string          `yaml:"accounts"`
@@ -218,19 +219,30 @@ func (s *Static) loadFile(path string) error {
 			}
 		}
 		switch {
-		case h.Name != "" && h.Pattern != "":
-			return fmt.Errorf("%s: hosts[%d] has both name and pattern — pick one", path, i)
-		case h.Name != "":
-			// Loading is an ingress boundary: names are lowercased here
-			// so lookups stay byte compares.
-			name := hostpattern.NormalizeName(h.Name)
-			if _, ok := s.hosts[name]; ok {
-				return fmt.Errorf("%s: duplicate host %q", path, name)
+		case h.Names != nil && h.Pattern != "":
+			return fmt.Errorf("%s: hosts[%d] has both names and pattern — pick one", path, i)
+		case h.Names != nil:
+			names := slices.Clone(h.Names)
+			if len(names) == 0 {
+				return fmt.Errorf("%s: hosts[%d] names must not be empty", path, i)
 			}
-			s.hosts[name] = &ResolvedHost{
-				Policy:        resolvedPolicyHost(name, domain, h.Labels, h.Accounts),
+			for j, raw := range names {
+				names[j] = hostpattern.NormalizeName(raw)
+				if names[j] == "" {
+					return fmt.Errorf("%s: hosts[%d] has an empty DNS name", path, i)
+				}
+			}
+			slices.Sort(names)
+			host := &ResolvedHost{
+				Policy:        resolvedPolicyHost(names, domain, h.Labels, h.Accounts),
 				PrincipalMode: mode,
 				Domain:        domain,
+			}
+			for _, name := range names {
+				if _, ok := s.hosts[name]; ok {
+					return fmt.Errorf("%s: hosts[%d] duplicate host name %q", path, i, name)
+				}
+				s.hosts[name] = host
 			}
 		case h.Pattern != "":
 			if domain.IsGeneratedHost() {
@@ -248,7 +260,7 @@ func (s *Static) loadFile(path string) error {
 				domain:        domain,
 			})
 		default:
-			return fmt.Errorf("%s: hosts[%d] has neither name nor pattern", path, i)
+			return fmt.Errorf("%s: hosts[%d] has neither names nor pattern", path, i)
 		}
 	}
 	return nil
@@ -268,7 +280,7 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, erro
 	for _, p := range s.patterns {
 		if p.pattern.Match(name) {
 			return &ResolvedHost{
-				Policy:        resolvedPolicyHost(name, p.domain, p.labels, p.accounts),
+				Policy:        resolvedPolicyHost([]string{name}, p.domain, p.labels, p.accounts),
 				PrincipalMode: p.principalMode,
 				Domain:        p.domain,
 			}, nil
@@ -322,12 +334,11 @@ func (s *Static) recordDomainPolicy(domain principal.Domain, labels map[string]s
 		path, hostIndex, domain, previous.path, previous.hostIndex)
 }
 
-func resolvedPolicyHost(requestedName string, domain principal.Domain, labels map[string]string, accounts []string) Host {
-	name := requestedName
+func resolvedPolicyHost(names []string, domain principal.Domain, labels map[string]string, accounts []string) Host {
 	if domain != "" && !domain.IsGeneratedHost() {
-		name = domain.String()
+		names = []string{domain.String()}
 	}
-	return Host{Name: name, Labels: labels, Accounts: accounts}
+	return Host{Names: names, Labels: labels, Accounts: accounts}
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an

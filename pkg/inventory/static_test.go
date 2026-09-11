@@ -30,16 +30,59 @@ users:
     groups: [SRE]
 
 hosts:
-  - name: PROD-DB-1
+  - names: [PROD-DB-1]
     labels: {env: prod, role: db}
     accounts: [root, postgres]
-  - name: dev-box
+  - names: [dev-box]
     labels: {env: dev}
   - pattern: "ci-runner-*"
     labels: {env: ci, ephemeral: "true"}
 `
 
 const inventoryGeneratedDomain = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+func TestMultipleNamesResolveOneHost(t *testing.T) {
+	src := "hosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    domain: " + inventoryGeneratedDomain + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
+	s, err := NewStatic([]string{writeInv(t, "names.yaml", src)})
+	require.NoError(t, err)
+	var first *ResolvedHost
+	for _, name := range []string{"freki.home", "freki.tailca597.ts.net"} {
+		host, err := s.LookupHost(t.Context(), name)
+		require.NoError(t, err)
+		require.NotNil(t, host)
+		require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Policy.Names)
+		require.Equal(t, inventoryGeneratedDomain, host.Domain.String())
+		require.Equal(t, []string{"brianm"}, host.Policy.Accounts)
+		require.Equal(t, "server", host.Policy.Labels["role"])
+		if first == nil {
+			first = host
+		} else {
+			require.Same(t, first, host)
+		}
+	}
+}
+
+func TestInvalidHostNames(t *testing.T) {
+	for _, tc := range []struct{ name, src, error string }{
+		{"empty", "  - names: []\n", "names must not be empty"},
+		{"empty member", "  - names: [host, '']\n", "empty DNS name"},
+		{"repeated", "  - names: [host, HOST]\n", "duplicate host name"},
+		{"overlap", "  - names: [host, alias]\n  - names: [ALIAS]\n", "duplicate host name"},
+		{"singular field", "  - name: host\n", "field name not found"},
+		{"singular with names", "  - name: host\n    names: [alias]\n", "field name not found"},
+		{"pattern", "  - names: [host]\n    pattern: '*'\n", "both names and pattern"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewStatic([]string{writeInv(t, "names.yaml", "hosts:\n"+tc.src)})
+			require.ErrorContains(t, err, tc.error)
+		})
+	}
+	_, err := NewStatic([]string{
+		writeInv(t, "one.yaml", "hosts:\n  - names: [host, alias]\n"),
+		writeInv(t, "two.yaml", "hosts:\n  - names: [ALIAS, other]\n"),
+	})
+	require.ErrorContains(t, err, "duplicate host name")
+}
 
 func loadBasic(t *testing.T) *Static {
 	t.Helper()
@@ -105,7 +148,7 @@ func TestExactHostLowercasedAtLoad(t *testing.T) {
 	h, err := s.LookupHost(context.Background(), "prod-db-1")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Equal(t, "prod-db-1", h.Policy.Name)
+	require.Equal(t, []string{"prod-db-1"}, h.Policy.Names)
 	require.Equal(t, map[string]string{"env": "prod", "role": "db"}, h.Policy.Labels)
 	require.Equal(t, []string{"root", "postgres"}, h.Policy.Accounts)
 }
@@ -123,7 +166,7 @@ func TestPatternSynthesizesHost(t *testing.T) {
 	h, err := s.LookupHost(context.Background(), "ci-runner-42")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Equal(t, "ci-runner-42", h.Policy.Name, "synthesized host adopts the requested name")
+	require.Equal(t, []string{"ci-runner-42"}, h.Policy.Names, "synthesized host adopts the requested name")
 	require.Equal(t, "ci", h.Policy.Labels["env"])
 	require.Nil(t, h.Policy.Accounts)
 }
@@ -166,7 +209,7 @@ func TestInvalidPatternSyntaxIsLoadError(t *testing.T) {
 }
 
 func TestHashedDefaultRequiresAndLoadsExactDomain(t *testing.T) {
-	src := "hosts:\n  - name: prod-1\n    domain: " + inventoryGeneratedDomain + "\n"
+	src := "hosts:\n  - names: [prod-1]\n    domain: " + inventoryGeneratedDomain + "\n"
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
@@ -200,7 +243,7 @@ hosts:
 func TestExactHostCanFallBackFromHashedDefault(t *testing.T) {
 	src := `
 hosts:
-  - name: legacy-1
+  - names: [legacy-1]
     principal-mode: account-name
 `
 	s, err := NewStatic(
@@ -214,7 +257,7 @@ hosts:
 }
 
 func TestHashedExactHostWithoutDomainIsError(t *testing.T) {
-	src := "hosts:\n  - name: prod-1\n"
+	src := "hosts:\n  - names: [prod-1]\n"
 	_, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
@@ -232,7 +275,7 @@ func TestHashedPatternLoadsDeclaredNamedDomain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, host.PrincipalMode)
 	require.Equal(t, "production", host.Domain.String())
-	require.Equal(t, "production", host.Policy.Name, "Writ authorizes the shared domain, not one member hostname")
+	require.Equal(t, []string{"production"}, host.Policy.Names, "Writ authorizes the shared domain, not one member hostname")
 }
 
 func TestPatternWithGeneratedHostDomainIsError(t *testing.T) {
@@ -242,7 +285,7 @@ func TestPatternWithGeneratedHostDomainIsError(t *testing.T) {
 }
 
 func TestMalformedDomainIsError(t *testing.T) {
-	src := "hosts:\n  - name: prod-1\n    domain: 'not a domain'\n"
+	src := "hosts:\n  - names: [prod-1]\n    domain: 'not a domain'\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.ErrorContains(t, err, "domain")
 }
@@ -277,11 +320,11 @@ func TestNamedDomainEntriesMustShareAuthorizationAttributes(t *testing.T) {
 	src := `
 domains: [production]
 hosts:
-  - name: prod-1
+  - names: [prod-1]
     domain: production
     principal-mode: epithet-principal-v1
     labels: {role: web}
-  - name: prod-2
+  - names: [prod-2]
     domain: production
     principal-mode: epithet-principal-v1
     labels: {role: database}
@@ -294,11 +337,11 @@ func TestNamedDomainEntriesResolveToSamePolicyResource(t *testing.T) {
 	src := `
 domains: [production]
 hosts:
-  - name: prod-1
+  - names: [prod-1]
     domain: production
     principal-mode: epithet-principal-v1
     labels: {env: prod}
-  - name: prod-2
+  - names: [prod-2]
     domain: production
     principal-mode: epithet-principal-v1
     labels: {env: prod}
@@ -310,7 +353,7 @@ hosts:
 	require.NoError(t, err)
 	two, err := s.LookupHost(context.Background(), "prod-2")
 	require.NoError(t, err)
-	require.Equal(t, "production", one.Policy.Name)
+	require.Equal(t, []string{"production"}, one.Policy.Names)
 	require.Equal(t, one.Policy, two.Policy)
 	require.Equal(t, one.Domain, two.Domain)
 }
@@ -319,11 +362,11 @@ func TestNamedDomainAccountOrderDoesNotChangeAuthorizationAttributes(t *testing.
 	src := `
 domains: [production]
 hosts:
-  - name: prod-1
+  - names: [prod-1]
     domain: production
     principal-mode: epithet-principal-v1
     accounts: [root, ubuntu]
-  - name: prod-2
+  - names: [prod-2]
     domain: production
     principal-mode: epithet-principal-v1
     accounts: [ubuntu, root]
@@ -336,10 +379,10 @@ func TestNamedDomainDistinguishesAbsentAndEmptyAccountGrounding(t *testing.T) {
 	src := `
 domains: [production]
 hosts:
-  - name: prod-1
+  - names: [prod-1]
     domain: production
     principal-mode: epithet-principal-v1
-  - name: prod-2
+  - names: [prod-2]
     domain: production
     principal-mode: epithet-principal-v1
     accounts: []
@@ -349,7 +392,7 @@ hosts:
 }
 
 func TestUnknownPrincipalModeIsError(t *testing.T) {
-	src := "hosts:\n  - name: prod-1\n    principal-mode: mystery\n"
+	src := "hosts:\n  - names: [prod-1]\n    principal-mode: mystery\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
 }
@@ -364,7 +407,7 @@ func TestUnknownHostIsNilNil(t *testing.T) {
 func TestExactEntryWinsOverPattern(t *testing.T) {
 	src := `
 hosts:
-  - name: ci-runner-1
+  - names: [ci-runner-1]
     labels: {env: prod}
   - pattern: "ci-runner-*"
     labels: {env: ci}
@@ -394,7 +437,7 @@ hosts:
 func TestEmptyAccountsListStaysNonNil(t *testing.T) {
 	src := `
 hosts:
-  - name: locked-down
+  - names: [locked-down]
     accounts: []
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
@@ -407,7 +450,7 @@ hosts:
 
 func TestMultipleFilesConcatenate(t *testing.T) {
 	users := "users:\n  - userName: alice@example.com\n    id: subject:alice@example.com\n"
-	hosts := "hosts:\n  - name: web-1\n"
+	hosts := "hosts:\n  - names: [web-1]\n"
 	s, err := NewStatic([]string{writeInv(t, "users.yaml", users), writeInv(t, "hosts.yaml", hosts)})
 	require.NoError(t, err)
 	u, _ := s.LookupUser(context.Background(), "subject:alice@example.com")
@@ -423,7 +466,7 @@ func TestDuplicateUserAcrossFilesIsError(t *testing.T) {
 }
 
 func TestDuplicateHostIsError(t *testing.T) {
-	src := "hosts:\n  - name: web-1\n  - name: WEB-1\n"
+	src := "hosts:\n  - names: [web-1]\n  - names: [WEB-1]\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.ErrorContains(t, err, "duplicate host")
 }
@@ -439,8 +482,8 @@ func TestUserWithoutUserNameIsError(t *testing.T) {
 	require.ErrorContains(t, err, "userName")
 }
 
-func TestHostWithNameAndPatternIsError(t *testing.T) {
-	src := "hosts:\n  - name: a\n    pattern: \"b*\"\n"
+func TestHostWithNamesAndPatternIsError(t *testing.T) {
+	src := "hosts:\n  - names: [a]\n    pattern: \"b*\"\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.ErrorContains(t, err, "pick one")
 }
@@ -470,7 +513,7 @@ func TestLegacySubjectKeysAreRejected(t *testing.T) {
 func TestDirectoryAndHostRevisionsAreIndependent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "inventory.yaml")
 	load := func(user, host string) *Static {
-		require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: alice\n    userName: "+user+"\nhosts:\n  - name: "+host+"\n"), 0600))
+		require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: alice\n    userName: "+user+"\nhosts:\n  - names: ["+host+"]\n"), 0600))
 		inv, err := NewStatic([]string{path})
 		require.NoError(t, err)
 		return inv

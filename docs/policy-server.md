@@ -86,10 +86,10 @@ users:
     userType: contractor
 
 hosts:
-  - name: prod-db-1
+  - names: [prod-db-1]
     labels: {env: prod, role: db}
     accounts: [root, postgres, ubuntu]   # optional: restricts issuable accounts
-  - name: dev-box
+  - names: [dev-box]
     labels: {env: dev}
   - pattern: "ci-runner-*"               # synthesizes a host for any matching name
     labels: {env: dev, ephemeral: "true"}
@@ -354,7 +354,7 @@ domains:
   - ci-runners
 
 hosts:
-  - name: prod-db-1               # exact entry (name is lowercased at load)
+  - names: [prod-db-1, prod-db-1.internal] # one host, equivalent DNS names
     labels: {env: prod, role: db}
     accounts: [root, postgres]    # optional account grounding — see below
     principal-mode: epithet-principal-v1
@@ -367,11 +367,19 @@ hosts:
 
 A connection's host must resolve in the inventory or the request is denied — this is what makes label selectors trustworthy. Two entry forms:
 
-- **Exact entries** (`name:`) are individual hosts, looked up first.
+- **Exact entries** (`names:`) are individual hosts with one or more equivalent DNS names, looked up first. Use either `names` or `pattern`; they cannot be combined. Names are normalized with ASCII case folding and must be nonempty and unique across all host records and files.
 - **Pattern entries** (`pattern:`) resolve any requested name they match. They use the same label-aware hostname globs as Writ host selectors. In account-name mode they adopt the requested name. A destination-bound named domain exposes the domain name to Writ instead, because the resulting certificate is valid throughout that domain. Patterns are the escape hatch for short-lived fleets (VM pools, CI runners) that follow a naming pattern but cannot be enumerated. Patterns match in file order; first match wins.
+
+An exact hostname matcher or glob matches if it matches **any** name of the
+resolved host. A deny matching one name therefore applies through every other
+name. Negation means no registered name matches that matcher, rather than
+finding a different name that does not match. Labels, accounts, and principal
+metadata belong to the host record and are shared by all its names.
 
 `domains` declares the human-readable authorization domains that host entries
 may reference. The loader rejects misspelled or otherwise undeclared names.
+Here and below, `domain` means **principal domain**, an SSH authorization
+boundary. It is independent of DNS domains and is never inferred from a DNS suffix.
 Generated per-host domains use the reserved `epithet-host-id-v1:` namespace
 and are carried directly by their exact host entry rather than declared.
 
@@ -693,7 +701,7 @@ Content-Type: application/json
       "organization": "Example"
     },
     "host": {
-      "name": "server.example.com",
+      "names": ["server.example.com", "server.internal"],
       "labels": {},
       "accounts": [
         "ubuntu"
@@ -709,7 +717,7 @@ Content-Type: application/json
 - `facts.authentication`: verified `id` and unexpired `expiresAt`. No bearer token or provider settings.
 - `facts.target`: the requested hostname, equal to `connection.remoteHost` after ASCII case folding.
 - `facts.user`: the user record, whose `id` must match `authentication.id`; explicit `null` means absent.
-- `facts.host`: the policy resource (`name`, `labels`, `accounts`); explicit `null` means absent. CA validates inventory's host/domain binding before supplying this resource. A shared domain's resource name can intentionally differ from `target`.
+- `facts.host`: the policy resource (`names`, `labels`, `accounts`); explicit `null` means absent. CA validates inventory's host/domain binding before supplying this resource. For an ordinary host, `names` contains all equivalent DNS names; for a shared principal domain it contains only that domain, which can differ from `target`.
 
 Missing `user` or `host` fields are malformed, while explicit null records produce
 structural denial. `host.accounts` is required: null is ungrounded, [] permits no
@@ -773,14 +781,25 @@ The built-in policy omits `notAfter`; it no longer echoes authentication expiry.
 Writ `until` still controls rule eligibility at evaluation time, not certificate
 expiry. No Writ language semantics change here.
 
-### Custom policy migration (API 7)
+<a id="custom-policy-migration-api-7"></a>
+
+### Custom policy migration (API 8)
 
 Upgrade CA, inventory, and policy together, including separately deployed services.
+API 8 replaces `facts.host.name` with nonempty `facts.host.names`. Inventory
+resolution version 2 makes the same change in `inventory.host`. Match each
+hostname/glob against the entire names list, then apply negation, so aliases
+cannot evade a deny. A shared principal domain must remain a singleton list
+containing the domain, without member DNS names. `target` remains the requested
+connection name. Static exact-host entries require `names`, including for a
+single name. Custom Go host fact and Writ evaluator structs use `Names []string`.
+
+
 User facts now use plain fields in both inventory responses and policy requests.
 Remove `schemas`; replace each group object with its `value` string; move
 `department` and `organization` out of the enterprise-extension URI property
 and directly into the user object. Group display values are no longer carried.
-Identity and group strings retain byte-exact matching. Static YAML is unchanged;
+Identity and group strings retain byte-exact matching. Static user YAML is unchanged;
 future SCIM adapters translate external records at the inventory boundary.
 
 API 7 replaces the response `ttl` (nanoseconds) with integer `ttlSeconds`.

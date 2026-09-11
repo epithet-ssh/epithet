@@ -310,7 +310,7 @@ func TestPolicyRejectsMismatchedFacts(t *testing.T) {
 			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
 			active := true
 			auth := facts.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
-			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Name: "host", Accounts: json.RawMessage(`null`)}}}
+			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: json.RawMessage(`null`)}}}
 			tc.change(&r)
 			body, err := json.Marshal(r)
 			require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestPolicyRejectsOmittedRecordsAndTransportFields(t *testing.T) {
 		`"user":null,"host":null,"resolvedAt":"2026-09-11T00:00:00Z"`,
 		`"user":null,"host":null,"directory":{"revision":"private"}`,
 		`"user":null,"host":null,"token":"bearer"`,
-		`"user":null,"host":{"name":"host","accounts":null,"principal":{"mode":"account-name"}}`,
+		`"user":null,"host":{"names":["host"],"accounts":null,"principal":{"mode":"account-name"}}`,
 	} {
 		t.Run(extra, func(t *testing.T) {
 			evaluator := &mockEvaluator{response: &wire.PolicyResponse{TTLSeconds: 60}}

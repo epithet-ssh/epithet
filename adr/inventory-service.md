@@ -27,7 +27,7 @@ and any policy deadline. Client-supplied inventory facts are ignored.
 The built-in policy no longer echoes authentication expiry as a deadline. Writ
 `until` remains an evaluation-time rule condition. Custom policies can supply a
 tighter absolute deadline; CA always enforces authentication expiry independently.
-The policy API 7 migration is documented in docs/policy-server.md.
+The policy API 8 migration is documented in docs/policy-server.md.
 
 Both services trust the CA public key. Requests use the existing request-bound
 service JWT, with distinct `epithet-inventory` and `epithet-policy` audiences.
@@ -55,10 +55,10 @@ the internal protocol. Future SCIM adapters translate at the inventory boundary.
 POST at the configured endpoint accepts `{token, host}`; GET at the same
 endpoint returns login discovery. No path suffix is appended; Unix sockets use
 `/`. Proxies preserve the signed host and path. Hosts use ASCII case folding, shared
-with Writ. Version 1 returns `target`, `authentication: {id, expiresAt}`,
+with Writ. Version 2 returns `target`, `authentication: {id, expiresAt}`,
 `directory: {revision, user}`, and `inventory: {revision, host}`. User records use
 plain fields and string group memberships as described above. Host facts
-contain `name`, `labels`, `accounts`, and `principal` directly. CA explicitly
+contain `names`, `labels`, `accounts`, and `principal` directly. CA explicitly
 selects the first three fields for policy and retains `principal` for signing. This protocol has no Writ Go types.
 
 Each static revision is a SHA-256 digest of the loaded data for that component;
@@ -86,8 +86,8 @@ are never sent to public clients or encoded in certificates.
 Policy uses `wire.PolicyFacts`, independent of the inventory envelope/version.
 `target` must match the normalized connection host; `user.id` must match the
 unexpired authentication ID. CA validates inventory host/domain binding before
-projection: the policy host resource may name a shared domain rather than an
-individual target. User/host fields must be present; null denotes absence and
+projection: the policy host names contain all equivalent DNS names, or only a shared
+principal domain rather than individual member DNS names. User/host fields must be present; null denotes absence and
 leads to structural denial. Shared fact shapes live in `pkg/facts` without
 transport metadata.
 

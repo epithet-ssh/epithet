@@ -41,6 +41,32 @@ The existing YAML record format is unchanged: top-level `users`, `hosts`, and
 or both. Paths/globs concatenate in order; duplicates and unknown fields are
 errors. See [user and host records](policy-server.md#inventory).
 
+## Multiple DNS names
+
+An exact host record can grant several equivalent names:
+
+```yaml
+hosts:
+  - names: [freki.home, freki.tailca597.ts.net]
+    labels: {role: server}
+    accounts: [brianm]
+```
+
+Both names resolve to the same host. Use `names: [freki.home]` for a single name.
+Use either `names` or `pattern`. Empty lists, empty
+names, repeated names after ASCII case folding, and names claimed by another
+record are rejected. Exact names take precedence over patterns.
+
+Writ matches any registered name, including for denies; negation is applied
+after matching the whole list. Changing the requested DNS name cannot evade
+a deny on that host. A shared **principal domain** still exposes only the domain
+to Writ, preserving its authorization boundary. Principal domains and DNS
+domains are separate concepts.
+
+Inventory resolution version 2 and policy API 8 carry `names` arrays in host
+facts, replacing `name`. Upgrade the private services and CA together. The
+top-level `target` remains the actual requested DNS name.
+
 ## Separate deployment
 
 Inventory accepts a literal CA public key, a key file, or an HTTPS key URL:
@@ -103,18 +129,18 @@ still uses `{token, host}`. Host responses are also flattened: move the old
 User responses no longer carry SCIM schema URIs: remove `schemas`, replace
 group objects with membership strings, and move `department` and `organization`
 directly into `directory.user`. The same user shape is projected to policy.
-Static YAML and authorization matching semantics are unchanged.
+Static user YAML and user matching semantics are unchanged.
 
-Policy API 7 uses projected policy facts and authorization
-limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-7).
+Policy API 8 uses projected policy facts and authorization
+limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-8).
 Client and agent identity output are unchanged by the extraction.
 
 ## Resolution and audit
 
-The [v1 API](inventory-api.yaml) returns separate directory and inventory
+The [v2 API](inventory-api.yaml) returns separate directory and inventory
 snapshots with content revisions, the requested connection `target`, the normalized
 authenticated `id`, and an `expiresAt` bound. `target` must match the request
-`host`; `inventory.host.name` is the policy resource and may instead name
+`host`; `inventory.host.names` lists the equivalent host names and may instead contain only
 a shared domain. Inventory never returns the bearer token. CA validates the
 full resolution, retains both revisions and principal metadata,
 and sends only authentication, requested target, user, and host resource fields to

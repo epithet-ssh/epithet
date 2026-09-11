@@ -186,7 +186,7 @@ entry and select the same principal mode:
 
 ```yaml
 hosts:
-  - name: prod-web-1.example.com
+  - names: [prod-web-1.example.com]
     labels: {env: prod, role: web}
     principal-mode: epithet-principal-v1
     domain: "epithet-host-id-v1:..."

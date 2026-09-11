@@ -34,13 +34,13 @@ domains:
 
 hosts:
   # Exact entries: one host each. Names are matched case-insensitively.
-  - name: prod-web-1.example.com
+  - names: [prod-web-1.example.com]
     labels: {env: prod, role: web}
     # For destination binding, set principal-mode: epithet-principal-v1 and copy
     # the domain printed by `epithet host enroll`:
     # principal-mode: epithet-principal-v1
     # domain: "epithet-host-id-v1:..."
-  - name: prod-db-1.example.com
+  - names: [prod-db-1.example.com]
     labels: {env: prod, role: db}
     # Optional account grounding: certs are only issuable for accounts
     # listed here, no matter what the policy says. Omit the key to let

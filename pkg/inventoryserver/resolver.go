@@ -30,7 +30,7 @@ func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host 
 	if err != nil {
 		return nil, fmt.Errorf("looking up host: %w", err)
 	}
-	r := &inventoryapi.Resolution{Version: 1, Authentication: auth, Target: host,
+	r := &inventoryapi.Resolution{Version: inventoryapi.Version, Authentication: auth, Target: host,
 		Directory: inventoryapi.DirectorySnapshot{Revision: s.DirectoryRevision},
 		Inventory: inventoryapi.HostSnapshot{Revision: s.InventoryRevision}}
 	if u != nil {
@@ -46,7 +46,7 @@ func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host 
 		if err != nil {
 			return nil, err
 		}
-		r.Inventory.Host = &inventoryapi.Host{HostResource: facts.HostResource{Name: h.Policy.Name, Labels: h.Policy.Labels, Accounts: accounts},
+		r.Inventory.Host = &inventoryapi.Host{HostResource: facts.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: accounts},
 			Principal: inventoryapi.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}
 	}
 	if err := r.Validate(host); err != nil {

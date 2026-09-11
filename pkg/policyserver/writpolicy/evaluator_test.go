@@ -43,7 +43,7 @@ func testInv() *fakeInv {
 			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []string{"SRE"}, UserType: "employee"},
 		},
 		hosts: map[string]*inventory.ResolvedHost{
-			"prod-db-1": {Policy: inventory.Host{Name: "prod-db-1", Labels: map[string]string{"env": "prod"}}},
+			"prod-db-1": {Policy: inventory.Host{Names: []string{"prod-db-1"}, Labels: map[string]string{"env": "prod"}}},
 		},
 	}
 }
@@ -103,7 +103,7 @@ func TestIssueAuthorizesDomainHost(t *testing.T) {
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	inv.hosts["prod-db-1"].Domain = evaluatorDomain
-	inv.hosts["prod-db-1"].Policy.Name = string(evaluatorDomain)
+	inv.hosts["prod-db-1"].Policy.Names = []string{string(evaluatorDomain)}
 	e := NewForTesting(pol, inv)
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
@@ -475,5 +475,45 @@ func TestUserFactsPreserveAuthorization(t *testing.T) {
 				require.Nil(t, response)
 			}
 		})
+	}
+}
+
+func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
+	for _, sharedDomain := range []bool{false, true} {
+		inv := testInv()
+		host := inv.hosts["prod-db-1"]
+		host.Policy.Names = []string{"prod-db-1", "database.internal"}
+		inv.hosts["database.internal"] = host
+		if sharedDomain {
+			host.Policy.Names = []string{string(evaluatorDomain)}
+			host.PrincipalMode = inventory.EpithetPrincipalV1
+			host.Domain = evaluatorDomain
+		}
+		for _, tc := range []struct {
+			rule    string
+			allowed bool
+		}{
+			{"allow * -> root@prod-db-1\n", !sharedDomain},
+			{"allow * -> root@*.internal\n", !sharedDomain},
+			{"allow * -> root@production-database\n", sharedDomain},
+			{"allow * -> root@*\ndeny * -> root@database.internal\n", sharedDomain},
+			{"allow * -> root@*\ndeny * -> root@*.internal\n", sharedDomain},
+			{"allow * -> root@*\ndeny * -> root@!prod-db-1\n", !sharedDomain},
+			{"allow * -> root@*\ndeny * -> root@!*.internal\n", !sharedDomain},
+			{"allow * -> root@*\ndeny * -> root@production-database\n", !sharedDomain},
+		} {
+			for _, name := range []string{"prod-db-1", "database.internal"} {
+				e := NewForTesting(mustPolicy(t, tc.rule), inv)
+				response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", name))
+				if tc.allowed {
+					require.NoError(t, err, "shared=%v target=%s rule=%s", sharedDomain, name, tc.rule)
+					require.NotNil(t, response)
+				} else {
+					var denied *wire.PolicyError
+					require.ErrorAs(t, err, &denied)
+					require.Equal(t, http.StatusForbidden, denied.StatusCode)
+				}
+			}
+		}
 	}
 }

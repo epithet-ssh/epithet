@@ -29,13 +29,13 @@ type User struct {
 	Organization string
 }
 
-// Host is a resolved host. Name must already have passed il.HostName.
+// Host is a resolved host. Names must already have passed il.HostName.
 // Accounts is the grounding list: nil means no account inventory was
 // reported and account expressions match the requested name directly
 // (ungrounded); non-nil means grounded matching — the requested account
 // must be in the list, and an empty list grounds nothing.
 type Host struct {
-	Name     string
+	Names    []string
 	Labels   map[string]string
 	Accounts []string
 }
@@ -322,9 +322,11 @@ func hostMatcher(h *Host) func(il.Matcher) bool {
 		case il.MatchAny:
 			return true
 		case il.MatchName:
-			return m.Value == h.Name
+			return slices.Contains(h.Names, m.Value)
 		case il.MatchGlob:
-			return hostpattern.Match(m.Value, h.Name)
+			return slices.ContainsFunc(h.Names, func(name string) bool {
+				return hostpattern.Match(m.Value, name)
+			})
 		case il.MatchLabels:
 			for k, v := range m.Labels {
 				if h.Labels[k] != v {

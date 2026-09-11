@@ -19,7 +19,7 @@ membership. Principal domains are literal, non-secret authorization
 identities; possession of a domain name is not authentication. A host without
 an explicit domain receives a reserved random per-host domain. A supplied
 human-readable domain must already exist and admission must authorize joining
-it. Keep host registration identity and canonical names separate from the
+it. Keep host registration identity and DNS names separate from the
 domain used for SSH principal derivation, make repeated registration of the
 same installation idempotent, and reject conflicting membership requests.
 Acceptance: the registry supplies the canonical literal domain and
@@ -42,3 +42,19 @@ that belong to literal principal domains. Named domains are declared and
 typo-checked; omission creates a reserved random per-host domain. Possession of
 either value is not authentication, and managed registration and membership
 must be authorized separately by the enrollment admission mechanism.
+
+
+## Agreed host identity and names
+
+Dynamic inventory assigns each host record an opaque, immutable ID, independent
+of its DNS names, authentication credentials, and principal domain. This ID is
+the database key and is never reassigned to a replacement host. Names are a
+unique lookup index onto that record. Names can change and credentials can
+rotate without replacing the record; multiple records may intentionally share
+a principal domain. Choose the opaque ID encoding with storage implementation.
+
+All DNS names on a record are peers, with no privileged canonical name. Name
+claims and changes require authorized admission/administration because they
+affect Writ matching for the entire host. Static YAML uses names, even for a single name,
+without a synthetic ID field. Use principal domain explicitly in
+prose to distinguish the domain field from a DNS domain.

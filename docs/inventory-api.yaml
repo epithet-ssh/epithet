@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Epithet Inventory Resolver API
-  version: 1.0.0
+  version: 2.0.0
   description: >-
     CA-authenticated OIDC validation and static resolution. No provisioning, administration, or
     enrollment routes. Requests and responses are limited to 64 KiB. Resolution responses
@@ -110,7 +110,7 @@ components:
       properties:
         version:
           type: integer
-          enum: [1]
+          enum: [2]
         authentication:
           $ref: '#/components/schemas/Authentication'
         target:
@@ -164,12 +164,16 @@ components:
     Host:
       type: object
       nullable: true
-      required: [name, accounts, principal]
+      required: [names, accounts, principal]
       properties:
-        name:
-          type: string
-          minLength: 1
-          description: Requested host, or named shared principal domain
+        names:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+          description: Normalized equivalent host names, or a singleton shared principal domain
         labels:
           type: object
           nullable: true

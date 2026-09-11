@@ -26,7 +26,7 @@ func sreUser() *eval.User {
 }
 
 func prodHost() *eval.Host {
-	return &eval.Host{Name: "prod-db-1", Labels: map[string]string{"env": "prod", "role": "db"}}
+	return &eval.Host{Names: []string{"prod-db-1"}, Labels: map[string]string{"env": "prod", "role": "db"}}
 }
 
 func noFlags(name string) (bool, error)           { return false, nil }
@@ -272,14 +272,14 @@ func TestUnsetTTLDoesNotParticipateInMinimum(t *testing.T) {
 
 func TestHostGlobStarStopsAtLabelBoundary(t *testing.T) {
 	src := "allow * -> root@web-*\n"
-	h := &eval.Host{Name: "web-1.example.com"}
+	h := &eval.Host{Names: []string{"web-1.example.com"}}
 	d := decide(t, src, eval.Request{User: sreUser(), Host: h, Account: "root"})
 	require.Equal(t, eval.Deny, d.Outcome)
 }
 
 func TestHostGlobMatchesWithinLabel(t *testing.T) {
 	src := "allow * -> root@web-*.example.com\n"
-	h := &eval.Host{Name: "web-1.example.com"}
+	h := &eval.Host{Names: []string{"web-1.example.com"}}
 	d := decide(t, src, eval.Request{User: sreUser(), Host: h, Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
 }
@@ -287,7 +287,7 @@ func TestHostGlobMatchesWithinLabel(t *testing.T) {
 func TestHostGlobDoublestarCrossesLabels(t *testing.T) {
 	src := "allow * -> root@**.controlplane.internal\n"
 	for _, name := range []string{"controlplane.internal", "api.controlplane.internal", "blue.api.controlplane.internal"} {
-		d := decide(t, src, eval.Request{User: sreUser(), Host: &eval.Host{Name: name}, Account: "root"})
+		d := decide(t, src, eval.Request{User: sreUser(), Host: &eval.Host{Names: []string{name}}, Account: "root"})
 		require.Equal(t, eval.Issue, d.Outcome, name)
 	}
 }
@@ -297,7 +297,7 @@ func TestLabelSelectorEntriesAND(t *testing.T) {
 	d := decide(t, src, eval.Request{User: sreUser(), Host: prodHost(), Account: "root"})
 	require.Equal(t, eval.Issue, d.Outcome)
 
-	web := &eval.Host{Name: "web-1", Labels: map[string]string{"env": "prod", "role": "web"}}
+	web := &eval.Host{Names: []string{"web-1"}, Labels: map[string]string{"env": "prod", "role": "web"}}
 	d = decide(t, src, eval.Request{User: sreUser(), Host: web, Account: "root"})
 	require.Equal(t, eval.Deny, d.Outcome)
 }

@@ -98,7 +98,7 @@ users:
     id: inactive@example.com
     active: false
 hosts:
-  - name: prod.example.com
+  - names: [prod.example.com]
     domain: prod.example.com
     principal-mode: epithet-principal-v1
     accounts: [root]

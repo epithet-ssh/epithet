@@ -111,7 +111,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts 
 		if err != nil {
 			return nil, err
 		}
-		policyHost = &eval.Host{Name: host.Name, Labels: host.Labels, Accounts: accounts}
+		policyHost = &eval.Host{Names: host.Names, Labels: host.Labels, Accounts: accounts}
 	}
 	req := eval.Request{User: user, Host: policyHost, Account: conn.RemoteUser}
 	decision, err := eval.Decide(e.pol, req, e.opts.Clock(),

@@ -1,14 +1,18 @@
-// Package inventoryapi defines the v1 resolver protocol independently of Writ
+// Package inventoryapi defines the v2 resolver protocol independently of Writ
 // and storage implementations. CA projects policy inputs from validated results.
 package inventoryapi
 
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
+
+// Version is the inventory resolution wire version.
+const Version = 2
 
 type ResolveRequest struct {
 	Token string `json:"token"`
@@ -41,8 +45,8 @@ type Resolution struct {
 // Validate checks both request binding and all fields whose omission could
 // broaden authorization. Absence of an entity is represented only by null.
 func (r *Resolution) Validate(host string) error {
-	if r == nil || r.Version != 1 {
-		return fmt.Errorf("inventory resolution version 1 is required")
+	if r == nil || r.Version != Version {
+		return fmt.Errorf("inventory resolution version %d is required", Version)
 	}
 	if r.Target != host || host == "" || r.Authentication.ID == "" {
 		return fmt.Errorf("inventory facts do not match authenticated identity and target")
@@ -64,7 +68,7 @@ func (r *Resolution) Validate(host string) error {
 		}
 		switch h.Principal.Mode {
 		case "account-name":
-			if h.Name != host {
+			if !slices.Contains(h.Names, host) {
 				return fmt.Errorf("invalid account-name host binding")
 			}
 		case "epithet-principal-v1":
@@ -72,11 +76,11 @@ func (r *Resolution) Validate(host string) error {
 			if err != nil {
 				return fmt.Errorf("invalid principal domain: %w", err)
 			}
-			expected := string(domain)
 			if domain.IsGeneratedHost() {
-				expected = host
-			}
-			if h.Name != expected {
+				if !slices.Contains(h.Names, host) {
+					return fmt.Errorf("invalid principal-domain host binding")
+				}
+			} else if !slices.Equal(h.Names, []string{string(domain)}) {
 				return fmt.Errorf("invalid principal-domain host binding")
 			}
 		default:

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 )
 
 // Authentication contains inventory's verified identity and session bound.
@@ -27,7 +29,7 @@ type User struct {
 	Organization string   `json:"organization,omitempty"`
 }
 type HostResource struct {
-	Name   string            `json:"name"`
+	Names  []string          `json:"names"`
 	Labels map[string]string `json:"labels"`
 	// Raw JSON preserves the security-significant distinction between omitted,
 	// null (ungrounded), and [] (grounded with no permitted accounts).
@@ -58,8 +60,15 @@ func (u *User) Validate(authenticatedID string) error {
 
 // Validate checks host fields whose omission could broaden authorization.
 func (h HostResource) Validate() error {
-	if h.Name == "" {
-		return fmt.Errorf("inventory host name is required")
+	if len(h.Names) == 0 {
+		return fmt.Errorf("inventory host names are required")
+	}
+	seen := make(map[string]bool, len(h.Names))
+	for _, name := range h.Names {
+		if name == "" || name != hostpattern.NormalizeName(name) || seen[name] {
+			return fmt.Errorf("invalid or duplicate inventory host name %q", name)
+		}
+		seen[name] = true
 	}
 	_, err := h.AccountList()
 	return err

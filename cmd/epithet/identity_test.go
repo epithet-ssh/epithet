@@ -263,7 +263,7 @@ func TestInventoryCheckIdentityModes(t *testing.T) {
   - userName: alice
     id: alice@example.com
 hosts:
-  - name: host.example
+  - names: [host.example]
     accounts: [root]
 `), 0600))
 	for _, tc := range []struct {

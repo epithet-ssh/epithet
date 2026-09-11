@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Epithet Policy Server API
-  version: 7.0.0
+  version: 8.0.0
   description: |
     The Policy Server API is called by the Epithet CA to make authorization decisions
     for SSH certificate requests. Your policy server receives normalized authentication
@@ -215,12 +215,16 @@ components:
     HostResource:
       type: object
       nullable: true
-      required: [name, accounts]
+      required: [names, accounts]
       properties:
-        name:
-          type: string
-          minLength: 1
-          description: Requested host, or named shared principal domain
+        names:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+          description: Normalized equivalent host names, or a singleton shared principal domain
         labels:
           type: object
           nullable: true

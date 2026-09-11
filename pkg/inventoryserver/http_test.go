@@ -39,10 +39,10 @@ func fixture(t *testing.T) (*inventory.Static, inventoryapi.ResolveRequest, *oid
     organization: Example
     userType: employee
 hosts:
-  - name: ungrounded
-  - name: empty
+  - names: [ungrounded]
+  - names: [empty]
     accounts: []
-  - name: grounded
+  - names: [grounded]
     accounts: [root]
 `), 0600))
 	inv, err := inventory.NewStatic([]string{path})
@@ -150,12 +150,16 @@ func TestClientRejectsMalformedAndUnavailableInventory(t *testing.T) {
 		{"missing active", strings.Replace(string(encoded), `,"active":true`, "", 1), 200},
 		{"empty group", strings.Replace(string(encoded), `"groups":["Admins"]`, `"groups":[""]`, 1), 200},
 		{"legacy group objects", strings.Replace(string(encoded), `"groups":["Admins"]`, `"groups":[{"value":"Admins","display":"Admins"}]`, 1), 200},
+		{"missing names", strings.Replace(string(encoded), `"names":["grounded"]`, `"name":"grounded"`, 1), 200},
+		{"empty names", strings.Replace(string(encoded), `"names":["grounded"]`, `"names":[]`, 1), 200},
+		{"duplicate names", strings.Replace(string(encoded), `"names":["grounded"]`, `"names":["grounded","grounded"]`, 1), 200},
+		{"target not in names", strings.Replace(string(encoded), `"names":["grounded"]`, `"names":["other"]`, 1), 200},
 		{"missing accounts", strings.Replace(string(encoded), `,"accounts":["root"]`, "", 1), 200},
 		{"wrong subject", strings.Replace(string(encoded), "subject:alice", "mallory-id", 1), 200},
 		{"wrong target", strings.Replace(string(encoded), `"target":"grounded"`, `"target":"other"`, 1), 200},
 		{"missing revision", strings.Replace(string(encoded), `"revision":"`+inv.DirectoryRevision()+`"`, `"revision":""`, 1), 200},
 		{"missing user", strings.Replace(string(encoded), `"user":`, `"unexpected":`, 1), 200},
-		{"bad version", strings.Replace(string(encoded), `"version":1`, `"version":2`, 1), 200},
+		{"bad version", strings.Replace(string(encoded), `"version":2`, `"version":1`, 1), 200},
 		{"oversized", strings.Repeat(" ", wire.MaxBodySize+1), 200},
 		{"unavailable", "", 503},
 		{"not JSON", "broken", 200},
