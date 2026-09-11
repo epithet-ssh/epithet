@@ -52,10 +52,12 @@ the internal protocol. Future SCIM adapters translate at the inventory boundary.
 
 ## Protocol and snapshots
 
-`POST /v1/resolve` accepts `{token, host}`. Hosts use ASCII case folding, shared
+POST at the configured endpoint accepts `{token, host}`; GET at the same
+endpoint returns login discovery. No path suffix is appended; Unix sockets use
+`/`. Proxies preserve the signed host and path. Hosts use ASCII case folding, shared
 with Writ. Version 1 returns `target`, `authentication: {id, expiresAt}`,
 `directory: {revision, user}`, and `inventory: {revision, host}`. User records use
-SCIM core User/group-reference fields and the enterprise extension. Host facts
+plain fields and string group memberships as described above. Host facts
 contain `name`, `labels`, `accounts`, and `principal` directly. CA explicitly
 selects the first three fields for policy and retains `principal` for signing. This protocol has no Writ Go types.
 

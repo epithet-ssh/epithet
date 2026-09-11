@@ -30,6 +30,8 @@ type Config struct {
 	Discovery   *wire.Discovery
 }
 
+// NewHandler dispatches GET discovery and POST resolution by method at the
+// configured endpoint. A mounting proxy must preserve the signed host and path.
 func NewHandler(config Config) (http.Handler, error) {
 	key, resolver := config.CAPublicKey, config.Resolver
 	verifier, err := serviceauth.NewVerifierFor(key, serviceauth.InventoryAudience)
@@ -55,7 +57,12 @@ func NewHandler(config Config) (http.Handler, error) {
 			http.Error(w, "invalid inventory service authentication", 403)
 			return
 		}
-		if r.Method == "GET" && r.URL.Path == "/" && r.URL.RawQuery == "" {
+		// Query parameters are not part of this RPC or the service-token binding.
+		if r.URL.RawQuery != "" || r.URL.ForceQuery {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == "GET" {
 			if config.Discovery == nil {
 				http.NotFound(w, r)
 				return
@@ -63,10 +70,6 @@ func NewHandler(config Config) (http.Handler, error) {
 			w.Header().Set("Cache-Control", "max-age=300")
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(config.Discovery)
-			return
-		}
-		if r.URL.Path != "/v1/resolve" || r.URL.RawQuery != "" {
-			http.NotFound(w, r)
 			return
 		}
 		if r.Method != "POST" {
@@ -125,7 +128,7 @@ func NewClient(endpoint string, key sshcert.RawPrivateKey, cfg tlsconfig.Config)
 	if err != nil {
 		return nil, err
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return nil, fmt.Errorf("inventory URL cannot contain credentials, query, or fragment")
 	}
 	if u.Scheme != "unix" && ((u.Scheme != "https" && u.Scheme != "http") || u.Host == "") {
@@ -152,7 +155,7 @@ func NewClient(endpoint string, key sshcert.RawPrivateKey, cfg tlsconfig.Config)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{url: strings.TrimRight(endpoint, "/") + "/v1/resolve", http: client, signer: signer}, nil
+	return &Client{url: endpoint, http: client, signer: signer}, nil
 }
 
 func (c *Client) Resolve(ctx context.Context, req inventoryapi.ResolveRequest) (*inventoryapi.Resolution, error) {
@@ -201,7 +204,7 @@ func (c *Client) Resolve(ctx context.Context, req inventoryapi.ResolveRequest) (
 
 // FetchDiscovery reads inventory-owned login configuration using service authentication.
 func (c *Client) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimSuffix(c.url, "v1/resolve"), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.url, nil)
 	if err != nil {
 		return nil, err
 	}

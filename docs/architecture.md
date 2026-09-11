@@ -60,7 +60,7 @@ sequenceDiagram
     end
 
     broker ->> ca: POST / {"publicKey", "connection"} — Authorization: Bearer <jwt>
-    ca ->> inventory: POST /v1/resolve {token, host} + service JWT
+    ca ->> inventory: POST / {token, host} + service JWT
     inventory ->> inventory: Verify OIDC token; map ID; resolve user and host
     inventory -->> ca: Authentication expiry, ID, and facts with separate revisions
     ca ->> policy: POST / {connection, facts: {authentication, target, user, host}} + service JWT
@@ -147,7 +147,7 @@ epithet policy --policy-file <policy.writ> --ca-pubkey <key> --listen <addr>
 epithet inventory --static <inventory.yaml> --oidc-issuer <url> --oidc-client-id <id> --ca-pubkey <key> --listen <addr>
 ```
 
-Serves CA-authenticated user and host resolution at `/v1/resolve`. Directory and
+Serves CA-authenticated user and host resolution with POST at the configured endpoint. Directory and
 host facts have independent revisions. Static files are immutable until restart;
 `--check` validates them offline. See [inventory.md](inventory.md).
 
@@ -231,7 +231,7 @@ The broker requests certificates from the CA over HTTP with the user's JWT in `A
 
 ### CA → inventory protocol
 
-The CA uses `/v1/resolve` and the `epithet-inventory` service-token audience.
+The CA uses the configured inventory endpoint and the `epithet-inventory` service-token audience.
 Both services trust the CA public key, but tokens cannot cross service audiences.
 Inventory validates the user token, then sends normalized authentication and
 versioned directory and host facts, host binding, and separate revisions. The

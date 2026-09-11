@@ -28,6 +28,14 @@ are supplied automatically. OIDC is configured only on inventory; all user IDs
 belong to that configured provider. Select principal mode deliberately; see
 [principal modes](principals.md).
 
+Inventory uses the configured URL as its complete RPC endpoint: POST resolves
+`{token, host}`, and GET returns login discovery. No path suffix is appended.
+For example, `https://inventory.example.com/internal/inventory` receives both
+methods at `/internal/inventory`. Reverse proxies must preserve the Host header
+and path because the service JWT binds both. Query parameters are not supported.
+Unix socket endpoints use `/` for both methods. Resolution responses retain
+the `version` field as the protocol-version mechanism.
+
 The existing YAML record format is unchanged: top-level `users`, `hosts`, and
 `domains`, with explicit user `id` and `userName`. Files may contain users, hosts,
 or both. Paths/globs concatenate in order; duplicates and unknown fields are
@@ -80,6 +88,11 @@ are removed.
 Restart inventory after editing its files; restart policy after editing Writ.
 Restart inventory when changing OIDC identity mapping. Restart agents if changing
 the login issuer or client settings they discovered at startup. Combined deployments can restart `epithet server`.
+Inventory lookup now uses POST at the configured endpoint instead of appending
+`/v1/resolve`. Update proxy routes to send both GET and POST to inventory at
+that endpoint, preserving the signed host and path, and upgrade CA and inventory
+together.
+
 Upgrade these services together: older policy requests do not carry the required
 facts. Inventory responses now use top-level `target` instead of `host`;
 CA and inventory must be upgraded together for this rename. The lookup request

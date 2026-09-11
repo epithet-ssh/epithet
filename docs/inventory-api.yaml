@@ -4,8 +4,12 @@ info:
   version: 1.0.0
   description: >-
     CA-authenticated OIDC validation and static resolution. No provisioning, administration, or
-    enrollment routes. Requests and responses are limited to 64 KiB. Responses
+    enrollment routes. Requests and responses are limited to 64 KiB. Resolution responses
     are not cached. Directory and host revisions are independent snapshots.
+    GET and POST use the configured endpoint without appending a path suffix.
+    Reverse proxies must preserve the signed Host header and path.
+    Query parameters are not supported. The resolution payload carries the
+    protocol version.
 paths:
   /:
     get:
@@ -22,7 +26,6 @@ paths:
                 $ref: '#/components/schemas/Discovery'
         '403':
           description: Invalid or missing CA service token
-  /v1/resolve:
     post:
       operationId: resolveInventory
       security:
