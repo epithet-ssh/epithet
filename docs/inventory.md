@@ -1,8 +1,9 @@
 # Inventory service
 
 `epithet inventory` serves the user directory and host inventory used during
-certificate issuance. It also verifies OIDC tokens and maps them to directory IDs. Static YAML is the initial implementation. Dynamic host
-enrollment, SCIM, and LDAP are not implemented yet.
+certificate issuance. It also verifies OIDC tokens and maps them to directory IDs. Static YAML can be combined with file-backed dynamic host enrollment and
+administration. See [dynamic inventory](dynamic-inventory.md) for configuration,
+commands, and the first implementation decisions. SCIM and LDAP remain later work.
 
 ## Combined deployment
 
@@ -86,7 +87,8 @@ for local deployment. Plain HTTP clients require explicit `--insecure`.
 Only the CA can resolve inventory or ask policy for decisions. Both services
 verify request-bound JWTs against its public key, using different service
 audiences. No separate policy-to-inventory credential is needed. The static
-service has no write or enrollment routes.
+service has no write or enrollment routes. Configuring `inventory.state-dir` adds
+the separately authenticated `/manage` endpoint.
 
 ## Validation and migration
 
@@ -155,8 +157,8 @@ Certificate issuance logs include `id`, `userName`, `policyId`,
 `directoryRevision`, and `inventoryRevision`. Certificate Key ID remains
 `userName`. Revisions identify the loaded facts and stay in CA's private audit records;
 policy neither receives nor echoes them. The unused `resolvedAt` field has been
-removed. Dynamic storage must define freshness semantics explicitly; no resolver
-cache is used.
+removed. Managed reads use committed snapshots and content revisions; writes become
+visible to subsequent reads immediately. No resolver cache is used.
 
 The [architecture decision](../adr/inventory-service.md) explains the trust and
 component boundaries.

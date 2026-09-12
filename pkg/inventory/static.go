@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
@@ -30,6 +31,7 @@ import (
 // escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
+	sourceFiles          map[*ResolvedHost]string
 	directoryHash        hash.Hash
 	inventoryHash        hash.Hash
 	users                map[string]*directory.User
@@ -43,6 +45,8 @@ type Static struct {
 }
 
 type patternHost struct {
+	sourceFile    string
+	rawPattern    string
 	pattern       hostpattern.Pattern
 	labels        map[string]string
 	accounts      []string
@@ -125,6 +129,7 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 		}
 	}
 	s := &Static{
+		sourceFiles:   map[*ResolvedHost]string{},
 		directoryHash: sha256.New(), inventoryHash: sha256.New(),
 		users:                map[string]*directory.User{},
 		ids:                  map[string]*directory.User{},
@@ -238,6 +243,7 @@ func (s *Static) loadFile(path string) error {
 				PrincipalMode: mode,
 				Domain:        domain,
 			}
+			s.sourceFiles[host] = path
 			for _, name := range names {
 				if _, ok := s.hosts[name]; ok {
 					return fmt.Errorf("%s: hosts[%d] duplicate host name %q", path, i, name)
@@ -253,6 +259,7 @@ func (s *Static) loadFile(path string) error {
 				return fmt.Errorf("%s: hosts[%d] pattern %q: %w", path, i, h.Pattern, err)
 			}
 			s.patterns = append(s.patterns, patternHost{
+				sourceFile: path, rawPattern: h.Pattern,
 				pattern:       pattern,
 				labels:        h.Labels,
 				accounts:      h.Accounts,
@@ -358,4 +365,29 @@ func (s *Static) DirectoryRevision() string {
 }
 func (s *Static) InventoryRevision() string {
 	return fmt.Sprintf("sha256:%x", s.inventoryHash.Sum(nil))
+}
+
+// Records provides read-only source information for inventory administration.
+func (s *Static) Records() []HostRecord {
+	records := []HostRecord{}
+	seen := map[*ResolvedHost]bool{}
+	for _, h := range s.hosts {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		names := []string{}
+		for n, other := range s.hosts {
+			if other == h {
+				names = append(names, n)
+			}
+		}
+		slices.Sort(names)
+		records = append(records, HostRecord{SourceFile: s.sourceFiles[h], ID: "static:" + names[0], Status: "approved", Source: "static", Proposal: Proposal{Names: names, Labels: maps.Clone(h.Policy.Labels), Accounts: slices.Clone(h.Policy.Accounts), PrincipalMode: h.PrincipalMode, Domain: string(h.Domain)}})
+	}
+	for _, p := range s.patterns {
+		records = append(records, HostRecord{ID: "static-pattern:" + p.rawPattern, Status: "approved", Source: "static", SourceFile: p.sourceFile, Pattern: p.rawPattern, Proposal: Proposal{Labels: maps.Clone(p.labels), Accounts: slices.Clone(p.accounts), PrincipalMode: p.principalMode, Domain: string(p.domain)}})
+	}
+	slices.SortFunc(records, func(a, b HostRecord) int { return strings.Compare(a.ID, b.ID) })
+	return records
 }

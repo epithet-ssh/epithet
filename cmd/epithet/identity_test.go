@@ -276,7 +276,7 @@ hosts:
 	} {
 		c := InventoryCLI{Check: true, Static: []string{invPath},
 			OIDC: InventoryOIDCConfig{Issuer: "https://invalid.invalid", IdentityMode: tc.mode, UserIDClaim: tc.claim}}
-		err := c.Run(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{})
+		err := c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{})
 		if tc.valid {
 			require.NoError(t, err)
 		} else {

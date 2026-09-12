@@ -19,6 +19,12 @@ import (
 
 // HostEnrollCLI bootstraps the durable local state needed to enroll a host.
 type HostEnrollCLI struct {
+	Token        string   `name:"token" help:"Single-use enrollment token"`
+	TokenFile    string   `name:"token-file" help:"File containing a single-use enrollment token"`
+	Names        []string `name:"name" help:"Proposed DNS name (repeatable; overrides detection)"`
+	ProposalFile string   `name:"proposal-file" help:"Start from an explicit host YAML proposal"`
+	Yes          bool     `name:"yes" help:"Submit --proposal-file without opening EDITOR or prompting"`
+
 	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
 	DomainFile                      string   `name:"domain-file" help:"Principal-domain file (default: native system state directory)"`
 	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
@@ -35,6 +41,8 @@ type HostEnrollCLI struct {
 }
 
 type hostEnrollment struct {
+	RecordID             string
+	Status               string
 	Domain               principal.Domain
 	DomainFile           string
 	DomainCreated        bool
@@ -47,7 +55,14 @@ type hostEnrollment struct {
 
 func (c *HostEnrollCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	result, err := c.enroll(context.Background(), logger, tlsCfg)
+	if errors.Is(err, errCanceled) {
+		return nil
+	}
 	if err != nil {
+		return err
+	}
+	if result.RecordID != "" {
+		_, err = fmt.Fprintf(os.Stdout, "%s\t%s\n", result.RecordID, result.Status)
 		return err
 	}
 	_, err = fmt.Fprintln(os.Stdout, result.Domain)
@@ -71,8 +86,17 @@ func (c *HostEnrollCLI) enroll(ctx context.Context, logger *slog.Logger, tlsCfg 
 	if err != nil {
 		return nil, err
 	}
+	registration, err := c.prepareRegistration(ctx, result, env, tlsCfg)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.configureSSHD(ctx, result, env); err != nil {
 		return nil, err
+	}
+	if registration != nil {
+		if err := registration.submit(ctx, result, tlsCfg, logger); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }

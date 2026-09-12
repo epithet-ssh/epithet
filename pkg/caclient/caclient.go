@@ -101,6 +101,7 @@ const DefaultCooldown = 10 * time.Minute
 
 // Client is a CA Client with support for multiple CA endpoints and failover.
 type Client struct {
+	tlsConfig  tlsconfig.Config
 	httpClient *http.Client
 	pool       *breakerpool.Pool[any, string]
 	timeout    time.Duration
@@ -179,6 +180,7 @@ func WithTLSConfig(cfg tlsconfig.Config) Option {
 			return fmt.Errorf("failed to create HTTP client: %w", err)
 		}
 		c.httpClient = httpClient
+		c.tlsConfig = cfg
 		return nil
 	})
 }

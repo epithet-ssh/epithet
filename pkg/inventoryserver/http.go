@@ -1,5 +1,5 @@
-// Package inventoryserver serves CA-authenticated resolution reads. It exposes
-// no administration or enrollment operations in the static implementation.
+// Package inventoryserver serves CA-authenticated resolution reads and separate
+// OIDC-authorized administration and host enrollment in managed deployments.
 package inventoryserver
 
 import (

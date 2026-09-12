@@ -3,7 +3,7 @@ info:
   title: Epithet Inventory Resolver API
   version: 2.0.0
   description: >-
-    CA-authenticated OIDC validation and static resolution. No provisioning, administration, or
+    CA-authenticated OIDC validation and host resolution. This document excludes the separate managed administration and
     enrollment routes. Requests and responses are limited to 64 KiB. Resolution responses
     are not cached. Directory and host revisions are independent snapshots.
     GET and POST use the configured endpoint without appending a path suffix.

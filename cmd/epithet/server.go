@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alecthomas/kong"
+	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
@@ -82,6 +84,13 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 		{"inventory", c.inventoryArgs(globalArgs, inventorySock, caPubkey), inventorySock},
 		{"policy", c.policyArgs(globalArgs, policySock, caPubkey), policySock},
 		{"ca", append(append([]string{}, globalArgs...), "ca", "--listen", c.Listen, "--policy", "unix://"+policySock, "--inventory", "unix://"+inventorySock, "--key", caKeyPath), ""},
+	}
+	managed, err := inventoryChildManaged(children[0].args)
+	if err != nil {
+		return err
+	}
+	if managed {
+		children[2].args = append(children[2].args, "--inventory-proxy", "--inventory-public-url", "inventory")
 	}
 	var wg sync.WaitGroup
 	exited := make(chan error, len(children))
@@ -193,4 +202,26 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 			}
 		}
 	}
+}
+
+// Kong loads command-scoped configuration for the selected command only. Parse
+// the actual inventory child arguments to make the composition decision using
+// precisely the same files/defaults as that child.
+func inventoryChildManaged(args []string) (bool, error) {
+	var root struct {
+		Config    kong.ConfigFlag `name:"config"`
+		Verbose   int             `short:"v" type:"counter"`
+		LogFile   string          `name:"log-file"`
+		Insecure  bool
+		TLSCACert string       `name:"tls-ca-cert"`
+		Inventory InventoryCLI `cmd:"inventory"`
+	}
+	parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, configFilePaths()...))
+	if err != nil {
+		return false, err
+	}
+	if _, err = parser.Parse(args); err != nil {
+		return false, err
+	}
+	return root.Inventory.StateDir != "", nil
 }

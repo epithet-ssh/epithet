@@ -26,13 +26,22 @@ func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host 
 	if err != nil {
 		return nil, fmt.Errorf("looking up user: %w", err)
 	}
-	h, err := s.Hosts.LookupHost(ctx, host)
+	var h *inventory.ResolvedHost
+	revision := s.InventoryRevision
+	if snapshots, ok := s.Hosts.(interface {
+		LookupHostSnapshot(context.Context, string) (*inventory.ResolvedHost, string, error)
+	}); ok {
+		h, revision, err = snapshots.LookupHostSnapshot(ctx, host)
+	} else {
+		h, err = s.Hosts.LookupHost(ctx, host)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("looking up host: %w", err)
 	}
 	r := &inventoryapi.Resolution{Version: inventoryapi.Version, Authentication: auth, Target: host,
 		Directory: inventoryapi.DirectorySnapshot{Revision: s.DirectoryRevision},
-		Inventory: inventoryapi.HostSnapshot{Revision: s.InventoryRevision}}
+		Inventory: inventoryapi.HostSnapshot{Revision: revision}}
 	if u != nil {
 		active := u.Active
 		r.Directory.User = &facts.User{

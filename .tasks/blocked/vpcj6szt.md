@@ -3,7 +3,7 @@ yatl_version: 1
 title: Register hosts and principal-domain membership
 id: vpcj6szt
 created: 2026-09-03T03:25:28.969057Z
-updated: 2026-09-05T16:53:44.408150Z
+updated: 2026-09-12T04:17:41.481271Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -58,3 +58,8 @@ claims and changes require authorized admission/administration because they
 affect Writ matching for the entire host. Static YAML uses names, even for a single name,
 without a synthetic ID field. Use principal domain explicitly in
 prose to distinguish the domain field from a DNS domain.
+
+---
+# Log: 2026-09-12T04:17:41Z Brian McCallister
+
+File-backed generated-domain host registry shipped in zf00zcgj, including stable IDs, independent host credentials, source precedence, and conflicting pending review. Named/shared-domain enrollment remains deferred; see docs/dynamic-inventory.md.

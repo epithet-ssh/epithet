@@ -8,16 +8,18 @@ import (
 	"net"
 	"sync"
 
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // Request is one line of JSON sent by the client. Exactly one field is set.
 type Request struct {
-	Identity *struct{}          `json:"identity,omitempty"`
-	Match    *policy.Connection `json:"match,omitempty"`
-	Inspect  *struct{}          `json:"inspect,omitempty"`
-	Kill     *KillRequest       `json:"kill,omitempty"`
+	Inventory *inventoryapi.ControlRequest `json:"inventory,omitempty"`
+	Identity  *struct{}                    `json:"identity,omitempty"`
+	Match     *policy.Connection           `json:"match,omitempty"`
+	Inspect   *struct{}                    `json:"inspect,omitempty"`
+	Kill      *KillRequest                 `json:"kill,omitempty"`
 }
 
 // Event is one line of JSON sent by the broker in response to a Request.
@@ -26,11 +28,12 @@ type Request struct {
 // Inspect request: exactly one Inspect event. Identity requests stream auth
 // Output events followed by one Identity event.
 type Event struct {
-	Identity *IdentityResponse `json:"identity,omitempty"`
-	Output   string            `json:"output,omitempty"`
-	Result   *MatchResponse    `json:"result,omitempty"`
-	Inspect  *InspectResponse  `json:"inspect,omitempty"`
-	Kill     *KillResponse     `json:"kill,omitempty"`
+	Inventory *inventoryapi.ControlResponse `json:"inventory,omitempty"`
+	Identity  *IdentityResponse             `json:"identity,omitempty"`
+	Output    string                        `json:"output,omitempty"`
+	Result    *MatchResponse                `json:"result,omitempty"`
+	Inspect   *InspectResponse              `json:"inspect,omitempty"`
+	Kill      *KillResponse                 `json:"kill,omitempty"`
 }
 
 // eventWriter serializes Event writes to a single client connection. Auth
@@ -126,6 +129,9 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	case req.Match != nil:
 		result := b.MatchWithUserOutput(connCtx, *req.Match, w)
 		_ = w.writeEvent(Event{Result: &result})
+	case req.Inventory != nil:
+		resp := b.InventoryWithUserOutput(connCtx, *req.Inventory, w)
+		_ = w.writeEvent(Event{Inventory: resp})
 	case req.Identity != nil:
 		resp := b.IdentityWithUserOutput(connCtx, w)
 		_ = w.writeEvent(Event{Identity: &resp})

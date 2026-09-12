@@ -1,14 +1,16 @@
 # Inventory service and policy facts
 
-Status: implemented static phase, September 7, 2026.
+Status: static phase implemented September 7, 2026; file-backed managed host
+enrollment and administration added September 11, 2026. See
+[dynamic inventory](../docs/dynamic-inventory.md) for the implementation contract.
 
 ## Boundaries
 
 `epithet inventory` owns the user directory and host inventory. They are separate
 lookup interfaces (`directory.Directory` and `inventory.Hosts`) hosted by one
 service. Static YAML loading implements both today. Policy owns compiled Writ,
-not files, clients, or credentials for inventory. Dynamic storage, SCIM/LDAP,
-write administration, and host admission/enrollment remain follow-up work.
+not files, clients, or credentials for inventory. File-backed host storage, inventory-admin authorization, and enrollment are
+implemented. SCIM/LDAP and dynamic user provisioning remain follow-up work.
 
 The CA is the caller of both private services. It sends the original OIDC token
 and requested host to inventory. Inventory validates authentication, maps the ID,
@@ -104,7 +106,9 @@ token rejection from inventory resolution remains 401.
 `epithet server` supervises inventory, policy, and CA subprocesses, passes the
 CA public key directly to the private services, and wires separate sockets in
 a private temporary directory. Startup failure, child exit, or shutdown stops
-and reaps every started child. Only CA has a public listener. Same-user processes
+and reaps every started child. Only CA has a public listener. In managed mode it also forwards the inventory
+control endpoint on `/inventory`; it never proxies policy or arbitrary inventory
+resolution routes. Same-user processes
 are not a strong filesystem boundary around the CA key; separate deployments
 can assign different OS permissions and network placement.
 

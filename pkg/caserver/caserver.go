@@ -25,9 +25,10 @@ import (
 const relAuth = "https://epithet.dev/rel/auth"
 
 type caServer struct {
-	c          *ca.CA
-	log        *slog.Logger
-	certLogger CertLogger
+	c            *ca.CA
+	log          *slog.Logger
+	certLogger   CertLogger
+	inventoryURL string
 }
 
 // New creates a new CA Server which needs to then
@@ -46,6 +47,9 @@ func New(c *ca.CA, log *slog.Logger, certLogger CertLogger) *caServer {
 
 	return cas
 }
+
+// SetInventoryURL advertises configured capability, independently of backend health.
+func (s *caServer) SetInventoryURL(endpoint string) { s.inventoryURL = endpoint }
 
 // Handler returns an http.Handler that serves the CA's root endpoint.
 // GET / returns the CA public key.
@@ -260,6 +264,9 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	// knowledge of its own external URL: the client resolves it against the
 	// ca-url it already has. See ideas/link-header-auth-discovery.md.
 	w.Header().Set("Link", `<discovery>; rel="`+relAuth+`"`)
+	if s.inventoryURL != "" {
+		w.Header().Add("Link", "<"+s.inventoryURL+">; rel=\"https://epithet.dev/rel/inventory\"")
+	}
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)
 	w.Write([]byte(s.c.PublicKey()))

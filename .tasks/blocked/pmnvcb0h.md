@@ -3,7 +3,7 @@ yatl_version: 1
 title: Integrate host enrollment with managed registration
 id: pmnvcb0h
 created: 2026-09-03T15:34:59.839315Z
-updated: 2026-09-05T16:53:44.411542Z
+updated: 2026-09-12T04:17:41.493731Z
 author: Brian McCallister
 priority: high
 tags:
@@ -45,3 +45,8 @@ Removed blocker: 0rm7n86c
 # Log: 2026-09-03T16:01:13Z Brian McCallister
 
 Added blocker: 930f5gpq
+
+---
+# Log: 2026-09-12T04:17:41Z Brian McCallister
+
+Initial CA-discovered managed enrollment integration shipped in zf00zcgj, including editor proposals, local sshd preparation, durable credential retries, and explicit pending record IDs. Named/shared domains and endpoint failover remain outside this milestone.

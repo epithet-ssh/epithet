@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/config"
@@ -25,6 +26,20 @@ type InventoryOIDCConfig struct {
 }
 
 type InventoryCLI struct {
+	StateDir    string              `help:"Directory for durable managed host state (enables enrollment)" name:"state-dir"`
+	AdminUsers  []string            `help:"Directory user ID granted inventory-admin (repeatable)" name:"admin-user"`
+	AdminGroups []string            `help:"Directory group granted inventory-admin (repeatable)" name:"admin-group"`
+	Name        string              `help:"Agent profile for administrative commands" default:"default"`
+	Broker      string              `help:"Agent broker socket override for administrative commands"`
+	Serve       InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve directory and inventory"`
+	List        InventoryListCLI    `cmd:"list" help:"List static and dynamic host records"`
+	Show        InventoryShowCLI    `cmd:"show" help:"Show one host record"`
+	Edit        InventoryEditCLI    `cmd:"edit" help:"Edit a dynamic host in EDITOR"`
+	Approve     InventoryApproveCLI `cmd:"approve" help:"Review, edit, approve, or deny enrollment"`
+	Remove      InventoryRemoveCLI  `cmd:"remove" help:"Withdraw a dynamic host from inventory"`
+	Token       InventoryTokenCLI   `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
+	Audit       InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
+
 	Listen        string              `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
 	CAPubkey      string              `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
 	OIDC          InventoryOIDCConfig `embed:"" prefix:"oidc-"`
@@ -33,7 +48,12 @@ type InventoryCLI struct {
 	Check         bool                `help:"Validate inventory files, then exit" name:"check"`
 }
 
-func (c *InventoryCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+type InventoryServeCLI struct{}
+
+func (_ *InventoryServeCLI) Run(c *InventoryCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
+	return c.runServer(logger, tlsCfg)
+}
+func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	if _, _, err := oidc.ResolveIdentity(c.OIDC.Issuer, c.OIDC.IdentityMode, c.OIDC.UserIDClaim); err != nil {
 		return fmt.Errorf("invalid OIDC identity configuration: %w", err)
 	}
@@ -77,6 +97,26 @@ func (c *InventoryCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	handler, err := inventoryserver.NewHandler(inventoryserver.Config{CAPublicKey: sshcert.RawPublicKey(key), Resolver: resolver, Validator: validator, Discovery: &wire.Discovery{Auth: &auth}})
 	if err != nil {
 		return err
+	}
+	if c.StateDir != "" {
+		stateDir, err := expandPath(c.StateDir)
+		if err != nil {
+			return err
+		}
+		managed, err := inventory.OpenManagedWithStaticFallback(stateDir, inv)
+		if err != nil {
+			return err
+		}
+		defer managed.Close()
+		if err := managed.Health(); err != nil {
+			logger.Error("managed inventory unavailable; serving static exact records only", "error", err)
+		}
+		resolver.Hosts = managed
+		control := &inventoryserver.Control{Store: managed, Directory: inv, Validator: validator, Admins: inventoryserver.Admins{Users: c.AdminUsers, Groups: c.AdminGroups}}
+		mux := http.NewServeMux()
+		mux.Handle("/manage", control)
+		mux.Handle("/", handler)
+		handler = mux
 	}
 	logger.Info("starting inventory server", "listen", c.Listen, "files", len(paths), "directoryRevision", inv.DirectoryRevision(), "inventoryRevision", inv.InventoryRevision())
 	return listenAndServe(c.Listen, handler)
