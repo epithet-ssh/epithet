@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 )
 
 // InventoryWithUserOutput sends an administrative operation through the agent's
@@ -32,17 +31,6 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 		return fail(err)
 	}
 	return response
-}
-
-// WithInventoryClient configures inventory transport independently of CA transport.
-func WithInventoryClient(client *inventoryclient.Client) Option {
-	return optionFunc(func(b *Broker) error {
-		if client == nil {
-			return fmt.Errorf("inventory client is required")
-		}
-		b.inventoryClient = client
-		return nil
-	})
 }
 
 func (b *Broker) inventoryWithToken(ctx context.Context, token string, request inventoryapi.ControlRequest) (*inventoryapi.ControlResponse, int, error) {

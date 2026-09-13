@@ -26,25 +26,10 @@ type IdentityResponse struct {
 // It must be safe for concurrent calls and must not return token contents in errors.
 type IdentityVerifier func(context.Context, string) (*Identity, error)
 
-// WithIdentityVerifier enables identity requests using the agent's configured
-// issuer and audience.
-func WithIdentityVerifier(verify IdentityVerifier) Option {
-	return optionFunc(func(b *Broker) error {
-		if verify == nil {
-			return fmt.Errorf("identity verifier is required")
-		}
-		b.verifyIdentity = verify
-		return nil
-	})
-}
-
 // IdentityWithUserOutput authenticates through the same cache and in-flight
 // login as SSH requests. It does not request a certificate or require an
 // inventory record, so administrators can use it to prepare that record.
 func (b *Broker) IdentityWithUserOutput(ctx context.Context, out io.Writer) IdentityResponse {
-	if b.verifyIdentity == nil {
-		return IdentityResponse{Error: "agent identity is unavailable; restart the agent with identity support"}
-	}
 	token, err := b.auth.Token(ctx, out)
 	if err != nil {
 		return IdentityResponse{Error: fmt.Sprintf("agent authentication failed: %v", err)}

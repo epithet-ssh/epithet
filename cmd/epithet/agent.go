@@ -217,8 +217,8 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	if err != nil {
 		return err
 	}
-	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, agentDir,
-		broker.WithIdentityVerifier(makeAgentIdentityVerifier(*discovery.Auth, tlsCfg)), broker.WithInventoryClient(inventoryClient))
+	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, inventoryClient,
+		makeAgentIdentityVerifier(*discovery.Auth, tlsCfg), agentDir)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}

@@ -111,7 +111,10 @@ inventory:
 	require.Error(t, err, "pending must block wildcard-based issuance")
 	// Run the real admin CLI through the broker's Unix socket and existing login.
 	socket := filepath.Join(dir, "broker.sock")
-	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, client, filepath.Join(dir, "agents"), broker.WithInventoryClient(inventoryClient))
+	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
+		return nil, fmt.Errorf("unexpected identity request in inventory test")
+	}
+	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, client, inventoryClient, verifyIdentity, filepath.Join(dir, "agents"))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

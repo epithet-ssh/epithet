@@ -26,6 +26,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
@@ -116,7 +117,12 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	caClient, err := caclient.New(caEndpoints)
 	require.NoError(t, err)
 
-	b, err := broker.New(*logger, brokerSocketPath, tokenFn, caClient, agentSocketDir)
+	inventoryClient, err := inventoryclient.New(tlsconfig.Config{Insecure: true})
+	require.NoError(t, err)
+	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
+		return nil, fmt.Errorf("unexpected identity request in SSH test")
+	}
+	b, err := broker.New(*logger, brokerSocketPath, tokenFn, caClient, inventoryClient, verifyIdentity, agentSocketDir)
 	require.NoError(t, err)
 
 	go func() {

@@ -25,7 +25,7 @@ import (
 // TokenFunc took (ctx, out), but this codebase's real TokenFunc (see
 // pkg/broker/auth.go) also carries a `force` bool, so tokenFn here matches
 // the real signature instead.
-func newTestBroker(t *testing.T, tokenFn TokenFunc, options ...Option) *Broker {
+func newTestBroker(t *testing.T, tokenFn TokenFunc, verifyIdentity IdentityVerifier) *Broker {
 	t.Helper()
 	if tokenFn == nil {
 		tokenFn = stubTokenFunc
@@ -35,7 +35,7 @@ func newTestBroker(t *testing.T, tokenFn TokenFunc, options ...Option) *Broker {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, tokenFn, testCAClientOK(t), agentSocketDir, options...)
+	b, err := New(*testLogger(t), socketPath, tokenFn, testCAClientOK(t), testInventoryClient(t), verifyIdentity, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -74,7 +74,7 @@ func TestMatchStreamsOutputThenResult(t *testing.T) {
 		fmt.Fprintln(out, "visit: https://example/auth")
 		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
 	}
-	b := newTestBroker(t, tokenFn)
+	b := newTestBroker(t, tokenFn, testIdentityVerifier)
 	client := dialBroker(t, b)
 
 	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &policy.Connection{
@@ -102,7 +102,7 @@ func TestMatchStreamsOutputThenResult(t *testing.T) {
 // or closing the connection silently.
 func TestMalformedRequestGetsErrorResult(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	client := dialBroker(t, b)
 	fmt.Fprintln(client, "{not json")
 
@@ -125,7 +125,7 @@ func TestMalformedRequestGetsErrorResult(t *testing.T) {
 // it inspects the raw bytes on the wire instead.
 func TestMatchResultWireShapeIsLowercase(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	client := dialBroker(t, b)
 	fmt.Fprintln(client, "{not json")
 
@@ -163,7 +163,7 @@ func TestClientCloseCancelsMatch(t *testing.T) {
 		close(canceled)
 		return "", ctx.Err()
 	}
-	b := newTestBroker(t, tokenFn)
+	b := newTestBroker(t, tokenFn, testIdentityVerifier)
 	client := dialBroker(t, b)
 
 	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &policy.Connection{
@@ -189,7 +189,7 @@ func TestClientCloseCancelsMatch(t *testing.T) {
 // exactly one Inspect event carrying the broker's InspectResponse.
 func TestInspectReturnsInspectEvent(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	client := dialBroker(t, b)
 
 	require.NoError(t, json.NewEncoder(client).Encode(Request{Inspect: &struct{}{}}))
@@ -204,7 +204,7 @@ func TestInspectReturnsInspectEvent(t *testing.T) {
 
 func TestInspectReturnsAgentConnection(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	conn := policy.Connection{
 		RemoteHost: "server.example.com",
 		RemoteUser: "deploy",
@@ -238,7 +238,7 @@ func TestInspectReturnsAgentConnection(t *testing.T) {
 
 func TestKillReturnsTypedEventAndRemovesAgent(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	connection := policy.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Hash: "connection-hash"}
 	b.lock.Lock()
 	b.agents[connection.Hash] = agentEntry{connection: connection}
@@ -263,7 +263,7 @@ func TestKillReturnsTypedEventAndRemovesAgent(t *testing.T) {
 
 func TestKillUnknownAgentReturnsTypedError(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	client := dialBroker(t, b)
 	require.NoError(t, json.NewEncoder(client).Encode(Request{Kill: &KillRequest{ID: "missing"}}))
 
@@ -284,12 +284,12 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 		fetches.Add(1)
 		fmt.Fprintln(out, "authenticate agent")
 		return token, nil
-	}, WithIdentityVerifier(func(ctx context.Context, actual string) (*Identity, error) {
+	}, func(ctx context.Context, actual string) (*Identity, error) {
 		if actual != token {
 			return nil, fmt.Errorf("not the agent's token")
 		}
 		return &Identity{OID: "directory-id", Issuer: idp.Issuer(), Subject: "login-subject"}, nil
-	}))
+	})
 	for i := 0; i < 2; i++ {
 		conn := dialBroker(t, b)
 		require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
@@ -325,9 +325,9 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 
 func TestIdentityVerificationFailureReturnsNoIdentity(t *testing.T) {
 	idp := oidctest.New(t)
-	b := newTestBroker(t, testTokenFunc(t, idp), WithIdentityVerifier(func(context.Context, string) (*Identity, error) {
+	b := newTestBroker(t, testTokenFunc(t, idp), func(context.Context, string) (*Identity, error) {
 		return nil, fmt.Errorf("invalid issuer")
-	}))
+	})
 	resp := b.IdentityWithUserOutput(context.Background(), io.Discard)
 	require.Nil(t, resp.Identity)
 	require.Contains(t, resp.Error, "invalid issuer")
@@ -341,10 +341,10 @@ func TestClosingIdentityClientCancelsAuthentication(t *testing.T) {
 		<-ctx.Done()
 		close(canceled)
 		return "", ctx.Err()
-	}, WithIdentityVerifier(func(context.Context, string) (*Identity, error) {
+	}, func(context.Context, string) (*Identity, error) {
 		t.Error("canceled authentication must not reach identity verification")
 		return nil, fmt.Errorf("unexpected verification")
-	}))
+	})
 	conn := dialBroker(t, b)
 	require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &struct{}{}}))
 	select {

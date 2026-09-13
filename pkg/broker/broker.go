@@ -18,7 +18,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // cleanupInterval is how often the broker checks for expired agents to clean up
@@ -86,21 +85,17 @@ type Broker struct {
 	shutdownTimeout time.Duration // Timeout for waiting on in-flight RPCs during shutdown
 }
 
-// Option configures the Broker
-type Option interface {
-	apply(*Broker) error
-}
-
-type optionFunc func(*Broker) error
-
-func (f optionFunc) apply(b *Broker) error {
-	return f(b)
-}
-
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient.Client, agentSocketDir string, options ...Option) (*Broker, error) {
+func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient.Client, inventoryClient *inventoryclient.Client, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
 	if caClient == nil {
 		return nil, fmt.Errorf("caClient is required")
+	}
+
+	if inventoryClient == nil {
+		return nil, fmt.Errorf("inventory client is required")
+	}
+	if verifyIdentity == nil {
+		return nil, fmt.Errorf("identity verifier is required")
 	}
 
 	b := &Broker{
@@ -109,24 +104,12 @@ func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
 		caClient:         caClient,
+		inventoryClient:  inventoryClient,
+		verifyIdentity:   verifyIdentity,
 		done:             make(chan struct{}),
 		ready:            make(chan struct{}),
 		log:              log,
 		shutdownTimeout:  2 * time.Second, // Default timeout for graceful shutdown
-	}
-
-	for _, o := range options {
-		if err := o.apply(b); err != nil {
-			return nil, err
-		}
-	}
-
-	if b.inventoryClient == nil {
-		var err error
-		b.inventoryClient, err = inventoryclient.New(tlsconfig.Config{})
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return b, nil

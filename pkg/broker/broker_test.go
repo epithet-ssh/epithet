@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
@@ -95,7 +97,7 @@ func Test_RpcBasics(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -127,7 +129,7 @@ func Test_MatchRequestFields(t *testing.T) {
 	agentSocketDir := tmpDir + "/a"
 
 	caClient := testCAClientOK(t)
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -188,7 +190,7 @@ func TestCleanupExpiredAgents(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -327,7 +329,7 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, caURL), agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, caURL), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -379,7 +381,7 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 
 	tmpDir := shortTempDir(t)
-	b, err := New(*testLogger(t), tmpDir+"/b.sock", testTokenFunc(t, idp), testCAClient(t, caURL), tmpDir+"/a")
+	b, err := New(*testLogger(t), tmpDir+"/b.sock", testTokenFunc(t, idp), testCAClient(t, caURL), testInventoryClient(t), testIdentityVerifier, tmpDir+"/a")
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -430,7 +432,7 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 
 func TestKillUnknownAgentLeavesBrokerStateUnchanged(t *testing.T) {
 	t.Parallel()
-	b := newTestBroker(t, nil)
+	b := newTestBroker(t, nil, testIdentityVerifier)
 	b.lock.Lock()
 	b.agents["known"] = agentEntry{connection: policy.Connection{Hash: "known"}}
 	b.lock.Unlock()
@@ -470,7 +472,7 @@ func TestMatchCADown_ReturnsHumanLegibleError(t *testing.T) {
 	agentSocketDir := tmpDir + "/a"
 
 	caClient := testCAClient(t, "http://"+closedAddr)
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -493,4 +495,16 @@ func TestMatchCADown_ReturnsHumanLegibleError(t *testing.T) {
 	require.False(t, resp.Allow)
 	require.NotEmpty(t, resp.Error)
 	require.Contains(t, resp.Error, "CA", "error should mention the CA so it reads clearly via ssh")
+}
+
+// testIdentityVerifier rejects identity requests in fixtures that do not test identity.
+func testIdentityVerifier(context.Context, string) (*Identity, error) {
+	return nil, fmt.Errorf("identity verification is not configured for this test")
+}
+
+func testInventoryClient(t *testing.T) *inventoryclient.Client {
+	t.Helper()
+	client, err := inventoryclient.New(tlsconfig.Config{Insecure: true})
+	require.NoError(t, err)
+	return client
 }
