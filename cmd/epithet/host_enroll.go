@@ -24,6 +24,7 @@ type HostEnrollCLI struct {
 	Names     []string `name:"name" help:"Proposed DNS name (repeatable; overrides detection)"`
 
 	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
+	PrincipalDomain                 string   `name:"principal-domain" help:"Proposed principal domain (default: reuse the local domain file's value or generate one)"`
 	DomainFile                      string   `name:"domain-file" help:"Principal-domain file (default: native system state directory)"`
 	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
 	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
@@ -153,6 +154,16 @@ func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, t
 	domain, err := readDomainIfPresent(domainPath)
 	if err != nil {
 		return nil, err
+	}
+	if c.PrincipalDomain != "" {
+		chosen, err := principal.ParseDomain(c.PrincipalDomain)
+		if err != nil {
+			return nil, fmt.Errorf("invalid principal-domain: %w", err)
+		}
+		if domain != "" && domain != chosen {
+			return nil, fmt.Errorf("principal-domain conflicts with the installed domain in %s", domainPath)
+		}
+		domain = chosen
 	}
 	if _, err := publicKeyFileMatches(caKeyPath, root.PublicKey); err != nil {
 		return nil, err

@@ -144,8 +144,8 @@ func (p *Proposal) Validate() error {
 		if err != nil {
 			return err
 		}
-		if !d.IsGeneratedHost() {
-			return fmt.Errorf("managed enrollment currently requires a generated per-host domain")
+		if !d.IsGeneratedHost() && p.PrincipalMode != EpithetPrincipalV1 {
+			return fmt.Errorf("named domain %q requires %s", d, EpithetPrincipalV1)
 		}
 	}
 	if p.PrincipalMode == EpithetPrincipalV1 && p.Domain == "" {
@@ -217,7 +217,7 @@ type Managed struct {
 	files         *itemFiles
 	records       map[string]*itemRecord
 	names         map[string]string
-	domains       map[string]string
+	domains       map[string]map[string]*HostRecord
 	staticDomains map[string]bool
 	pending       int
 	hashes        map[string]string
@@ -260,7 +260,10 @@ func (m *Managed) publish(r *itemRecord) {
 				m.names[name] = id
 			}
 			if h.Proposal.Domain != "" {
-				m.domains[h.Proposal.Domain] = id
+				if m.domains[h.Proposal.Domain] == nil {
+					m.domains[h.Proposal.Domain] = map[string]*HostRecord{}
+				}
+				m.domains[h.Proposal.Domain][id] = h
 			}
 		}
 		if h.Status == "pending" {
@@ -282,8 +285,11 @@ func (m *Managed) unindex(r *itemRecord) {
 			}
 		}
 	}
-	if m.domains[h.Proposal.Domain] == h.ID {
-		delete(m.domains, h.Proposal.Domain)
+	if members := m.domains[h.Proposal.Domain]; members != nil {
+		delete(members, h.ID)
+		if len(members) == 0 {
+			delete(m.domains, h.Proposal.Domain)
+		}
 	}
 	if h.Status == "pending" {
 		m.pending--
@@ -314,15 +320,18 @@ func (m *Managed) checkIndexes(r *itemRecord) error {
 				return fmt.Errorf("%w: name %s is approved on hosts %s and %s", ErrConflict, n, owner, h.ID)
 			}
 		}
-		if owner := m.domains[h.Proposal.Domain]; h.Proposal.Domain != "" && owner != "" && owner != h.ID {
-			return fmt.Errorf("%w: principal domain is approved on hosts %s and %s", ErrConflict, owner, h.ID)
+		if err := m.checkDomain(h.Proposal, h.ID); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 func (m *Managed) conflict(p Proposal, except string) error {
-	if p.Domain != "" && (m.staticDomains[p.Domain] || (m.domains[p.Domain] != "" && m.domains[p.Domain] != except)) {
+	if m.staticDomains[p.Domain] {
 		return fmt.Errorf("%w: principal domain is already in use", ErrConflict)
+	}
+	if err := m.checkDomain(p, except); err != nil {
+		return err
 	}
 	for _, n := range p.Names {
 		if m.static != nil && m.static.hosts[n] != nil {
@@ -330,6 +339,40 @@ func (m *Managed) conflict(p Proposal, except string) error {
 		}
 		if owner := m.names[n]; owner != "" && owner != except {
 			return fmt.Errorf("%w: proposed names are already in use", ErrConflict)
+		}
+	}
+	return nil
+}
+
+// checkDomain preserves per-host identity for generated domains and one set of
+// authorization attributes for each shared named domain, including static members.
+// Pending proposals impose no constraints until they are approved.
+func (m *Managed) checkDomain(p Proposal, except string) error {
+	domain := principal.Domain(p.Domain)
+	if domain == "" {
+		return nil
+	}
+	if !domain.IsGeneratedHost() {
+		if m.static == nil {
+			return fmt.Errorf("%w: undeclared domain %q", ErrConflict, domain)
+		}
+		if _, ok := m.static.domains[domain]; !ok {
+			return fmt.Errorf("%w: undeclared domain %q", ErrConflict, domain)
+		}
+		if policy, ok := m.static.domainPolicies[domain]; ok && !policy.matches(p.Labels, p.Accounts) {
+			return fmt.Errorf("%w: domain %q has different authorization attributes from static inventory", ErrConflict, domain)
+		}
+	}
+	for id, member := range m.domains[p.Domain] {
+		if id == except {
+			continue
+		}
+		if domain.IsGeneratedHost() {
+			return fmt.Errorf("%w: principal domain is already approved on host %s", ErrConflict, id)
+		}
+		policy := domainPolicy{labels: member.Proposal.Labels, accounts: member.Proposal.Accounts}
+		if !policy.matches(p.Labels, p.Accounts) {
+			return fmt.Errorf("%w: domain %q has different authorization attributes from host %s", ErrConflict, domain, id)
 		}
 	}
 	return nil
@@ -628,7 +671,8 @@ func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, s
 	}
 	if id := m.names[name]; id != "" {
 		p := m.records[id].Host.Proposal
-		return &ResolvedHost{Policy: Host{Names: slices.Clone(p.Names), Labels: cloneLabels(p.Labels), Accounts: slices.Clone(p.Accounts)}, PrincipalMode: p.PrincipalMode, Domain: principal.Domain(p.Domain)}, revision, nil
+		domain := principal.Domain(p.Domain)
+		return &ResolvedHost{Policy: resolvedPolicyHost(slices.Clone(p.Names), domain, cloneLabels(p.Labels), slices.Clone(p.Accounts)), PrincipalMode: p.PrincipalMode, Domain: domain}, revision, nil
 	}
 	if m.static != nil {
 		h, _, err := m.static.LookupHost(ctx, name)

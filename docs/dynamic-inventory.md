@@ -21,8 +21,9 @@ errors from implementation assumptions that still need design review.
 - Exact static hosts win over accepted dynamic exact records, which win over patterns.
   Pending proposals do not affect resolution. Removal deletes the dynamic record.
   Competing pending requests cannot both be approved.
-- This milestone manages hosts. Users and role grants remain static; SCIM, shared
-  principal domains, direct host addition, and databases are deferred.
+- This milestone manages hosts, including shared named principal domains. Users,
+  role grants, and named-domain declarations remain static; SCIM, direct host
+  addition, and databases are deferred.
 
 ## Try it
 
@@ -94,7 +95,8 @@ epithet host enroll --ca-url https://ca.example/
 ```
 
 The command fetches the CA key and prepares local configuration without installing
-it. It reuses an existing principal domain or generates one in memory for review. It
+it. It reuses an existing principal domain or generates one in memory for review.
+Use `--principal-domain fleet` to propose a specific domain. It
 proposes the local hostname, appending the configured search-domain suffix when
 it is missing. This reads local configuration and sends no
 DNS queries. Use
@@ -115,10 +117,25 @@ principal-mode: epithet-principal-v1
 domain: epithet-host-id-v1:THE_HOSTS_GENERATED_DOMAIN
 ```
 
-The domain shown in the real proposal is the valid identifier generated locally.
-Domain and principal mode must match local enrollment settings; validation
-explains a mismatch and offers to reopen the editor. Select the mode with the
-existing `--principal-mode` flag. Other proposal fields are editable.
+The domain shown in the real proposal is the installed domain, the value supplied
+with `--principal-domain`, or a valid identifier generated locally. You can edit
+`domain` before installation; the reviewed value is both installed locally and
+submitted to inventory. An existing domain file must match the chosen value;
+enrollment does not replace an installed domain. Principal mode must match local
+enrollment settings; select it with `--principal-mode`.
+
+Domains prefixed with `epithet-host-id-v1:` remain unique to an approved host.
+Unprefixed names such as `fleet` are shared domains and require
+`principal-mode: epithet-principal-v1`. Declare them in the static inventory:
+
+```yaml
+domains: [fleet]
+```
+
+Approval and token admission reject undeclared named domains. All approved members
+of a shared domain, including static hosts and patterns, must have identical labels
+and account restrictions. Account order does not matter, but `null` and `[]` differ.
+Writ authorizes the shared domain name, rather than individual member hostnames.
 
 A successful editor exit with valid YAML proceeds to local setup and submission. Invalid YAML
 produces an error and an edit/cancel choice. Unknown fields, multiple YAML documents,
@@ -139,6 +156,10 @@ reports that registration did not complete. A rerun prepares, reviews, configure
 and submits again. It reuses matching local identity and trust files; unchanged
 sshd configuration is validated without reloading. A configured managed endpoint
 failure never becomes a silent local-only enrollment.
+
+Admin edits to a domain affect subsequent issuance but do not yet update the
+target's installed domain file. Scheduled host checks to adopt domain changes
+made during approval or later edits are tracked in YATL task `508fj5h3`.
 
 `inventory approve HOST_ID` prints the complete record and prompts:
 

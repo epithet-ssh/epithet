@@ -324,21 +324,30 @@ func (s *Static) validateDomainReferences() error {
 
 func (s *Static) recordDomainPolicy(domain principal.Domain, labels map[string]string, accounts []string, path string, hostIndex int) error {
 	previous, exists := s.domainPolicies[domain]
-	canonicalAccounts := slices.Clone(accounts)
-	slices.Sort(canonicalAccounts)
 	if !exists {
 		s.domainPolicies[domain] = domainPolicy{
-			labels: maps.Clone(labels), accounts: canonicalAccounts, path: path, hostIndex: hostIndex,
+			labels: maps.Clone(labels), accounts: slices.Clone(accounts), path: path, hostIndex: hostIndex,
 		}
 		return nil
 	}
-	sameAccounts := (previous.accounts == nil) == (accounts == nil) && slices.Equal(previous.accounts, canonicalAccounts)
-	if maps.Equal(previous.labels, labels) && sameAccounts {
+	if previous.matches(labels, accounts) {
 		return nil
 	}
 	return fmt.Errorf(
 		"%s: hosts[%d] domain %q has different authorization attributes from %s: hosts[%d]",
 		path, hostIndex, domain, previous.path, previous.hostIndex)
+}
+
+// matches compares the authorization attributes shared by all domain members.
+// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
+func (p domainPolicy) matches(labels map[string]string, accounts []string) bool {
+	if !maps.Equal(p.labels, labels) || (p.accounts == nil) != (accounts == nil) {
+		return false
+	}
+	previous, proposed := slices.Clone(p.accounts), slices.Clone(accounts)
+	slices.Sort(previous)
+	slices.Sort(proposed)
+	return slices.Equal(previous, proposed)
 }
 
 func resolvedPolicyHost(names []string, domain principal.Domain, labels map[string]string, accounts []string) Host {

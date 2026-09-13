@@ -40,18 +40,23 @@ func TestEditorCancelAndValidationRetry(t *testing.T) {
 func TestManagedEnrollmentLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		name, token, status    string
+		domain, editedDomain   string
 		rejected, localFailure bool
 	}{
 		{name: "pending", status: "pending"},
 		{name: "token admission", token: "one-use-token", status: "approved"},
 		{name: "rejection then rerun", status: "pending", rejected: true},
 		{name: "local failure", localFailure: true},
+		{name: "named domain flag", status: "pending", domain: "fleet"},
+		{name: "edited domain", status: "pending", editedDomain: "fleet"},
+		{name: "edited flag domain", status: "pending", domain: "initial", editedDomain: "fleet"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, local, env, runner, main, fragment := newSSHDConfigurationTest(t)
 			cmd.DomainFile, cmd.CAPubkeyFile = local.DomainFile, local.CAPubkeyFile
 			cmd.Names = []string{"one.example"}
 			cmd.Token = tc.token
+			cmd.PrincipalDomain = tc.domain
 			cmd.sshdEnv = env
 			cmd.EpithetBinary = ""
 			resolutions := 0
@@ -69,9 +74,10 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			t.Setenv("DOMAIN", cmd.DomainFile)
 			t.Setenv("CA_KEY", cmd.CAPubkeyFile)
 			t.Setenv("FRAGMENT", fragment)
+			t.Setenv("EDIT_DOMAIN", tc.editedDomain)
 			// The first review sees no installed state. Capture the actual proposal
 			// so the test can compare its in-memory domain with the installed one.
-			t.Setenv("EDITOR", `sh -c 'if [ ! -e "$REVIEW" ]; then test ! -e "$DOMAIN" && test ! -e "$CA_KEY" && test ! -e "$FRAGMENT" || exit 9; fi; cp "$1" "$REVIEW"' editor`)
+			t.Setenv("EDITOR", `sh -c 'if [ ! -e "$REVIEW" ]; then test ! -e "$DOMAIN" && test ! -e "$CA_KEY" && test ! -e "$FRAGMENT" || exit 9; fi; if [ -n "$EDIT_DOMAIN" ]; then sed "/^domain:/d" "$1" > "$1.edit"; printf "domain: %s\n" "$EDIT_DOMAIN" >> "$1.edit"; mv "$1.edit" "$1"; fi; cp "$1" "$REVIEW"' editor`)
 			pub := newTestCAPublicKey(t)
 			requests := make(chan inventoryapi.ControlRequest, 2)
 			mux := http.NewServeMux()
@@ -123,12 +129,18 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			var reviewed inventory.Proposal
 			require.NoError(t, yaml.Unmarshal(data, &reviewed))
 			require.Equal(t, reviewed, *req.Host)
+			if tc.editedDomain != "" {
+				require.Equal(t, tc.editedDomain, reviewed.Domain)
+			} else if tc.domain != "" {
+				require.Equal(t, tc.domain, reviewed.Domain)
+			}
 			require.Equal(t, tc.token, req.Token)
 			requireFileContents(t, cmd.CAPubkeyFile, string(pub))
 			// A rerun reviews and submits anew, reusing local identity and skipping
 			// reload when sshd is already configured. No prior record is resumed.
 			tc.rejected = false
 			cmd.Token = ""
+			cmd.PrincipalDomain = ""
 			tc.status = "pending"
 			second, err := cmd.enroll(t.Context(), nil, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)

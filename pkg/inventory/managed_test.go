@@ -293,6 +293,101 @@ func TestManagedApprovalRejectsSharedGeneratedDomains(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 }
 
+func TestManagedSharedDomainMembership(t *testing.T) {
+	m, _ := managedFixture(t, "domains: [fleet, other]\n")
+	p := proposal("first")
+	p.PrincipalMode, p.Domain = EpithetPrincipalV1, "fleet"
+	p.Accounts = []string{"alice", "root"}
+	a, err := m.Enroll(p, "")
+	require.NoError(t, err)
+	a, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
+	require.NoError(t, err)
+	p.Names, p.Accounts = []string{"second"}, []string{"root", "alice"}
+	token, err := m.CreateToken("admin", time.Hour)
+	require.NoError(t, err)
+	b, err := m.Enroll(p, token.ID)
+	require.NoError(t, err)
+	require.Equal(t, "approved", b.Status)
+	require.NoError(t, m.Close())
+	fresh, err := OpenManaged(m.files.root, m.static)
+	require.NoError(t, err)
+	defer fresh.Close()
+	for _, name := range []string{"first", "second"} {
+		h, _, err := fresh.LookupHost(t.Context(), name)
+		require.NoError(t, err)
+		require.Equal(t, "fleet", string(h.Domain))
+		require.Equal(t, []string{"fleet"}, h.Policy.Names)
+	}
+
+	// One member cannot change the shared authorization attributes.
+	p.Accounts = []string{"root"}
+	_, err = fresh.Change("admin", "edit", b.ID, b.Revision, &p)
+	require.ErrorIs(t, err, ErrConflict)
+	// Moving that member releases its old domain membership, without losing
+	// the remaining member's constraints.
+	p.Domain = "other"
+	b, err = fresh.Change("admin", "edit", b.ID, b.Revision, &p)
+	require.NoError(t, err)
+	h, _, err := fresh.LookupHost(t.Context(), "second")
+	require.NoError(t, err)
+	require.Equal(t, []string{"other"}, h.Policy.Names)
+	p.Domain, p.Names = "fleet", []string{"third"}
+	c, err := fresh.Enroll(p, "")
+	require.NoError(t, err)
+	_, err = fresh.Change("admin", "approve", c.ID, c.Revision, nil)
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = fresh.Change("admin", "remove", a.ID, a.Revision, nil)
+	require.NoError(t, err)
+	_, err = fresh.Change("admin", "approve", c.ID, c.Revision, nil)
+	require.NoError(t, err, "the last member's removal releases its authorization attributes")
+}
+
+func TestManagedSharedDomainMatchesStaticMembers(t *testing.T) {
+	for _, selector := range []string{"names: [static]", "pattern: '*.example'"} {
+		t.Run(selector, func(t *testing.T) {
+			m, _ := managedFixture(t, "domains: [fleet]\nhosts:\n - "+selector+"\n   principal-mode: epithet-principal-v1\n   domain: fleet\n   accounts: []\n   labels: {role: server}\n")
+			p := proposal("dynamic")
+			p.PrincipalMode, p.Domain = EpithetPrincipalV1, "fleet"
+			p.Labels = map[string]string{"role": "server"}
+			p.Accounts = nil
+			h, err := m.Enroll(p, "")
+			require.NoError(t, err)
+			_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
+			require.ErrorIs(t, err, ErrConflict, "null must differ from []")
+			p.Accounts, p.Labels = []string{}, map[string]string{"role": "client"}
+			h, err = m.Change("admin", "edit", h.ID, h.Revision, &p)
+			require.NoError(t, err)
+			_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
+			require.ErrorIs(t, err, ErrConflict)
+			p.Labels = map[string]string{"role": "server"}
+			h, err = m.Change("admin", "edit", h.ID, h.Revision, &p)
+			require.NoError(t, err)
+			_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
+			require.NoError(t, err)
+			require.NoError(t, m.Close())
+			fresh, err := OpenManaged(m.files.root, m.static)
+			require.NoError(t, err)
+			require.NoError(t, fresh.Close())
+		})
+	}
+}
+
+func TestManagedSharedDomainValidation(t *testing.T) {
+	m, _ := managedFixture(t, "domains: [fleet]\n")
+	p := proposal("host")
+	p.Domain = "fleet"
+	_, err := m.Enroll(p, "")
+	require.ErrorContains(t, err, "requires epithet-principal-v1")
+	p.PrincipalMode, p.Domain = EpithetPrincipalV1, "typo"
+	h, err := m.Enroll(p, "")
+	require.NoError(t, err)
+	_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
+	require.ErrorContains(t, err, "undeclared domain")
+	p.Domain = "not a domain"
+	_, err = m.Enroll(p, "")
+	require.Error(t, err)
+}
+
 func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
 	for _, accounts := range [][]string{nil, {}, {"alice"}} {
 		t.Run(fmt.Sprintf("%#v", accounts), func(t *testing.T) {

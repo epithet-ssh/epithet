@@ -18,8 +18,40 @@ import (
 )
 
 func TestHostEnrollCLIModelAllowsPlatformDependentPrincipalModeDefault(t *testing.T) {
-	_, err := kong.New(&HostEnrollCLI{})
+	var cmd HostEnrollCLI
+	parser, err := kong.New(&cmd)
 	require.NoError(t, err)
+	_, err = parser.Parse([]string{"--ca-url", "https://ca.example/", "--principal-domain", "fleet"})
+	require.NoError(t, err)
+	require.Equal(t, "fleet", cmd.PrincipalDomain)
+}
+
+func TestHostEnrollExplicitDomainPreservesExistingState(t *testing.T) {
+	pub := newTestCAPublicKey(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, pub)
+	}))
+	t.Cleanup(server.Close)
+	for _, tc := range []struct{ name, requested, failure string }{
+		{"matching", "fleet", ""},
+		{"conflicting", "other", "conflicts with the installed domain"},
+		{"invalid", "not a domain", "invalid principal-domain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := HostEnrollCLI{CAURL: server.URL, PrincipalDomain: tc.requested, DomainFile: filepath.Join(dir, "domain"), CAPubkeyFile: filepath.Join(dir, "ca.pub")}
+			require.NoError(t, os.WriteFile(cmd.DomainFile, []byte("fleet\n"), 0644))
+			state, err := cmd.prepareState(t.Context(), nil, tlsconfig.Config{Insecure: true})
+			if tc.failure != "" {
+				require.ErrorContains(t, err, tc.failure)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, principal.Domain("fleet"), state.Domain)
+			}
+			requireFileContents(t, cmd.DomainFile, "fleet\n")
+			require.NoFileExists(t, cmd.CAPubkeyFile)
+		})
+	}
 }
 
 func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) {

@@ -172,10 +172,10 @@ func OpenManaged(dir string, static *Static) (*Managed, error) {
 	return m, nil
 }
 func newManaged(files *itemFiles, static *Static) *Managed {
-	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]string{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static}
+	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]string{}, domains: map[string]map[string]*HostRecord{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static}
 	if static != nil {
 		for _, h := range static.hosts {
-			if h.Domain != "" {
+			if h.Domain.IsGeneratedHost() {
 				m.staticDomains[string(h.Domain)] = true
 			}
 		}

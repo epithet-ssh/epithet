@@ -17,6 +17,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
@@ -62,8 +63,18 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		proposal.Names = guessHostNames(ctx)
 	}
 	validateLocal := func(p inventory.Proposal) error {
-		if p.Domain != string(result.Domain) || string(p.PrincipalMode) != settings.principalMode {
-			return fmt.Errorf("domain and principal-mode must match this host's local enrollment settings; use --principal-mode to select the mode")
+		if string(p.PrincipalMode) != settings.principalMode {
+			return fmt.Errorf("principal-mode must match this host's local enrollment settings; use --principal-mode to select the mode")
+		}
+		if _, err := principal.ParseDomain(p.Domain); err != nil {
+			return err
+		}
+		installed, err := readDomainIfPresent(result.DomainFile)
+		if err != nil {
+			return err
+		}
+		if installed != "" && p.Domain != string(installed) {
+			return fmt.Errorf("domain conflicts with the installed domain in %s", result.DomainFile)
 		}
 		return nil
 	}
@@ -71,6 +82,9 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	if err != nil {
 		return nil, err
 	}
+	// The reviewed proposal chooses the identity installed locally and submitted
+	// to inventory. No domain has been written before review completes.
+	result.Domain = principal.Domain(proposal.Domain)
 	return &hostRegistration{endpoint: endpoint, token: token, proposal: proposal}, nil
 }
 
