@@ -466,11 +466,16 @@ epithet-host-id-v1:...
 ```
 
 The command validates the CA response before changing local state and will not
-replace a different existing CA key. It then validates the existing sshd
+replace a different existing CA key. When managed inventory is advertised, it
+prepares the domain and host proposal in memory and opens the proposal for review.
+Cancellation leaves persistent state unchanged. After review, it installs the
+local identity and trust files. It then validates the existing sshd
 configuration, validates a complete candidate configuration, installs a
 managed fragment, validates the installed configuration, and reloads sshd. If
 installation or reload fails, it restores the previous configuration. It is
-safe to rerun and does not install a persistent Epithet process. The managed
+safe to rerun for local setup and does not install a persistent Epithet process.
+Managed enrollment submits a fresh proposal on every run, after local setup
+completes; pending admission needs no further host setup after approval. The managed
 fragment records the selected principal mode and the absolute domain and CA-key
 paths, so a later CA-URL-only rerun recovers nondefault state paths before it
 touches host state. If the main sshd configuration itself is nonstandard,

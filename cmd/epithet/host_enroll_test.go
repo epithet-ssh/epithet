@@ -56,8 +56,12 @@ func TestHostEnrollCreatesDomainAndCAPublicKey(t *testing.T) {
 		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
-	result, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
+	result, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
+	require.NoDirExists(t, dir, "preparation must not install state")
+	reviewedDomain := result.Domain
+	require.NoError(t, result.install(nil))
+	require.Equal(t, reviewedDomain, result.Domain)
 	require.True(t, result.DomainCreated)
 	require.True(t, result.CAPublicKeyCreated)
 	require.Equal(t, pub, result.CAPublicKey)
@@ -87,10 +91,12 @@ func TestHostEnrollRerunIsIdempotent(t *testing.T) {
 		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
-	first, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
+	first, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	second, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
+	require.NoError(t, first.install(nil))
+	second, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
+	require.NoError(t, second.install(nil))
 	require.Equal(t, first.Domain, second.Domain)
 	require.False(t, second.DomainCreated)
 	require.False(t, second.CAPublicKeyCreated)
@@ -110,7 +116,7 @@ func TestHostEnrollRejectsConflictingCAWithoutCreatingDomain(t *testing.T) {
 	require.NoError(t, os.WriteFile(caKeyPath, []byte(existing), 0o644))
 	cmd := HostEnrollCLI{CAURL: server.URL, DomainFile: domainPath, CAPubkeyFile: caKeyPath}
 
-	_, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
+	_, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.ErrorContains(t, err, "conflicts with the key returned by the CA")
 	_, err = os.Stat(domainPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -131,7 +137,7 @@ func TestHostEnrollInvalidResponseLeavesHostStateAbsent(t *testing.T) {
 		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
-	_, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
+	_, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.ErrorContains(t, err, "invalid SSH public key")
 	_, err = os.Stat(dir)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -148,7 +154,7 @@ func TestHostEnrollFailedRequestLeavesHostStateAbsent(t *testing.T) {
 		DomainFile:   filepath.Join(dir, "domain"),
 		CAPubkeyFile: filepath.Join(dir, "epithet-ca.pub"),
 	}
-	_, err := cmd.enrollState(context.Background(), nil, tlsconfig.Config{Insecure: true})
+	_, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.Error(t, err)
 	_, err = os.Stat(dir)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -261,9 +267,11 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	require.Equal(t, first.Domain, second.Domain)
 	require.False(t, second.DomainCreated)
 	require.False(t, second.CAPublicKeyCreated)
-	require.Equal(t, domainPath, secondCommand.DomainFile)
-	require.Equal(t, caKeyPath, secondCommand.CAPubkeyFile)
-	require.Equal(t, fragmentPath, secondCommand.SSHDFragmentFile)
+	require.Equal(t, domainPath, second.DomainFile)
+	require.Equal(t, caKeyPath, second.CAPubkeyFile)
+	require.Empty(t, secondCommand.DomainFile, "resolving existing state must not mutate CLI options")
+	require.Empty(t, secondCommand.CAPubkeyFile)
+	require.Empty(t, secondCommand.SSHDFragmentFile)
 	require.Len(t, secondRunner.calls, 1, "an unchanged rerun validates but does not reload sshd")
 }
 
@@ -279,4 +287,18 @@ func requireFileMode(t *testing.T, path string, mode os.FileMode) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, mode, info.Mode().Perm())
+}
+
+func TestEnrollmentInstallRejectsDomainChangedDuringReview(t *testing.T) {
+	dir := t.TempDir()
+	state := &hostEnrollment{
+		Domain:       "reviewed-domain",
+		DomainFile:   filepath.Join(dir, "domain"),
+		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
+		CAPublicKey:  newTestCAPublicKey(t),
+	}
+	require.NoError(t, os.WriteFile(state.DomainFile, []byte("another-domain\n"), 0o644))
+	require.ErrorContains(t, state.install(nil), "changed since preparation")
+	requireFileContents(t, state.DomainFile, "another-domain\n")
+	require.NoFileExists(t, state.CAPubkeyFile)
 }

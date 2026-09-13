@@ -212,7 +212,7 @@ func TestAdoptExistingSSHDEnrollmentKeepsExplicitIdentityOverrideTogether(t *tes
 func TestConfigureSSHDInstallsValidCandidateAndIsIdempotent(t *testing.T) {
 	cmd, enrollment, env, runner, mainPath, fragmentPath := newSSHDConfigurationTest(t)
 
-	require.NoError(t, cmd.configureSSHD(context.Background(), enrollment, env))
+	require.NoError(t, configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env))
 	require.Len(t, runner.calls, 4)
 	require.Equal(t, "/test/sshd", runner.calls[0].name)
 	resolvedMainPath, err := filepath.EvalSymlinks(mainPath)
@@ -234,7 +234,7 @@ func TestConfigureSSHDInstallsValidCandidateAndIsIdempotent(t *testing.T) {
 
 	secondRunner := &recordingSSHDRunner{}
 	env.runner = secondRunner
-	require.NoError(t, cmd.configureSSHD(context.Background(), enrollment, env))
+	require.NoError(t, configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env))
 	require.Len(t, secondRunner.calls, 1, "unchanged valid configuration must not be reloaded")
 }
 
@@ -247,7 +247,7 @@ func TestConfigureSSHDRejectsCandidateWithoutChangingFiles(t *testing.T) {
 		return nil, nil
 	}
 
-	err := cmd.configureSSHD(context.Background(), enrollment, env)
+	err := configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env)
 	require.ErrorContains(t, err, "candidate sshd configuration is invalid")
 	requireFileContents(t, mainPath, "Port 22\n")
 	_, statErr := os.Stat(fragmentPath)
@@ -263,7 +263,7 @@ func TestConfigureSSHDRollsBackFailedInstalledValidation(t *testing.T) {
 		return nil, nil
 	}
 
-	err := cmd.configureSSHD(context.Background(), enrollment, env)
+	err := configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env)
 	require.ErrorContains(t, err, "installed sshd configuration is invalid")
 	requireFileContents(t, mainPath, "Port 22\n")
 	_, statErr := os.Stat(fragmentPath)
@@ -283,7 +283,7 @@ func TestConfigureSSHDRollsBackAndReloadsAfterReloadFailure(t *testing.T) {
 		return nil, nil
 	}
 
-	err := cmd.configureSSHD(context.Background(), enrollment, env)
+	err := configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env)
 	require.ErrorContains(t, err, "reloading sshd with enrolled configuration")
 	require.Equal(t, 2, reloadCalls, "the restored configuration must be reloaded")
 	requireFileContents(t, mainPath, "Port 22\n")
@@ -296,7 +296,7 @@ func TestConfigureSSHDRefusesUnmanagedFragment(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(fragmentPath), 0o755))
 	require.NoError(t, os.WriteFile(fragmentPath, []byte("# belongs to the operator\n"), 0o644))
 
-	err := cmd.configureSSHD(context.Background(), enrollment, env)
+	err := configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env)
 	require.ErrorContains(t, err, "is not managed by Epithet")
 	require.Empty(t, runner.calls)
 	requireFileContents(t, mainPath, "Port 22\n")
@@ -340,4 +340,11 @@ func requireFileContents(t *testing.T, path, want string) {
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, want, string(got))
+}
+
+func mustSSHDSettings(t *testing.T, cmd *HostEnrollCLI, env *sshdEnvironment) *sshdSettings {
+	t.Helper()
+	settings, err := cmd.resolveSSHDSettings(env)
+	require.NoError(t, err)
+	return settings
 }

@@ -26,7 +26,7 @@ type hostRegistration struct {
 	proposal inventory.Proposal
 }
 
-func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnrollment, env *sshdEnvironment, cfg tlsconfig.Config) (*hostRegistration, error) {
+func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnrollment, settings *sshdSettings, cfg tlsconfig.Config) (*hostRegistration, error) {
 	endpoint, err := caclient.InventoryURL(&caclient.RootResponse{FinalURL: result.CAFinalURL, Links: result.AdvertisedLinkFields}, cfg)
 	if err != nil {
 		return nil, err
@@ -50,10 +50,6 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		if token == "" {
 			return nil, fmt.Errorf("token file is empty")
 		}
-	}
-	settings, err := c.resolveSSHDSettings(env)
-	if err != nil {
-		return nil, err
 	}
 	proposal := inventory.Proposal{
 		Names:         c.Names,
@@ -89,10 +85,10 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 		Token:  r.token,
 	})
 	if err != nil {
-		return fmt.Errorf("local sshd is configured, but registration did not complete; check inventory before submitting another enrollment: %w", err)
+		return fmt.Errorf("local sshd is configured, but registration did not complete: %w", err)
 	}
 	if response.Host == nil {
-		return fmt.Errorf("inventory returned no host record")
+		return fmt.Errorf("local sshd is configured, but inventory returned no host record")
 	}
 	result.RecordID = response.Host.ID
 	result.Status = response.Host.Status

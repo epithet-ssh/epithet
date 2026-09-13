@@ -62,63 +62,76 @@ func ReadDomainFile(path string) (Domain, error) {
 	return domain, nil
 }
 
-// EnsureDomainFile returns the existing canonical domain at path or creates a new
-// generated host domain. It never replaces an existing directory entry. The
-// parent directory must already exist with its final ownership and permissions.
-func EnsureDomainFile(path string) (domain Domain, created bool, err error) {
+// EnsureDomainFile installs the supplied domain, or reuses an existing file with
+// that same value. It never replaces an existing directory entry or substitutes
+// a different domain. Callers can therefore review a domain before publishing it.
+// The parent directory must already exist with its final ownership and permissions.
+func EnsureDomainFile(path string, domain Domain) (created bool, err error) {
 	if path == "" {
-		return "", false, fmt.Errorf("principal-domain path is empty")
+		return false, fmt.Errorf("principal-domain path is empty")
 	}
-	domain, err = ReadDomainFile(path)
-	if err == nil {
-		return domain, false, nil
+	if err := domain.Validate(); err != nil {
+		return false, err
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", false, err
+	if matches, err := domainFileMatches(path, domain); err != nil || matches {
+		return false, err
 	}
 
-	domain, err = GenerateHostDomain()
-	if err != nil {
-		return "", false, err
-	}
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".epithet-domain-*")
 	if err != nil {
-		return "", false, fmt.Errorf("creating temporary principal domain in %s: %w", dir, err)
+		return false, fmt.Errorf("creating temporary principal domain in %s: %w", dir, err)
 	}
 	tempPath := f.Name()
 	defer os.Remove(tempPath)
 	if err := f.Chmod(0o644); err != nil {
 		_ = f.Close()
-		return "", false, fmt.Errorf("setting principal-domain permissions on %s: %w", tempPath, err)
+		return false, fmt.Errorf("setting principal-domain permissions on %s: %w", tempPath, err)
 	}
 	if _, err := io.WriteString(f, domain.String()+"\n"); err != nil {
 		_ = f.Close()
-		return "", false, fmt.Errorf("writing principal domain %s: %w", tempPath, err)
+		return false, fmt.Errorf("writing principal domain %s: %w", tempPath, err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		return "", false, fmt.Errorf("syncing principal domain %s: %w", tempPath, err)
+		return false, fmt.Errorf("syncing principal domain %s: %w", tempPath, err)
 	}
 	if err := f.Close(); err != nil {
-		return "", false, fmt.Errorf("closing principal domain %s: %w", tempPath, err)
+		return false, fmt.Errorf("closing principal domain %s: %w", tempPath, err)
 	}
 
 	// A same-directory hard link publishes the complete file atomically and
 	// fails rather than replacing an enrollment that won the race.
 	if err := os.Link(tempPath, path); errors.Is(err, os.ErrExist) {
-		domain, err = ReadDomainFile(path)
-		return domain, false, err
+		matches, err := domainFileMatches(path, domain)
+		if err == nil && !matches {
+			err = fmt.Errorf("principal domain %s disappeared during installation", path)
+		}
+		return false, err
 	} else if err != nil {
-		return "", false, fmt.Errorf("publishing principal domain %s: %w", path, err)
+		return false, fmt.Errorf("publishing principal domain %s: %w", path, err)
 	}
 	if err := os.Remove(tempPath); err != nil {
-		return domain, true, fmt.Errorf("removing temporary principal domain %s: %w", tempPath, err)
+		return true, fmt.Errorf("removing temporary principal domain %s: %w", tempPath, err)
 	}
 	if err := syncDirectory(dir); err != nil {
-		return domain, true, fmt.Errorf("syncing principal-domain directory %s: %w", dir, err)
+		return true, fmt.Errorf("syncing principal-domain directory %s: %w", dir, err)
 	}
-	return domain, true, nil
+	return true, nil
+}
+
+func domainFileMatches(path string, expected Domain) (bool, error) {
+	existing, err := ReadDomainFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if existing != expected {
+		return false, fmt.Errorf("principal domain %s conflicts with the prepared domain; refusing to replace it", path)
+	}
+	return true, nil
 }
 
 func syncDirectory(path string) error {

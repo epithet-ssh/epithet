@@ -56,7 +56,9 @@ func TestDefaultPathMatchesCurrentOS(t *testing.T) {
 func TestEnsureFileCreatesAndThenReadsSameDomain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domain")
 
-	createdDomain, created, err := EnsureDomainFile(path)
+	createdDomain, err := GenerateHostDomain()
+	require.NoError(t, err)
+	created, err := EnsureDomainFile(path, createdDomain)
 	require.NoError(t, err)
 	require.True(t, created)
 	require.NoError(t, createdDomain.Validate())
@@ -66,7 +68,9 @@ func TestEnsureFileCreatesAndThenReadsSameDomain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 
-	readDomain, created, err := EnsureDomainFile(path)
+	created, err = EnsureDomainFile(path, createdDomain)
+	require.NoError(t, err)
+	readDomain, err := ReadDomainFile(path)
 	require.NoError(t, err)
 	require.False(t, created)
 	require.Equal(t, createdDomain, readDomain)
@@ -76,7 +80,9 @@ func TestEnsureFilePreservesNamedDomain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domain")
 	require.NoError(t, os.WriteFile(path, []byte("ai-worker-pool-1\n"), 0o644))
 
-	domain, created, err := EnsureDomainFile(path)
+	created, err := EnsureDomainFile(path, "ai-worker-pool-1")
+	domain, readErr := ReadDomainFile(path)
+	require.NoError(t, readErr)
 	require.NoError(t, err)
 	require.False(t, created)
 	require.Equal(t, Domain("ai-worker-pool-1"), domain)
@@ -86,7 +92,7 @@ func TestEnsureFileRejectsMalformedExistingState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domain")
 	require.NoError(t, os.WriteFile(path, []byte("broken domain\n"), 0o644))
 
-	_, created, err := EnsureDomainFile(path)
+	created, err := EnsureDomainFile(path, "ai-worker-pool-1")
 	require.ErrorContains(t, err, "parsing principal domain")
 	require.False(t, created)
 
@@ -95,7 +101,7 @@ func TestEnsureFileRejectsMalformedExistingState(t *testing.T) {
 	require.Equal(t, "broken domain\n", string(data), "malformed state must not be replaced")
 }
 
-func TestConcurrentEnsureFileReturnsOneDomain(t *testing.T) {
+func TestConcurrentEnsureFileInstallsReviewedDomain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "domain")
 	const count = 16
 
@@ -112,7 +118,11 @@ func TestConcurrentEnsureFileReturnsOneDomain(t *testing.T) {
 		go func() {
 			ready.Done()
 			<-start
-			domain, created, err := EnsureDomainFile(path)
+			created, err := EnsureDomainFile(path, "reviewed-domain")
+			domain, readErr := ReadDomainFile(path)
+			if err == nil {
+				err = readErr
+			}
 			results <- result{domain: domain, created: created, err: err}
 		}()
 	}
@@ -169,7 +179,20 @@ func TestReadFileRejectsAdditionalLinesAndWhitespace(t *testing.T) {
 
 func TestEnsureFileRequiresExistingParent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "domain")
-	_, created, err := EnsureDomainFile(path)
+	created, err := EnsureDomainFile(path, "ai-worker-pool-1")
 	require.ErrorContains(t, err, "creating temporary principal domain")
 	require.False(t, created)
+}
+
+func TestEnsureFileRejectsDifferentReviewedDomain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "domain")
+	created, err := EnsureDomainFile(path, "first-domain")
+	require.NoError(t, err)
+	require.True(t, created)
+	created, err = EnsureDomainFile(path, "second-domain")
+	require.ErrorContains(t, err, "conflicts with the prepared domain")
+	require.False(t, created)
+	domain, err := ReadDomainFile(path)
+	require.NoError(t, err)
+	require.Equal(t, Domain("first-domain"), domain)
 }

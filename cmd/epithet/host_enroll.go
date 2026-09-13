@@ -72,23 +72,19 @@ func (c *HostEnrollCLI) enroll(ctx context.Context, logger *slog.Logger, tlsCfg 
 	if env == nil {
 		env = newSystemSSHDEnvironment()
 	}
-	if err := c.adoptExistingSSHDEnrollment(env); err != nil {
-		return nil, err
-	}
-	// Kong cannot express this flag's platform-dependent default as an enum.
-	// Resolve and validate all sshd settings before enrollment creates state.
-	if _, err := c.resolveSSHDSettings(env); err != nil {
-		return nil, err
-	}
-	result, err := c.enrollState(ctx, logger, tlsCfg)
+	prepared, err := c.prepareEnrollment(ctx, logger, tlsCfg, env)
 	if err != nil {
 		return nil, err
 	}
-	registration, err := c.prepareRegistration(ctx, result, env, tlsCfg)
+	result := prepared.state
+	registration, err := c.prepareRegistration(ctx, result, prepared.settings, tlsCfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.configureSSHD(ctx, result, env); err != nil {
+	if err := result.install(logger); err != nil {
+		return nil, err
+	}
+	if err := configureSSHD(ctx, result, prepared.settings, env); err != nil {
 		return nil, err
 	}
 	if registration != nil {
@@ -99,7 +95,34 @@ func (c *HostEnrollCLI) enroll(ctx context.Context, logger *slog.Logger, tlsCfg 
 	return result, nil
 }
 
-func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config) (*hostEnrollment, error) {
+// preparedHostEnrollment holds the local identity and resolved settings for this
+// attempt. Preparation reads existing state and generates any new domain in
+// memory; installation happens only after proposal review succeeds.
+type preparedHostEnrollment struct {
+	state    *hostEnrollment
+	settings *sshdSettings
+}
+
+func (c *HostEnrollCLI) prepareEnrollment(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config, env *sshdEnvironment) (*preparedHostEnrollment, error) {
+	// Recover existing choices on a local copy, preserving the caller's explicit
+	// inputs so each invocation resolves them afresh.
+	options := *c
+	if err := options.adoptExistingSSHDEnrollment(env); err != nil {
+		return nil, err
+	}
+	settings, err := options.resolveSSHDSettings(env)
+	if err != nil {
+		return nil, err
+	}
+	state, err := options.prepareState(ctx, logger, tlsCfg)
+	if err != nil {
+		return nil, err
+	}
+	return &preparedHostEnrollment{state: state, settings: settings}, nil
+}
+
+// prepareState fetches trust and chooses a domain without writing local state.
+func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config) (*hostEnrollment, error) {
 	endpoint, err := caclient.ParseCAURL(c.CAURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ca-url: %w", err)
@@ -127,48 +150,66 @@ func (c *HostEnrollCLI) enrollState(ctx context.Context, logger *slog.Logger, tl
 		return nil, fmt.Errorf("fetching CA public key from %s: %w", endpoint.URL, err)
 	}
 
-	// Check all existing state before creating anything. In particular, a
-	// conflicting CA key must not accidentally mint an identity for this host.
-	if _, err := readDomainIfPresent(domainPath); err != nil {
+	domain, err := readDomainIfPresent(domainPath)
+	if err != nil {
 		return nil, err
 	}
 	if _, err := publicKeyFileMatches(caKeyPath, root.PublicKey); err != nil {
 		return nil, err
 	}
-
-	for _, dir := range uniqueDirectories(domainPath, caKeyPath) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("creating enrollment directory %s: %w", dir, err)
+	if domain == "" {
+		domain, err = principal.GenerateHostDomain()
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	caCreated, err := ensurePublicKeyFile(caKeyPath, root.PublicKey)
-	if err != nil {
-		return nil, err
-	}
-	domain, domainCreated, err := principal.EnsureDomainFile(domainPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if logger != nil {
-		logger.Info("host enrollment state ready",
-			"domain", domain,
-			"domain_file", domainPath,
-			"domain_created", domainCreated,
-			"ca_public_key_file", caKeyPath,
-			"ca_public_key_created", caCreated)
 	}
 	return &hostEnrollment{
 		Domain:               domain,
 		DomainFile:           domainPath,
-		DomainCreated:        domainCreated,
 		CAPublicKey:          root.PublicKey,
 		CAPubkeyFile:         caKeyPath,
-		CAPublicKeyCreated:   caCreated,
 		CAFinalURL:           root.FinalURL,
 		AdvertisedLinkFields: append([]string(nil), root.Links...),
 	}, nil
+}
+
+// install publishes the reviewed identity and trust. Existing matching files are
+// reused; conflicting state is never replaced. Later sshd or registration errors
+// leave these files in place for the next invocation.
+func (e *hostEnrollment) install(logger *slog.Logger) error {
+	// Recheck both files after review before writing either one.
+	domain, err := readDomainIfPresent(e.DomainFile)
+	if err != nil {
+		return err
+	}
+	if domain != "" && domain != e.Domain {
+		return fmt.Errorf("principal domain %s changed since preparation", e.DomainFile)
+	}
+	if _, err := publicKeyFileMatches(e.CAPubkeyFile, e.CAPublicKey); err != nil {
+		return err
+	}
+	for _, dir := range uniqueDirectories(e.DomainFile, e.CAPubkeyFile) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("creating enrollment directory %s: %w", dir, err)
+		}
+	}
+	e.CAPublicKeyCreated, err = ensurePublicKeyFile(e.CAPubkeyFile, e.CAPublicKey)
+	if err != nil {
+		return err
+	}
+	e.DomainCreated, err = principal.EnsureDomainFile(e.DomainFile, e.Domain)
+	if err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Info("host enrollment state ready",
+			"domain", e.Domain,
+			"domain_file", e.DomainFile,
+			"domain_created", e.DomainCreated,
+			"ca_public_key_file", e.CAPubkeyFile,
+			"ca_public_key_created", e.CAPublicKeyCreated)
+	}
+	return nil
 }
 
 func (c *HostEnrollCLI) paths() (string, string, error) {

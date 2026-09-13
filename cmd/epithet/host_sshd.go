@@ -299,11 +299,9 @@ func (c *HostEnrollCLI) adoptExistingSSHDEnrollment(env *sshdEnvironment) error 
 	return nil
 }
 
-func (c *HostEnrollCLI) configureSSHD(ctx context.Context, enrollment *hostEnrollment, env *sshdEnvironment) error {
-	settings, err := c.resolveSSHDSettings(env)
-	if err != nil {
-		return err
-	}
+func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *sshdSettings, env *sshdEnvironment) error {
+	settings := *resolved
+	var err error
 	settings.configFile, err = filepath.EvalSymlinks(settings.configFile)
 	if err != nil {
 		return fmt.Errorf("resolving sshd configuration file %s: %w", settings.configFile, err)
@@ -328,7 +326,7 @@ func (c *HostEnrollCLI) configureSSHD(ctx context.Context, enrollment *hostEnrol
 		}
 	}
 
-	fragment, err := renderSSHDFragment(settings, domainPath, caKeyPath, env.goos)
+	fragment, err := renderSSHDFragment(&settings, domainPath, caKeyPath, env.goos)
 	if err != nil {
 		return err
 	}

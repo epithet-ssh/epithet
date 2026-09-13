@@ -93,7 +93,8 @@ On the machine being enrolled, run as root:
 epithet host enroll --ca-url https://ca.example/
 ```
 
-The command fetches the CA key and prepares durable local identity state. It
+The command fetches the CA key and prepares local configuration without installing
+it. It reuses an existing principal domain or generates one in memory for review. It
 proposes the local hostname, appending the configured search-domain suffix when
 it is missing. This reads local configuration and sends no
 DNS queries. Use
@@ -119,22 +120,25 @@ Domain and principal mode must match local enrollment settings; validation
 explains a mismatch and offers to reopen the editor. Select the mode with the
 existing `--principal-mode` flag. Other proposal fields are editable.
 
-A successful editor exit with valid YAML submits the proposal. Invalid YAML
+A successful editor exit with valid YAML proceeds to local setup and submission. Invalid YAML
 produces an error and an edit/cancel choice. Unknown fields, multiple YAML documents,
 invalid names, and omitted `accounts` are errors. Emptying the file also cancels;
-an unsuccessful editor exit aborts. Cancellation leaves sshd untouched, although
-the initial CA-key and principal-domain files may already have been prepared.
+an unsuccessful editor exit aborts. Cancellation leaves persistent state unchanged:
+no CA-key or principal-domain files are installed, and sshd is untouched.
 
 `accounts: []` permits no accounts. Explicit `accounts: null` means ungrounded,
 leaving account selection to issuance policy. A list restricts issuance to those
 accounts. There is no silent omitted-field default in managed proposals.
 
-After a valid editor exit, enrollment configures and validates sshd using the existing
-rollback-aware setup, then submits the proposal. It prints `RECORD_ID` and
+After a valid editor exit, enrollment installs the reviewed domain and CA key,
+then configures, validates, and reloads sshd before submitting the proposal.
+A local setup failure prevents submission. It prints `RECORD_ID` and
 `pending` or `approved`, separated by a tab, and exits. It does not poll. If
-submission fails, sshd remains configured and the error explicitly tells the
-operator to check inventory before submitting again. A configured managed endpoint failure never becomes a silent
-local-only enrollment.
+submission fails or is rejected, local setup remains installed and the error
+reports that registration did not complete. A rerun prepares, reviews, configures,
+and submits again. It reuses matching local identity and trust files; unchanged
+sshd configuration is validated without reloading. A configured managed endpoint
+failure never becomes a silent local-only enrollment.
 
 `inventory approve HOST_ID` prints the complete record and prompts:
 
@@ -192,9 +196,9 @@ the host record under that same ID. Enrollment without a token allocates an ID
 and creates a pending host file directly. New filename publication is exclusive:
 a collision cannot overwrite an existing record.
 Each submission is a new enrollment. There is no persistent enrollment credential
-or automatic recovery of an earlier response. If a response is lost, the operator
-checks inventory before submitting again. A consumed token stays consumed; a new
-token or a new pending request is needed if another enrollment is appropriate.
+or automatic recovery of an earlier response. Rerunning submits a new proposal,
+including after a lost response; it does not resume or reconcile a previous record.
+A consumed token stays consumed and is rejected if supplied again.
 
 Pending proposals may overlap other pending proposals, approved dynamic hosts,
 and exact static records. They cannot be approved until the conflict is resolved.
