@@ -108,7 +108,7 @@ inventory:
 	require.NoError(t, err)
 	request := caserver.CreateCertRequest{PublicKey: pub, Connection: policy.Connection{RemoteHost: "managed.example", RemoteUser: "root", Port: 22}}
 	_, err = client.GetCert(t.Context(), token, &request)
-	require.Error(t, err, "pending must block wildcard-based issuance")
+	require.NoError(t, err, "pending must preserve existing wildcard-based issuance")
 	// Run the real admin CLI through the broker's Unix socket and existing login.
 	socket := filepath.Join(dir, "broker.sock")
 	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
@@ -146,7 +146,8 @@ inventory:
 	require.Equal(t, created, second.Host.ID, "the enrollment token reserves the eventual host ID")
 	admin("remove", enrolled.Host.ID)
 	_, err = client.GetCert(t.Context(), token, &request)
-	require.Error(t, err, "removal must block new issuance through wildcard")
-	inspection := admin("show", enrolled.Host.ID)
-	require.Contains(t, string(inspection), "removed")
+	require.NoError(t, err, "removal restores wildcard-based issuance")
+	_, status, err = inventoryClient.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "get", ID: enrolled.Host.ID})
+	require.Error(t, err)
+	require.Equal(t, http.StatusNotFound, status)
 }

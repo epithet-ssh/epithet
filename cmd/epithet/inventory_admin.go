@@ -261,11 +261,8 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 	if h.Source == "static" {
 		return fmt.Errorf("static record: edit inventory.static configuration and restart inventory")
 	}
-	r, err := p.request(inventoryapi.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
-	if err != nil {
-		return err
-	}
-	return printInventory(r.Host)
+	_, err = p.request(inventoryapi.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
+	return err
 }
 
 type InventoryAuditCLI struct{}

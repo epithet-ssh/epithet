@@ -29,7 +29,7 @@ func managedFixture(t *testing.T, staticYAML string) (*Managed, string) {
 func proposal(name string) Proposal {
 	return Proposal{Names: []string{name}, Labels: map[string]string{}, Accounts: []string{"alice"}, PrincipalMode: AccountNamePrincipals}
 }
-func TestManagedAdmissionConflictAndWildcardTombstones(t *testing.T) {
+func TestManagedAdmissionConflictAndWildcardFallback(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n  - pattern: '*.example'\n    accounts: [root]\n")
 	a, err := m.Enroll(proposal("a.example"), "")
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestManagedAdmissionConflictAndWildcardTombstones(t *testing.T) {
 	require.NoError(t, err)
 	h, err := m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
-	require.Nil(t, h, "pending must mask wildcard")
+	require.Equal(t, []string{"root"}, h.Policy.Accounts, "pending must not change wildcard admission")
 	a, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", b.ID, b.Revision, nil)
@@ -51,7 +51,7 @@ func TestManagedAdmissionConflictAndWildcardTombstones(t *testing.T) {
 	require.NoError(t, err)
 	h, err = m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
-	require.Nil(t, h)
+	require.Equal(t, []string{"root"}, h.Policy.Accounts)
 	a, err = m.Enroll(proposal("a.example"), "")
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
@@ -93,8 +93,21 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.NotNil(t, host)
 	_, err = fresh.Change("admin", "remove", h.ID, h.Revision, nil)
 	require.NoError(t, err)
+	require.NoFileExists(t, fresh.files.itemPath(h.ID))
+	require.NoError(t, fresh.Close())
+	fresh, err = OpenManaged(dir, m.static)
+	require.NoError(t, err)
+	defer fresh.Close()
+	_, err = fresh.Get(h.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+	tokens, err = fresh.Tokens()
+	require.NoError(t, err)
+	require.Empty(t, tokens)
+	host, err = fresh.LookupHost(t.Context(), "one")
+	require.NoError(t, err)
+	require.Nil(t, host)
 	_, err = fresh.Enroll(proposal("one"), secret)
-	require.ErrorIs(t, err, ErrToken, "used token must not restore admission")
+	require.ErrorIs(t, err, ErrToken, "deleted host must not make its token reusable")
 	again, err := fresh.Enroll(proposal("one"), "")
 	require.NoError(t, err)
 	require.NotEqual(t, h.ID, again.ID)
@@ -334,4 +347,48 @@ func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
 	require.NoError(t, err)
+}
+
+func TestUnapprovedRecordsNeverAffectResolution(t *testing.T) {
+	for _, action := range []string{"pending", "deny", "remove", "deny-then-remove"} {
+		t.Run(action, func(t *testing.T) {
+			m, _ := managedFixture(t, "hosts:\n - pattern: '*.example'\n   accounts: [root]\n")
+			accepted, err := m.Enroll(proposal("accepted.example"), "")
+			require.NoError(t, err)
+			_, err = m.Change("admin", "approve", accepted.ID, accepted.Revision, nil)
+			require.NoError(t, err)
+
+			pending, err := m.Enroll(proposal("old.example"), "")
+			require.NoError(t, err)
+			edited := proposal("new.example")
+			edited.Names = append(edited.Names, "accepted.example")
+			pending, err = m.Change("admin", "edit", pending.ID, pending.Revision, &edited)
+			require.NoError(t, err)
+			if action == "deny" || action == "deny-then-remove" {
+				pending, err = m.Change("admin", "deny", pending.ID, pending.Revision, nil)
+				require.NoError(t, err)
+			}
+			if action == "remove" || action == "deny-then-remove" {
+				_, err = m.Change("admin", "remove", pending.ID, pending.Revision, nil)
+				require.NoError(t, err)
+			}
+			check := func(store *Managed) {
+				for _, name := range []string{"old.example", "new.example"} {
+					h, err := store.LookupHost(t.Context(), name)
+					require.NoError(t, err)
+					require.NotNil(t, h)
+					require.Equal(t, []string{"root"}, h.Policy.Accounts)
+				}
+				h, err := store.LookupHost(t.Context(), "accepted.example")
+				require.NoError(t, err)
+				require.Equal(t, []string{"alice"}, h.Policy.Accounts)
+			}
+			check(m)
+			require.NoError(t, m.Close())
+			restarted, err := OpenManaged(m.files.root, m.static)
+			require.NoError(t, err)
+			defer restarted.Close()
+			check(restarted)
+		})
+	}
 }

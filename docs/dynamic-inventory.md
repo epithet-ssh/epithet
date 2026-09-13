@@ -18,8 +18,9 @@ errors from implementation assumptions that still need design review.
   Parse and validation errors offer re-editing. No separate host retry secret is created.
 - Tokens have no templates, default to one hour, and support copy/paste or files.
   The literal token is its filename and becomes the admitted host ID.
-- Exact static hosts win over dynamic admission state, which wins over patterns.
-  Removal leaves tombstones, and competing pending requests cannot both be approved.
+- Exact static hosts win over accepted dynamic exact records, which win over patterns.
+  Pending proposals do not affect resolution. Removal deletes the dynamic record.
+  Competing pending requests cannot both be approved.
 - This milestone manages hosts. Users and role grants remain static; SCIM, shared
   principal domains, direct host addition, and databases are deferred.
 
@@ -82,7 +83,7 @@ epithet inventory audit
 
 Commands accept `--name PROFILE` or `--broker SOCKET` to select an agent. A full
 record ID always works; unique ID prefixes and unambiguous exact host names also
-work. Old removed records can make a name ambiguous, so use the current ID.
+work. If multiple proposals share a name, use the record ID.
 
 ## Enrollment and review
 
@@ -205,29 +206,27 @@ admitted hosts; shared-domain enrollment is deferred.
 
 A denied or removed host can submit again, receiving a new pending record ID.
 Previous approval is never restored. Retrying with an already-consumed token does
-not bypass this. Removal prevents new certificate issuance for that record; it
+not bypass this. Removal deletes the dynamic record, so normal static lookup applies again. It
 does not revoke certificates already issued or clear certificates held by agents.
 
 Lookup precedence is:
 
 1. Exact static record.
-2. Exact dynamic admission state: approved hosts resolve; pending, denied, and
-   removed records prevent wildcard fallback. An approved record takes precedence
-   over competing pending/retired claims to that name.
+2. Approved dynamic exact records. Pending and denied proposals do not affect
+   resolution.
 3. Static wildcard patterns in their existing configured order.
 
 Static records are read-only through the API. Listings include static exact and
 pattern records with their source file, plus dynamic records and any names
 shadowed by static records. Removing a static override exposes underlying dynamic
-state again. Editing names retains tombstones for retired names so removal or
-renaming cannot silently fall back to a wildcard grant.
+state again. Renaming or removing an approved record releases its former names;
+normal static lookup, including wildcard patterns, applies to those names again.
 
 Anonymous enrollment has a global burst limit of 20 and sustained rate of one
 request per second, and at most 1,000 pending records. Name-conflict responses do
 not disclose the conflicting record. They still reveal whether a proposed name
 is available; this implementation reduces abuse rather than eliminating name
-enumeration. Pending claims can also mask static wildcard access. Use exact static
-entries for recovery hosts and trusted static admission.
+enumeration. Pending proposals cannot change existing static or dynamic admission.
 
 ## Files, durability, and recovery
 
@@ -260,10 +259,12 @@ audit:
 After redemption, the same file has `kind: host`, a `host` record, and token
 metadata with `used-by` equal to that host ID. The `host.host` mapping contains
 the editable names, labels, accounts, and principal settings. `host.status`
-records admission; `host.retired-names` preserves names removed by API edits.
-Its `audit` list includes the token creation and enrollment events. Approval,
-editing, removal, and revocation replace only the affected item file. Audit
-inspection combines the per-item histories in timestamp order.
+records admission. Its `audit` list includes token creation and enrollment events.
+Approval, editing, and token revocation replace only the affected item file.
+Removal deletes the item file, including its audit history and consumed token
+metadata, and syncs the directory before updating the in-memory indexes. A missing
+token file cannot be redeemed. Audit inspection combines the surviving per-item
+histories in timestamp order.
 
 One inventory process owns the directory through an OS file lock. Directories
 are created with mode 0700 and files with mode 0600. A new item is fully written
@@ -274,7 +275,7 @@ are all in that one file: there is no transaction journal or multi-file commit
 for redemption. Interrupted temporary writes are ignored at startup.
 
 At startup (and with `inventory --check`), inventory scans and validates the item files and builds maps
-for records by ID, names (approved owner plus pending/retired claims), and approved
+for records by ID, approved names to record IDs, and approved
 principal domains. **Hostname resolution does not scan files or host records.** Admission and conflict checks use these
 indexes too. The check command takes the same store lock as startup, so stop the
 writer before checking managed files. Mutations hold the write lock, persist the changed file, then update
@@ -292,9 +293,8 @@ provide the same directory-fsync step through Go's file API.
 
 For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.
 There is no index to repair separately. Keep each ID equal to its filename,
-preserve admission state, and retain `retired-names` when
-renaming a host offline. Deleting a host file deletes its tombstones too; mark it
-`removed` when access should stay withdrawn. Live edits are not watched: the
+and use `pending`, `approved`, or `denied` for host status. Delete a host file to
+remove its dynamic record. Live edits are not watched: the
 process continues reading its in-memory version, and its next write to that
 item replaces external changes. Keep a backup before manual edits.
 
@@ -341,9 +341,10 @@ A 401 triggers one broker refresh/retry; permission denials do not.
 Tests cover per-item updates, exclusive creation, startup index reconstruction,
 offline repair, interrupted redemption before/after replacement,
 durable restart, locking, stale edits, concurrent approvals and token
-redemption, token expiry/revocation/retries, static precedence, wildcard tombstones,
+redemption, token expiry/revocation/retries, static precedence, wildcard lookup after rename/removal,
 corruption recovery, immutable snapshots, actual configured OIDC claim mapping,
 active users and group grants, cross-origin discovery and redirect refusal,
 editor cancellation/retry, and local sshd setup ordering. A combined-server test
-runs real admin CLI commands through an agent and verifies that issuance is denied
-while pending, allowed after approval, and denied after removal.
+runs real admin CLI commands through an agent and verifies that wildcard-based
+issuance continues while pending, approval takes effect, and removal restores
+static wildcard lookup.

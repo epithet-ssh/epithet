@@ -128,5 +128,5 @@ capability or enrollment link. The one-command combined path is preserved.
 The managed file store now uses `records/<id>.yaml`, one item per token/host,
 with the literal token reserving the eventual host ID. Resolution uses indexes
 rebuilt at startup; item mutation updates its indexes after atomic persistence.
-Per-item audit and retired names are persisted with that record. See the dynamic
+Per-item audit is persisted with that record. Removal deletes the item file. See the dynamic
 inventory contract for the file format and offline recovery behavior.

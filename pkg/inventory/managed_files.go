@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,24 +69,12 @@ func (r *itemRecord) validate(id string) error {
 			return err
 		}
 		switch h.Status {
-		case "pending", "approved", "denied", "removed":
+		case "pending", "approved", "denied":
 		default:
 			return fmt.Errorf("unknown host status %q", h.Status)
 		}
-		for i, name := range h.RetiredNames {
-			normalized, err := normalizeRetiredName(name)
-			if err != nil {
-				return err
-			}
-			h.RetiredNames[i] = normalized
-		}
 	}
 	return nil
-}
-func normalizeRetiredName(name string) (string, error) {
-	name = hostpattern.NormalizeName(name)
-	p := Proposal{Names: []string{name}, PrincipalMode: AccountNamePrincipals}
-	return name, p.Validate()
 }
 
 type itemFiles struct {
@@ -109,6 +96,13 @@ func (f *itemFiles) write(r *itemRecord, create bool) error {
 		return err
 	}
 	return f.writeAtomic(f.itemPath(r.id()), data, create)
+}
+
+func (f *itemFiles) remove(id string) error {
+	if err := os.Remove(f.itemPath(id)); err != nil {
+		return err
+	}
+	return syncManagedDir(f.dir)
 }
 
 // atomicItemWrite publishes a fully written, synced temporary file. A hard link
@@ -178,7 +172,7 @@ func OpenManaged(dir string, static *Static) (*Managed, error) {
 	return m, nil
 }
 func newManaged(files *itemFiles, static *Static) *Managed {
-	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]*nameClaims{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static}
+	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]string{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static}
 	if static != nil {
 		for _, h := range static.hosts {
 			if h.Domain != "" {

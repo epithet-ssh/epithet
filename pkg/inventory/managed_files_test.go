@@ -78,7 +78,7 @@ func TestHostnameLookupUsesIndexesWithoutFilesystemReads(t *testing.T) {
 	require.Equal(t, []string{"root"}, missing.Policy.Accounts)
 	require.NoError(t, os.Rename(m.files.dir+".offline", m.files.dir))
 }
-func TestRestartRebuildsNamesAndKeepsRetiredClaims(t *testing.T) {
+func TestRestartRebuildsNamesAfterRename(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - pattern: '*'\n   accounts: [root]\n")
 	h, err := m.Enroll(proposal("old"), "")
 	require.NoError(t, err)
@@ -88,14 +88,11 @@ func TestRestartRebuildsNamesAndKeepsRetiredClaims(t *testing.T) {
 	h, err = m.Change("admin", "edit", h.ID, h.Revision, &p)
 	require.NoError(t, err)
 	r := readItem(t, m, h.ID)
-	require.Contains(t, r.Host.RetiredNames, "old")
 	_, oldRevision, err := m.LookupHostSnapshot(t.Context(), "current")
 	require.NoError(t, err)
 	require.NoError(t, m.Close())
-	// Offline emergency edit: name the host differently and explicitly retain
-	// its previous name. No index file exists to update or repair.
+	// Offline emergency edit: rename the host. No index file needs repair.
 	r.Host.Proposal.Names = []string{"offline-name"}
-	r.Host.RetiredNames = append(r.Host.RetiredNames, "current")
 	data, err := yaml.Marshal(r)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(m.files.itemPath(h.ID), data, 0600))
@@ -109,7 +106,7 @@ func TestRestartRebuildsNamesAndKeepsRetiredClaims(t *testing.T) {
 	for _, name := range []string{"old", "current"} {
 		got, err := restarted.LookupHost(t.Context(), name)
 		require.NoError(t, err)
-		require.Nil(t, got)
+		require.Equal(t, []string{"root"}, got.Policy.Accounts)
 	}
 	require.NoError(t, restarted.Close())
 	again, err := OpenManaged(m.files.root, m.static)
@@ -221,4 +218,16 @@ func TestItemRejectsFilenameMismatchAndTraversal(t *testing.T) {
 	require.NoError(t, os.Rename(m.files.itemPath(value), m.files.itemPath(strings.Repeat("a", 64))))
 	_, err = OpenManaged(m.files.root, nil)
 	require.ErrorContains(t, err, "record ID must match its filename")
+}
+
+func TestRemoveStorageFailureDoesNotReportSuccess(t *testing.T) {
+	m, _ := managedFixture(t, "users: []\n")
+	h, err := m.Enroll(proposal("host"), "")
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(m.files.dir, m.files.dir+".offline"))
+	_, err = m.Change("admin", "remove", h.ID, h.Revision, nil)
+	require.ErrorIs(t, err, ErrStorage)
+	require.ErrorIs(t, m.Health(), ErrStorage)
+	require.NoError(t, os.Rename(m.files.dir+".offline", m.files.dir))
+	require.FileExists(t, m.files.itemPath(h.ID))
 }

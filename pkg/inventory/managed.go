@@ -172,7 +172,6 @@ type HostRecord struct {
 	UpdatedAt     time.Time `yaml:"updated-at" json:"updated-at"`
 	Source        string    `yaml:"-" json:"source,omitempty"`
 	ShadowedNames []string  `yaml:"-" json:"shadowed-names,omitempty"`
-	RetiredNames  []string  `yaml:"retired-names,omitempty" json:"retired-names,omitempty"`
 }
 
 type EnrollmentToken struct {
@@ -195,7 +194,7 @@ type Managed struct {
 	mu            sync.RWMutex
 	files         *itemFiles
 	records       map[string]*itemRecord
-	names         map[string]*nameClaims
+	names         map[string]string
 	domains       map[string]string
 	staticDomains map[string]bool
 	pending       int
@@ -203,11 +202,6 @@ type Managed struct {
 	revision      string
 	static        *Static
 	failed        error
-}
-
-type nameClaims struct {
-	approved string
-	owners   map[string]struct{}
 }
 
 func RandomSecret() (string, error) {
@@ -239,17 +233,9 @@ func (m *Managed) publish(r *itemRecord) {
 	}
 	m.records[id] = r
 	if h := r.Host; h != nil {
-		for _, name := range append(slices.Clone(h.Proposal.Names), h.RetiredNames...) {
-			entry := m.names[name]
-			if entry == nil {
-				entry = &nameClaims{owners: map[string]struct{}{}}
-				m.names[name] = entry
-			}
-			entry.owners[id] = struct{}{}
-		}
 		if h.Status == "approved" {
 			for _, name := range h.Proposal.Names {
-				m.names[name].approved = id
+				m.names[name] = id
 			}
 			if h.Proposal.Domain != "" {
 				m.domains[h.Proposal.Domain] = id
@@ -267,17 +253,11 @@ func (m *Managed) unindex(r *itemRecord) {
 	if h == nil {
 		return
 	}
-	for _, name := range append(slices.Clone(h.Proposal.Names), h.RetiredNames...) {
-		entry := m.names[name]
-		if entry == nil {
-			continue
-		}
-		delete(entry.owners, h.ID)
-		if entry.approved == h.ID {
-			entry.approved = ""
-		}
-		if len(entry.owners) == 0 {
-			delete(m.names, name)
+	if h.Status == "approved" {
+		for _, name := range h.Proposal.Names {
+			if m.names[name] == h.ID {
+				delete(m.names, name)
+			}
 		}
 	}
 	if m.domains[h.Proposal.Domain] == h.ID {
@@ -308,8 +288,8 @@ func (m *Managed) checkIndexes(r *itemRecord) error {
 	}
 	if h.Status == "approved" {
 		for _, n := range h.Proposal.Names {
-			if entry := m.names[n]; entry != nil && entry.approved != "" && entry.approved != h.ID {
-				return fmt.Errorf("%w: name %s is approved on hosts %s and %s", ErrConflict, n, entry.approved, h.ID)
+			if owner := m.names[n]; owner != "" && owner != h.ID {
+				return fmt.Errorf("%w: name %s is approved on hosts %s and %s", ErrConflict, n, owner, h.ID)
 			}
 		}
 		if owner := m.domains[h.Proposal.Domain]; h.Proposal.Domain != "" && owner != "" && owner != h.ID {
@@ -326,7 +306,7 @@ func (m *Managed) conflict(p Proposal, except string) error {
 		if m.static != nil && m.static.hosts[n] != nil {
 			return fmt.Errorf("%w: proposed names are already in use", ErrConflict)
 		}
-		if entry := m.names[n]; entry != nil && entry.approved != "" && entry.approved != except {
+		if owner := m.names[n]; owner != "" && owner != except {
 			return fmt.Errorf("%w: proposed names are already in use", ErrConflict)
 		}
 	}
@@ -340,7 +320,6 @@ func cloneHost(h *HostRecord) *HostRecord {
 	out.Proposal.Names = slices.Clone(h.Proposal.Names)
 	out.Proposal.Accounts = slices.Clone(h.Proposal.Accounts)
 	out.Proposal.Labels = cloneLabels(h.Proposal.Labels)
-	out.RetiredNames = slices.Clone(h.RetiredNames)
 	out.ShadowedNames = slices.Clone(h.ShadowedNames)
 	return &out
 }
@@ -472,11 +451,6 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 				return nil, err
 			}
 		}
-		for _, n := range h.Proposal.Names {
-			if !slices.Contains(p.Names, n) && !slices.Contains(h.RetiredNames, n) {
-				h.RetiredNames = append(h.RetiredNames, n)
-			}
-		}
 		h.Proposal = *p
 	case "approve":
 		if h.Status != "pending" {
@@ -492,7 +466,15 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		}
 		h.Status = "denied"
 	case "remove":
-		h.Status = "removed"
+		if err := m.files.remove(id); err != nil {
+			m.failed = fmt.Errorf("%w; restart after repair: %v", ErrStorage, err)
+			return nil, m.failed
+		}
+		m.unindex(current)
+		delete(m.records, id)
+		delete(m.hashes, id)
+		m.updateRevision()
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown inventory action")
 	}
@@ -624,11 +606,8 @@ func (m *Managed) LookupHostSnapshot(ctx context.Context, name string) (*Resolve
 	if m.static != nil {
 		revision = m.static.InventoryRevision() + ":" + revision
 	}
-	if entry := m.names[name]; entry != nil {
-		if entry.approved == "" {
-			return nil, revision, nil
-		}
-		p := m.records[entry.approved].Host.Proposal
+	if id := m.names[name]; id != "" {
+		p := m.records[id].Host.Proposal
 		return &ResolvedHost{Policy: Host{Names: slices.Clone(p.Names), Labels: cloneLabels(p.Labels), Accounts: slices.Clone(p.Accounts)}, PrincipalMode: p.PrincipalMode, Domain: principal.Domain(p.Domain)}, revision, nil
 	}
 	if m.static != nil {

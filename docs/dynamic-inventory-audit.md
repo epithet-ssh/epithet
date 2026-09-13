@@ -20,6 +20,11 @@ implementation summary as an approved requirement.
 | CLI handling interpreted a generic broker error as evidence of an old unsupported agent. | Report the actual broker error, without an invented upgrade diagnosis. |
 | Even a full record ID caused the CLI to download the entire inventory. | Use the existing indexed get operation for full IDs. Name and prefix convenience lookup still uses listing. |
 
+Following review, pending and denied proposals no longer participate in hostname
+resolution. Approved exact records take precedence over wildcards. Tombstone
+fields, indexes, and the removed status have been deleted: removal deletes the
+item file; rename and removal release names for normal static lookup.
+
 Also removed redundant proposal validation and updated the affected tests,
 protocol descriptions, and workflow documentation.
 
@@ -29,9 +34,8 @@ These are findings for discussion. This pass does not choose replacement behavio
 
 | Area | Current behavior and consequence |
 | --- | --- |
-| Wildcard admission and tombstones | Pending, denied, removed, and retired names block static wildcard matches. An anonymous pending submission can therefore prevent access to a host that previously resolved through a wildcard. Removing a record retains its tombstone; editing away a pending name does too. This is a substantive admission policy, not merely storage bookkeeping. |
 | Fixed operational limits | Enrollment shares a global burst of 20 and sustained rate of one request/second, including token enrollment. The pending queue is capped at 1,000, proposals at 64 names, and token lifetime at 24 hours. Only the one-hour default was agreed; these other numbers were implementation choices. |
-| Additional commands and retained history | Token listing/revocation and an audit command were added beyond token creation. Every item retains audit history, and a redeemed host retains token metadata. There is no history compaction or expiry-based file cleanup. The need and shape of these features were not settled. |
+| Additional commands and retained history | Token listing/revocation and an audit command were added beyond token creation. Every item retains audit history, and a redeemed host retains token metadata. Removing a host deletes its history and token metadata with its file. There is no history compaction or expiry-based file cleanup. The need and shape of these features were not settled. |
 | Principal-domain restrictions | Managed proposals permit generated per-host domains only, and approved records cannot share a generated domain. Existing static inventory has named/shared-domain semantics. The managed restriction needs an explicit scope decision. |
 | Runtime storage failure | A failed write marks the store unavailable until restart, even if the write failed before publication. The process stays running and returns errors. Static-only fallback is removed, but whether a runtime storage error should terminate the process or be handled otherwise remains an operational decision. |
 
