@@ -23,6 +23,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -86,6 +87,8 @@ inventory:
 	trust := filepath.Join(dir, "tls-ca.pem")
 	require.NoError(t, os.WriteFile(trust, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: front.Certificate().Raw}), 0600))
 	tlsCfg := tlsconfig.Config{CACertFile: trust}
+	inventoryClient, err := inventoryclient.New(tlsCfg)
+	require.NoError(t, err)
 	client, err := caclient.New([]caclient.CAEndpoint{{URL: base}}, caclient.WithTLSConfig(tlsCfg))
 	require.NoError(t, err)
 	root, err := client.GetRoot(t.Context())
@@ -93,13 +96,11 @@ inventory:
 	endpoint, err := caclient.InventoryURL(root, tlsCfg)
 	require.NoError(t, err)
 	require.Equal(t, base+"inventory", endpoint)
-	_, status, err := caclient.DoInventory(t.Context(), front.Client(), endpoint, "", inventoryapi.ControlRequest{Action: "list"})
+	_, status, err := inventoryClient.Control(t.Context(), endpoint, "", inventoryapi.ControlRequest{Action: "list"})
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
 	proposal := inventory.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}
-	key, err := inventory.RandomSecret()
-	require.NoError(t, err)
-	enrolled, status, err := caclient.DoInventory(t.Context(), front.Client(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Credential: key})
+	enrolled, status, err := inventoryClient.Control(t.Context(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
@@ -110,7 +111,7 @@ inventory:
 	require.Error(t, err, "pending must block wildcard-based issuance")
 	// Run the real admin CLI through the broker's Unix socket and existing login.
 	socket := filepath.Join(dir, "broker.sock")
-	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, client, filepath.Join(dir, "agents"))
+	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, client, filepath.Join(dir, "agents"), broker.WithInventoryClient(inventoryClient))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -135,9 +136,7 @@ inventory:
 	created := strings.TrimSpace(string(admin("token", "create", "--quiet")))
 	require.Len(t, created, 64)
 	proposal.Names = []string{"second.example"}
-	key, err = inventory.RandomSecret()
-	require.NoError(t, err)
-	second, status, err := caclient.DoInventory(t.Context(), front.Client(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Credential: key, Token: created})
+	second, status, err := inventoryClient.Control(t.Context(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Token: created})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "approved", second.Host.Status)

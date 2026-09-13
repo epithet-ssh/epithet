@@ -103,7 +103,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 		if err != nil {
 			return err
 		}
-		managed, err := inventory.OpenManagedWithStaticFallback(stateDir, inv)
+		managed, err := inventory.OpenManagedAllowDegraded(stateDir, inv)
 		if err != nil {
 			return err
 		}

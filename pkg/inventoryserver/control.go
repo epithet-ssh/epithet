@@ -87,10 +87,7 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(405, "method not allowed")
 		return
 	}
-	if r.URL.RawQuery != "" {
-		fail(400, "query parameters are not supported")
-		return
-	}
+
 	defer r.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(r.Body, wire.MaxBodySize+1))
 	if err != nil || len(body) > wire.MaxBodySize {
@@ -154,7 +151,7 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		resp.Host, err = c.Store.Enroll(*req.Host, req.Credential, req.Token)
+		resp.Host, err = c.Store.Enroll(*req.Host, req.Token)
 	case "list":
 		resp.Hosts, err = c.Store.List()
 	case "get":

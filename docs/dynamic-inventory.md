@@ -12,8 +12,8 @@ link. Nothing has been deployed or enabled on a real host as part of this change
 - Inventory administration uses the existing agent session and one static admin role.
 - The combined server puts a plain HTTP router in front of private CA, inventory,
   and policy Unix sockets. TLS and ACME stay in the deployment's front end.
-- Enrollment uses an editor plus an explicit submit/cancel choice. A durable local
-  bearer credential makes retries idempotent; it is separate from the host's ID.
+- Enrollment generates YAML, opens the editor, and offers submit/edit/cancel.
+  Parse and validation errors offer re-editing. No separate host retry secret is created.
 - Tokens have no templates, default to one hour, and support copy/paste or files.
   The literal token is its filename and becomes the admitted host ID.
 - Exact static hosts win over dynamic admission state, which wins over patterns.
@@ -89,7 +89,9 @@ epithet host enroll --ca-url https://ca.example/
 ```
 
 The command fetches the CA key and prepares durable local identity state. It
-proposes the local hostname and, when available, its canonical DNS name. Use
+proposes the local hostname, appending the configured search-domain suffix when
+it is missing. This reads local configuration and sends no
+DNS queries. Use
 repeatable `--name` flags to override that guess. It proposes accounts with shells
 that appear to permit login, using local passwd data and macOS Directory Services.
 These are guesses, not a determination of effective PAM/sshd access. Windows
@@ -126,7 +128,7 @@ After confirmation, enrollment configures and validates sshd using the existing
 rollback-aware setup, then submits the proposal. It prints `RECORD_ID` and
 `pending` or `approved`, separated by a tab, and exits. It does not poll. If
 submission fails, sshd remains configured and the error explicitly tells the
-operator to retry. A configured managed endpoint failure never becomes a silent
+operator to check inventory before submitting again. A configured managed endpoint failure never becomes a silent
 local-only enrollment.
 
 `inventory approve HOST_ID` prints the complete record and prompts:
@@ -142,10 +144,8 @@ A stale revision is rejected, and the
 review command reloads before presenting another choice. Once approved, a host
 can be used without rerunning enrollment, subject to ordinary certificate policy.
 
-For automation, prepare a complete YAML proposal and use
-`host enroll --proposal-file FILE --yes --ca-url URL`. `--yes` requires the
-explicit file and still validates it. Without `--yes`, that file is opened for
-review. There is no `inventory add` command in this milestone.
+Enrollment always uses the editor. There is no proposal-file or noninteractive
+submission mode, and no `inventory add` command in this milestone.
 
 ## Tokens
 
@@ -186,13 +186,10 @@ Creating a token reserves the future host ID. Redemption transforms its file int
 the host record under that same ID. Enrollment without a token allocates an ID
 and creates a pending host file directly. New filename publication is exclusive:
 a collision cannot overwrite an existing record.
-The host also keeps a random 256-bit enrollment credential in `enrollment.key`
-beside its principal-domain file, with mode 0600. This is a bearer credential over
-TLS, not a new SSH signing key. Inventory stores only its hash. Retrying with that
-credential returns the existing pending or approved registration, without
-replacing its attributes or consuming another token. It also makes a lost token
-redemption response safely retryable. Do not clone that credential into another
-machine image.
+Each submission is a new enrollment. There is no persistent enrollment credential
+or automatic recovery of an earlier response. If a response is lost, the operator
+checks inventory before submitting again. A consumed token stays consumed; a new
+token or a new pending request is needed if another enrollment is appropriate.
 
 Pending proposals may overlap each other. A new submission cannot overlap an
 already approved dynamic host or an exact static record. Approval rechecks
@@ -272,9 +269,8 @@ are all in that one file: there is no transaction journal or multi-file commit
 for redemption. Interrupted temporary writes are ignored at startup.
 
 At startup, inventory scans and validates the item files once and builds maps
-for records by ID, names (approved owner plus pending/retired claims), active
-enrollment credentials, and approved principal domains. **Hostname resolution
-does not scan files or host records.** Admission and conflict checks use these
+for records by ID, names (approved owner plus pending/retired claims), and approved
+principal domains. **Hostname resolution does not scan files or host records.** Admission and conflict checks use these
 indexes too. Mutations hold the write lock, persist the changed file, then update
 only that record's index entries before allowing another reader or writer.
 Content revisions are calculated from in-memory per-item hashes; no index file
@@ -283,14 +279,14 @@ is persisted. Unchanged restarts produce the same revision.
 A storage failure disables managed reads and writes until repair/restart;
 static exact records still resolve. If the directory can be locked but an item
 is corrupt at startup, the service identifies the file and serves only static
-exact records. Duplicate approved names or credentials are validation errors,
+exact records. Duplicate approved names are validation errors,
 not a reason to choose an arbitrary winner. Failure to establish the directory
 or lock still prevents startup. Windows cannot provide the same directory-fsync
 step through Go's file API.
 
 For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.
 There is no index to repair separately. Keep each ID equal to its filename,
-preserve admission state and credential hashes, and retain `retired-names` when
+preserve admission state, and retain `retired-names` when
 renaming a host offline. Deleting a host file deletes its tombstones too; mark it
 `removed` when access should stay withdrawn. Live edits are not watched: the
 process continues reading its in-memory version, and its next write to that
@@ -347,7 +343,7 @@ provided the advertised URL routes to `/manage`.
 The managed endpoint uses GET for capability discovery and POST for an operation
 request. It is separate from resolution version 2; the existing resolution wire
 contract and Writ facts are unchanged. Admin POST requests use OIDC bearer
-credentials. Enrollment uses its host credential and optional one-use token.
+credentials. Enrollment submits a proposal and an optional one-use token.
 The broker sends admin requests to the CA-advertised endpoint itself, so neither
 an admin CLI destination override nor a local response exposes the OIDC token.
 A 401 triggers one broker refresh/retry; permission denials do not.

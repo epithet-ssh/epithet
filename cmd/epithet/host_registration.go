@@ -3,10 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,14 +16,14 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 type hostRegistration struct {
-	endpoint   string
-	credential string
-	token      string
-	proposal   inventory.Proposal
+	endpoint string
+	token    string
+	proposal inventory.Proposal
 }
 
 func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnrollment, env *sshdEnvironment, cfg tlsconfig.Config) (*hostRegistration, error) {
@@ -34,7 +32,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		return nil, err
 	}
 	if endpoint == "" {
-		if c.Token != "" || c.TokenFile != "" || c.ProposalFile != "" || c.Yes {
+		if c.Token != "" || c.TokenFile != "" {
 			return nil, fmt.Errorf("CA does not advertise managed inventory enrollment")
 		}
 		return nil, nil
@@ -57,19 +55,15 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	if err != nil {
 		return nil, err
 	}
-	proposal := inventory.Proposal{Names: guessHostNames(ctx), Accounts: guessLoginAccounts(), Labels: map[string]string{}, PrincipalMode: inventory.PrincipalMode(settings.principalMode), Domain: string(result.Domain)}
-	if len(c.Names) > 0 {
-		proposal.Names = c.Names
+	proposal := inventory.Proposal{
+		Names:         c.Names,
+		Accounts:      guessLoginAccounts(),
+		Labels:        map[string]string{},
+		PrincipalMode: inventory.PrincipalMode(settings.principalMode),
+		Domain:        string(result.Domain),
 	}
-	if c.ProposalFile != "" {
-		data, err := os.ReadFile(c.ProposalFile)
-		if err != nil {
-			return nil, err
-		}
-		proposal, err = inventory.ParseProposal(data)
-		if err != nil {
-			return nil, err
-		}
+	if len(proposal.Names) == 0 {
+		proposal.Names = guessHostNames(ctx)
 	}
 	validateLocal := func(p inventory.Proposal) error {
 		if p.Domain != string(result.Domain) || string(p.PrincipalMode) != settings.principalMode {
@@ -77,36 +71,25 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		}
 		return nil
 	}
-	if c.Yes {
-		if c.ProposalFile == "" {
-			return nil, fmt.Errorf("--yes requires --proposal-file with an explicitly prepared host proposal")
-		}
-	} else {
-		proposal, err = editProposal(proposal, bufio.NewReader(os.Stdin), "submit", validateLocal)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err = proposal.Validate(); err != nil {
-		return nil, err
-	}
-	if err = validateLocal(proposal); err != nil {
-		return nil, err
-	}
-	credential, err := ensureEnrollmentCredential(filepath.Join(filepath.Dir(result.DomainFile), "enrollment.key"))
+	proposal, err = editProposal(proposal, bufio.NewReader(os.Stdin), "submit", validateLocal)
 	if err != nil {
 		return nil, err
 	}
-	return &hostRegistration{endpoint, credential, token, proposal}, nil
+	return &hostRegistration{endpoint: endpoint, token: token, proposal: proposal}, nil
 }
+
 func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, cfg tlsconfig.Config, logger *slog.Logger) error {
-	client, err := tlsconfig.NewHTTPClient(cfg)
+	client, err := inventoryclient.New(cfg)
 	if err != nil {
 		return err
 	}
-	response, _, err := caclient.DoInventory(ctx, client, r.endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &r.proposal, Credential: r.credential, Token: r.token})
+	response, _, err := client.Control(ctx, r.endpoint, "", inventoryapi.ControlRequest{
+		Action: "enroll",
+		Host:   &r.proposal,
+		Token:  r.token,
+	})
 	if err != nil {
-		return fmt.Errorf("local sshd is configured, but registration did not complete; rerun enrollment to retry: %w", err)
+		return fmt.Errorf("local sshd is configured, but registration did not complete; check inventory before submitting another enrollment: %w", err)
 	}
 	if response.Host == nil {
 		return fmt.Errorf("inventory returned no host record")
@@ -118,74 +101,59 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 	}
 	return nil
 }
-func ensureEnrollmentCredential(path string) (string, error) {
-	if data, err := os.ReadFile(path); err == nil {
-		value := strings.TrimSpace(string(data))
-		if len(value) != 64 {
-			return "", fmt.Errorf("invalid enrollment credential in %s", path)
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", err
-		}
-		if info.Mode().Perm()&0077 != 0 {
-			return "", fmt.Errorf("enrollment credential %s must be private (mode 0600)", path)
-		}
-		return value, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	secret, err := inventory.RandomSecret()
-	if err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".enrollment-key-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if err = f.Chmod(0600); err != nil {
-		return "", err
-	}
-	if _, err = f.WriteString(secret + "\n"); err != nil {
-		return "", err
-	}
-	if err = f.Sync(); err != nil {
-		return "", err
-	}
-	if err = f.Close(); err != nil {
-		return "", err
-	}
-	if err = os.Link(f.Name(), path); errors.Is(err, os.ErrExist) {
-		return ensureEnrollmentCredential(path)
-	} else if err != nil {
-		return "", err
-	}
-	if err = syncEnrollmentDirectory(filepath.Dir(path)); err != nil {
-		return "", err
-	}
-	return secret, nil
-}
+
+// guessHostNames only reads local configuration; it never resolves DNS names.
 func guessHostNames(ctx context.Context) []string {
 	name, err := os.Hostname()
-	if err != nil || name == "" {
+	if err != nil {
 		return []string{}
 	}
+	return proposedHostNames(name, configuredSearchDomain(ctx))
+}
+
+func proposedHostNames(name, domain string) []string {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
-	names := []string{name}
-	// A bounded local resolver query can add the canonical FQDN. It is still a
-	// proposal for the operator, never evidence of ownership.
-	lookup, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	if canonical, err := net.DefaultResolver.LookupCNAME(lookup, name); err == nil {
-		canonical = strings.ToLower(strings.TrimSuffix(canonical, "."))
-		if canonical != "" && !slices.Contains(names, canonical) {
-			names = append(names, canonical)
+	domain = strings.ToLower(strings.Trim(domain, "."))
+	if name == "" {
+		return []string{}
+	}
+	if domain != "" && name != domain && !strings.HasSuffix(name, "."+domain) {
+		name += "." + domain
+	}
+	return []string{name}
+}
+
+func configuredSearchDomain(ctx context.Context) string {
+	if runtime.GOOS == "darwin" {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		// scutil reads macOS resolver configuration; --dns does not do a lookup.
+		if data, err := exec.CommandContext(ctx, "scutil", "--dns").Output(); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				key, value, ok := strings.Cut(line, ":")
+				if ok && strings.TrimSpace(key) == "search domain[0]" {
+					return strings.TrimSpace(value)
+				}
+			}
 		}
 	}
-	return names
+	data, _ := os.ReadFile("/etc/resolv.conf")
+	return resolvSearchDomain(string(data))
 }
+
+func resolvSearchDomain(config string) string {
+	domain := ""
+	for _, line := range strings.Split(config, "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		line, _, _ = strings.Cut(line, ";")
+		fields := strings.Fields(line)
+		if len(fields) > 1 && (fields[0] == "search" || fields[0] == "domain") {
+			domain = fields[1]
+		}
+	}
+	return domain
+}
+
 func guessLoginAccounts() []string {
 	accounts := []string{}
 	add := func(name, shell string) {

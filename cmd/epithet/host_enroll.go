@@ -19,11 +19,9 @@ import (
 
 // HostEnrollCLI bootstraps the durable local state needed to enroll a host.
 type HostEnrollCLI struct {
-	Token        string   `name:"token" help:"Single-use enrollment token"`
-	TokenFile    string   `name:"token-file" help:"File containing a single-use enrollment token"`
-	Names        []string `name:"name" help:"Proposed DNS name (repeatable; overrides detection)"`
-	ProposalFile string   `name:"proposal-file" help:"Start from an explicit host YAML proposal"`
-	Yes          bool     `name:"yes" help:"Submit --proposal-file without opening EDITOR or prompting"`
+	Token     string   `name:"token" help:"Single-use enrollment token"`
+	TokenFile string   `name:"token-file" help:"File containing a single-use enrollment token"`
+	Names     []string `name:"name" help:"Proposed DNS name (repeatable; overrides detection)"`
 
 	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
 	DomainFile                      string   `name:"domain-file" help:"Principal-domain file (default: native system state directory)"`
@@ -276,7 +274,7 @@ func ensurePublicKeyFile(path string, key sshcert.RawPublicKey) (bool, error) {
 	if err := os.Remove(tempPath); err != nil {
 		return true, fmt.Errorf("removing temporary CA public key %s: %w", tempPath, err)
 	}
-	if err := syncEnrollmentDirectory(dir); err != nil {
+	if err := syncDirectory(dir); err != nil {
 		return true, fmt.Errorf("syncing CA public-key directory %s: %w", dir, err)
 	}
 	return true, nil
@@ -295,7 +293,7 @@ func uniqueDirectories(paths ...string) []string {
 	return dirs
 }
 
-func syncEnrollmentDirectory(path string) error {
+func syncDirectory(path string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}

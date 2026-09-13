@@ -36,16 +36,22 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 	if err != nil {
 		return nil, nil, err
 	}
-	closeIdle := caTransport.CloseIdleConnections
 	var inventory http.Handler
+	var inventoryTransport *http.Transport
 	if inventoryEndpoint != "" {
 		proxy, transport, err := unixServiceProxy("inventory", inventoryEndpoint, "/manage", logger)
 		if err != nil {
-			closeIdle()
+			caTransport.CloseIdleConnections()
 			return nil, nil, err
 		}
 		inventory = proxy
-		closeIdle = func() { caTransport.CloseIdleConnections(); transport.CloseIdleConnections() }
+		inventoryTransport = transport
+	}
+	closeIdle := func() {
+		caTransport.CloseIdleConnections()
+		if inventoryTransport != nil {
+			inventoryTransport.CloseIdleConnections()
+		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only this exact public path maps to inventory. Its private resolver

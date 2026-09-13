@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -42,7 +42,7 @@ func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.C
 		return nil, err
 	}
 	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 4096), caclient.MaxControlResponse)
+	scanner.Buffer(make([]byte, 4096), inventoryclient.MaxControlResponse)
 	for scanner.Scan() {
 		var event broker.Event
 		if err = json.Unmarshal(scanner.Bytes(), &event); err != nil {

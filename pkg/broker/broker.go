@@ -15,8 +15,10 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
 // cleanupInterval is how often the broker checks for expired agents to clean up
@@ -57,7 +59,7 @@ type agentEntry struct {
 //     certificate from the CA; ensureAgent() reconciles them (last one wins).
 //   - ensureAgent() acquires b.lock itself; do not call it with b.lock held
 //
-// Immutable after New(): brokerSocketPath, agentSocketDir, caClient, log
+// Immutable after New(): brokerSocketPath, agentSocketDir, caClient, inventoryClient, log
 // Protected by b.lock: agents map
 // Protected by closeOnce: brokerListener, done channel
 // Self-synchronized: auth (has internal lock)
@@ -75,8 +77,9 @@ type Broker struct {
 	auth           *Auth                                // Has internal locking, safe to call concurrently
 	agents         map[policy.ConnectionHash]agentEntry // Protected by b.lock
 
-	caClient       *caclient.Client // Immutable after New()
-	agentSocketDir string           // Immutable after New()
+	inventoryClient *inventoryclient.Client // Immutable after New()
+	caClient        *caclient.Client        // Immutable after New()
+	agentSocketDir  string                  // Immutable after New()
 
 	// For graceful shutdown: track in-flight RPC connections
 	activeRPC       sync.WaitGroup
@@ -114,6 +117,14 @@ func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient
 
 	for _, o := range options {
 		if err := o.apply(b); err != nil {
+			return nil, err
+		}
+	}
+
+	if b.inventoryClient == nil {
+		var err error
+		b.inventoryClient, err = inventoryclient.New(tlsconfig.Config{})
+		if err != nil {
 			return nil, err
 		}
 	}

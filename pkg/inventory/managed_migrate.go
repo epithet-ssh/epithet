@@ -108,7 +108,7 @@ func (m *Managed) prepareFiles() error {
 		}
 	}
 	// Validate the entire index before publishing migration. Duplicate approved
-	// names or credentials never produce an arbitrarily selected active host.
+	// names never produce an arbitrarily selected active host.
 	check := newManaged(m.files, m.static)
 	if err := check.load(stage); err != nil {
 		return err

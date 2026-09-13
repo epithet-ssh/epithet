@@ -17,6 +17,7 @@ import (
 	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
+	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/oauth2"
 )
@@ -211,9 +212,13 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return idToken, nil
 	}
 
-	// Create broker
+	// Create broker with separate CA and inventory transports.
+	inventoryClient, err := inventoryclient.New(tlsCfg)
+	if err != nil {
+		return err
+	}
 	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, agentDir,
-		broker.WithIdentityVerifier(makeAgentIdentityVerifier(*discovery.Auth, tlsCfg)))
+		broker.WithIdentityVerifier(makeAgentIdentityVerifier(*discovery.Auth, tlsCfg)), broker.WithInventoryClient(inventoryClient))
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)
 	}

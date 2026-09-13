@@ -58,21 +58,10 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	certLogger := caserver.NewSlogCertLogger(certAuditLogger(logger))
 
 	server := caserver.New(caInstance, logger, certLogger)
-	if c.InventoryPublicURL != "" {
-		u, err := url.Parse(c.InventoryPublicURL)
-		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(c.InventoryPublicURL, "<>\r\n\"") {
-			return fmt.Errorf("invalid inventory-public-url")
-		}
-		if u.IsAbs() {
-			if err := tlsCfg.ValidateURL(c.InventoryPublicURL); err != nil {
-				return err
-			}
-			if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-				return fmt.Errorf("inventory-public-url must be HTTPS")
-			}
-		}
-		server.SetInventoryURL(c.InventoryPublicURL)
+	if err := validatePublicInventoryURL(c.InventoryPublicURL, tlsCfg); err != nil {
+		return err
 	}
+	server.PublicInventoryURL = c.InventoryPublicURL
 	r.Handle("/", server.Handler())
 	r.Handle("/discovery", server.DiscoveryHandler())
 
@@ -111,4 +100,32 @@ func (h *minLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *minLevelHandler) WithGroup(name string) slog.Handler {
 	return &minLevelHandler{inner: h.inner.WithGroup(name), minLevel: h.minLevel}
+}
+
+func validatePublicInventoryURL(value string, cfg tlsconfig.Config) error {
+	if value == "" {
+		return nil
+	}
+	// The URL is emitted inside Link's angle brackets. Delimiters and line
+	// breaks must not be inserted literally into that header value.
+	if strings.ContainsAny(value, "<>\r\n\"") {
+		return fmt.Errorf("inventory-public-url must percent-encode Link header delimiters and cannot contain line breaks")
+	}
+	u, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("invalid inventory-public-url: %w", err)
+	}
+	if u.User != nil {
+		return fmt.Errorf("inventory-public-url cannot contain embedded credentials; inventory authenticates requests separately")
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("inventory-public-url cannot contain a fragment; fragments are not sent to the HTTP endpoint")
+	}
+	if u.IsAbs() {
+		if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("inventory-public-url must be an HTTP(S) endpoint or a relative URL")
+		}
+		return cfg.ValidateURL(value)
+	}
+	return nil
 }

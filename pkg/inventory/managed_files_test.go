@@ -35,8 +35,8 @@ func TestTokenFilenameBecomesHostAndOnlyThatFileChanges(t *testing.T) {
 	require.NoError(t, err)
 	otherData, err := os.ReadFile(otherPath)
 	require.NoError(t, err)
-	key := credential(t)
-	h, err := m.Enroll(proposal("host.example"), key, value)
+
+	h, err := m.Enroll(proposal("host.example"), value)
 	require.NoError(t, err)
 	require.Equal(t, value, h.ID)
 	after := readItem(t, m, value)
@@ -57,15 +57,14 @@ func TestTokenFilenameBecomesHostAndOnlyThatFileChanges(t *testing.T) {
 	restarted, err := OpenManaged(m.files.root, m.static)
 	require.NoError(t, err)
 	defer restarted.Close()
-	retry, err := restarted.Enroll(proposal("ignored"), key, value)
-	require.NoError(t, err)
-	require.Equal(t, value, retry.ID)
-	_, err = restarted.Enroll(proposal("second"), credential(t), value)
+	_, err = restarted.Enroll(proposal("ignored"), value)
+	require.ErrorIs(t, err, ErrToken)
+	_, err = restarted.Enroll(proposal("second"), value)
 	require.ErrorIs(t, err, ErrToken)
 }
 func TestHostnameLookupUsesIndexesWithoutFilesystemReads(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - pattern: '*'\n   accounts: [root]\n")
-	h, err := m.Enroll(proposal("host"), credential(t), "")
+	h, err := m.Enroll(proposal("host"), "")
 	require.NoError(t, err)
 	h, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 	require.NoError(t, err)
@@ -82,7 +81,7 @@ func TestHostnameLookupUsesIndexesWithoutFilesystemReads(t *testing.T) {
 }
 func TestRestartRebuildsNamesAndKeepsRetiredClaims(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - pattern: '*'\n   accounts: [root]\n")
-	h, err := m.Enroll(proposal("old"), credential(t), "")
+	h, err := m.Enroll(proposal("old"), "")
 	require.NoError(t, err)
 	h, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 	require.NoError(t, err)
@@ -123,9 +122,9 @@ func TestRestartRebuildsNamesAndKeepsRetiredClaims(t *testing.T) {
 }
 func TestRebuildRejectsConflictingApprovedItems(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
-	a, err := m.Enroll(proposal("same"), credential(t), "")
+	a, err := m.Enroll(proposal("same"), "")
 	require.NoError(t, err)
-	b, err := m.Enroll(proposal("same"), credential(t), "")
+	b, err := m.Enroll(proposal("same"), "")
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
 	require.NoError(t, err)
@@ -182,8 +181,8 @@ func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
 				}
 				return errors.New("simulated storage failure")
 			}
-			key := credential(t)
-			_, err = m.Enroll(proposal("host"), key, value)
+
+			_, err = m.Enroll(proposal("host"), value)
 			require.ErrorIs(t, err, ErrStorage)
 			_, err = m.LookupHost(t.Context(), "host")
 			require.ErrorIs(t, err, ErrStorage)
@@ -197,10 +196,15 @@ func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
 			} else {
 				require.Equal(t, "token", r.Kind)
 			}
-			host, err := restarted.Enroll(proposal("host"), key, value)
-			require.NoError(t, err)
-			require.Equal(t, value, host.ID)
-			_, err = restarted.Enroll(proposal("another"), credential(t), value)
+			if published {
+				_, err = restarted.Enroll(proposal("retry"), value)
+				require.ErrorIs(t, err, ErrToken)
+			} else {
+				host, err := restarted.Enroll(proposal("host"), value)
+				require.NoError(t, err)
+				require.Equal(t, value, host.ID)
+			}
+			_, err = restarted.Enroll(proposal("another"), value)
 			require.ErrorIs(t, err, ErrToken)
 		})
 	}
@@ -210,7 +214,7 @@ func TestLegacySnapshotMigrationPreservesAdmissionAndRevokesTokens(t *testing.T)
 	id := strings.Repeat("a", 24)
 	tokenID := strings.Repeat("b", 24)
 	oldSecret := strings.Repeat("c", 64)
-	old := legacyState{Version: 1, Hosts: []HostRecord{{ID: id, Revision: 3, Status: "approved", Proposal: proposal("migrated"), CredentialHash: digest(credential(t)), CreatedAt: time.Now(), UpdatedAt: time.Now()}}, Tokens: []legacyToken{{EnrollmentToken: EnrollmentToken{ID: tokenID, ExpiresAt: time.Now().Add(time.Hour)}, Hash: digest(oldSecret)}}, BlockedNames: []string{"retired"}, Audit: []AuditEvent{{At: time.Now(), Actor: "admin", Action: "approve", Resource: id}}}
+	old := legacyState{Version: 1, Hosts: []HostRecord{{ID: id, Revision: 3, Status: "approved", Proposal: proposal("migrated"), CreatedAt: time.Now(), UpdatedAt: time.Now()}}, Tokens: []legacyToken{{EnrollmentToken: EnrollmentToken{ID: tokenID, ExpiresAt: time.Now().Add(time.Hour)}, Hash: digest(oldSecret)}}, BlockedNames: []string{"retired"}, Audit: []AuditEvent{{At: time.Now(), Actor: "admin", Action: "approve", Resource: id}}}
 	data, err := yaml.Marshal(old)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "inventory.yaml"), data, 0600))
@@ -228,7 +232,7 @@ func TestLegacySnapshotMigrationPreservesAdmissionAndRevokesTokens(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, tokens, 1)
 	require.True(t, tokens[0].Revoked)
-	_, err = m.Enroll(proposal("other"), credential(t), oldSecret)
+	_, err = m.Enroll(proposal("other"), oldSecret)
 	require.ErrorIs(t, err, ErrToken)
 	audit, err := m.Audit()
 	require.NoError(t, err)
@@ -257,7 +261,7 @@ func TestLegacySnapshotMigrationPreservesAdmissionAndRevokesTokens(t *testing.T)
 }
 func TestItemRejectsFilenameMismatchAndTraversal(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
-	_, err := m.Enroll(proposal("x"), credential(t), "../inventory.lock")
+	_, err := m.Enroll(proposal("x"), "../inventory.lock")
 	require.ErrorIs(t, err, ErrToken)
 	_, value, err := m.CreateToken("admin", time.Hour)
 	require.NoError(t, err)

@@ -665,7 +665,7 @@ func replaceSSHDFile(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(temp, path); err != nil {
 		return fmt.Errorf("installing sshd configuration %s: %w", path, err)
 	}
-	if err := syncEnrollmentDirectory(filepath.Dir(path)); err != nil {
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("syncing sshd configuration directory %s: %w", filepath.Dir(path), err)
 	}
 	return nil
@@ -681,7 +681,7 @@ func restoreSSHDFile(snapshot sshdFileSnapshot) error {
 	if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing newly installed %s: %w", snapshot.path, err)
 	}
-	return syncEnrollmentDirectory(filepath.Dir(snapshot.path))
+	return syncDirectory(filepath.Dir(snapshot.path))
 }
 
 func validateSSHD(ctx context.Context, runner sshdCommandRunner, binary, config string) error {

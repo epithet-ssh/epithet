@@ -64,7 +64,7 @@ func (r *itemRecord) validate(id string) error {
 		}
 	}
 	if h := r.Host; h != nil {
-		if h.Revision == 0 || !validID(h.CredentialHash) || len(h.CredentialHash) != 64 {
+		if h.Revision == 0 {
 			return fmt.Errorf("invalid host metadata")
 		}
 		if err := h.Proposal.Validate(); err != nil {
@@ -162,12 +162,13 @@ func OpenManaged(dir string, static *Static) (*Managed, error) {
 	return openManaged(dir, static, false)
 }
 
-// Static fallback is deliberately limited to exact static records if a managed
-// file is unreadable. Guessing through a wildcard could bypass lost tombstones.
-func OpenManagedWithStaticFallback(dir string, static *Static) (*Managed, error) {
+// OpenManagedAllowDegraded permits startup with unreadable dynamic state.
+// Exact static records always override dynamic records, including in this mode.
+// Wildcards cannot be used when unreadable state may contain admission tombstones.
+func OpenManagedAllowDegraded(dir string, static *Static) (*Managed, error) {
 	return openManaged(dir, static, true)
 }
-func openManaged(dir string, static *Static, fallback bool) (*Managed, error) {
+func openManaged(dir string, static *Static, allowDegraded bool) (*Managed, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -185,7 +186,7 @@ func openManaged(dir string, static *Static, fallback bool) (*Managed, error) {
 		err = m.load(files.dir)
 	}
 	if err != nil {
-		if fallback {
+		if allowDegraded {
 			m = newManaged(files, static)
 			m.failed = fmt.Errorf("%w: %v", ErrStorage, err)
 			return m, nil
@@ -196,7 +197,7 @@ func openManaged(dir string, static *Static, fallback bool) (*Managed, error) {
 	return m, nil
 }
 func newManaged(files *itemFiles, static *Static) *Managed {
-	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]*nameClaims{}, credentials: map[string]string{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static, legacy: legacyMetadata{Version: 2}}
+	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]*nameClaims{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static, legacy: legacyMetadata{Version: 2}}
 	if static != nil {
 		for _, h := range static.hosts {
 			if h.Domain != "" {

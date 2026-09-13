@@ -5,14 +5,13 @@ import "github.com/epithet-ssh/epithet/pkg/inventory"
 const InventoryRelation = "https://epithet.dev/rel/inventory"
 
 // ControlRequest is one operation at the complete advertised inventory URL.
-// Enrollment credentials are carried only on enrollment; admin authentication
-// is the OIDC bearer header. Revision binds review/edit to the displayed record.
+// An optional single-use token preapproves enrollment. Admin authentication is
+// the OIDC bearer header. Revision binds review/edit to the displayed record.
 type ControlRequest struct {
 	Action          string              `json:"action"`
 	ID              string              `json:"id,omitempty"`
 	Revision        uint64              `json:"revision,omitempty"`
 	Host            *inventory.Proposal `json:"host,omitempty"`
-	Credential      string              `json:"credential,omitempty"`
 	Token           string              `json:"token,omitempty"`
 	LifetimeSeconds int64               `json:"lifetime-seconds,omitempty"`
 }

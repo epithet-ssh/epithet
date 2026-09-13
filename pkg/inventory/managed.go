@@ -152,17 +152,17 @@ type HostRecord struct {
 	SourceFile string `yaml:"-" json:"source-file,omitempty"`
 	Pattern    string `yaml:"-" json:"pattern,omitempty"`
 
-	ID             string    `yaml:"id" json:"id"`
-	Revision       uint64    `yaml:"revision" json:"revision"`
-	Status         string    `yaml:"status" json:"status"`
-	Proposal       Proposal  `yaml:"host" json:"host"`
-	CredentialHash string    `yaml:"credential-hash" json:"-"`
-	CreatedAt      time.Time `yaml:"created-at" json:"created-at"`
-	UpdatedAt      time.Time `yaml:"updated-at" json:"updated-at"`
-	Source         string    `yaml:"-" json:"source,omitempty"`
-	ShadowedNames  []string  `yaml:"-" json:"shadowed-names,omitempty"`
-	RetiredNames   []string  `yaml:"retired-names,omitempty" json:"retired-names,omitempty"`
+	ID            string    `yaml:"id" json:"id"`
+	Revision      uint64    `yaml:"revision" json:"revision"`
+	Status        string    `yaml:"status" json:"status"`
+	Proposal      Proposal  `yaml:"host" json:"host"`
+	CreatedAt     time.Time `yaml:"created-at" json:"created-at"`
+	UpdatedAt     time.Time `yaml:"updated-at" json:"updated-at"`
+	Source        string    `yaml:"-" json:"source,omitempty"`
+	ShadowedNames []string  `yaml:"-" json:"shadowed-names,omitempty"`
+	RetiredNames  []string  `yaml:"retired-names,omitempty" json:"retired-names,omitempty"`
 }
+
 type EnrollmentToken struct {
 	ID        string    `yaml:"id" json:"id"`
 	ExpiresAt time.Time `yaml:"expires-at" json:"expires-at"`
@@ -184,7 +184,6 @@ type Managed struct {
 	files         *itemFiles
 	records       map[string]*itemRecord
 	names         map[string]*nameClaims
-	credentials   map[string]string
 	domains       map[string]string
 	staticDomains map[string]bool
 	pending       int
@@ -248,9 +247,6 @@ func (m *Managed) publish(r *itemRecord) {
 		if h.Status == "pending" {
 			m.pending++
 		}
-		if h.Status == "pending" || h.Status == "approved" {
-			m.credentials[h.CredentialHash] = id
-		}
 	}
 	data, _ := yaml.Marshal(r)
 	m.hashes[id] = digest(string(data))
@@ -276,9 +272,6 @@ func (m *Managed) unindex(r *itemRecord) {
 	if m.domains[h.Proposal.Domain] == h.ID {
 		delete(m.domains, h.Proposal.Domain)
 	}
-	if m.credentials[h.CredentialHash] == h.ID {
-		delete(m.credentials, h.CredentialHash)
-	}
 	if h.Status == "pending" {
 		m.pending--
 	}
@@ -303,11 +296,6 @@ func (m *Managed) checkIndexes(r *itemRecord) error {
 	h := r.Host
 	if h == nil {
 		return nil
-	}
-	if h.Status == "pending" || h.Status == "approved" {
-		if owner := m.credentials[h.CredentialHash]; owner != "" && owner != h.ID {
-			return fmt.Errorf("duplicate enrollment credential on hosts %s and %s", owner, h.ID)
-		}
 	}
 	if h.Status == "approved" {
 		for _, n := range h.Proposal.Names {
@@ -383,24 +371,14 @@ func (m *Managed) commit(r *itemRecord, actor, action string, create bool) error
 	m.updateRevision()
 	return nil
 }
-func (m *Managed) Enroll(p Proposal, credential, token string) (*HostRecord, error) {
+func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
-	}
-	if len(credential) != 64 {
-		return nil, fmt.Errorf("invalid host enrollment credential")
-	}
-	if _, err := hex.DecodeString(credential); err != nil {
-		return nil, fmt.Errorf("invalid host enrollment credential")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.failed != nil {
 		return nil, m.failed
-	}
-	hash := digest(credential)
-	if id := m.credentials[hash]; id != "" {
-		return cloneHost(m.records[id].Host), nil
 	}
 	if err := m.conflict(p, ""); err != nil {
 		return nil, err
@@ -434,7 +412,7 @@ func (m *Managed) Enroll(p Proposal, credential, token string) (*HostRecord, err
 			}
 		}
 		now := time.Now().UTC()
-		h := HostRecord{ID: id, Revision: 1, Status: status, Proposal: p, CredentialHash: hash, CreatedAt: now, UpdatedAt: now}
+		h := HostRecord{ID: id, Revision: 1, Status: status, Proposal: p, CreatedAt: now, UpdatedAt: now}
 		r := &itemRecord{Version: 2, Kind: "host", Host: &h}
 		if reserved != nil {
 			r = cloneItem(reserved)
