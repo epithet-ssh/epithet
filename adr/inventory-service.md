@@ -103,12 +103,19 @@ token rejection from inventory resolution remains 401.
 
 ## Deployment
 
-`epithet server` supervises inventory, policy, and CA subprocesses, passes the
-CA public key directly to the private services, and wires separate sockets in
-a private temporary directory. Startup failure, child exit, or shutdown stops
-and reaps every started child. Only CA has a public listener. In managed mode it also forwards the inventory
-control endpoint on `/inventory`; it never proxies policy or arbitrary inventory
-resolution routes. Same-user processes
+`epithet server` supervises router, inventory, policy, and CA subprocesses. It
+passes the CA public key directly to the private services and wires all three
+services through separate Unix sockets in a private temporary directory. The
+router starts after those sockets accept connections. Startup failure, child
+exit, or shutdown stops and reaps every started child.
+
+Only the router owns the public HTTP listener. TLS termination and ACME remain
+in Caddy or another deployment front end. The router forwards `/inventory` to
+inventory's `/manage` only in managed mode; all other paths go to CA. It never
+routes requests to policy or inventory resolution endpoints, adds no service
+credentials, and leaves authentication and authorization to the services. CA
+only advertises the inventory Link header; its former proxy mode is removed.
+Same-user processes
 are not a strong filesystem boundary around the CA key; separate deployments
 can assign different OS permissions and network placement.
 

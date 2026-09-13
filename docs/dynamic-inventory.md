@@ -10,7 +10,8 @@ link. Nothing has been deployed or enabled on a real host as part of this change
 - One YAML file holds each token or host and its audit history; one process owns the
   directory. Hostname indexes are rebuilt at startup and updated in memory.
 - Inventory administration uses the existing agent session and one static admin role.
-- The combined server advertises inventory automatically and shares its existing port.
+- The combined server puts a plain HTTP router in front of private CA, inventory,
+  and policy Unix sockets. TLS and ACME stay in the deployment's front end.
 - Enrollment uses an editor plus an explicit submit/cancel choice. A durable local
   bearer credential makes retries idempotent; it is separate from the host's ID.
 - Tokens have no templates, default to one hour, and support copy/paste or files.
@@ -47,13 +48,21 @@ Both grant the single `inventory-admin` role; there are no custom roles or Writ
 rules for inventory administration. User records and grants are static in this
 first implementation. SCIM and dynamic user provisioning remain later work.
 
-Start `epithet --config server.yaml server` as usual. It discovers whether its
-inventory child has managed storage configured, exposes only that child's managed
-endpoint through the existing listener, and advertises this bootstrap header:
+Start `epithet --config server.yaml server` as usual. A separate router process
+owns `server.listen`; CA, inventory, and policy each listen on a private Unix
+socket. When the inventory child has managed storage configured, the router
+forwards `/inventory` to that child's `/manage` endpoint. Other paths go to CA.
+The CA advertises this bootstrap header and does not proxy management requests:
 
 ```http
 Link: <inventory>; rel="https://epithet.dev/rel/inventory"
 ```
+
+For `https://ca.example/`, that target is `https://ca.example/inventory`. Keep
+Caddy terminating TLS and proxying HTTP to the existing `server.listen` address;
+it does not need separate inventory routing. See the
+[combined deployment example](inventory.md#combined-deployment). Authentication
+and authorization stay in their services, and the router adds no credentials.
 
 On the admin machine, start or restart the agent with the updated executable and
 the usual CA configuration. Administration reuses that agent's OIDC login:

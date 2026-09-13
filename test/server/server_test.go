@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,8 +21,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// TestServerEndToEnd verifies the combined server command starts CA and policy
-// subprocesses and routes requests correctly through the reverse proxy.
+// TestServerEndToEnd verifies the combined server starts a router and three
+// private services, routes requests, and cleans up the supervised processes.
 func TestServerEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -95,6 +96,11 @@ inventory:
 		"--listen", fmt.Sprintf(":%d", port),
 		"-v",
 	)
+	runtimeDir := filepath.Join(tmpDir, "run")
+	if err := os.Mkdir(runtimeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	serverCmd.Env = append(os.Environ(), "TMPDIR="+runtimeDir)
 	serverCmd.Stdout = os.Stderr
 	serverCmd.Stderr = os.Stderr
 
@@ -230,6 +236,34 @@ inventory:
 		case <-time.After(10 * time.Second):
 			t.Error("server did not exit within 10s after SIGTERM")
 			serverCmd.Process.Kill()
+		}
+	})
+
+	t.Run("router_bind_failure_cleans_up", func(t *testing.T) {
+		// The public port belongs to the last-started child. If it cannot bind,
+		// the supervisor must stop the already-running private services too.
+		occupied, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer occupied.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		failed := exec.CommandContext(ctx, epithetBin, "--config", configPath, "server", "--listen", occupied.Addr().String())
+		failed.Env = serverCmd.Env
+		output, err := failed.CombinedOutput()
+		if ctx.Err() != nil {
+			t.Fatalf("supervisor did not exit after router failure: %s", output)
+		}
+		if err == nil || !strings.Contains(string(output), "router subprocess exited") {
+			t.Fatalf("expected router startup failure, got %v: %s", err, output)
+		}
+		entries, err := os.ReadDir(runtimeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("private sockets remain after shutdown/failure: %v", entries)
 		}
 	})
 }

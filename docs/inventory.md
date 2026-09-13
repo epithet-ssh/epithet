@@ -10,7 +10,7 @@ commands, and the first implementation decisions. SCIM and LDAP remain later wor
 ```yaml
 server:
   ca-key: /etc/epithet/ca.key
-  listen: ':8080'
+  listen: '127.0.0.1:8080'
 policy:
   policy-file: /etc/epithet/policy.writ
 inventory:
@@ -23,11 +23,37 @@ inventory:
   principal-mode: account-name
 ```
 
-Run `epithet --config server.yaml server`. It starts and supervises all three
-services. CA public-key configuration and the two private Unix socket addresses
-are supplied automatically. OIDC is configured only on inventory; all user IDs
+Run `epithet --config server.yaml server`. It starts and supervises a plain HTTP
+router plus CA, inventory, and policy. All three services listen on separate
+Unix sockets in a private temporary directory; the router owns `server.listen`.
+CA public-key configuration and private socket addresses are supplied
+automatically. OIDC is configured only on inventory; all user IDs
 belong to that configured provider. Select principal mode deliberately; see
 [principal modes](principals.md).
+
+Keep TLS termination and ACME in Caddy (or your existing front end). For the
+loopback listener above, a Caddy site can forward all requests unchanged:
+
+```caddyfile
+ca.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Clients use `https://ca.example.com/`. Caddy forwards HTTP to the router; Epithet
+does not manage HTTPS certificates. Existing Caddy configurations that forward
+to the same `server.listen` address need no routing changes.
+
+The router forwards `/inventory` to inventory's `/manage` endpoint when
+`inventory.state-dir` is configured. Other paths go to the CA, including `/`
+and `/discovery`. Policy and inventory resolution remain private. The router
+adds no service credentials and makes no authentication or authorization
+decisions. The CA advertises the relative inventory link but does not proxy
+inventory management requests. There is no `ca.inventory-proxy` setting.
+
+`epithet router` can also be run separately with `--ca unix:///path/ca.sock` and
+optional `--inventory unix:///path/inventory.sock`. Standalone `epithet ca` and
+`epithet inventory` retain their TCP and Unix listener options.
 
 Inventory uses the configured URL as its complete RPC endpoint: POST resolves
 `{token, host}`, and GET returns login discovery. No path suffix is appended.

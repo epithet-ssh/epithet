@@ -22,8 +22,8 @@ import (
 )
 
 // ServerCLI defines the CLI flags for the combined server command.
-// It supervises CA, policy, and inventory subprocesses. Only the CA listens
-// on the public port; it contacts both private services over Unix sockets.
+// It supervises router, CA, policy, and inventory subprocesses. Only the router
+// owns the public listener; all three services listen on private Unix sockets.
 type ServerCLI struct {
 	Listen string `help:"Public address to listen on" short:"l" default:":8080"`
 	CAKey  string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
@@ -58,7 +58,7 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	caPubkey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 	logger.Info("derived ca public key", "path", caKeyPath)
 
-	// Create temp directory for the policy domain socket.
+	// The private socket directory is accessible only to this user.
 	tmpDir, err := os.MkdirTemp("", "epithet-server-")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
@@ -75,22 +75,22 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	globalArgs := buildGlobalArgs()
 
 	inventorySock := filepath.Join(tmpDir, "inventory.sock")
+	caSock := filepath.Join(tmpDir, "ca.sock")
+	inventoryArgs := c.inventoryArgs(globalArgs, inventorySock, caPubkey)
+	managed, err := inventoryChildManaged(inventoryArgs)
+	if err != nil {
+		return err
+	}
 	type child struct {
 		name   string
 		args   []string
 		socket string
 	}
 	children := []child{
-		{"inventory", c.inventoryArgs(globalArgs, inventorySock, caPubkey), inventorySock},
+		{"inventory", inventoryArgs, inventorySock},
 		{"policy", c.policyArgs(globalArgs, policySock, caPubkey), policySock},
-		{"ca", append(append([]string{}, globalArgs...), "ca", "--listen", c.Listen, "--policy", "unix://"+policySock, "--inventory", "unix://"+inventorySock, "--key", caKeyPath), ""},
-	}
-	managed, err := inventoryChildManaged(children[0].args)
-	if err != nil {
-		return err
-	}
-	if managed {
-		children[2].args = append(children[2].args, "--inventory-proxy", "--inventory-public-url", "inventory")
+		{"ca", c.caArgs(globalArgs, caSock, policySock, inventorySock, managed), caSock},
+		{"router", c.routerArgs(globalArgs, caSock, inventorySock, managed), ""},
 	}
 	var wg sync.WaitGroup
 	exited := make(chan error, len(children))
@@ -132,6 +132,25 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	case err := <-exited:
 		return err
 	}
+}
+
+func (c *ServerCLI) caArgs(globalArgs []string, caSock, policySock, inventorySock string, managed bool) []string {
+	publicURL := ""
+	if managed {
+		publicURL = "inventory"
+	}
+	return append(append([]string{}, globalArgs...), "ca", "--listen", "unix://"+caSock,
+		"--policy", "unix://"+policySock, "--inventory", "unix://"+inventorySock,
+		"--key", c.CAKey, "--inventory-public-url", publicURL)
+}
+
+func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string, managed bool) []string {
+	endpoint := ""
+	if managed {
+		endpoint = "unix://" + inventorySock
+	}
+	return append(append([]string{}, globalArgs...), "router", "--listen", c.Listen,
+		"--ca", "unix://"+caSock, "--inventory", endpoint)
 }
 
 func (c *ServerCLI) inventoryArgs(globalArgs []string, socket, key string) []string {

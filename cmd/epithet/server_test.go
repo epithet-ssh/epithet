@@ -91,3 +91,50 @@ func TestInventoryChildManagedReadsCommandScopedConfiguration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, managed)
 }
+
+func TestServerOwnsChildListenersAndInventoryRouting(t *testing.T) {
+	// Combined topology must override standalone command configuration, including
+	// disabling a configured inventory route when the child has no managed store.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`ca:
+  listen: :9999
+  inventory-public-url: https://old.example/manage
+router:
+  listen: :9998
+  ca: unix:///tmp/old-ca.sock
+  inventory: unix:///tmp/old-inventory.sock
+`), 0600))
+	for _, managed := range []bool{true, false} {
+		var root struct {
+			Config kong.ConfigFlag `name:"config"`
+			CA     CACLI           `cmd:"ca"`
+			Router RouterCLI       `cmd:"router"`
+		}
+		parse := func(args []string) {
+			t.Helper()
+			parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader))
+			require.NoError(t, err)
+			_, err = parser.Parse(args)
+			require.NoError(t, err)
+		}
+		server := ServerCLI{Listen: "127.0.0.1:8080", CAKey: "/tmp/ca.key"}
+		globals := []string{"--config", path}
+		parse(server.caArgs(globals, "/tmp/ca.sock", "/tmp/policy.sock", "/tmp/inventory.sock", managed))
+		require.Equal(t, "unix:///tmp/ca.sock", root.CA.Listen)
+		require.Equal(t, "unix:///tmp/policy.sock", root.CA.Policy)
+		require.Equal(t, "unix:///tmp/inventory.sock", root.CA.Inventory)
+		if managed {
+			require.Equal(t, "inventory", root.CA.InventoryPublicURL)
+		} else {
+			require.Empty(t, root.CA.InventoryPublicURL)
+		}
+		parse(server.routerArgs(globals, "/tmp/ca.sock", "/tmp/inventory.sock", managed))
+		require.Equal(t, server.Listen, root.Router.Listen)
+		require.Equal(t, "unix:///tmp/ca.sock", root.Router.CA)
+		if managed {
+			require.Equal(t, "unix:///tmp/inventory.sock", root.Router.Inventory)
+		} else {
+			require.Empty(t, root.Router.Inventory)
+		}
+	}
+}

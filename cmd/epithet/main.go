@@ -45,7 +45,8 @@ var cli struct {
 	Host      HostCLI         `cmd:"host" help:"Manage and authorize Epithet hosts"`
 	Inventory InventoryCLI    `cmd:"inventory" help:"Serve or administer the user directory and host inventory"`
 	Policy    PolicyServerCLI `cmd:"policy" help:"Run the policy server evaluating normalized facts"`
-	Server    ServerCLI       `cmd:"server" help:"Run CA, policy, and inventory as supervised subprocesses behind a single port"`
+	Router    RouterCLI       `cmd:"router" help:"Proxy HTTP to private CA and inventory Unix sockets"`
+	Server    ServerCLI       `cmd:"server" help:"Supervise an HTTP router with private CA, policy, and inventory services"`
 }
 
 func main() {

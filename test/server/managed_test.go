@@ -2,10 +2,14 @@ package server_test
 
 import (
 	"context"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,22 +62,44 @@ inventory:
 	port := availablePort(t)
 	base := fmt.Sprintf("http://127.0.0.1:%d/", port)
 	process := exec.Command(binary, "--config", configPath, "--insecure", "server", "--listen", fmt.Sprintf("127.0.0.1:%d", port))
+	process.Env = append(os.Environ(), "TMPDIR="+dir)
 	process.Stdout = os.Stderr
 	process.Stderr = os.Stderr
 	require.NoError(t, process.Start())
 	t.Cleanup(func() { process.Process.Signal(syscall.SIGTERM); process.Wait() })
 	waitForTCP(t, fmt.Sprintf("127.0.0.1:%d", port), 15*time.Second)
-	client, err := caclient.New([]caclient.CAEndpoint{{URL: base}}, caclient.WithTLSConfig(tlsconfig.Config{Insecure: true}))
+	// All services are private Unix listeners; the router owns the TCP port.
+	sockets, err := filepath.Glob(filepath.Join(dir, "epithet-server-*", "*.sock"))
+	require.NoError(t, err)
+	var names []string
+	for _, socket := range sockets {
+		names = append(names, filepath.Base(socket))
+	}
+	require.ElementsMatch(t, []string{"ca.sock", "inventory.sock", "policy.sock"}, names)
+	// Exercise the Caddy-style topology: external HTTPS termination forwards
+	// plain HTTP to the router. Clients trust only the external TLS certificate.
+	upstream, err := url.Parse(base)
+	require.NoError(t, err)
+	front := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(upstream))
+	t.Cleanup(front.Close)
+	base = front.URL + "/"
+	trust := filepath.Join(dir, "tls-ca.pem")
+	require.NoError(t, os.WriteFile(trust, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: front.Certificate().Raw}), 0600))
+	tlsCfg := tlsconfig.Config{CACertFile: trust}
+	client, err := caclient.New([]caclient.CAEndpoint{{URL: base}}, caclient.WithTLSConfig(tlsCfg))
 	require.NoError(t, err)
 	root, err := client.GetRoot(t.Context())
 	require.NoError(t, err)
-	endpoint, err := caclient.InventoryURL(root, tlsconfig.Config{Insecure: true})
+	endpoint, err := caclient.InventoryURL(root, tlsCfg)
 	require.NoError(t, err)
 	require.Equal(t, base+"inventory", endpoint)
+	_, status, err := caclient.DoInventory(t.Context(), front.Client(), endpoint, "", inventoryapi.ControlRequest{Action: "list"})
+	require.Error(t, err)
+	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
 	proposal := inventory.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}
 	key, err := inventory.RandomSecret()
 	require.NoError(t, err)
-	enrolled, status, err := caclient.DoInventory(t.Context(), http.DefaultClient, endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Credential: key})
+	enrolled, status, err := caclient.DoInventory(t.Context(), front.Client(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Credential: key})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
@@ -111,7 +137,7 @@ inventory:
 	proposal.Names = []string{"second.example"}
 	key, err = inventory.RandomSecret()
 	require.NoError(t, err)
-	second, status, err := caclient.DoInventory(t.Context(), http.DefaultClient, endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Credential: key, Token: created})
+	second, status, err := caclient.DoInventory(t.Context(), front.Client(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Credential: key, Token: created})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "approved", second.Host.Status)

@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"strings"
@@ -19,7 +17,6 @@ import (
 
 type CACLI struct {
 	InventoryPublicURL string `help:"Client-accessible managed inventory URL advertised at bootstrap" name:"inventory-public-url"`
-	InventoryProxy     bool   `help:"Expose managed inventory through this CA listener (combined server)" name:"inventory-proxy"`
 
 	Inventory string `help:"URL for inventory service" name:"inventory" required:"true"`
 	Policy    string `help:"URL for policy service" short:"p" env:"POLICY_URL" required:"true"`
@@ -76,13 +73,6 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 		}
 		server.SetInventoryURL(c.InventoryPublicURL)
 	}
-	if c.InventoryProxy {
-		proxy, err := inventoryControlProxy(c.Inventory)
-		if err != nil {
-			return err
-		}
-		r.Handle("/inventory", proxy)
-	}
 	r.Handle("/", server.Handler())
 	r.Handle("/discovery", server.DiscoveryHandler())
 
@@ -121,23 +111,4 @@ func (h *minLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *minLevelHandler) WithGroup(name string) slog.Handler {
 	return &minLevelHandler{inner: h.inner.WithGroup(name), minLevel: h.minLevel}
-}
-
-// The combined listener exposes only the managed endpoint. It never proxies
-// arbitrary resolver/policy paths or gives these requests service credentials.
-func inventoryControlProxy(endpoint string) (http.Handler, error) {
-	path, ok := strings.CutPrefix(endpoint, "unix://")
-	if !ok || path == "" {
-		return nil, fmt.Errorf("inventory proxy requires a private Unix socket")
-	}
-	transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", path)
-	}}
-	return &httputil.ReverseProxy{Transport: transport, Rewrite: func(r *httputil.ProxyRequest) {
-		r.Out.URL.Scheme = "http"
-		r.Out.URL.Host = "inventory"
-		r.Out.URL.Path = "/manage"
-		r.Out.URL.RawPath = ""
-		r.Out.Host = "inventory"
-	}}, nil
 }
