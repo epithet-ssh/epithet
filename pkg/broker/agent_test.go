@@ -35,7 +35,7 @@ func TestBroker_AgentMapInitialized(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, stubTokenFunc, testClient(t, "http://localhost:9999"), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, stubTokenFunc, testClient(t, "http://localhost:9999"), "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 
 	// Verify agents map is initialized.
@@ -51,7 +51,7 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, stubTokenFunc, testClient(t, "http://localhost:9999"), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, stubTokenFunc, testClient(t, "http://localhost:9999"), "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 

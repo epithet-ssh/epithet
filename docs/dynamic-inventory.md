@@ -65,7 +65,9 @@ it does not need separate inventory routing. See the
 and authorization stay in their services, and the router adds no credentials.
 
 On the admin machine, start or restart the agent with the updated executable and
-the usual CA configuration. Administration reuses that agent's OIDC login:
+the usual CA configuration. At startup, the agent discovers the public inventory
+URL from the CA and binds its inventory client to that endpoint. Restart the agent
+after changing the advertised URL. Administration reuses that agent's OIDC login:
 
 ```sh
 epithet inventory list --pending

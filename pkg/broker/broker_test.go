@@ -97,7 +97,7 @@ func Test_RpcBasics(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -129,7 +129,7 @@ func Test_MatchRequestFields(t *testing.T) {
 	agentSocketDir := tmpDir + "/a"
 
 	caClient := testCAClientOK(t)
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -190,7 +190,7 @@ func TestCleanupExpiredAgents(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, "http://localhost:9999"), "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
@@ -329,7 +329,7 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, caURL), testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), testCAClient(t, caURL), "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -381,7 +381,7 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 
 	tmpDir := shortTempDir(t)
-	b, err := New(*testLogger(t), tmpDir+"/b.sock", testTokenFunc(t, idp), testCAClient(t, caURL), testInventoryClient(t), testIdentityVerifier, tmpDir+"/a")
+	b, err := New(*testLogger(t), tmpDir+"/b.sock", testTokenFunc(t, idp), testCAClient(t, caURL), "https://ca.example", testInventoryClient(t), testIdentityVerifier, tmpDir+"/a")
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -472,7 +472,7 @@ func TestMatchCADown_ReturnsHumanLegibleError(t *testing.T) {
 	agentSocketDir := tmpDir + "/a"
 
 	caClient := testCAClient(t, "http://"+closedAddr)
-	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, testInventoryClient(t), testIdentityVerifier, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, testTokenFunc(t, idp), caClient, "https://ca.example", testInventoryClient(t), testIdentityVerifier, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0)
 
@@ -504,7 +504,7 @@ func testIdentityVerifier(context.Context, string) (*Identity, error) {
 
 func testInventoryClient(t *testing.T) *inventoryclient.Client {
 	t.Helper()
-	client, err := inventoryclient.New(tlsconfig.Config{Insecure: true})
+	client, err := inventoryclient.New("", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	return client
 }

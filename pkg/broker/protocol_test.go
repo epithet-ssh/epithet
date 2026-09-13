@@ -35,7 +35,7 @@ func newTestBroker(t *testing.T, tokenFn TokenFunc, verifyIdentity IdentityVerif
 	socketPath := tmpDir + "/b.sock"
 	agentSocketDir := tmpDir + "/a"
 
-	b, err := New(*testLogger(t), socketPath, tokenFn, testCAClientOK(t), testInventoryClient(t), verifyIdentity, agentSocketDir)
+	b, err := New(*testLogger(t), socketPath, tokenFn, testCAClientOK(t), "https://ca.example", testInventoryClient(t), verifyIdentity, agentSocketDir)
 	require.NoError(t, err)
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 

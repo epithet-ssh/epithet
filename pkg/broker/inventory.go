@@ -2,7 +2,6 @@ package broker
 
 import (
 	"context"
-	"fmt"
 	"io"
 
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -34,16 +33,9 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 }
 
 func (b *Broker) inventoryWithToken(ctx context.Context, token string, request inventoryapi.ControlRequest) (*inventoryapi.ControlResponse, int, error) {
-	endpoint, caURL, err := b.caClient.DiscoverInventory(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	if endpoint == "" {
-		return nil, 0, fmt.Errorf("CA does not advertise managed inventory")
-	}
-	response, status, err := b.inventoryClient.Control(ctx, endpoint, token, request)
+	response, status, err := b.inventoryClient.Control(ctx, token, request)
 	if response != nil && response.Secret != "" {
-		response.CAURL = caURL
+		response.CAURL = b.enrollmentCAURL
 	}
 	return response, status, err
 }

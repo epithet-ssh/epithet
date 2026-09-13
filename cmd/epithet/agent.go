@@ -212,12 +212,16 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		return idToken, nil
 	}
 
-	// Create broker with separate CA and inventory transports.
-	inventoryClient, err := inventoryclient.New(tlsCfg)
+	// Bind inventory management to the endpoint advertised by the CA.
+	inventoryURL, enrollmentCAURL, err := caClient.DiscoverInventory(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to discover inventory endpoint: %w", err)
+	}
+	inventoryClient, err := inventoryclient.New(inventoryURL, tlsCfg)
 	if err != nil {
 		return err
 	}
-	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, inventoryClient,
+	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, enrollmentCAURL, inventoryClient,
 		makeAgentIdentityVerifier(*discovery.Auth, tlsCfg), agentDir)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)

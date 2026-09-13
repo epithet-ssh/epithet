@@ -44,14 +44,14 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	control := &inventoryserver.Control{Store: m, Directory: inv, Validator: validator, Admins: inventoryserver.Admins{Users: []string{"directory-admin"}, Groups: []string{"ops"}}}
 	server := httptest.NewServer(control)
 	defer server.Close()
-	client, err := inventoryclient.New(tlsconfig.Config{Insecure: true})
+	client, err := inventoryclient.New(server.URL+"?route=inventory", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		id   string
 		want int
 	}{{"directory-admin", 200}, {"directory-group", 200}, {"directory-user", 403}, {"directory-disabled", 403}, {"missing", 403}} {
 		token := idp.MintIDTokenWithClaims("different-subject", time.Now().Add(time.Hour), map[string]any{"oid": tc.id})
-		_, status, err := client.Control(t.Context(), server.URL, token, inventoryapi.ControlRequest{Action: "list"})
+		_, status, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "list"})
 		require.Equal(t, tc.want, status)
 		if status == 200 {
 			require.NoError(t, err)
@@ -60,17 +60,17 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 		}
 	}
 	for _, token := range []string{"", "not-a-token", idp.MintIDTokenWithAudience("admin", "wrong-audience", time.Now().Add(time.Hour))} {
-		_, status, err := client.Control(t.Context(), server.URL, token, inventoryapi.ControlRequest{Action: "list"})
+		_, status, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "list"})
 		require.Equal(t, 401, status)
 		require.Error(t, err)
 	}
 	p := inventory.Proposal{Names: []string{"new-host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
-	response, status, err := client.Control(t.Context(), server.URL+"?route=inventory", "", inventoryapi.ControlRequest{Action: "enroll", Host: &p})
+	response, status, err := client.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &p})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	require.Equal(t, "pending", response.Host.Status)
 	token := idp.MintIDTokenWithClaims("unrelated-subject", time.Now().Add(time.Hour), map[string]any{"oid": "directory-admin"})
-	response, status, err = client.Control(t.Context(), server.URL, token, inventoryapi.ControlRequest{Action: "approve", ID: response.Host.ID, Revision: response.Host.Revision})
+	response, status, err = client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "approve", ID: response.Host.ID, Revision: response.Host.Revision})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "approved", response.Host.Status)

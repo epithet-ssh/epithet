@@ -77,6 +77,7 @@ type Broker struct {
 	agents         map[policy.ConnectionHash]agentEntry // Protected by b.lock
 
 	inventoryClient *inventoryclient.Client // Immutable after New()
+	enrollmentCAURL string                  // Public CA URL for token enrollment instructions; immutable after New()
 	caClient        *caclient.Client        // Immutable after New()
 	agentSocketDir  string                  // Immutable after New()
 
@@ -86,7 +87,7 @@ type Broker struct {
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient.Client, inventoryClient *inventoryclient.Client, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
+func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient.Client, enrollmentCAURL string, inventoryClient *inventoryclient.Client, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
 	if caClient == nil {
 		return nil, fmt.Errorf("caClient is required")
 	}
@@ -104,6 +105,7 @@ func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
 		caClient:         caClient,
+		enrollmentCAURL:  enrollmentCAURL,
 		inventoryClient:  inventoryClient,
 		verifyIdentity:   verifyIdentity,
 		done:             make(chan struct{}),

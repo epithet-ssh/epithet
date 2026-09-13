@@ -79,11 +79,11 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 }
 
 func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, cfg tlsconfig.Config, logger *slog.Logger) error {
-	client, err := inventoryclient.New(cfg)
+	client, err := inventoryclient.New(r.endpoint, cfg)
 	if err != nil {
 		return err
 	}
-	response, _, err := client.Control(ctx, r.endpoint, "", inventoryapi.ControlRequest{
+	response, _, err := client.Control(ctx, "", inventoryapi.ControlRequest{
 		Action: "enroll",
 		Host:   &r.proposal,
 		Token:  r.token,

@@ -87,8 +87,6 @@ inventory:
 	trust := filepath.Join(dir, "tls-ca.pem")
 	require.NoError(t, os.WriteFile(trust, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: front.Certificate().Raw}), 0600))
 	tlsCfg := tlsconfig.Config{CACertFile: trust}
-	inventoryClient, err := inventoryclient.New(tlsCfg)
-	require.NoError(t, err)
 	client, err := caclient.New([]caclient.CAEndpoint{{URL: base}}, caclient.WithTLSConfig(tlsCfg))
 	require.NoError(t, err)
 	root, err := client.GetRoot(t.Context())
@@ -96,11 +94,13 @@ inventory:
 	endpoint, err := caclient.InventoryURL(root, tlsCfg)
 	require.NoError(t, err)
 	require.Equal(t, base+"inventory", endpoint)
-	_, status, err := inventoryClient.Control(t.Context(), endpoint, "", inventoryapi.ControlRequest{Action: "list"})
+	inventoryClient, err := inventoryclient.New(endpoint, tlsCfg)
+	require.NoError(t, err)
+	_, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "list"})
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
 	proposal := inventory.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}
-	enrolled, status, err := inventoryClient.Control(t.Context(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal})
+	enrolled, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
@@ -114,7 +114,7 @@ inventory:
 	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
 		return nil, fmt.Errorf("unexpected identity request in inventory test")
 	}
-	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, client, inventoryClient, verifyIdentity, filepath.Join(dir, "agents"))
+	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, client, root.FinalURL, inventoryClient, verifyIdentity, filepath.Join(dir, "agents"))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -139,7 +139,7 @@ inventory:
 	created := strings.TrimSpace(string(admin("token", "create", "--quiet")))
 	require.Len(t, created, 64)
 	proposal.Names = []string{"second.example"}
-	second, status, err := inventoryClient.Control(t.Context(), endpoint, "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Token: created})
+	second, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Token: created})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "approved", second.Host.Status)
