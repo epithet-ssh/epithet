@@ -276,13 +276,12 @@ only that record's index entries before allowing another reader or writer.
 Content revisions are calculated from in-memory per-item hashes; no index file
 is persisted. Unchanged restarts produce the same revision.
 
-A storage failure disables managed reads and writes until repair/restart;
-static exact records still resolve. If the directory can be locked but an item
-is corrupt at startup, the service identifies the file and serves only static
-exact records. Duplicate approved names are validation errors,
-not a reason to choose an arbitrary winner. Failure to establish the directory
-or lock still prevents startup. Windows cannot provide the same directory-fsync
-step through Go's file API.
+When `inventory.state-dir` is configured, unreadable or invalid dynamic storage
+fails startup. Duplicate approved names are validation errors, never a reason to
+choose an arbitrary winner. To run static-only, leave `inventory.state-dir` unset.
+Static exact records override dynamic records during normal operation. A write
+failure disables managed reads and writes until repair/restart. Windows cannot
+provide the same directory-fsync step through Go's file API.
 
 For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.
 There is no index to repair separately. Keep each ID equal to its filename,
@@ -303,24 +302,6 @@ Reads already in flight may complete using their earlier revision, even after
 removal. Neither file replacement nor reindexing revokes certificates already
 issued. Static configuration and role changes still require restart. There is
 no audit compaction, pagination, SCIM, database backend, or configurable RBAC yet.
-
-### Migrating the original single-file store
-
-On the first startup after this change, a legacy `inventory.yaml` is validated
-and converted into a staged `records/` directory. The completed directory is
-published atomically, and the original file is retained as
-`inventory.v1.yaml.bak`. A restart completes interrupted backup archival without
-reimporting old data. A missing records directory beside that backup is an error,
-so recovery does not silently reset to the old snapshot.
-
-Existing hosts keep their IDs and admission state. Historical audit is attached
-to the corresponding items. Legacy global tombstones and any audit without a
-matching item are retained in `records/legacy.yaml`.
-
-**Unused legacy tokens must be recreated.** The original snapshot stored token
-hashes, so its literal token values cannot be recovered as filenames. Legacy
-token metadata is retained but revoked. New tokens use the literal filename/host
-ID model. Migration never modifies the backup and is validated before publication.
 
 ## Separate deployment and protocol
 
@@ -351,7 +332,7 @@ A 401 triggers one broker refresh/retry; permission denials do not.
 ## Validation
 
 Tests cover per-item updates, exclusive creation, startup index reconstruction,
-offline repair, migration, interrupted redemption before/after replacement,
+offline repair, interrupted redemption before/after replacement,
 durable restart, locking, stale edits, concurrent approvals and token
 redemption, token expiry/revocation/retries, static precedence, wildcard tombstones,
 corruption recovery, immutable snapshots, actual configured OIDC claim mapping,

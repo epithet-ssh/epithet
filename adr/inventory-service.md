@@ -129,4 +129,4 @@ The managed file store now uses `records/<id>.yaml`, one item per token/host,
 with the literal token reserving the eventual host ID. Resolution uses indexes
 rebuilt at startup; item mutation updates its indexes after atomic persistence.
 Per-item audit and retired names are persisted with that record. See the dynamic
-inventory contract for migration and offline recovery behavior.
+inventory contract for the file format and offline recovery behavior.

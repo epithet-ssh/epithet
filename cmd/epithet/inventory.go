@@ -103,14 +103,11 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 		if err != nil {
 			return err
 		}
-		managed, err := inventory.OpenManagedAllowDegraded(stateDir, inv)
+		managed, err := inventory.OpenManaged(stateDir, inv)
 		if err != nil {
 			return err
 		}
 		defer managed.Close()
-		if err := managed.Health(); err != nil {
-			logger.Error("managed inventory unavailable; serving static exact records only", "error", err)
-		}
 		resolver.Hosts = managed
 		control := &inventoryserver.Control{Store: managed, Directory: inv, Validator: validator, Admins: inventoryserver.Admins{Users: c.AdminUsers, Groups: c.AdminGroups}}
 		mux := http.NewServeMux()

@@ -189,7 +189,6 @@ type Managed struct {
 	pending       int
 	hashes        map[string]string
 	revision      string
-	legacy        legacyMetadata
 	static        *Static
 	failed        error
 }
@@ -206,9 +205,9 @@ func RandomSecret() (string, error) {
 }
 func digest(s string) string { v := sha256.Sum256([]byte(s)); return hex.EncodeToString(v[:]) }
 func validID(id string) bool {
-	if len(id) != 64 && len(id) != 24 {
+	if len(id) != 64 {
 		return false
-	} // 24-character IDs belong to migrated hosts.
+	}
 	for _, c := range id {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
 			return false
@@ -288,8 +287,6 @@ func (m *Managed) updateRevision() {
 	for _, id := range ids {
 		fmt.Fprintf(hash, "%s:%s\n", id, m.hashes[id])
 	}
-	data, _ := yaml.Marshal(m.legacy)
-	hash.Write(data)
 	m.revision = fmt.Sprintf("managed:sha256:%x", hash.Sum(nil))
 }
 func (m *Managed) checkIndexes(r *itemRecord) error {
@@ -585,7 +582,7 @@ func (m *Managed) Audit() ([]AuditEvent, error) {
 	if m.failed != nil {
 		return nil, m.failed
 	}
-	events := slices.Clone(m.legacy.Audit)
+	events := []AuditEvent{}
 	for _, r := range m.records {
 		events = append(events, r.Audit...)
 	}

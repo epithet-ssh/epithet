@@ -3,7 +3,6 @@ package inventory
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -208,56 +207,6 @@ func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
 			require.ErrorIs(t, err, ErrToken)
 		})
 	}
-}
-func TestLegacySnapshotMigrationPreservesAdmissionAndRevokesTokens(t *testing.T) {
-	dir := t.TempDir()
-	id := strings.Repeat("a", 24)
-	tokenID := strings.Repeat("b", 24)
-	oldSecret := strings.Repeat("c", 64)
-	old := legacyState{Version: 1, Hosts: []HostRecord{{ID: id, Revision: 3, Status: "approved", Proposal: proposal("migrated"), CreatedAt: time.Now(), UpdatedAt: time.Now()}}, Tokens: []legacyToken{{EnrollmentToken: EnrollmentToken{ID: tokenID, ExpiresAt: time.Now().Add(time.Hour)}, Hash: digest(oldSecret)}}, BlockedNames: []string{"retired"}, Audit: []AuditEvent{{At: time.Now(), Actor: "admin", Action: "approve", Resource: id}}}
-	data, err := yaml.Marshal(old)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "inventory.yaml"), data, 0600))
-	m, err := OpenManaged(dir, nil)
-	require.NoError(t, err)
-	defer m.Close()
-	require.FileExists(t, filepath.Join(dir, "inventory.v1.yaml.bak"))
-	require.NoFileExists(t, filepath.Join(dir, "inventory.yaml"))
-	require.FileExists(t, m.files.itemPath(id))
-	host, err := m.LookupHost(t.Context(), "migrated")
-	require.NoError(t, err)
-	require.NotNil(t, host)
-	require.Contains(t, m.names, "retired")
-	tokens, err := m.Tokens()
-	require.NoError(t, err)
-	require.Len(t, tokens, 1)
-	require.True(t, tokens[0].Revoked)
-	_, err = m.Enroll(proposal("other"), oldSecret)
-	require.ErrorIs(t, err, ErrToken)
-	audit, err := m.Audit()
-	require.NoError(t, err)
-	require.Len(t, audit, 1)
-	require.Equal(t, id, audit[0].Resource)
-	_, err = m.Change("admin", "remove", id, 3, nil)
-	require.NoError(t, err)
-	require.NoError(t, m.Close())
-	// Simulate a crash after linking the backup but before unlinking the old
-	// snapshot. Restart must finish archival without resurrecting its approval.
-	require.NoError(t, os.Link(filepath.Join(dir, "inventory.v1.yaml.bak"), filepath.Join(dir, "inventory.yaml")))
-	restarted, err := OpenManaged(dir, nil)
-	require.NoError(t, err)
-	require.NoFileExists(t, filepath.Join(dir, "inventory.yaml"))
-	host, err = restarted.LookupHost(t.Context(), "migrated")
-	require.NoError(t, err)
-	require.Nil(t, host)
-	backup, err := os.ReadFile(filepath.Join(dir, "inventory.v1.yaml.bak"))
-	require.NoError(t, err)
-	require.Equal(t, data, backup)
-	// A backup can never silently restore an old approval if records go missing.
-	require.NoError(t, restarted.Close())
-	require.NoError(t, os.Rename(m.files.dir, m.files.dir+".offline"))
-	_, err = OpenManaged(dir, nil)
-	require.ErrorContains(t, err, "records directory is missing")
 }
 func TestItemRejectsFilenameMismatchAndTraversal(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")

@@ -202,32 +202,34 @@ func TestManagedTokenConflictDoesNotConsumeAndExpiry(t *testing.T) {
 }
 func TestManagedRejectCorruptState(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "inventory.yaml"), []byte("version: 99\n"), 0600))
-	_, err := OpenManaged(dir, nil)
-	require.Error(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "inventory.yaml"), []byte("version: 1\nunknown: foo\n"), 0600))
-	_, err = OpenManaged(dir, nil)
-	require.Error(t, err)
-	require.False(t, errors.Is(err, ErrNotFound))
-	require.True(t, strings.Contains(err.Error(), "opening managed inventory"))
+	records := filepath.Join(dir, "records")
+	require.NoError(t, os.Mkdir(records, 0700))
+	path := filepath.Join(records, strings.Repeat("a", 64)+".yaml")
+	for _, invalid := range []string{"version: 99\n", "version: 2\nunknown: foo\n"} {
+		require.NoError(t, os.WriteFile(path, []byte(invalid), 0600))
+		_, err := OpenManaged(dir, nil)
+		require.ErrorContains(t, err, "opening managed inventory")
+		require.False(t, errors.Is(err, ErrNotFound))
+	}
 }
 
-func TestManagedCorruptionKeepsStaticRecoveryAvailable(t *testing.T) {
+func TestManagedCorruptionFailsStartupEvenWithStaticOverrides(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [recovery]\n   accounts: [root]\n - pattern: '*'\n")
 	dir := m.files.root
 	require.NoError(t, m.Close())
-	require.NoError(t, os.WriteFile(filepath.Join(m.files.dir, strings.Repeat("a", 64)+".yaml"), []byte("not valid: ["), 0600))
-	fallback, err := OpenManagedAllowDegraded(dir, m.static)
+	path := filepath.Join(m.files.dir, strings.Repeat("a", 64)+".yaml")
+	require.NoError(t, os.WriteFile(path, []byte("not valid: ["), 0600))
+	failed, err := OpenManaged(dir, m.static)
+	require.ErrorContains(t, err, "opening managed inventory")
+	require.Nil(t, failed)
+	// Failed startup releases the lock, so repairing the file allows startup.
+	require.NoError(t, os.Remove(path))
+	repaired, err := OpenManaged(dir, m.static)
 	require.NoError(t, err)
-	defer fallback.Close()
-	require.ErrorIs(t, fallback.Health(), ErrStorage)
-	h, err := fallback.LookupHost(t.Context(), "recovery")
+	defer repaired.Close()
+	host, err := repaired.LookupHost(t.Context(), "recovery")
 	require.NoError(t, err)
-	require.Equal(t, []string{"root"}, h.Policy.Accounts)
-	_, err = fallback.LookupHost(t.Context(), "anything")
-	require.ErrorIs(t, err, ErrStorage)
-	_, err = fallback.Enroll(proposal("new"), "")
-	require.ErrorIs(t, err, ErrStorage)
+	require.Equal(t, []string{"root"}, host.Policy.Accounts)
 }
 
 func TestManagedSnapshotsDoNotExposeMutableState(t *testing.T) {

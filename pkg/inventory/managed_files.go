@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
@@ -59,8 +58,8 @@ func (r *itemRecord) validate(id string) error {
 		if r.Host != nil && t.UsedBy != id {
 			return fmt.Errorf("host token must be consumed by this host")
 		}
-		if r.Host == nil && t.UsedBy != "" && !t.Revoked {
-			return fmt.Errorf("historical consumed token must be revoked")
+		if r.Host == nil && t.UsedBy != "" {
+			return fmt.Errorf("unused token cannot have a consuming host")
 		}
 	}
 	if h := r.Host; h != nil {
@@ -89,14 +88,6 @@ func normalizeRetiredName(name string) (string, error) {
 	name = hostpattern.NormalizeName(name)
 	p := Proposal{Names: []string{name}, PrincipalMode: AccountNamePrincipals}
 	return name, p.Validate()
-}
-
-// Only v1 migration needs this file: the old snapshot did not associate retired
-// names with their original host, and may contain audit for historical resources.
-type legacyMetadata struct {
-	Version      int          `yaml:"version"`
-	RetiredNames []string     `yaml:"retired-names,omitempty"`
-	Audit        []AuditEvent `yaml:"audit,omitempty"`
 }
 
 type itemFiles struct {
@@ -158,17 +149,9 @@ func atomicItemWrite(path string, data []byte, create bool) error {
 	return syncManagedDir(dir)
 }
 
+// OpenManaged loads the configured dynamic store. Any storage or validation
+// error fails startup; exact static records take precedence after a successful load.
 func OpenManaged(dir string, static *Static) (*Managed, error) {
-	return openManaged(dir, static, false)
-}
-
-// OpenManagedAllowDegraded permits startup with unreadable dynamic state.
-// Exact static records always override dynamic records, including in this mode.
-// Wildcards cannot be used when unreadable state may contain admission tombstones.
-func OpenManagedAllowDegraded(dir string, static *Static) (*Managed, error) {
-	return openManaged(dir, static, true)
-}
-func openManaged(dir string, static *Static, allowDegraded bool) (*Managed, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -182,22 +165,20 @@ func openManaged(dir string, static *Static, allowDegraded bool) (*Managed, erro
 	}
 	files := &itemFiles{root: dir, dir: filepath.Join(dir, "records"), lock: lock, newID: RandomSecret, writeAtomic: atomicItemWrite}
 	m := newManaged(files, static)
-	if err = m.prepareFiles(); err == nil {
+	if err = os.MkdirAll(files.dir, 0700); err == nil {
+		err = syncManagedDir(files.root)
+	}
+	if err == nil {
 		err = m.load(files.dir)
 	}
 	if err != nil {
-		if allowDegraded {
-			m = newManaged(files, static)
-			m.failed = fmt.Errorf("%w: %v", ErrStorage, err)
-			return m, nil
-		}
 		lock.Close()
 		return nil, fmt.Errorf("opening managed inventory: %w", err)
 	}
 	return m, nil
 }
 func newManaged(files *itemFiles, static *Static) *Managed {
-	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]*nameClaims{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static, legacy: legacyMetadata{Version: 2}}
+	m := &Managed{files: files, records: map[string]*itemRecord{}, names: map[string]*nameClaims{}, domains: map[string]string{}, staticDomains: map[string]bool{}, hashes: map[string]string{}, static: static}
 	if static != nil {
 		for _, h := range static.hosts {
 			if h.Domain != "" {
@@ -212,7 +193,7 @@ func (m *Managed) load(dir string) error {
 	if err != nil {
 		return err
 	}
-	// ReadDir sorts filenames. Startup diagnostics and migration output are stable.
+	// ReadDir sorts filenames for stable startup diagnostics.
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".item-") {
 			continue
@@ -227,22 +208,6 @@ func (m *Managed) load(dir string) error {
 		if err != nil {
 			return err
 		}
-		if entry.Name() == "legacy.yaml" {
-			if err := DecodeYAML(data, &m.legacy); err != nil {
-				return fmt.Errorf("legacy.yaml: %w", err)
-			}
-			if m.legacy.Version != 2 {
-				return fmt.Errorf("unsupported legacy metadata version")
-			}
-			for i, name := range m.legacy.RetiredNames {
-				normalized, err := normalizeRetiredName(name)
-				if err != nil {
-					return err
-				}
-				m.legacy.RetiredNames[i] = normalized
-			}
-			continue
-		}
 		id := strings.TrimSuffix(entry.Name(), ".yaml")
 		var r itemRecord
 		if err := DecodeYAML(data, &r); err != nil {
@@ -255,14 +220,6 @@ func (m *Managed) load(dir string) error {
 			return fmt.Errorf("%s: %w", entry.Name(), err)
 		}
 		m.publish(&r)
-	}
-	for _, n := range m.legacy.RetiredNames {
-		entry := m.names[n]
-		if entry == nil {
-			entry = &nameClaims{owners: map[string]struct{}{}}
-			m.names[n] = entry
-		}
-		entry.owners["legacy"] = struct{}{}
 	}
 	m.updateRevision()
 	return nil
@@ -297,14 +254,4 @@ func (m *Managed) Get(id string) (*HostRecord, error) {
 		}
 	}
 	return h, nil
-}
-
-// Sort helper used by migration to produce deterministic files.
-func sortedItemIDs(records map[string]*itemRecord) []string {
-	ids := make([]string, 0, len(records))
-	for id := range records {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
 }
