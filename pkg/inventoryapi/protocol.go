@@ -26,6 +26,30 @@ type Host struct {
 	facts.HostResource
 	Principal Principal `json:"principal"`
 }
+
+// UnmarshalJSON decodes the complete inventory host, including principal
+// metadata. Using a plain resource prevents promotion of HostResource's custom
+// decoder, which would otherwise consume the enclosing object by itself.
+func (h *Host) UnmarshalJSON(data []byte) error {
+	type resource facts.HostResource
+	var raw struct {
+		resource
+		Accounts  json.RawMessage `json:"accounts"`
+		Principal Principal       `json:"principal"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Accounts) == 0 {
+		return fmt.Errorf("inventory host accounts field is required")
+	}
+	if err := json.Unmarshal(raw.Accounts, &raw.resource.Accounts); err != nil {
+		return fmt.Errorf("invalid inventory host accounts: %w", err)
+	}
+	*h = Host{HostResource: facts.HostResource(raw.resource), Principal: raw.Principal}
+	return nil
+}
+
 type DirectorySnapshot struct {
 	Revision string      `json:"revision"`
 	User     *facts.User `json:"user"`

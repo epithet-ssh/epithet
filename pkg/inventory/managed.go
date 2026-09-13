@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +36,27 @@ type Proposal struct {
 	Accounts      []string          `yaml:"accounts" json:"accounts"`
 	PrincipalMode PrincipalMode     `yaml:"principal-mode" json:"principal-mode"`
 	Domain        string            `yaml:"domain,omitempty" json:"domain,omitempty"`
+}
+
+// UnmarshalJSON requires accounts at the input boundary, just as UnmarshalYAML
+// does for editor proposals. Explicit null is unrestricted; [] permits none.
+func (p *Proposal) UnmarshalJSON(data []byte) error {
+	type plain Proposal
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["accounts"]; !ok {
+		return fmt.Errorf("accounts must be explicit")
+	}
+	var raw plain
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&raw); err != nil {
+		return err
+	}
+	*p = Proposal(raw)
+	return nil
 }
 
 // UnmarshalYAML applies the same field-presence contract to on-disk snapshots

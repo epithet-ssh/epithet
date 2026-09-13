@@ -2,7 +2,6 @@ package inventoryserver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
@@ -51,11 +50,7 @@ func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host 
 		}
 	}
 	if h != nil {
-		accounts, err := json.Marshal(h.Policy.Accounts)
-		if err != nil {
-			return nil, err
-		}
-		r.Inventory.Host = &inventoryapi.Host{HostResource: facts.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: accounts},
+		r.Inventory.Host = &inventoryapi.Host{HostResource: facts.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts},
 			Principal: inventoryapi.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}
 	}
 	if err := r.Validate(host); err != nil {

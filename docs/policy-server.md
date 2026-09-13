@@ -449,7 +449,7 @@ For each request `(identity, account@host)` the evaluator (`pkg/policyserver/wri
 2. **Structural gates** — the identity must resolve to an `active` inventory user; the host must resolve in the inventory; if the host lists accounts, the requested account must be among them. Any failure → 403, regardless of policy text.
 3. **Collects matching rules** — a rule matches when its user, account, and host expressions all match.
 4. **Deny wins** — any matching deny → 403, always; no allow can override. The private denial names the rule's label (or content id); the public CA response is only `access denied`.
-5. **Authorizes issuance** if any allow survives: the response `ttlSeconds` is the whole-second value of the minimum `ttl` among satisfied allows (else the default), and `extensions` are the deployment set. CA constructs the certificate Key ID and exactly one requested principal, and independently caps its expiry at the authentication expiry from inventory. Built-in Writ policy supplies no additional absolute deadline; Writ `until` continues to control rule eligibility at evaluation time.
+5. **Authorizes issuance** if any allow survives: the response `ttlSeconds` is the whole-second value of the minimum `ttl` among satisfied allows (else the default), and `extensions` are the deployment set. Built-in Writ policy returns the authentication expiry from inventory as `notAfter`. CA constructs the certificate Key ID and exactly one requested principal and applies the returned TTL and deadline; Writ `until` continues to control rule eligibility at evaluation time.
 
 Evaluator or inventory failures fail **closed** (500), never "treat as no match".
 
@@ -756,15 +756,16 @@ parse error.
 
 - `ttlSeconds` (integer, 1–9223372036): Maximum certificate lifetime from **CA signing time**, in whole seconds. For example, `300` means five minutes. Fractional numbers and duration strings are invalid.
 - `extensions` (map[string]string): SSH certificate extensions to grant. An empty map grants none.
-- `notAfter` (RFC 3339 string, optional): An additional absolute deadline owned by policy, for example `"2026-09-11T17:00:00Z"`. Omit it (or send the zero time) when no additional deadline applies. An expired deadline prevents issuance.
+- `notAfter` (RFC 3339 string, optional): An absolute deadline owned by policy, for example `"2026-09-11T17:00:00Z"`. Omit it (or send the zero time) when TTL alone determines certificate expiry. An expired deadline prevents issuance.
 - `policyId` (string): Content ID of the compiled policy, retained in private issuance logs. Built-in Writ supplies its SHA-256 content ID.
 
 CA constructs certificate Key ID from inventory `userName` and exactly one
 principal from the requested account and the resolved host's principal mode/domain.
-It checks active-user, host, and account restrictions, and signs with:
+Policy owns eligibility, including active-user and account restrictions. CA requires
+the identity and principal construction data, validates the returned limits, and signs with:
 
 ```text
-expiry = min(signing time + ttlSeconds seconds, inventory authentication expiry, optional notAfter)
+expiry = min(signing time + ttlSeconds seconds, optional notAfter)
 ```
 
 Writ and deployment configuration retain duration syntax such as `5m`.
@@ -773,11 +774,14 @@ deployment defaults down (`1500ms` becomes `1`) and rejects results below one se
 before converting it to its internal duration; it never interprets legacy `ttl`
 values as seconds.
 
-A policy deadline cannot extend the authentication lifetime. TTL must be positive;
-SSH timestamps are truncated to whole seconds and an interval leaving no usable
-lifetime is rejected. CA rechecks the ceiling at signing, so time spent waiting
-between policy evaluation and signing cannot extend either absolute deadline.
-The built-in policy omits `notAfter`; it no longer echoes authentication expiry.
+The policy server decides whether certificates may outlive authentication. The
+built-in Writ policy returns `facts.authentication.expiresAt` as `notAfter`,
+preserving its login-lifetime bound. A custom policy may omit that bound or return
+a later deadline; CA does not independently cap certificates at authentication expiry.
+
+TTL must be positive; SSH timestamps are truncated to whole seconds and an
+interval leaving no usable lifetime is rejected. CA rechecks the policy deadline
+at signing, so time spent waiting after evaluation cannot extend that deadline.
 Writ `until` still controls rule eligibility at evaluation time, not certificate
 expiry. No Writ language semantics change here.
 
@@ -786,6 +790,10 @@ expiry. No Writ language semantics change here.
 ### Custom policy migration (API 8)
 
 Upgrade CA, inventory, and policy together, including separately deployed services.
+Policy owns all issuance eligibility and lifetime restrictions. Custom policies
+must enforce any required active-user and account restrictions themselves and
+return `notAfter` when they want an authentication-expiry bound. The CA validates
+construction inputs and response encoding but does not repeat those policy decisions.
 API 8 replaces `facts.host.name` with nonempty `facts.host.names`. Inventory
 resolution version 2 makes the same change in `inventory.host`. Match each
 hostname/glob against the entire names list, then apply negation, so aliases
@@ -820,7 +828,7 @@ The output-ownership change introduced in API 5 is retained. The old
 
 - Convert `certParams.expiration` from nanoseconds to top-level `ttlSeconds` as described above, retaining the signing-time origin.
 - Move `certParams.extensions` to top-level `extensions`.
-- Move any intentionally tighter `certParams.notAfter` to top-level `notAfter`. Remove it if it only echoed authentication expiry; CA enforces that bound independently.
+- Move `certParams.notAfter` to top-level `notAfter`. Policies that bound certificates to authentication expiry must return that deadline explicitly; CA no longer adds it independently.
 - Remove response `id`, `certParams.identity`, and `certParams.principals`. CA obtains the ID and username from inventory and derives the sole requested principal itself.
 - Retain `policyId` for private audit. Continue authorizing the exact user/host/account request and enforcing policy-owned limits.
 

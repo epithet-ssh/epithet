@@ -45,21 +45,20 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 			require.NoError(t, err)
 			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
 			for _, tc := range []struct {
-				name        string
-				ttlSeconds  int64
-				body        string
-				notAfter    time.Time
-				wantCeiling time.Time
-				invalid     bool
+				name       string
+				ttlSeconds int64
+				body       string
+				notAfter   time.Time
+				invalid    bool
 			}{
-				{name: "TTL from signing", ttlSeconds: 60, wantCeiling: expiry},
-				{name: "authentication ceiling without policy deadline", ttlSeconds: 3600, wantCeiling: expiry},
-				{name: "tighter policy deadline", ttlSeconds: 3600, notAfter: deadline, wantCeiling: deadline},
-				{name: "TTL tighter than both deadlines", ttlSeconds: 60, notAfter: deadline, wantCeiling: deadline},
-				{name: "policy cannot extend authentication", ttlSeconds: 3600, notAfter: expiry.Add(time.Hour), wantCeiling: expiry},
+				{name: "TTL from signing", ttlSeconds: 60},
+				{name: "policy omits authentication ceiling", ttlSeconds: 3600},
+				{name: "tighter policy deadline", ttlSeconds: 3600, notAfter: deadline},
+				{name: "TTL tighter than policy deadline", ttlSeconds: 60, notAfter: deadline},
+				{name: "policy extends beyond authentication", ttlSeconds: 3600, notAfter: expiry.Add(time.Hour)},
 				{name: "zero TTL", invalid: true},
-				{name: "one second", ttlSeconds: 1, wantCeiling: expiry},
-				{name: "maximum duration", ttlSeconds: wire.MaxTTLSeconds, wantCeiling: expiry},
+				{name: "one second", ttlSeconds: 1},
+				{name: "maximum duration", ttlSeconds: wire.MaxTTLSeconds},
 				{name: "overflowing seconds", ttlSeconds: wire.MaxTTLSeconds + 1, invalid: true},
 				{name: "fractional seconds", body: `{"ttlSeconds":1.5}`, invalid: true},
 				{name: "duration string", body: `{"ttlSeconds":"5s"}`, invalid: true},
@@ -110,7 +109,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						return
 					}
 					require.NoError(t, err)
-					require.WithinDuration(t, tc.wantCeiling, result.CertParams.NotAfter, 0)
+					require.WithinDuration(t, tc.notAfter, result.CertParams.NotAfter, 0)
 					require.Equal(t, "subject:alice", result.ID)
 					require.Equal(t, "sha256:policy", result.PolicyID)
 					require.Equal(t, inv.DirectoryRevision(), result.DirectoryRevision)
@@ -125,12 +124,15 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 					require.Equal(t, "Alice", cert.KeyId)
 					require.Equal(t, []string{expected}, cert.ValidPrincipals)
 					require.Equal(t, map[string]string{"permit-pty": ""}, cert.Extensions)
-					earliest, latest := before.Add(time.Duration(tc.ttlSeconds)*time.Second), after.Add(time.Duration(tc.ttlSeconds)*time.Second)
-					if tc.wantCeiling.Before(earliest) {
-						earliest = tc.wantCeiling
+					if tc.name == "policy omits authentication ceiling" || tc.name == "policy extends beyond authentication" {
+						require.Greater(t, cert.ValidBefore, uint64(expiry.Unix()))
 					}
-					if tc.wantCeiling.Before(latest) {
-						latest = tc.wantCeiling
+					earliest, latest := before.Add(time.Duration(tc.ttlSeconds)*time.Second), after.Add(time.Duration(tc.ttlSeconds)*time.Second)
+					if !tc.notAfter.IsZero() && tc.notAfter.Before(earliest) {
+						earliest = tc.notAfter
+					}
+					if !tc.notAfter.IsZero() && tc.notAfter.Before(latest) {
+						latest = tc.notAfter
 					}
 					require.GreaterOrEqual(t, cert.ValidBefore, uint64(earliest.Unix()))
 					require.LessOrEqual(t, cert.ValidBefore, uint64(latest.Unix()))
@@ -140,7 +142,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 	}
 }
 
-func TestCARejectsGrantsOutsideInventoryRestrictions(t *testing.T) {
+func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 	idp := oidctest.New(t)
 	pub, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
@@ -149,10 +151,10 @@ func TestCARejectsGrantsOutsideInventoryRestrictions(t *testing.T) {
 		allowed                   bool
 	}{
 		{"ungrounded accounts", "    active: true\n", "    accounts: null\n", "ubuntu", true},
-		{"empty accounts", "    active: true\n", "    accounts: []\n", "ubuntu", false},
-		{"different account", "    active: true\n", "    accounts: [root]\n", "ubuntu", false},
+		{"empty accounts", "    active: true\n", "    accounts: []\n", "ubuntu", true},
+		{"different account", "    active: true\n", "    accounts: [root]\n", "ubuntu", true},
 		{"empty account", "    active: true\n", "    accounts: null\n", "", false},
-		{"inactive user", "    active: false\n", "    accounts: [ubuntu]\n", "ubuntu", false},
+		{"inactive user", "    active: false\n", "    accounts: [ubuntu]\n", "ubuntu", true},
 		{"missing user", "missing", "    accounts: [ubuntu]\n", "ubuntu", false},
 		{"missing host", "    active: true\n", "missing", "ubuntu", false},
 	} {
@@ -179,6 +181,9 @@ func TestCARejectsGrantsOutsideInventoryRestrictions(t *testing.T) {
 			if tc.allowed {
 				require.NoError(t, err)
 				require.NotNil(t, result)
+				cert := signTestCert(t, authority, &result.CertParams)
+				require.Equal(t, "Alice", cert.KeyId)
+				require.Equal(t, []string{tc.account}, cert.ValidPrincipals)
 			} else {
 				require.Error(t, err)
 				require.Nil(t, result)

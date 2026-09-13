@@ -23,8 +23,9 @@ import (
 type PolicyEvaluator interface {
 	// Evaluate makes an authorization decision using validated, CA-supplied
 	// directory and host facts. It has no inventory access.
-	// Authentication expiry is verified before evaluation and enforced by CA
-	// independently when signing.
+	// Authentication expiry is verified before evaluation. The evaluator owns
+	// active-user and account restrictions and any authentication-derived
+	// certificate deadline, which it must return as NotAfter for CA to apply.
 	// Returns:
 	// - *wire.PolicyResponse: Authorization limits and policy audit metadata if authorized
 	// - error: If authorization denied

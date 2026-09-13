@@ -2,9 +2,11 @@ package inventoryserver_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,41 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
+	store, err := inventory.OpenManaged(t.TempDir(), nil)
+	require.NoError(t, err)
+	defer store.Close()
+	control := &inventoryserver.Control{Store: store}
+	for _, tc := range []struct {
+		field  string
+		want   []string
+		status int
+	}{
+		{"", nil, 400},
+		{`,"accounts":"deploy"`, nil, 400},
+		{`,"accounts":null`, nil, 202},
+		{`,"accounts":[]`, []string{}, 202},
+		{`,"accounts":["deploy"]`, []string{"deploy"}, 202},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			body := `{"action":"enroll","host":{"names":["host"],"principal-mode":"account-name"` + tc.field + `}}`
+			request := httptest.NewRequest("POST", "/", strings.NewReader(body))
+			response := httptest.NewRecorder()
+			control.ServeHTTP(response, request)
+			require.Equal(t, tc.status, response.Code, response.Body.String())
+			if tc.status == 202 {
+				var result inventoryapi.ControlResponse
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+				require.NotNil(t, result.Host)
+				require.Equal(t, tc.want, result.Host.Proposal.Accounts)
+			}
+		})
+	}
+	hosts, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, hosts, 3, "invalid input must never reach enrollment")
+}
 
 func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "static.yaml")

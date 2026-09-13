@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -48,7 +47,7 @@ type CertParams struct {
 	Names      []string
 	Expiration time.Duration
 	Extensions map[string]string
-	// NotAfter is the earlier of authentication expiry and any policy deadline.
+	// NotAfter is the optional absolute deadline supplied by policy.
 	NotAfter time.Time
 }
 
@@ -164,7 +163,9 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 	return discovery, nil
 }
 
-// RequestPolicy requests policy from the policy server for a cert request.
+// RequestPolicy obtains policy approval and assembles certificate signing inputs.
+// Policy owns eligibility and lifetime restrictions. CA validates construction
+// data and applies the returned limits without re-evaluating inventory policy.
 // The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
 func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*Authorization, error) {
 	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
@@ -253,15 +254,8 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		return nil, fmt.Errorf("%w: parsing response from %s: %w", ErrDependency, c.policyURL, err)
 	}
 	user, host := facts.Directory.User, facts.Inventory.Host
-	if user == nil || user.Active == nil || !*user.Active || host == nil {
-		return nil, fmt.Errorf("%w: policy issued for absent or inactive inventory records", ErrDependency)
-	}
-	accounts, err := host.AccountList()
-	if err != nil {
-		return nil, err
-	}
-	if conn.RemoteUser == "" || (accounts != nil && !slices.Contains(accounts, conn.RemoteUser)) {
-		return nil, fmt.Errorf("%w: policy issued for an account outside the resolved host restrictions", ErrDependency)
+	if user == nil || host == nil || conn.RemoteUser == "" {
+		return nil, fmt.Errorf("%w: policy approval lacks certificate identity or principal data", ErrDependency)
 	}
 	expected := conn.RemoteUser
 	if host.Principal.Mode == "epithet-principal-v1" {
@@ -273,11 +267,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if policyResp.TTLSeconds <= 0 || policyResp.TTLSeconds > wire.MaxTTLSeconds {
 		return nil, fmt.Errorf("%w: policy ttlSeconds must be between 1 and %d", ErrDependency, wire.MaxTTLSeconds)
 	}
-	notAfter := facts.Authentication.ExpiresAt
-	if !policyResp.NotAfter.IsZero() && policyResp.NotAfter.Before(notAfter) {
-		notAfter = policyResp.NotAfter
-	}
-	if !notAfter.After(time.Now()) {
+	if !policyResp.NotAfter.IsZero() && !policyResp.NotAfter.After(time.Now()) {
 		return nil, fmt.Errorf("%w: certificate authorization has expired", ErrDependency)
 	}
 	return &Authorization{
@@ -285,7 +275,7 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 		DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
 		CertParams: CertParams{
 			Identity: user.UserName, Names: []string{expected},
-			Expiration: time.Duration(policyResp.TTLSeconds) * time.Second, Extensions: policyResp.Extensions, NotAfter: notAfter,
+			Expiration: time.Duration(policyResp.TTLSeconds) * time.Second, Extensions: policyResp.Extensions, NotAfter: policyResp.NotAfter,
 		},
 	}, nil
 }

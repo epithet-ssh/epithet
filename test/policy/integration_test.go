@@ -70,7 +70,7 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 
 // TestPolicyIntegration_ValidToken_ReturnsSigningInputs exercises inventory OIDC
 // validation, policy evaluation, and CA construction together. The CA derives
-// the requested principal and enforces the token expiry independently of TTL.
+// the requested principal and applies Writ's token-expiry deadline alongside TTL.
 func TestPolicyIntegration_ValidToken_ReturnsSigningInputs(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 

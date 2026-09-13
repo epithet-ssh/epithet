@@ -66,7 +66,7 @@ func TestIssueReturnsPolicyLimits(t *testing.T) {
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", expiry, conn("root", "prod-db-1"))
 	require.NoError(t, err)
-	require.True(t, resp.NotAfter.IsZero(), "authentication expiry is enforced independently by CA")
+	require.WithinDuration(t, expiry, resp.NotAfter, 0, "Writ supplies its authentication-derived certificate deadline")
 	require.NotEmpty(t, resp.PolicyID)
 	require.Equal(t, int64(300), resp.TTLSeconds, "deployment default TTL")
 	require.Contains(t, resp.Extensions, "permit-pty")

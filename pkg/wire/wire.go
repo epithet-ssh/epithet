@@ -28,12 +28,15 @@ const MaxTTLSeconds int64 = (1<<63 - 1) / int64(time.Second)
 // PolicyResponse grants this one connection with policy-owned limits. HTTP
 // 200 means authorized; other outcomes use PolicyError. CA constructs the
 // certificate identity and principal from its original inventory facts.
+// Policy owns active-user and account restrictions and whether certificate
+// lifetime is bounded by authentication expiry; CA does not impose them.
 type PolicyResponse struct {
 	// TTLSeconds is a positive whole-second lifetime, measured from CA signing.
 	TTLSeconds int64             `json:"ttlSeconds"`
 	Extensions map[string]string `json:"extensions"`
-	// NotAfter is an optional absolute policy deadline. It may tighten, but
-	// never extend, the authentication expiry independently enforced by CA.
+	// NotAfter is an optional absolute policy deadline. Zero means TTL alone
+	// determines expiry. Policies that bound certificates to authentication
+	// expiry must return that bound here.
 	NotAfter time.Time `json:"notAfter,omitzero"`
 	PolicyID string    `json:"policyId,omitempty"`
 }

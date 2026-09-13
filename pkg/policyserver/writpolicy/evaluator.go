@@ -107,11 +107,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts 
 	host := facts.Host
 	var policyHost *eval.Host
 	if host != nil {
-		accounts, err := host.AccountList()
-		if err != nil {
-			return nil, err
-		}
-		policyHost = &eval.Host{Names: host.Names, Labels: host.Labels, Accounts: accounts}
+		policyHost = &eval.Host{Names: host.Names, Labels: host.Labels, Accounts: host.Accounts}
 	}
 	req := eval.Request{User: user, Host: policyHost, Account: conn.RemoteUser}
 	decision, err := eval.Decide(e.pol, req, e.opts.Clock(),
@@ -135,6 +131,9 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts 
 		return &wire.PolicyResponse{
 			PolicyID:   e.policyID,
 			TTLSeconds: ttlSeconds, Extensions: e.opts.Extensions,
+			// Writ bounds certificates to the verified login lifetime. CA
+			// applies this deadline without deriving its own from inventory.
+			NotAfter: facts.Authentication.ExpiresAt,
 		}, nil
 	case eval.Pending:
 		return nil, &wire.PolicyError{

@@ -310,7 +310,7 @@ func TestPolicyRejectsMismatchedFacts(t *testing.T) {
 			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
 			active := true
 			auth := facts.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
-			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: json.RawMessage(`null`)}}}
+			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: nil}}}
 			tc.change(&r)
 			body, err := json.Marshal(r)
 			require.NoError(t, err)

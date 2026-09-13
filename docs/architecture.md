@@ -129,7 +129,7 @@ epithet ca --inventory <url> --policy <url> --key <path> --listen <addr>
 - `GET /` returns the CA's public key and advertises the auth config via a
   relative `Link` header; `POST /` signs a certificate
 - `GET /discovery` exposes the inventory discovery `auth` object
-- CA sends the JWT to inventory, then forwards normalized facts to policy. It retains revisions and principal metadata, and constructs identity/principal fields from inventory and applies policy limits plus authentication expiry before signing.
+- CA sends the JWT to inventory, then forwards normalized facts to policy. It retains revisions and principal metadata, and constructs identity/principal fields from inventory and applies the returned policy limits before signing.
 
 ### epithet policy
 
@@ -162,7 +162,7 @@ epithet server --listen <addr> --ca-key <path>
 
 ## Core components
 
-1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Constructs identity and the sole requested principal from inventory, then signs using policy TTL/extensions and optional deadline, clamping expiry to `min(signing time + ttlSeconds seconds, authentication expiry, optional policy deadline)`.
+1. **CA Server** (`pkg/ca`, `pkg/caserver`, `cmd/epithet`): The certificate authority that signs SSH certificates. Accepts the user's token via `Authorization: Bearer` and sends it to inventory for authentication and resolution, then passes normalized facts to policy, authenticating itself to the policy server with a short-lived, CA-minted service JWT (see [Protocols](#protocols) below). Constructs identity and the sole requested principal from inventory, then signs using policy TTL/extensions and optional deadline, setting expiry to `min(signing time + ttlSeconds seconds, optional policy deadline)`. Policy owns eligibility and any authentication-derived lifetime bound.
 
 2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `PolicyPendingError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
@@ -176,11 +176,11 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 
 ### Certificate lifecycle with short-lived certificates
 
-**Key timing decision**: SSH certificates are **short-lived (2-10 minutes)**, and additionally clamped to never outlive the auth token that authorized them (`NotAfter`, derived from the token's `exp`) — see [policy-server.md](policy-server.md).
+**Key timing decision**: With the built-in Writ policy, SSH certificates are **short-lived (2-10 minutes)** and cannot outlive the auth token that authorized them. Writ returns that token-expiry bound as `NotAfter`; CA applies the returned limits. Custom policy servers own their lifetime decisions — see [policy-server.md](policy-server.md).
 
 **Authentication vs certificate expiry:**
 - **Auth sessions**: Long-lived (hours/days) via OIDC refresh tokens held in the broker's memory
-- **SSH certificates**: Short-lived (2-10 minutes, further clamped to the token's remaining lifetime) for just-in-time authorization. Each connection hash has its own agent and certificate; repeated matches reuse only that agent until expiry or explicit eviction.
+- **SSH certificates**: Short-lived (2-10 minutes, bounded by Writ to the token's remaining lifetime) for just-in-time authorization. Each connection hash has its own agent and certificate; repeated matches reuse only that agent until expiry or explicit eviction.
 - **OIDC calls**: Proactive, ahead of JWT expiry, plus a single forced retry on a CA 401
 
 **User experience:**
@@ -198,7 +198,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 6. CA sends the user JWT and target to inventory. Inventory verifies authentication, maps the ID, and returns normalized authentication and user/host facts. CA retains snapshot revisions and principal metadata, and projects authentication/target/user/host facts plus the connection to policy; both calls use distinct request-bound service JWTs.
 7. Policy verifies the CA request, checks fact binding and authentication expiry, and evaluates Writ against the normalized user's ID, name, groups, and attributes.
 8. Policy server authorizes with a positive whole-second `ttlSeconds`, extensions, optional absolute policy deadline, and policy content ID
-9. CA constructs identity and exactly one principal from inventory/connection facts, signs with expiry bounded by TTL, authentication expiry, and any policy deadline, and returns the certificate
+9. CA constructs identity and exactly one principal from inventory/connection facts, signs with expiry bounded by the policy's TTL and optional deadline, and returns the certificate
 10. Broker starts (or reuses) a per-connection agent socket serving this certificate
 11. OpenSSH uses the certificate from the agent socket to establish the connection
 

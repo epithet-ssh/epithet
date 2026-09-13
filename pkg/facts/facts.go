@@ -3,6 +3,7 @@
 package facts
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -31,9 +32,33 @@ type User struct {
 type HostResource struct {
 	Names  []string          `json:"names"`
 	Labels map[string]string `json:"labels"`
-	// Raw JSON preserves the security-significant distinction between omitted,
-	// null (ungrounded), and [] (grounded with no permitted accounts).
-	Accounts json.RawMessage `json:"accounts"`
+	// Nil means ungrounded; a non-nil slice restricts accounts to its members.
+	// An empty slice permits no accounts. JSON decoding rejects omission.
+	Accounts []string `json:"accounts"`
+}
+
+// UnmarshalJSON requires an explicit account restriction and decodes it before
+// exposing host facts. Keep strict decoding for policy requests, whose outer
+// decoder cannot enforce unknown-field checks inside a custom unmarshaler.
+func (h *HostResource) UnmarshalJSON(data []byte) error {
+	type plain HostResource
+	var raw struct {
+		plain
+		Accounts json.RawMessage `json:"accounts"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&raw); err != nil {
+		return err
+	}
+	if len(raw.Accounts) == 0 {
+		return fmt.Errorf("inventory host accounts field is required")
+	}
+	if err := json.Unmarshal(raw.Accounts, &raw.plain.Accounts); err != nil {
+		return fmt.Errorf("invalid inventory host accounts: %w", err)
+	}
+	*h = HostResource(raw.plain)
+	return nil
 }
 
 // Validate checks the verified identity and its absolute lifetime bound.
@@ -70,17 +95,5 @@ func (h HostResource) Validate() error {
 		}
 		seen[name] = true
 	}
-	_, err := h.AccountList()
-	return err
-}
-
-func (h HostResource) AccountList() ([]string, error) {
-	if len(h.Accounts) == 0 {
-		return nil, fmt.Errorf("inventory host accounts field is required")
-	}
-	var accounts []string
-	if err := json.Unmarshal(h.Accounts, &accounts); err != nil {
-		return nil, fmt.Errorf("invalid inventory host accounts: %w", err)
-	}
-	return accounts, nil
+	return nil
 }

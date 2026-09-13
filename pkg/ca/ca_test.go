@@ -108,15 +108,14 @@ func signTestCert(t *testing.T, c *ca.CA, params *ca.CertParams) *ssh.Certificat
 }
 
 // TestSignPublicKeyClampsToNotAfter verifies that a NotAfter ceiling tighter
-// than the requested Expiration wins - the certificate must never outlive
-// the auth session that requested it.
+// than the requested Expiration wins - CA must apply the policy's deadline.
 func TestSignPublicKeyClampsToNotAfter(t *testing.T) {
 	c := newTestCA(t)
 	notAfter := time.Now().Add(90 * time.Second)
 	cert := signTestCert(t, c, &ca.CertParams{
 		Identity:   "alice@example.com",
 		Names:      []string{"root"},
-		Expiration: 10 * time.Minute, // Would outlive the token.
+		Expiration: 10 * time.Minute, // Would exceed the policy deadline.
 		NotAfter:   notAfter,
 	})
 	require.LessOrEqual(t, cert.ValidBefore, uint64(notAfter.Unix()))

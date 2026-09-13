@@ -133,16 +133,6 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		actor = u.ID
 	}
-	if (req.Action == "edit" || req.Action == "enroll") && req.Host != nil {
-		var raw map[string]json.RawMessage
-		_ = json.Unmarshal(body, &raw)
-		var host map[string]json.RawMessage
-		_ = json.Unmarshal(raw["host"], &host)
-		if _, ok := host["accounts"]; !ok {
-			fail(400, "accounts must be explicit")
-			return
-		}
-	}
 	var resp inventoryapi.ControlResponse
 	switch req.Action {
 	case "enroll":
