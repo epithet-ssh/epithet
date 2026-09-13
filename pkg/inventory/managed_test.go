@@ -79,11 +79,13 @@ func TestManagedTokenAtomicSingleUseRestartAndRetry(t *testing.T) {
 	require.Equal(t, []string{"one"}, again.Proposal.Names)
 	_, err = m.Enroll(proposal("two"), credential(t), secret)
 	require.ErrorIs(t, err, ErrToken)
-	data, err := os.ReadFile(m.path)
+	data, err := os.ReadFile(m.files.itemPath(h.ID))
 	require.NoError(t, err)
-	require.NotContains(t, string(data), secret)
+	require.Equal(t, secret, h.ID)
+	require.Equal(t, tok.ID, h.ID)
+	require.Contains(t, string(data), secret)
 	require.NotContains(t, string(data), key)
-	dir := filepath.Dir(m.path)
+	dir := m.files.root
 	require.NoError(t, m.Close())
 	fresh, err := OpenManaged(dir, m.static)
 	require.NoError(t, err)
@@ -154,8 +156,8 @@ func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
 	h, err := m.Enroll(proposal("dynamic"), credential(t), "")
 	require.NoError(t, err)
 	// Force a failed rename. Uncommitted approval must never become readable.
-	require.NoError(t, os.Remove(m.path))
-	require.NoError(t, os.Mkdir(m.path, 0700))
+	require.NoError(t, os.Remove(m.files.itemPath(h.ID)))
+	require.NoError(t, os.Mkdir(m.files.itemPath(h.ID), 0700))
 	_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 	require.Error(t, err)
 	_, err = m.LookupHost(context.Background(), "dynamic")
@@ -166,7 +168,7 @@ func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
 }
 func TestManagedRevisionLockAndValidation(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
-	_, err := OpenManaged(filepath.Dir(m.path), m.static)
+	_, err := OpenManaged(m.files.root, m.static)
 	require.Error(t, err)
 	h, err := m.Enroll(proposal("A.example"), credential(t), "")
 	require.NoError(t, err)
@@ -220,9 +222,9 @@ func TestManagedRejectCorruptState(t *testing.T) {
 
 func TestManagedCorruptionKeepsStaticRecoveryAvailable(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [recovery]\n   accounts: [root]\n - pattern: '*'\n")
-	dir := filepath.Dir(m.path)
+	dir := m.files.root
 	require.NoError(t, m.Close())
-	require.NoError(t, os.WriteFile(m.path, []byte("not valid: ["), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(m.files.dir, strings.Repeat("a", 64)+".yaml"), []byte("not valid: ["), 0600))
 	fallback, err := OpenManagedWithStaticFallback(dir, m.static)
 	require.NoError(t, err)
 	defer fallback.Close()

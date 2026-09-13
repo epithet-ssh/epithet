@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -26,7 +24,6 @@ var (
 	ErrConflict = errors.New("inventory conflict")
 	ErrNotFound = errors.New("inventory record not found")
 	ErrToken    = errors.New("invalid, expired, revoked, or used enrollment token")
-	errNoChange = errors.New("no inventory change")
 	ErrRevision = errors.New("record changed; reload before retrying")
 )
 
@@ -164,10 +161,10 @@ type HostRecord struct {
 	UpdatedAt      time.Time `yaml:"updated-at" json:"updated-at"`
 	Source         string    `yaml:"-" json:"source,omitempty"`
 	ShadowedNames  []string  `yaml:"-" json:"shadowed-names,omitempty"`
+	RetiredNames   []string  `yaml:"retired-names,omitempty" json:"retired-names,omitempty"`
 }
 type EnrollmentToken struct {
 	ID        string    `yaml:"id" json:"id"`
-	Hash      string    `yaml:"hash" json:"-"`
 	ExpiresAt time.Time `yaml:"expires-at" json:"expires-at"`
 	UsedBy    string    `yaml:"used-by,omitempty" json:"used-by,omitempty"`
 	Revoked   bool      `yaml:"revoked" json:"revoked"`
@@ -178,223 +175,212 @@ type AuditEvent struct {
 	Action   string    `yaml:"action" json:"action"`
 	Resource string    `yaml:"resource" json:"resource"`
 }
-type managedState struct {
-	Version      int               `yaml:"version"`
-	Revision     uint64            `yaml:"revision"`
-	Hosts        []HostRecord      `yaml:"hosts"`
-	Tokens       []EnrollmentToken `yaml:"tokens"`
-	BlockedNames []string          `yaml:"blocked-names"`
-	Audit        []AuditEvent      `yaml:"audit"`
-}
 
-// Managed uses a single durable snapshot per mutation. All reads are snapshots
-// of committed state, and one process owns the directory for its lifetime.
-// Files may be edited for experiments ONLY with that process stopped.
+// Managed loads item files once, then resolves names entirely through indexes.
+// Mutations persist one item before updating its indexes under the write lock.
+// Files are the source of truth; edit them only while the service is stopped.
 type Managed struct {
-	revision string
-	mu       sync.RWMutex
-	path     string
-	lock     *os.File
-	state    managedState
-	static   *Static
-	failed   error
+	mu            sync.RWMutex
+	files         *itemFiles
+	records       map[string]*itemRecord
+	names         map[string]*nameClaims
+	credentials   map[string]string
+	domains       map[string]string
+	staticDomains map[string]bool
+	pending       int
+	hashes        map[string]string
+	revision      string
+	legacy        legacyMetadata
+	static        *Static
+	failed        error
 }
 
-func OpenManaged(dir string, static *Static) (*Managed, error) {
-	return openManaged(dir, static, false)
+type nameClaims struct {
+	approved string
+	owners   map[string]struct{}
 }
 
-// OpenManagedWithStaticFallback retains the exclusive lock but disables managed
-// operations when the snapshot is unreadable. Static exact hosts and directory
-// records can still support recovery. Lock/directory setup failures remain fatal.
-func OpenManagedWithStaticFallback(dir string, static *Static) (*Managed, error) {
-	return openManaged(dir, static, true)
-}
-func openManaged(dir string, static *Static, fallback bool) (*Managed, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, "inventory.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, err
-	}
-	if err = lockManagedFile(f); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("inventory state is already in use: %w", err)
-	}
-	m := &Managed{path: filepath.Join(dir, "inventory.yaml"), lock: f, static: static, state: managedState{Version: 1}}
-	data, err := os.ReadFile(m.path)
-	if err == nil {
-		err = DecodeYAML(data, &m.state)
-	} else if errors.Is(err, os.ErrNotExist) {
-		err = m.persist(m.state)
-	}
-	if err == nil {
-		err = m.validateState()
-	}
-	if err != nil {
-		if fallback {
-			m.failed = fmt.Errorf("%w: %v", ErrStorage, err)
-			m.state = managedState{}
-			return m, nil
-		}
-		f.Close()
-		return nil, fmt.Errorf("opening managed inventory: %w", err)
-	}
-	stateBytes, _ := yaml.Marshal(m.state)
-	m.revision = "managed:sha256:" + digest(string(stateBytes))
-	return m, nil
-}
-func (m *Managed) Close() error  { return m.lock.Close() }
-func (m *Managed) Health() error { m.mu.RLock(); defer m.mu.RUnlock(); return m.failed }
-func (m *Managed) validateState() error {
-	if m.state.Version != 1 {
-		return fmt.Errorf("unsupported state version %d", m.state.Version)
-	}
-	ids := map[string]bool{}
-	names := map[string]bool{}
-	credentials := map[string]bool{}
-	for i := range m.state.Hosts {
-		h := &m.state.Hosts[i]
-		if h.ID == "" || ids[h.ID] || h.Revision == 0 || len(h.CredentialHash) != 64 {
-			return fmt.Errorf("invalid host metadata")
-		}
-		ids[h.ID] = true
-		if err := h.Proposal.Validate(); err != nil {
-			return err
-		}
-		switch h.Status {
-		case "pending", "approved", "denied", "removed":
-		default:
-			return fmt.Errorf("invalid admission state %q", h.Status)
-		}
-		if h.Status == "approved" || h.Status == "pending" {
-			if credentials[h.CredentialHash] {
-				return fmt.Errorf("duplicate enrollment credential")
-			}
-			credentials[h.CredentialHash] = true
-		}
-		if h.Status == "approved" {
-			for _, n := range h.Proposal.Names {
-				if names[n] {
-					return ErrConflict
-				}
-				names[n] = true
-			}
-		}
-	}
-	ids = map[string]bool{}
-	for _, t := range m.state.Tokens {
-		if t.ID == "" || ids[t.ID] || len(t.Hash) != 64 || t.ExpiresAt.IsZero() {
-			return fmt.Errorf("invalid token metadata")
-		}
-		ids[t.ID] = true
-	}
-	return nil
-}
 func RandomSecret() (string, error) {
 	b := make([]byte, 32)
 	_, err := rand.Read(b)
 	return hex.EncodeToString(b), err
 }
 func digest(s string) string { v := sha256.Sum256([]byte(s)); return hex.EncodeToString(v[:]) }
-func newID() (string, error) {
-	s, err := RandomSecret()
-	if err != nil {
-		return "", err
+func validID(id string) bool {
+	if len(id) != 64 && len(id) != 24 {
+		return false
+	} // 24-character IDs belong to migrated hosts.
+	for _, c := range id {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
 	}
-	return s[:24], nil
+	return true
 }
-func (m *Managed) persist(s managedState) error {
-	data, err := yaml.Marshal(s)
-	if err != nil {
-		return err
+func (m *Managed) Close() error  { return m.files.Close() }
+func (m *Managed) Health() error { m.mu.RLock(); defer m.mu.RUnlock(); return m.failed }
+
+// publish updates only the affected record's index entries. The caller holds
+// the write lock and has already committed the file (or is loading at startup).
+func (m *Managed) publish(r *itemRecord) {
+	id := r.id()
+	if old := m.records[id]; old != nil {
+		m.unindex(old)
 	}
-	f, err := os.CreateTemp(filepath.Dir(m.path), ".inventory-*")
-	if err != nil {
-		return err
+	m.records[id] = r
+	if h := r.Host; h != nil {
+		for _, name := range append(slices.Clone(h.Proposal.Names), h.RetiredNames...) {
+			entry := m.names[name]
+			if entry == nil {
+				entry = &nameClaims{owners: map[string]struct{}{}}
+				m.names[name] = entry
+			}
+			entry.owners[id] = struct{}{}
+		}
+		if h.Status == "approved" {
+			for _, name := range h.Proposal.Names {
+				m.names[name].approved = id
+			}
+			if h.Proposal.Domain != "" {
+				m.domains[h.Proposal.Domain] = id
+			}
+		}
+		if h.Status == "pending" {
+			m.pending++
+		}
+		if h.Status == "pending" || h.Status == "approved" {
+			m.credentials[h.CredentialHash] = id
+		}
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if err = f.Chmod(0600); err != nil {
-		return err
-	}
-	if _, err = f.Write(data); err != nil {
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(f.Name(), m.path); err != nil {
-		return err
-	}
-	return syncManagedDir(filepath.Dir(m.path))
+	data, _ := yaml.Marshal(r)
+	m.hashes[id] = digest(string(data))
 }
-func (m *Managed) mutate(actor, action string, fn func(*managedState) (string, error)) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.failed != nil {
-		return m.failed
+func (m *Managed) unindex(r *itemRecord) {
+	h := r.Host
+	if h == nil {
+		return
 	}
-	data, _ := yaml.Marshal(m.state)
-	var next managedState
-	if err := DecodeYAML(data, &next); err != nil {
-		return err
+	for _, name := range append(slices.Clone(h.Proposal.Names), h.RetiredNames...) {
+		entry := m.names[name]
+		if entry == nil {
+			continue
+		}
+		delete(entry.owners, h.ID)
+		if entry.approved == h.ID {
+			entry.approved = ""
+		}
+		if len(entry.owners) == 0 {
+			delete(m.names, name)
+		}
 	}
-	resource, err := fn(&next)
-	if errors.Is(err, errNoChange) {
+	if m.domains[h.Proposal.Domain] == h.ID {
+		delete(m.domains, h.Proposal.Domain)
+	}
+	if m.credentials[h.CredentialHash] == h.ID {
+		delete(m.credentials, h.CredentialHash)
+	}
+	if h.Status == "pending" {
+		m.pending--
+	}
+}
+func (m *Managed) updateRevision() {
+	// This visits small in-memory hashes, not files or record bodies. Resolution
+	// reads the resulting fingerprint in O(1), stable across unchanged restarts.
+	ids := make([]string, 0, len(m.hashes))
+	for id := range m.hashes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	hash := sha256.New()
+	for _, id := range ids {
+		fmt.Fprintf(hash, "%s:%s\n", id, m.hashes[id])
+	}
+	data, _ := yaml.Marshal(m.legacy)
+	hash.Write(data)
+	m.revision = fmt.Sprintf("managed:sha256:%x", hash.Sum(nil))
+}
+func (m *Managed) checkIndexes(r *itemRecord) error {
+	h := r.Host
+	if h == nil {
 		return nil
 	}
-	if err != nil {
-		return err
+	if h.Status == "pending" || h.Status == "approved" {
+		if owner := m.credentials[h.CredentialHash]; owner != "" && owner != h.ID {
+			return fmt.Errorf("duplicate enrollment credential on hosts %s and %s", owner, h.ID)
+		}
 	}
-	next.Revision++
-	next.Audit = append(next.Audit, AuditEvent{time.Now().UTC(), actor, action, resource})
-	if err := m.persist(next); err != nil {
-		m.failed = fmt.Errorf("%w; restart after repair: %v", ErrStorage, err)
-		return m.failed
+	if h.Status == "approved" {
+		for _, n := range h.Proposal.Names {
+			if entry := m.names[n]; entry != nil && entry.approved != "" && entry.approved != h.ID {
+				return fmt.Errorf("%w: name %s is approved on hosts %s and %s", ErrConflict, n, entry.approved, h.ID)
+			}
+		}
+		if owner := m.domains[h.Proposal.Domain]; h.Proposal.Domain != "" && owner != "" && owner != h.ID {
+			return fmt.Errorf("%w: principal domain is approved on hosts %s and %s", ErrConflict, owner, h.ID)
+		}
 	}
-	// Detach caller-owned proposals and returned records from committed state.
-	data, _ = yaml.Marshal(next)
-	var committed managedState
-	if err := DecodeYAML(data, &committed); err != nil {
-		m.failed = err
-		return err
-	}
-	m.state = committed
-	m.revision = "managed:sha256:" + digest(string(data))
 	return nil
 }
-func (m *Managed) conflict(s *managedState, p Proposal, except string) error {
-	// Generated principal domains identify individual machines. Sharing one
-	// would make destination-bound certificates portable between those machines.
-	if p.Domain != "" {
-		if m.static != nil {
-			for _, h := range m.static.hosts {
-				if string(h.Domain) == p.Domain {
-					return fmt.Errorf("%w: principal domain is already in use", ErrConflict)
-				}
-			}
-		}
-		for _, h := range s.Hosts {
-			if h.ID != except && h.Status == "approved" && h.Proposal.Domain == p.Domain {
-				return fmt.Errorf("%w: principal domain is already in use", ErrConflict)
-			}
-		}
+func (m *Managed) conflict(p Proposal, except string) error {
+	if p.Domain != "" && (m.staticDomains[p.Domain] || (m.domains[p.Domain] != "" && m.domains[p.Domain] != except)) {
+		return fmt.Errorf("%w: principal domain is already in use", ErrConflict)
 	}
 	for _, n := range p.Names {
 		if m.static != nil && m.static.hosts[n] != nil {
 			return fmt.Errorf("%w: proposed names are already in use", ErrConflict)
 		}
-		for _, h := range s.Hosts {
-			if h.ID != except && h.Status == "approved" && slices.Contains(h.Proposal.Names, n) {
-				return fmt.Errorf("%w: proposed names are already in use", ErrConflict)
-			}
+		if entry := m.names[n]; entry != nil && entry.approved != "" && entry.approved != except {
+			return fmt.Errorf("%w: proposed names are already in use", ErrConflict)
 		}
 	}
+	return nil
+}
+func cloneHost(h *HostRecord) *HostRecord {
+	if h == nil {
+		return nil
+	}
+	out := *h
+	out.Proposal.Names = slices.Clone(h.Proposal.Names)
+	out.Proposal.Accounts = slices.Clone(h.Proposal.Accounts)
+	out.Proposal.Labels = cloneLabels(h.Proposal.Labels)
+	out.RetiredNames = slices.Clone(h.RetiredNames)
+	out.ShadowedNames = slices.Clone(h.ShadowedNames)
+	return &out
+}
+func cloneLabels(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	m := map[string]string{}
+	for k, v := range src {
+		m[k] = v
+	}
+	return m
+}
+func cloneItem(r *itemRecord) *itemRecord {
+	out := *r
+	out.Host = cloneHost(r.Host)
+	if r.Token != nil {
+		t := *r.Token
+		out.Token = &t
+	}
+	out.Audit = slices.Clone(r.Audit)
+	return &out
+}
+
+// commit writes the host/token transition and its audit together in one file.
+func (m *Managed) commit(r *itemRecord, actor, action string, create bool) error {
+	r = cloneItem(r)
+	r.Audit = append(r.Audit, AuditEvent{At: time.Now().UTC(), Actor: actor, Action: action, Resource: r.id()})
+	if err := m.files.write(r, create); err != nil {
+		if create && errors.Is(err, errItemExists) {
+			return err
+		}
+		m.failed = fmt.Errorf("%w; restart after repair: %v", ErrStorage, err)
+		return m.failed
+	}
+	m.publish(r)
+	m.updateRevision()
 	return nil
 }
 func (m *Managed) Enroll(p Proposal, credential, token string) (*HostRecord, error) {
@@ -407,126 +393,128 @@ func (m *Managed) Enroll(p Proposal, credential, token string) (*HostRecord, err
 	if _, err := hex.DecodeString(credential); err != nil {
 		return nil, fmt.Errorf("invalid host enrollment credential")
 	}
-	var result HostRecord
-	err := m.mutate("host", "enroll", func(s *managedState) (string, error) {
-		hash := digest(credential)
-		for _, h := range s.Hosts {
-			if h.CredentialHash == hash && (h.Status == "pending" || h.Status == "approved") {
-				data, _ := yaml.Marshal(h)
-				if err := yaml.Unmarshal(data, &result); err != nil {
-					return "", err
-				}
-				return h.ID, errNoChange
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failed != nil {
+		return nil, m.failed
+	}
+	hash := digest(credential)
+	if id := m.credentials[hash]; id != "" {
+		return cloneHost(m.records[id].Host), nil
+	}
+	if err := m.conflict(p, ""); err != nil {
+		return nil, err
+	}
+	status := "pending"
+	var reserved *itemRecord
+	if token != "" {
+		// The literal token is the filename and the reserved host ID. A host file
+		// never grants preapproval, even if its former token has not yet expired.
+		if !validID(token) {
+			return nil, ErrToken
+		}
+		reserved = m.records[token]
+		if reserved == nil || reserved.Kind != "token" || reserved.Token.Revoked || reserved.Token.UsedBy != "" || !time.Now().Before(reserved.Token.ExpiresAt) {
+			return nil, ErrToken
+		}
+		status = "approved"
+	} else if m.pending >= 1000 {
+		return nil, fmt.Errorf("pending enrollment queue is full")
+	}
+	for {
+		id := token
+		if id == "" {
+			var err error
+			id, err = m.files.newID()
+			if err != nil {
+				return nil, err
 			}
-		}
-		if err := m.conflict(s, p, ""); err != nil {
-			return "", err
-		}
-		status := "pending"
-		tokenIndex := -1
-		if token != "" {
-			for i, t := range s.Tokens {
-				if t.Hash == digest(token) && !t.Revoked && t.UsedBy == "" && time.Now().Before(t.ExpiresAt) {
-					tokenIndex = i
-					break
-				}
+			if m.records[id] != nil {
+				continue
 			}
-			if tokenIndex < 0 {
-				return "", ErrToken
-			}
-			status = "approved"
-		}
-		// A finite admission queue bounds anonymous disk growth. Denied/removed
-		// records remain as audit and wildcard tombstones.
-		pending := 0
-		for _, h := range s.Hosts {
-			if h.Status == "pending" {
-				pending++
-			}
-		}
-		if status == "pending" && pending >= 1000 {
-			return "", fmt.Errorf("pending enrollment queue is full")
-		}
-		id, err := newID()
-		if err != nil {
-			return "", err
 		}
 		now := time.Now().UTC()
-		result = HostRecord{ID: id, Revision: 1, Status: status, Proposal: p, CredentialHash: hash, CreatedAt: now, UpdatedAt: now}
-		s.Hosts = append(s.Hosts, result)
-		if tokenIndex >= 0 {
-			s.Tokens[tokenIndex].UsedBy = result.ID
+		h := HostRecord{ID: id, Revision: 1, Status: status, Proposal: p, CredentialHash: hash, CreatedAt: now, UpdatedAt: now}
+		r := &itemRecord{Version: 2, Kind: "host", Host: &h}
+		if reserved != nil {
+			r = cloneItem(reserved)
+			r.Kind = "host"
+			r.Host = &h
+			r.Token.UsedBy = id
 		}
-		return result.ID, nil
-	})
-	return &result, err
-}
-func findRecord(s *managedState, id string) (*HostRecord, error) {
-	for i := range s.Hosts {
-		if s.Hosts[i].ID == id {
-			return &s.Hosts[i], nil
+		err := m.commit(r, "host", "enroll", reserved == nil)
+		if errors.Is(err, errItemExists) {
+			continue
 		}
+		if err != nil {
+			return nil, err
+		}
+		return cloneHost(m.records[id].Host), nil
 	}
-	return nil, ErrNotFound
 }
 func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal) (*HostRecord, error) {
-	var result HostRecord
 	if p != nil {
 		if err := p.Validate(); err != nil {
 			return nil, err
 		}
 	}
-	err := m.mutate(actor, action, func(s *managedState) (string, error) {
-		h, err := findRecord(s, id)
-		if err != nil {
-			return "", err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failed != nil {
+		return nil, m.failed
+	}
+	current := m.records[id]
+	if current == nil || current.Host == nil {
+		return nil, ErrNotFound
+	}
+	r := cloneItem(current)
+	h := r.Host
+	if revision == 0 || h.Revision != revision {
+		return nil, ErrRevision
+	}
+	switch action {
+	case "edit":
+		if p == nil {
+			return nil, fmt.Errorf("host proposal is required")
 		}
-		if revision == 0 || h.Revision != revision {
-			return "", ErrRevision
+		if h.Status != "pending" && h.Status != "approved" {
+			return nil, fmt.Errorf("only pending or approved records can be edited")
 		}
-		switch action {
-		case "edit":
-			if p == nil {
-				return "", fmt.Errorf("host proposal is required")
+		if h.Status == "approved" {
+			if err := m.conflict(*p, id); err != nil {
+				return nil, err
 			}
-			if h.Status != "pending" && h.Status != "approved" {
-				return "", fmt.Errorf("only pending or approved records can be edited")
-			}
-			if h.Status == "approved" {
-				if err := m.conflict(s, *p, id); err != nil {
-					return "", err
-				}
-			}
-			for _, n := range h.Proposal.Names {
-				if !slices.Contains(p.Names, n) {
-					s.BlockedNames = append(s.BlockedNames, n)
-				}
-			}
-			h.Proposal = *p
-		case "approve":
-			if h.Status != "pending" {
-				return "", fmt.Errorf("only pending records can be approved")
-			}
-			if err := m.conflict(s, h.Proposal, id); err != nil {
-				return "", err
-			}
-			h.Status = "approved"
-		case "deny":
-			if h.Status != "pending" {
-				return "", fmt.Errorf("only pending records can be denied")
-			}
-			h.Status = "denied"
-		case "remove":
-			h.Status = "removed"
-		default:
-			return "", fmt.Errorf("unknown inventory action")
 		}
-		h.Revision++
-		h.UpdatedAt = time.Now().UTC()
-		result = *h
-		return id, nil
-	})
-	return &result, err
+		for _, n := range h.Proposal.Names {
+			if !slices.Contains(p.Names, n) && !slices.Contains(h.RetiredNames, n) {
+				h.RetiredNames = append(h.RetiredNames, n)
+			}
+		}
+		h.Proposal = *p
+	case "approve":
+		if h.Status != "pending" {
+			return nil, fmt.Errorf("only pending records can be approved")
+		}
+		if err := m.conflict(h.Proposal, id); err != nil {
+			return nil, err
+		}
+		h.Status = "approved"
+	case "deny":
+		if h.Status != "pending" {
+			return nil, fmt.Errorf("only pending records can be denied")
+		}
+		h.Status = "denied"
+	case "remove":
+		h.Status = "removed"
+	default:
+		return nil, fmt.Errorf("unknown inventory action")
+	}
+	h.Revision++
+	h.UpdatedAt = time.Now().UTC()
+	if err := m.commit(r, actor, action, false); err != nil {
+		return nil, err
+	}
+	return cloneHost(m.records[id].Host), nil
 }
 func (m *Managed) List() ([]HostRecord, error) {
 	m.mu.RLock()
@@ -534,41 +522,55 @@ func (m *Managed) List() ([]HostRecord, error) {
 	if m.failed != nil {
 		return nil, m.failed
 	}
-	data, _ := yaml.Marshal(m.state.Hosts)
-	var hosts []HostRecord
-	if err := yaml.Unmarshal(data, &hosts); err != nil {
-		return nil, err
-	}
-	for i := range hosts {
-		hosts[i].Source = "dynamic"
-		if m.static != nil {
-			for _, n := range hosts[i].Proposal.Names {
-				if m.static.hosts[n] != nil {
-					hosts[i].ShadowedNames = append(hosts[i].ShadowedNames, n)
+	hosts := []HostRecord{}
+	for _, r := range m.records {
+		if r.Host != nil {
+			h := cloneHost(r.Host)
+			h.Source = "dynamic"
+			h.SourceFile = m.files.itemPath(h.ID)
+			if m.static != nil {
+				for _, n := range h.Proposal.Names {
+					if m.static.hosts[n] != nil {
+						h.ShadowedNames = append(h.ShadowedNames, n)
+					}
 				}
 			}
+			hosts = append(hosts, *h)
 		}
 	}
 	if m.static != nil {
 		hosts = append(hosts, m.static.Records()...)
 	}
+	slices.SortFunc(hosts, func(a, b HostRecord) int { return strings.Compare(a.ID, b.ID) })
 	return hosts, nil
 }
 func (m *Managed) CreateToken(actor string, lifetime time.Duration) (EnrollmentToken, string, error) {
 	if lifetime <= 0 || lifetime > 24*time.Hour {
 		return EnrollmentToken{}, "", fmt.Errorf("token lifetime must be positive and no more than 24h")
 	}
-	secret, err := RandomSecret()
-	if err != nil {
-		return EnrollmentToken{}, "", err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failed != nil {
+		return EnrollmentToken{}, "", m.failed
 	}
-	id, err := newID()
-	if err != nil {
-		return EnrollmentToken{}, "", err
+	for {
+		id, err := m.files.newID()
+		if err != nil {
+			return EnrollmentToken{}, "", err
+		}
+		if m.records[id] != nil {
+			continue
+		}
+		token := EnrollmentToken{ID: id, ExpiresAt: time.Now().UTC().Add(lifetime)}
+		err = m.commit(&itemRecord{Version: 2, Kind: "token", Token: &token}, actor, "token-create", true)
+		if errors.Is(err, errItemExists) {
+			continue
+		}
+		if err != nil {
+			return EnrollmentToken{}, "", err
+		}
+		return token, id, nil
 	}
-	t := EnrollmentToken{ID: id, Hash: digest(secret), ExpiresAt: time.Now().UTC().Add(lifetime)}
-	err = m.mutate(actor, "token-create", func(s *managedState) (string, error) { s.Tokens = append(s.Tokens, t); return t.ID, nil })
-	return t, secret, err
 }
 func (m *Managed) Tokens() ([]EnrollmentToken, error) {
 	m.mu.RLock()
@@ -576,18 +578,28 @@ func (m *Managed) Tokens() ([]EnrollmentToken, error) {
 	if m.failed != nil {
 		return nil, m.failed
 	}
-	return slices.Clone(m.state.Tokens), nil
+	tokens := []EnrollmentToken{}
+	for _, r := range m.records {
+		if r.Token != nil {
+			tokens = append(tokens, *r.Token)
+		}
+	}
+	slices.SortFunc(tokens, func(a, b EnrollmentToken) int { return strings.Compare(a.ID, b.ID) })
+	return tokens, nil
 }
 func (m *Managed) RevokeToken(actor, id string) error {
-	return m.mutate(actor, "token-revoke", func(s *managedState) (string, error) {
-		for i := range s.Tokens {
-			if s.Tokens[i].ID == id {
-				s.Tokens[i].Revoked = true
-				return id, nil
-			}
-		}
-		return "", ErrNotFound
-	})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failed != nil {
+		return m.failed
+	}
+	old := m.records[id]
+	if old == nil || old.Token == nil {
+		return ErrNotFound
+	}
+	r := cloneItem(old)
+	r.Token.Revoked = true
+	return m.commit(r, actor, "token-revoke", false)
 }
 func (m *Managed) Audit() ([]AuditEvent, error) {
 	m.mu.RLock()
@@ -595,53 +607,46 @@ func (m *Managed) Audit() ([]AuditEvent, error) {
 	if m.failed != nil {
 		return nil, m.failed
 	}
-	return slices.Clone(m.state.Audit), nil
+	events := slices.Clone(m.legacy.Audit)
+	for _, r := range m.records {
+		events = append(events, r.Audit...)
+	}
+	slices.SortStableFunc(events, func(a, b AuditEvent) int {
+		if c := a.At.Compare(b.At); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Resource, b.Resource)
+	})
+	return events, nil
 }
 func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, error) {
 	h, _, err := m.LookupHostSnapshot(ctx, name)
 	return h, err
 }
 func (m *Managed) LookupHostSnapshot(ctx context.Context, name string) (*ResolvedHost, string, error) {
+	name = hostpattern.NormalizeName(name)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// Static exact records remain usable even after a managed write failure.
 	if m.static != nil && m.static.hosts[name] != nil {
 		return m.static.hosts[name], m.static.InventoryRevision(), nil
 	}
 	if m.failed != nil {
 		return nil, "", m.failed
 	}
-	rev := m.revision
+	revision := m.revision
 	if m.static != nil {
-		rev = m.static.InventoryRevision() + ":" + rev
+		revision = m.static.InventoryRevision() + ":" + revision
 	}
-	blocked := slices.Contains(m.state.BlockedNames, name)
-	for _, h := range m.state.Hosts {
-		if !slices.Contains(h.Proposal.Names, name) {
-			continue
+	if entry := m.names[name]; entry != nil {
+		if entry.approved == "" {
+			return nil, revision, nil
 		}
-		blocked = true
-		if h.Status == "approved" {
-			p := h.Proposal
-			return &ResolvedHost{Policy: Host{Names: slices.Clone(p.Names), Labels: cloneLabels(p.Labels), Accounts: slices.Clone(p.Accounts)}, PrincipalMode: p.PrincipalMode, Domain: principal.Domain(p.Domain)}, rev, nil
-		}
-	}
-	if blocked {
-		return nil, rev, nil
+		p := m.records[entry.approved].Host.Proposal
+		return &ResolvedHost{Policy: Host{Names: slices.Clone(p.Names), Labels: cloneLabels(p.Labels), Accounts: slices.Clone(p.Accounts)}, PrincipalMode: p.PrincipalMode, Domain: principal.Domain(p.Domain)}, revision, nil
 	}
 	if m.static != nil {
 		h, err := m.static.LookupHost(ctx, name)
-		return h, rev, err
+		return h, revision, err
 	}
-	return nil, rev, nil
-}
-func cloneLabels(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	m := map[string]string{}
-	for k, v := range src {
-		m[k] = v
-	}
-	return m
+	return nil, revision, nil
 }

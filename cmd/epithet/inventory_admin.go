@@ -267,7 +267,7 @@ func (*InventoryAuditCLI) Run(p *InventoryCLI) error {
 
 type InventoryTokenCLI struct {
 	Create InventoryTokenCreateCLI `cmd:"create" help:"Create an expiring single-use preapproval token"`
-	List   InventoryTokenListCLI   `cmd:"list" help:"List token metadata without secret values"`
+	List   InventoryTokenListCLI   `cmd:"list" help:"List token IDs, expiration, and redemption state"`
 	Revoke InventoryTokenRevokeCLI `cmd:"revoke" help:"Revoke an unused token"`
 }
 type InventoryTokenCreateCLI struct {

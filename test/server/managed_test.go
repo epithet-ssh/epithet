@@ -115,6 +115,7 @@ inventory:
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "approved", second.Host.Status)
+	require.Equal(t, created, second.Host.ID, "the enrollment token reserves the eventual host ID")
 	admin("remove", enrolled.Host.ID)
 	_, err = client.GetCert(t.Context(), token, &request)
 	require.Error(t, err, "removal must block new issuance through wildcard")

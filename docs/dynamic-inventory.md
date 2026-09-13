@@ -1,18 +1,20 @@
 # File-backed dynamic inventory: first implementation
 
 This implements the enrollment and administration workflow discussed on September
-11, 2026. Enable it with `inventory.state-dir`. Existing static deployments keep
+11–12, 2026. Enable it with `inventory.state-dir`. Existing static deployments keep
 working, including local-only `host enroll` when the CA advertises no inventory
 link. Nothing has been deployed or enabled on a real host as part of this change.
 
 ## Decisions made during implementation
 
-- One YAML snapshot holds hosts, tokens, tombstones, and audit; one process owns it.
+- One YAML file holds each token or host and its audit history; one process owns the
+  directory. Hostname indexes are rebuilt at startup and updated in memory.
 - Inventory administration uses the existing agent session and one static admin role.
 - The combined server advertises inventory automatically and shares its existing port.
 - Enrollment uses an editor plus an explicit submit/cancel choice. A durable local
   bearer credential makes retries idempotent; it is separate from the host's ID.
 - Tokens have no templates, default to one hour, and support copy/paste or files.
+  The literal token is its filename and becomes the admitted host ID.
 - Exact static hosts win over dynamic admission state, which wins over patterns.
   Removal leaves tombstones, and competing pending requests cannot both be approved.
 - This milestone manages hosts. Users and role grants remain static; SCIM, shared
@@ -154,10 +156,13 @@ epithet host enroll --ca-url https://ca.example/ --token TOKEN_VALUE
 epithet host enroll --ca-url https://ca.example/ --token-file ./token.txt
 ```
 
-The two inputs are mutually exclusive. Tokens are random 256-bit values; only
-SHA-256 hashes are persisted. Listings and audit entries never contain secret
-values. Creation displays the value once. The initial configurable lifetime range
-is one second to 24 hours, with a one-hour default.
+The two inputs are mutually exclusive. Tokens are random 256-bit values. The
+literal value is the filename and the reserved host ID; filenames are not hashed.
+The inventory filesystem is trusted and protected by ordinary permissions.
+Admin token listings and per-item audit entries consequently expose token IDs,
+which are usable preapproval credentials until consumed, revoked, or expired.
+The initial configurable lifetime range is one second to 24 hours, with a
+one-hour default. Token expiry has no effect on an already admitted host.
 
 There are **no constrained enrollment templates** yet. A token holder chooses the
 proposal's names, labels, and accounts. Redemption performs normal validation and
@@ -168,6 +173,10 @@ cannot approve another host.
 ## Identity, retries, and conflicts
 
 Records have random, immutable IDs distinct from names and principal domains.
+Creating a token reserves the future host ID. Redemption transforms its file into
+the host record under that same ID. Enrollment without a token allocates an ID
+and creates a pending host file directly. New filename publication is exclusive:
+a collision cannot overwrite an existing record.
 The host also keeps a random 256-bit enrollment credential in `enrollment.key`
 beside its principal-domain file, with mode 0600. This is a bearer credential over
 TLS, not a new SSH signing key. Inventory stores only its hash. Retrying with that
@@ -211,36 +220,102 @@ entries for recovery hosts and trusted static admission.
 
 ## Files, durability, and recovery
 
-`inventory.state-dir` contains `inventory.yaml` and `inventory.lock`. The YAML
-snapshot contains versioned host records, token metadata/hashes, retired-name
-tombstones, and an audit of committed mutations. One inventory process owns the
-store at a time through an OS file lock. The directory is created with mode 0700
-and snapshots with mode 0600. Use a local filesystem; this is not an HA/NFS design.
+The directory layout is:
 
-Mutations copy the committed state, validate it, write and sync a temporary file,
-rename it over the snapshot, and sync the directory on Unix. Host activation,
-token consumption, and the audit event commit together. A storage failure disables
-further managed reads and writes until repair/restart; static exact records still
-resolve. If the directory can be locked but its snapshot is corrupt at startup,
-the service logs the failure and serves static exact records while managed
-operations return unavailable. Failure to establish the directory/lock still
-prevents startup. The code has Windows locking support, but Windows cannot provide
-the same directory-fsync step through Go's file API.
+```text
+inventory/
+  inventory.lock
+  records/
+    <token-or-host-id>.yaml
+    <another-id>.yaml
+```
 
-Reads use committed in-memory snapshots with a content revision. Mutations are
-visible to subsequent reads immediately. A read already in flight may complete
-using its earlier snapshot; removal is not synchronous certificate revocation.
+An unused token file contains its expiry and audit history:
 
-For experimentation: **stop inventory before manually editing `inventory.yaml`**,
-keep a backup, and restart afterward. Live file edits are not watched and will be
-overwritten by the next API mutation. Preserve IDs, credential hashes, token use
-metadata, and retired-name tombstones unless deliberately resetting that state.
-A restored older backup can resurrect old approvals or unused tokens; recovery
-must account for that. Static YAML and role changes also require restart.
+```yaml
+version: 2
+kind: token
+token:
+  id: TOKEN_VALUE
+  expires-at: 2026-09-12T12:00:00Z
+  revoked: false
+audit:
+  - at: 2026-09-12T11:00:00Z
+    actor: ADMIN_DIRECTORY_ID
+    action: token-create
+    resource: TOKEN_VALUE
+```
 
-The whole snapshot, including audit, is rewritten per mutation. This favors easy
-inspection and iteration over large fleets. There is no compaction, pagination,
-SCIM, database backend, multi-writer coordination, or configurable RBAC yet.
+After redemption, the same file has `kind: host`, a `host` record, and token
+metadata with `used-by` equal to that host ID. The `host.host` mapping contains
+the editable names, labels, accounts, and principal settings. `host.status`
+records admission; `host.retired-names` preserves names removed by API edits.
+Its `audit` list includes the token creation and enrollment events. Approval,
+editing, removal, and revocation replace only the affected item file. Audit
+inspection combines the per-item histories in timestamp order.
+
+One inventory process owns the directory through an OS file lock. Directories
+are created with mode 0700 and files with mode 0600. A new item is fully written
+and synced in a temporary file, then published through an exclusive hard link.
+Replacing a token with its host uses atomic rename of a synced temporary file,
+followed by directory sync on Unix. The admission, consumption, and audit event
+are all in that one file: there is no transaction journal or multi-file commit
+for redemption. Interrupted temporary writes are ignored at startup.
+
+At startup, inventory scans and validates the item files once and builds maps
+for records by ID, names (approved owner plus pending/retired claims), active
+enrollment credentials, and approved principal domains. **Hostname resolution
+does not scan files or host records.** Admission and conflict checks use these
+indexes too. Mutations hold the write lock, persist the changed file, then update
+only that record's index entries before allowing another reader or writer.
+Content revisions are calculated from in-memory per-item hashes; no index file
+is persisted. Unchanged restarts produce the same revision.
+
+A storage failure disables managed reads and writes until repair/restart;
+static exact records still resolve. If the directory can be locked but an item
+is corrupt at startup, the service identifies the file and serves only static
+exact records. Duplicate approved names or credentials are validation errors,
+not a reason to choose an arbitrary winner. Failure to establish the directory
+or lock still prevents startup. Windows cannot provide the same directory-fsync
+step through Go's file API.
+
+For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.
+There is no index to repair separately. Keep each ID equal to its filename,
+preserve admission state and credential hashes, and retain `retired-names` when
+renaming a host offline. Deleting a host file deletes its tombstones too; mark it
+`removed` when access should stay withdrawn. Live edits are not watched: the
+process continues reading its in-memory version, and its next write to that
+item replaces external changes. Keep a backup before manual edits.
+
+A snapshot of the directory captures the authoritative records without derived
+indexes. Copy/restore with the writer stopped for a coherent ordinary file copy;
+a filesystem snapshot can capture a point in time. Restoring older data can
+resurrect approvals or unused tokens. Multi-writer replication, a static-directory
+reader, and object-store coordination are possible follow-ups, not implemented
+features. This version uses a single writer and local filesystem semantics.
+
+Reads already in flight may complete using their earlier revision, even after
+removal. Neither file replacement nor reindexing revokes certificates already
+issued. Static configuration and role changes still require restart. There is
+no audit compaction, pagination, SCIM, database backend, or configurable RBAC yet.
+
+### Migrating the original single-file store
+
+On the first startup after this change, a legacy `inventory.yaml` is validated
+and converted into a staged `records/` directory. The completed directory is
+published atomically, and the original file is retained as
+`inventory.v1.yaml.bak`. A restart completes interrupted backup archival without
+reimporting old data. A missing records directory beside that backup is an error,
+so recovery does not silently reset to the old snapshot.
+
+Existing hosts keep their IDs and admission state. Historical audit is attached
+to the corresponding items. Legacy global tombstones and any audit without a
+matching item are retained in `records/legacy.yaml`.
+
+**Unused legacy tokens must be recreated.** The original snapshot stored token
+hashes, so its literal token values cannot be recovered as filenames. Legacy
+token metadata is retained but revoked. New tokens use the literal filename/host
+ID model. Migration never modifies the backup and is validated before publication.
 
 ## Separate deployment and protocol
 
@@ -270,7 +345,9 @@ A 401 triggers one broker refresh/retry; permission denials do not.
 
 ## Validation
 
-Tests cover durable restart, locking, stale edits, concurrent approvals and token
+Tests cover per-item updates, exclusive creation, startup index reconstruction,
+offline repair, migration, interrupted redemption before/after replacement,
+durable restart, locking, stale edits, concurrent approvals and token
 redemption, token expiry/revocation/retries, static precedence, wildcard tombstones,
 corruption recovery, immutable snapshots, actual configured OIDC claim mapping,
 active users and group grants, cross-origin discovery and redirect refusal,

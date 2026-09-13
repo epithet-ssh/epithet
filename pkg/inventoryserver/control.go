@@ -158,18 +158,7 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "list":
 		resp.Hosts, err = c.Store.List()
 	case "get":
-		var hosts []inventory.HostRecord
-		hosts, err = c.Store.List()
-		if err == nil {
-			err = inventory.ErrNotFound
-			for _, h := range hosts {
-				if h.ID == req.ID {
-					resp.Host = &h
-					err = nil
-					break
-				}
-			}
-		}
+		resp.Host, err = c.Store.Get(req.ID)
 	case "edit", "approve", "deny", "remove":
 		resp.Host, err = c.Store.Change(actor, req.Action, req.ID, req.Revision, req.Host)
 	case "token-create":
