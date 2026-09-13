@@ -168,7 +168,7 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		var t inventory.EnrollmentToken
-		t, resp.Secret, err = c.Store.CreateToken(actor, time.Duration(seconds)*time.Second)
+		t, err = c.Store.CreateToken(actor, time.Duration(seconds)*time.Second)
 		resp.Token = &t
 	case "token-list":
 		resp.Tokens, err = c.Store.Tokens()

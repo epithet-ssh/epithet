@@ -68,6 +68,18 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if err != nil {
 		return err
 	}
+	var managed *inventory.Managed
+	if c.StateDir != "" {
+		stateDir, err := expandPath(c.StateDir)
+		if err != nil {
+			return err
+		}
+		managed, err = inventory.OpenManaged(stateDir, inv)
+		if err != nil {
+			return err
+		}
+		defer managed.Close()
+	}
 	if c.Check {
 		fmt.Println("inventory OK")
 		return nil
@@ -98,16 +110,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if err != nil {
 		return err
 	}
-	if c.StateDir != "" {
-		stateDir, err := expandPath(c.StateDir)
-		if err != nil {
-			return err
-		}
-		managed, err := inventory.OpenManaged(stateDir, inv)
-		if err != nil {
-			return err
-		}
-		defer managed.Close()
+	if managed != nil {
 		resolver.Hosts = managed
 		control := &inventoryserver.Control{Store: managed, Directory: inv, Validator: validator, Admins: inventoryserver.Admins{Users: c.AdminUsers, Groups: c.AdminGroups}}
 		mux := http.NewServeMux()

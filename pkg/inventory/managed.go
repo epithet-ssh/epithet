@@ -65,6 +65,25 @@ func (p *Proposal) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// MarshalYAML preserves the distinction between unrestricted accounts (null)
+// and an explicit empty account set ([]), both on disk and in the editor.
+func (p Proposal) MarshalYAML() (any, error) {
+	type plainProposal Proposal
+	var node yaml.Node
+	if err := node.Encode(plainProposal(p)); err != nil {
+		return nil, err
+	}
+	if p.Accounts == nil {
+		for i := 0; i < len(node.Content); i += 2 {
+			if node.Content[i].Value == "accounts" {
+				node.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
+				break
+			}
+		}
+	}
+	return &node, nil
+}
+
 func (p *Proposal) Validate() error {
 	if len(p.Names) == 0 || len(p.Names) > 64 {
 		return fmt.Errorf("provide between 1 and 64 exact DNS names")
@@ -126,13 +145,6 @@ func ParseProposal(data []byte) (Proposal, error) {
 	var p Proposal
 	if err := DecodeYAML(data, &p); err != nil {
 		return p, err
-	}
-	var fields map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &fields); err != nil {
-		return p, err
-	}
-	if _, ok := fields["accounts"]; !ok {
-		return p, fmt.Errorf("accounts is required: use [] for none, a list, or explicit null for ungrounded")
 	}
 	return p, p.Validate()
 }
@@ -377,9 +389,6 @@ func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
 	if m.failed != nil {
 		return nil, m.failed
 	}
-	if err := m.conflict(p, ""); err != nil {
-		return nil, err
-	}
 	status := "pending"
 	var reserved *itemRecord
 	if token != "" {
@@ -391,6 +400,9 @@ func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
 		reserved = m.records[token]
 		if reserved == nil || reserved.Kind != "token" || reserved.Token.Revoked || reserved.Token.UsedBy != "" || !time.Now().Before(reserved.Token.ExpiresAt) {
 			return nil, ErrToken
+		}
+		if err := m.conflict(p, ""); err != nil {
+			return nil, err
 		}
 		status = "approved"
 	} else if m.pending >= 1000 {
@@ -519,19 +531,19 @@ func (m *Managed) List() ([]HostRecord, error) {
 	slices.SortFunc(hosts, func(a, b HostRecord) int { return strings.Compare(a.ID, b.ID) })
 	return hosts, nil
 }
-func (m *Managed) CreateToken(actor string, lifetime time.Duration) (EnrollmentToken, string, error) {
+func (m *Managed) CreateToken(actor string, lifetime time.Duration) (EnrollmentToken, error) {
 	if lifetime <= 0 || lifetime > 24*time.Hour {
-		return EnrollmentToken{}, "", fmt.Errorf("token lifetime must be positive and no more than 24h")
+		return EnrollmentToken{}, fmt.Errorf("token lifetime must be positive and no more than 24h")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.failed != nil {
-		return EnrollmentToken{}, "", m.failed
+		return EnrollmentToken{}, m.failed
 	}
 	for {
 		id, err := m.files.newID()
 		if err != nil {
-			return EnrollmentToken{}, "", err
+			return EnrollmentToken{}, err
 		}
 		if m.records[id] != nil {
 			continue
@@ -542,9 +554,9 @@ func (m *Managed) CreateToken(actor string, lifetime time.Duration) (EnrollmentT
 			continue
 		}
 		if err != nil {
-			return EnrollmentToken{}, "", err
+			return EnrollmentToken{}, err
 		}
-		return token, id, nil
+		return token, nil
 	}
 }
 func (m *Managed) Tokens() ([]EnrollmentToken, error) {
@@ -602,11 +614,11 @@ func (m *Managed) LookupHostSnapshot(ctx context.Context, name string) (*Resolve
 	name = hostpattern.NormalizeName(name)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.static != nil && m.static.hosts[name] != nil {
-		return m.static.hosts[name], m.static.InventoryRevision(), nil
-	}
 	if m.failed != nil {
 		return nil, "", m.failed
+	}
+	if m.static != nil && m.static.hosts[name] != nil {
+		return m.static.hosts[name], m.static.InventoryRevision(), nil
 	}
 	revision := m.revision
 	if m.static != nil {

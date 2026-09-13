@@ -20,17 +20,18 @@ import (
 )
 
 func TestEditorCancelAndValidationRetry(t *testing.T) {
-	t.Setenv("EDITOR", "true")
+	t.Setenv("EDITOR", `sh -c ': > "$1"' editor`)
 	initial := inventory.Proposal{Names: []string{"one"}, Labels: map[string]string{}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
-	_, err := editProposal(initial, bufio.NewReader(strings.NewReader("cancel\n")), "submit")
+	_, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
 	require.ErrorIs(t, err, errCanceled)
-	p, err := editProposal(initial, bufio.NewReader(strings.NewReader("submit\n")), "submit")
+	t.Setenv("EDITOR", "true")
+	p, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
 	require.NoError(t, err)
 	require.Equal(t, initial, p)
 	script := filepath.Join(t.TempDir(), "editor")
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nif [ ! -f \"$1.once\" ]; then\n touch \"$1.once\"\n printf 'invalid: yaml\\n' > \"$1\"\nelse\n rm \"$1.once\"\n printf 'names: [fixed]\\naccounts: []\\nprincipal-mode: account-name\\n' > \"$1\"\nfi\n"), 0700))
 	t.Setenv("EDITOR", script)
-	p, err = editProposal(initial, bufio.NewReader(strings.NewReader("edit\nsubmit\n")), "submit")
+	p, err = editProposal(initial, bufio.NewReader(strings.NewReader("edit\n")))
 	require.NoError(t, err)
 	require.Equal(t, []string{"fixed"}, p.Names)
 }
@@ -69,10 +70,6 @@ func TestManagedHostEnrollmentEditsAndConfiguresBeforeSubmitting(t *testing.T) {
 	input, err := os.CreateTemp(t.TempDir(), "input")
 	require.NoError(t, err)
 	defer input.Close()
-	_, err = input.WriteString("submit\n")
-	require.NoError(t, err)
-	_, err = input.Seek(0, 0)
-	require.NoError(t, err)
 	old := os.Stdin
 	os.Stdin = input
 	defer func() { os.Stdin = old }()
@@ -87,7 +84,7 @@ func TestManagedHostEnrollmentEditsAndConfiguresBeforeSubmitting(t *testing.T) {
 
 }
 func TestEnrollmentCancelLeavesSSHDUnchanged(t *testing.T) {
-	t.Setenv("EDITOR", "true")
+	t.Setenv("EDITOR", `sh -c ': > "$1"' editor`)
 	cmd, enrollment, env, runner, main, fragment := newSSHDConfigurationTest(t)
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,10 +99,6 @@ func TestEnrollmentCancelLeavesSSHDUnchanged(t *testing.T) {
 	input, err := os.CreateTemp(t.TempDir(), "input")
 	require.NoError(t, err)
 	defer input.Close()
-	_, err = input.WriteString("cancel\n")
-	require.NoError(t, err)
-	_, err = input.Seek(0, 0)
-	require.NoError(t, err)
 	old := os.Stdin
 	os.Stdin = input
 	defer func() { os.Stdin = old }()
@@ -138,4 +131,13 @@ func TestProposedHostNamesUseConfiguredSearchSuffix(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, resolvSearchDomain(tc.config))
 	}
+}
+
+// Saving unchanged YAML must preserve null account semantics.
+func TestEditorPreservesUnrestrictedAccounts(t *testing.T) {
+	t.Setenv("EDITOR", "true")
+	initial := inventory.Proposal{Names: []string{"host"}, PrincipalMode: inventory.AccountNamePrincipals}
+	edited, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
+	require.NoError(t, err)
+	require.Nil(t, edited.Accounts)
 }

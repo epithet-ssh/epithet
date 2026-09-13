@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,7 +59,7 @@ func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.C
 			return event.Inventory, nil
 		}
 		if event.Result != nil {
-			return nil, fmt.Errorf("agent does not support inventory administration; restart it after upgrading")
+			return nil, fmt.Errorf("agent rejected inventory request: %s", event.Result.Error)
 		}
 	}
 	if ctx.Err() != nil {
@@ -70,14 +71,13 @@ func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.C
 	return nil, fmt.Errorf("agent closed without an inventory response")
 }
 func printInventory(v any) error {
-	// Use the public JSON projection so private persisted hashes never appear in
-	// command output. YAML presentation is for people; edit uses Proposal directly.
+	// Preserve the API field names and source metadata when presenting records as YAML.
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	var public any
-	if err = json.Unmarshal(data, &public); err != nil {
+	if err = yaml.Unmarshal(data, &public); err != nil {
 		return err
 	}
 	data, err = yaml.Marshal(public)
@@ -88,6 +88,19 @@ func printInventory(v any) error {
 	return err
 }
 func (c *InventoryCLI) find(id string) (*inventory.HostRecord, error) {
+	// Full IDs use the server's record index rather than downloading every host.
+	_, hexErr := hex.DecodeString(id)
+	if (len(id) == 64 && hexErr == nil) || strings.HasPrefix(id, "static:") {
+		response, err := c.request(inventoryapi.ControlRequest{Action: "get", ID: id})
+		if err != nil {
+			return nil, err
+		}
+		if response.Host == nil {
+			return nil, inventory.ErrNotFound
+		}
+		return response.Host, nil
+	}
+
 	resp, err := c.request(inventoryapi.ControlRequest{Action: "list"})
 	if err != nil {
 		return nil, err
@@ -166,7 +179,7 @@ func editInventoryHost(p *InventoryCLI, h *inventory.HostRecord, input *bufio.Re
 	if h.Source == "static" || strings.HasPrefix(h.ID, "static:") {
 		return nil, fmt.Errorf("static record: edit the inventory.static YAML configuration and restart inventory")
 	}
-	proposal, err := editProposal(h.Proposal, input, "save")
+	proposal, err := editProposal(h.Proposal, input)
 	if err != nil {
 		return nil, err
 	}
@@ -284,10 +297,10 @@ func (c *InventoryTokenCreateCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 	if c.Quiet {
-		fmt.Println(r.Secret)
+		fmt.Println(r.Token.ID)
 		return nil
 	}
-	fmt.Printf("Token %s expires %s\n\nepithet host enroll --ca-url %s --token %s\n", r.Token.ID, r.Token.ExpiresAt.Format(time.RFC3339), shellQuote(r.CAURL), shellQuote(r.Secret))
+	fmt.Printf("Token %s expires %s\n\nepithet host enroll --ca-url %s --token %s\n", r.Token.ID, r.Token.ExpiresAt.Format(time.RFC3339), shellQuote(r.CAURL), shellQuote(r.Token.ID))
 	return nil
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
@@ -321,7 +334,7 @@ func readChoice(input *bufio.Reader, prompt string) (string, error) {
 	}
 	return strings.ToLower(strings.TrimSpace(line)), err
 }
-func editProposal(initial inventory.Proposal, input *bufio.Reader, verb string, validators ...func(inventory.Proposal) error) (inventory.Proposal, error) {
+func editProposal(initial inventory.Proposal, input *bufio.Reader, validators ...func(inventory.Proposal) error) (inventory.Proposal, error) {
 	data, err := yaml.Marshal(initial)
 	if err != nil {
 		return initial, err
@@ -381,22 +394,7 @@ func editProposal(initial inventory.Proposal, input *bufio.Reader, verb string, 
 			}
 			return initial, errCanceled
 		}
-		for {
-			choice, e := readChoice(input, strings.Title(verb)+" / Edit / Cancel [cancel]: ")
-			if e != nil {
-				return initial, e
-			}
-			if choice == verb || choice == string(verb[0]) {
-				return proposal, nil
-			}
-			if choice == "e" || choice == "edit" {
-				break
-			}
-			if choice == "" || choice == "c" || choice == "cancel" || choice == "exit" {
-				return initial, errCanceled
-			}
-			fmt.Fprintln(os.Stderr, "Choose "+verb+", edit, or cancel.")
-		}
+		return proposal, nil
 	}
 }
 func bytesTrim(data []byte) []byte { return []byte(strings.TrimSpace(string(data))) }

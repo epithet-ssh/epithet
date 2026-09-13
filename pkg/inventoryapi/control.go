@@ -21,7 +21,6 @@ type ControlResponse struct {
 	Hosts  []inventory.HostRecord      `json:"hosts,omitempty"`
 	Token  *inventory.EnrollmentToken  `json:"token,omitempty"`
 	Tokens []inventory.EnrollmentToken `json:"tokens,omitempty"`
-	Secret string                      `json:"secret,omitempty"`
 	Audit  []inventory.AuditEvent      `json:"audit,omitempty"`
 	Error  string                      `json:"error,omitempty"`
 }

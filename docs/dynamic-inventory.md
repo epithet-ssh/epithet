@@ -4,6 +4,8 @@ This implements the enrollment and administration workflow discussed on Septembe
 11–12, 2026. Enable it with `inventory.state-dir`. Existing static deployments keep
 working, including local-only `host enroll` when the CA advertises no inventory
 link. Nothing has been deployed or enabled on a real host as part of this change.
+The [follow-up audit](dynamic-inventory-audit.md) distinguishes corrected workflow
+errors from implementation assumptions that still need design review.
 
 ## Decisions made during implementation
 
@@ -12,7 +14,7 @@ link. Nothing has been deployed or enabled on a real host as part of this change
 - Inventory administration uses the existing agent session and one static admin role.
 - The combined server puts a plain HTTP router in front of private CA, inventory,
   and policy Unix sockets. TLS and ACME stay in the deployment's front end.
-- Enrollment generates YAML, opens the editor, and offers submit/edit/cancel.
+- Enrollment generates YAML, opens the editor, and submits after a valid editor exit.
   Parse and validation errors offer re-editing. No separate host retry secret is created.
 - Tokens have no templates, default to one hour, and support copy/paste or files.
   The literal token is its filename and becomes the admitted host ID.
@@ -116,8 +118,8 @@ Domain and principal mode must match local enrollment settings; validation
 explains a mismatch and offers to reopen the editor. Select the mode with the
 existing `--principal-mode` flag. Other proposal fields are editable.
 
-After editing, choose **submit**, **edit**, or **cancel**. Invalid YAML produces
-an error and an edit/cancel choice. Unknown fields, multiple YAML documents,
+A successful editor exit with valid YAML submits the proposal. Invalid YAML
+produces an error and an edit/cancel choice. Unknown fields, multiple YAML documents,
 invalid names, and omitted `accounts` are errors. Emptying the file also cancels;
 an unsuccessful editor exit aborts. Cancellation leaves sshd untouched, although
 the initial CA-key and principal-domain files may already have been prepared.
@@ -126,7 +128,7 @@ the initial CA-key and principal-domain files may already have been prepared.
 leaving account selection to issuance policy. A list restricts issuance to those
 accounts. There is no silent omitted-field default in managed proposals.
 
-After confirmation, enrollment configures and validates sshd using the existing
+After a valid editor exit, enrollment configures and validates sshd using the existing
 rollback-aware setup, then submits the proposal. It prints `RECORD_ID` and
 `pending` or `approved`, separated by a tab, and exits. It does not poll. If
 submission fails, sshd remains configured and the error explicitly tells the
@@ -193,9 +195,10 @@ or automatic recovery of an earlier response. If a response is lost, the operato
 checks inventory before submitting again. A consumed token stays consumed; a new
 token or a new pending request is needed if another enrollment is appropriate.
 
-Pending proposals may overlap each other. A new submission cannot overlap an
-already approved dynamic host or an exact static record. Approval rechecks
-uniqueness while holding the same lock as its write. Conflicts must be resolved by
+Pending proposals may overlap other pending proposals, approved dynamic hosts,
+and exact static records. They cannot be approved until the conflict is resolved.
+Token enrollment approves immediately, so it rejects an overlapping name without
+consuming the token. Approval checks uniqueness while holding the same lock as its write. Conflicts must be resolved by
 editing the pending record or changing the existing record through its owning
 source. Generated per-host principal domains must likewise be unique among
 admitted hosts; shared-domain enrollment is deferred.
@@ -270,10 +273,11 @@ followed by directory sync on Unix. The admission, consumption, and audit event
 are all in that one file: there is no transaction journal or multi-file commit
 for redemption. Interrupted temporary writes are ignored at startup.
 
-At startup, inventory scans and validates the item files once and builds maps
+At startup (and with `inventory --check`), inventory scans and validates the item files and builds maps
 for records by ID, names (approved owner plus pending/retired claims), and approved
 principal domains. **Hostname resolution does not scan files or host records.** Admission and conflict checks use these
-indexes too. Mutations hold the write lock, persist the changed file, then update
+indexes too. The check command takes the same store lock as startup, so stop the
+writer before checking managed files. Mutations hold the write lock, persist the changed file, then update
 only that record's index entries before allowing another reader or writer.
 Content revisions are calculated from in-memory per-item hashes; no index file
 is persisted. Unchanged restarts produce the same revision.
@@ -282,7 +286,8 @@ When `inventory.state-dir` is configured, unreadable or invalid dynamic storage
 fails startup. Duplicate approved names are validation errors, never a reason to
 choose an arbitrary winner. To run static-only, leave `inventory.state-dir` unset.
 Static exact records override dynamic records during normal operation. A write
-failure disables managed reads and writes until repair/restart. Windows cannot
+failure disables all lookups and operations through the managed store until
+repair/restart, including exact static lookups; it never switches to static-only service. Windows cannot
 provide the same directory-fsync step through Go's file API.
 
 For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.

@@ -26,7 +26,8 @@ type Request struct {
 // For a Match request: zero or more Output events (auth progress, e.g. the
 // auth-code+PKCE URL to visit) followed by exactly one Result event. For an
 // Inspect request: exactly one Inspect event. Identity requests stream auth
-// Output events followed by one Identity event.
+// Output events followed by one Identity event. Inventory requests similarly
+// stream Output events followed by one Inventory event.
 type Event struct {
 	Inventory *inventoryapi.ControlResponse `json:"inventory,omitempty"`
 	Identity  *IdentityResponse             `json:"identity,omitempty"`
@@ -151,7 +152,7 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	default:
 		_ = w.writeEvent(Event{Result: &MatchResponse{
 			Allow: false,
-			Error: "request must set exactly one of match, inspect, identity, or kill",
+			Error: "request must set exactly one of match, inspect, identity, inventory, or kill",
 		}})
 	}
 }

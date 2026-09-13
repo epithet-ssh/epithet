@@ -1,7 +1,6 @@
 package caclient
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -35,15 +34,4 @@ func InventoryURL(root *RootResponse, cfg tlsconfig.Config) (string, error) {
 		return "", err
 	}
 	return target.String(), nil
-}
-
-// DiscoverInventory resolves the configured CA's advertised management endpoint.
-// Discovery never sends inventory operations or user credentials.
-func (c *Client) DiscoverInventory(ctx context.Context) (endpoint, caURL string, err error) {
-	root, err := c.GetRoot(ctx)
-	if err != nil {
-		return "", "", err
-	}
-	endpoint, err = InventoryURL(root, c.tlsConfig)
-	return endpoint, root.FinalURL, err
 }

@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,8 @@ func TestManagedAdmissionConflictAndWildcardTombstones(t *testing.T) {
 }
 func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
-	tok, secret, err := m.CreateToken("admin", time.Hour)
+	tok, err := m.CreateToken("admin", time.Hour)
+	secret := tok.ID
 	require.NoError(t, err)
 
 	h, err := m.Enroll(proposal("one"), secret)
@@ -100,7 +102,8 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 }
 func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
-	_, secret, err := m.CreateToken("admin", time.Hour)
+	token, err := m.CreateToken("admin", time.Hour)
+	secret := token.ID
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
@@ -143,7 +146,9 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 }
 func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [static]\n   accounts: [root]\n - pattern: '*'\n   accounts: [fallback]\n")
-	_, err := m.Enroll(proposal("static"), "")
+	pending, err := m.Enroll(proposal("static"), "")
+	require.NoError(t, err)
+	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
 	require.ErrorIs(t, err, ErrConflict)
 	h, err := m.Enroll(proposal("dynamic"), "")
 	require.NoError(t, err)
@@ -154,9 +159,8 @@ func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
 	require.Error(t, err)
 	_, err = m.LookupHost(context.Background(), "dynamic")
 	require.Error(t, err)
-	static, err := m.LookupHost(context.Background(), "static")
-	require.NoError(t, err)
-	require.Equal(t, []string{"root"}, static.Policy.Accounts)
+	_, err = m.LookupHost(context.Background(), "static")
+	require.ErrorIs(t, err, ErrStorage, "a failed managed store must not switch to static-only service")
 }
 func TestManagedRevisionLockAndValidation(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
@@ -183,18 +187,21 @@ func TestManagedRevisionLockAndValidation(t *testing.T) {
 }
 func TestManagedTokenConflictDoesNotConsumeAndExpiry(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [taken]\n")
-	_, secret, err := m.CreateToken("admin", time.Hour)
+	token, err := m.CreateToken("admin", time.Hour)
+	secret := token.ID
 	require.NoError(t, err)
 	_, err = m.Enroll(proposal("taken"), secret)
 	require.ErrorIs(t, err, ErrConflict)
 	_, err = m.Enroll(proposal("free"), secret)
 	require.NoError(t, err)
-	tok, secret, err := m.CreateToken("admin", time.Hour)
+	tok, err := m.CreateToken("admin", time.Hour)
+	secret = tok.ID
 	require.NoError(t, err)
 	require.NoError(t, m.RevokeToken("admin", tok.ID))
 	_, err = m.Enroll(proposal("revoked"), secret)
 	require.ErrorIs(t, err, ErrToken)
-	_, secret, err = m.CreateToken("admin", time.Nanosecond)
+	expiredToken, err := m.CreateToken("admin", time.Nanosecond)
+	secret = expiredToken.ID
 	require.NoError(t, err)
 	time.Sleep(time.Millisecond)
 	_, err = m.Enroll(proposal("expired"), secret)
@@ -271,4 +278,60 @@ func TestManagedApprovalRejectsSharedGeneratedDomains(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", b.ID, b.Revision, nil)
 	require.ErrorIs(t, err, ErrConflict)
+}
+
+func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
+	for _, accounts := range [][]string{nil, {}, {"alice"}} {
+		t.Run(fmt.Sprintf("%#v", accounts), func(t *testing.T) {
+			m, _ := managedFixture(t, "users: []\n")
+			p := proposal("host")
+			p.Accounts = accounts
+			h, err := m.Enroll(p, "")
+			require.NoError(t, err)
+			_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
+			require.NoError(t, err)
+			require.NoError(t, m.Close())
+			fresh, err := OpenManaged(m.files.root, m.static)
+			require.NoError(t, err)
+			defer fresh.Close()
+			host, err := fresh.LookupHost(t.Context(), "host")
+			require.NoError(t, err)
+			require.Equal(t, accounts, host.Policy.Accounts)
+		})
+	}
+}
+
+func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
+	m, _ := managedFixture(t, "hosts:\n - names: [static]\n   accounts: [root]\n")
+	approved, err := m.Enroll(proposal("taken"), "")
+	require.NoError(t, err)
+	approved, err = m.Change("admin", "approve", approved.ID, approved.Revision, nil)
+	require.NoError(t, err)
+	pending, err := m.Enroll(proposal("taken"), "")
+	require.NoError(t, err)
+	require.Equal(t, "pending", pending.Status)
+	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
+	require.ErrorIs(t, err, ErrConflict)
+
+	// Editing the existing record can release the name for the pending request.
+	moved := proposal("moved")
+	_, err = m.Change("admin", "edit", approved.ID, approved.Revision, &moved)
+	require.NoError(t, err)
+	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
+	require.NoError(t, err)
+
+	pending, err = m.Enroll(proposal("static"), "")
+	require.NoError(t, err)
+	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
+	require.ErrorIs(t, err, ErrConflict)
+	current, err := m.LookupHost(t.Context(), "static")
+	require.NoError(t, err)
+	require.Equal(t, []string{"root"}, current.Policy.Accounts)
+
+	// Editing the pending request can resolve a conflict with a static record.
+	moved = proposal("free")
+	pending, err = m.Change("admin", "edit", pending.ID, pending.Revision, &moved)
+	require.NoError(t, err)
+	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
+	require.NoError(t, err)
 }

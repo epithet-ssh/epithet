@@ -34,8 +34,8 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 
 func (b *Broker) inventoryWithToken(ctx context.Context, token string, request inventoryapi.ControlRequest) (*inventoryapi.ControlResponse, int, error) {
 	response, status, err := b.inventoryClient.Control(ctx, token, request)
-	if response != nil && response.Secret != "" {
-		response.CAURL = b.enrollmentCAURL
+	if response != nil && response.Token != nil {
+		response.CAURL = b.publicCAURL
 	}
 	return response, status, err
 }

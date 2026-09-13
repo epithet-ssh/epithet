@@ -71,7 +71,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		}
 		return nil
 	}
-	proposal, err = editProposal(proposal, bufio.NewReader(os.Stdin), "submit", validateLocal)
+	proposal, err = editProposal(proposal, bufio.NewReader(os.Stdin), validateLocal)
 	if err != nil {
 		return nil, err
 	}

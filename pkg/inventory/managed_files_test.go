@@ -21,13 +21,13 @@ func readItem(t *testing.T, m *Managed, id string) *itemRecord {
 }
 func TestTokenFilenameBecomesHostAndOnlyThatFileChanges(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
-	token, value, err := m.CreateToken("admin", time.Hour)
+	token, err := m.CreateToken("admin", time.Hour)
+	value := token.ID
 	require.NoError(t, err)
-	require.Equal(t, value, token.ID)
 	before := readItem(t, m, value)
 	require.Equal(t, "token", before.Kind)
 	require.Nil(t, before.Host)
-	other, _, err := m.CreateToken("admin", time.Hour)
+	other, err := m.CreateToken("admin", time.Hour)
 	require.NoError(t, err)
 	otherPath := m.files.itemPath(other.ID)
 	otherInfo, err := os.Stat(otherPath)
@@ -155,7 +155,8 @@ func TestExclusiveItemCreationDoesNotOverwriteCollision(t *testing.T) {
 		}
 		return next, nil
 	}
-	token, value, err := m.CreateToken("admin", time.Hour)
+	token, err := m.CreateToken("admin", time.Hour)
+	value := token.ID
 	require.NoError(t, err)
 	require.Equal(t, next, value)
 	require.Equal(t, next, token.ID)
@@ -169,7 +170,8 @@ func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
 	for _, published := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before-replace", true: "after-replace"}[published], func(t *testing.T) {
 			m, _ := managedFixture(t, "users: []\n")
-			_, value, err := m.CreateToken("admin", time.Hour)
+			token, err := m.CreateToken("admin", time.Hour)
+			value := token.ID
 			require.NoError(t, err)
 			realWrite := m.files.writeAtomic
 			m.files.writeAtomic = func(path string, data []byte, create bool) error {
@@ -212,7 +214,8 @@ func TestItemRejectsFilenameMismatchAndTraversal(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
 	_, err := m.Enroll(proposal("x"), "../inventory.lock")
 	require.ErrorIs(t, err, ErrToken)
-	_, value, err := m.CreateToken("admin", time.Hour)
+	token, err := m.CreateToken("admin", time.Hour)
+	value := token.ID
 	require.NoError(t, err)
 	require.NoError(t, m.Close())
 	require.NoError(t, os.Rename(m.files.itemPath(value), m.files.itemPath(strings.Repeat("a", 64))))

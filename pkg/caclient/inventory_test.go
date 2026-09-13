@@ -2,6 +2,8 @@ package caclient
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -30,4 +32,31 @@ func TestInventoryDiscoverySeparateOriginAndTLS(t *testing.T) {
 	target, err = InventoryURL(root, tlsconfig.Config{})
 	require.NoError(t, err)
 	require.Empty(t, target)
+}
+
+func TestDiscoveryUsesOneBootstrapForAuthAndInventory(t *testing.T) {
+	roots := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Empty(t, r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/prefix/":
+			roots++
+			w.Header().Add("Link", `<auth>; rel="https://epithet.dev/rel/auth"`)
+			w.Header().Add("Link", `<manage?route=hosts>; rel="https://epithet.dev/rel/inventory"`)
+		case "/prefix/auth":
+			fmt.Fprint(w, `{"auth":{"issuer":"https://issuer.example","client_id":"client"}}`)
+		default:
+			t.Errorf("unexpected discovery path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := New([]CAEndpoint{{URL: server.URL + "/prefix/"}}, WithTLSConfig(tlsconfig.Config{Insecure: true}))
+	require.NoError(t, err)
+	discovery, err := client.GetDiscovery(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, roots)
+	require.Equal(t, server.URL+"/prefix/", discovery.PublicCAURL)
+	require.Equal(t, server.URL+"/prefix/manage?route=hosts", discovery.InventoryURL)
+	require.Equal(t, "https://issuer.example", discovery.Auth.Issuer)
 }

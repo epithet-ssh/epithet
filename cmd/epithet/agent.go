@@ -180,8 +180,11 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	// Discover the auth config from the CA's anonymous bootstrap endpoint.
 	logger.Debug("discovering auth config from CA")
 	discovery, err := caClient.GetDiscovery(context.Background())
-	if err != nil || discovery == nil || discovery.Auth == nil {
+	if err != nil {
 		return fmt.Errorf("failed to get discovery config from CA: %w", err)
+	}
+	if discovery == nil || discovery.Auth == nil {
+		return fmt.Errorf("CA discovery did not include authentication configuration")
 	}
 	logger.Info("discovered auth config from CA", "issuer", discovery.Auth.Issuer)
 
@@ -213,15 +216,11 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	}
 
 	// Bind inventory management to the endpoint advertised by the CA.
-	inventoryURL, enrollmentCAURL, err := caClient.DiscoverInventory(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to discover inventory endpoint: %w", err)
-	}
-	inventoryClient, err := inventoryclient.New(inventoryURL, tlsCfg)
+	inventoryClient, err := inventoryclient.New(discovery.InventoryURL, tlsCfg)
 	if err != nil {
 		return err
 	}
-	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, enrollmentCAURL, inventoryClient,
+	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, discovery.PublicCAURL, inventoryClient,
 		makeAgentIdentityVerifier(*discovery.Auth, tlsCfg), agentDir)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)

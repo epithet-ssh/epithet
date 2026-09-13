@@ -332,12 +332,20 @@ func (c *Client) doGetRoot(ctx context.Context, caURL string) (*RootResponse, er
 	}, nil
 }
 
+// DiscoveryResponse includes the auth document and public service addresses
+// advertised by the same CA bootstrap response.
+type DiscoveryResponse struct {
+	wire.Discovery
+	PublicCAURL  string
+	InventoryURL string
+}
+
 // GetDiscovery fetches the CA's discovery document by following the Link
 // header the CA advertises on its root GET, with automatic failover to
 // backup CAs. The endpoint requires no authentication, so no token is sent.
 // Callers are responsible for caching the result if they need to avoid
 // repeated fetches.
-func (c *Client) GetDiscovery(ctx context.Context) (*wire.Discovery, error) {
+func (c *Client) GetDiscovery(ctx context.Context) (*DiscoveryResponse, error) {
 	result, err := c.pool.Execute(func(caURL string) (any, error) {
 		if c.logger != nil {
 			c.logger.Debug("GetDiscovery request", "url", caURL)
@@ -352,19 +360,20 @@ func (c *Client) GetDiscovery(ctx context.Context) (*wire.Discovery, error) {
 		}
 		return nil, err
 	}
-	return result.(*wire.Discovery), nil
+	return result.(*DiscoveryResponse), nil
 }
 
 // doGetDiscovery makes two unauthenticated GET requests to a CA: one to the CA
 // URL itself, which advertises the location of the auth config with a relative
 // Link target, and one to the resolved target. Neither request constructs a
 // path, so the CA can be mounted anywhere.
-func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*wire.Discovery, error) {
-	final, ref, err := c.fetchDiscoveryLink(ctx, caURL)
+func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*DiscoveryResponse, error) {
+	final, links, err := c.fetchDiscoveryLinks(ctx, caURL)
 	if err != nil {
 		return nil, err
 	}
 
+	ref, _ := findLinkTarget(links, relAuth) // fetchDiscoveryLinks requires this relation.
 	target, err := resolveLinkTarget(final, ref)
 	if err != nil {
 		return nil, err
@@ -372,7 +381,7 @@ func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*wire.Discov
 
 	// The same-origin check is anchored to the configured ca-url, not to
 	// final: a redirect can legitimately move the resolution base (see
-	// fetchDiscoveryLink), but it must not be able to walk the origin check
+	// fetchDiscoveryLinks), but it must not be able to walk the origin check
 	// off along with it, or a redirect to an attacker's origin defeats the
 	// control by comparing that origin to itself.
 	configured, err := url.Parse(caURL)
@@ -383,20 +392,28 @@ func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*wire.Discov
 		return nil, &InvalidRequestError{Message: fmt.Sprintf("CA at %s advertised discovery at a different origin (%s)", caURL, target)}
 	}
 
-	return c.fetchDiscoveryDoc(ctx, target.String())
+	inventoryURL, err := InventoryURL(&RootResponse{FinalURL: final.String(), Links: links.Values("Link")}, c.tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+	discovery, err := c.fetchDiscoveryDoc(ctx, target.String())
+	if err != nil {
+		return nil, err
+	}
+	return &DiscoveryResponse{Discovery: *discovery, PublicCAURL: final.String(), InventoryURL: inventoryURL}, nil
 }
 
-// fetchDiscoveryLink GETs the CA URL and returns the URL the response actually
-// came from (which differs from caURL if redirected) along with the raw Link
-// target advertising the auth config.
-func (c *Client) fetchDiscoveryLink(ctx context.Context, caURL string) (*url.URL, string, error) {
+// fetchDiscoveryLinks GETs the CA URL and returns the URL the response actually
+// came from (which differs from caURL if redirected) along with the Link headers
+// advertising its public service endpoints.
+func (c *Client) fetchDiscoveryLinks(ctx context.Context, caURL string) (*url.URL, http.Header, error) {
 	if c.logger != nil {
 		c.logger.Debug("http request", "method", "GET", "url", caURL)
 	}
 
 	rq, err := http.NewRequest("GET", caURL, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 
 	start := time.Now()
@@ -406,7 +423,7 @@ func (c *Client) fetchDiscoveryLink(ctx context.Context, caURL string) (*url.URL
 		if c.logger != nil {
 			c.logger.Debug("http request failed", "method", "GET", "url", caURL, "duration_ms", duration.Milliseconds(), "error", err)
 		}
-		return nil, "", err
+		return nil, nil, err
 	}
 	defer res.Body.Close()
 	// The body is the CA public key; discovery does not need it, but it must
@@ -419,21 +436,21 @@ func (c *Client) fetchDiscoveryLink(ctx context.Context, caURL string) (*url.URL
 
 	if res.StatusCode != http.StatusOK {
 		if res.StatusCode >= 500 {
-			return nil, "", &CAUnavailableError{Message: fmt.Sprintf("GET %s returned %d", caURL, res.StatusCode)}
+			return nil, nil, &CAUnavailableError{Message: fmt.Sprintf("GET %s returned %d", caURL, res.StatusCode)}
 		}
-		return nil, "", &InvalidRequestError{Message: fmt.Sprintf("GET %s returned %d", caURL, res.StatusCode)}
+		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("GET %s returned %d", caURL, res.StatusCode)}
 	}
 
-	ref, ok := findLinkTarget(res.Header, relAuth)
+	_, ok := findLinkTarget(res.Header, relAuth)
 	if !ok {
-		return nil, "", &InvalidRequestError{Message: fmt.Sprintf("CA at %s did not advertise its auth config (no Link with rel=%q); the CA is older than this client and must be upgraded", caURL, relAuth)}
+		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("CA at %s did not advertise its auth config (no Link with rel=%q); the CA is older than this client and must be upgraded", caURL, relAuth)}
 	}
 
 	// Resolve against where the response came from, not where it was sent, so
 	// a redirect cannot silently shift the base.
 	final := res.Request.URL
 
-	return final, ref, nil
+	return final, res.Header, nil
 }
 
 // fetchDiscoveryDoc GETs the resolved discovery URL and decodes it.
