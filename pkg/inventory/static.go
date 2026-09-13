@@ -278,11 +278,11 @@ func (s *Static) LookupUser(_ context.Context, id string) (*directory.User, erro
 	return s.ids[id], nil
 }
 
-// LookupHost implements Inventory: exact entries first, then pattern
+// LookupHost implements Hosts: exact entries first, then pattern
 // entries in file order, first match wins.
-func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, error) {
+func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, string, error) {
 	if h, ok := s.hosts[name]; ok {
-		return h, nil
+		return h, s.InventoryRevision(), nil
 	}
 	for _, p := range s.patterns {
 		if p.pattern.Match(name) {
@@ -290,10 +290,10 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, erro
 				Policy:        resolvedPolicyHost([]string{name}, p.domain, p.labels, p.accounts),
 				PrincipalMode: p.principalMode,
 				Domain:        p.domain,
-			}, nil
+			}, s.InventoryRevision(), nil
 		}
 	}
-	return nil, nil
+	return nil, s.InventoryRevision(), nil
 }
 
 func (s *Static) resolvePrincipalMode(override PrincipalMode) (PrincipalMode, error) {

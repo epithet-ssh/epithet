@@ -10,14 +10,13 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 )
 
-// Resolver combines independently owned directory and host snapshots. Static
-// data is immutable for the lifetime of this resolver; future dynamic sources
-// must supply coherent snapshot reads and explicit freshness semantics.
+// Resolver combines independently owned directory and host snapshots. Directory
+// data is immutable for the lifetime of this resolver; the host source supplies
+// its revision with each lookup.
 type Resolver struct {
 	Directory         directory.Directory
 	Hosts             inventory.Hosts
 	DirectoryRevision string
-	InventoryRevision string
 }
 
 func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host string) (*inventoryapi.Resolution, error) {
@@ -25,15 +24,7 @@ func (s *Resolver) Resolve(ctx context.Context, auth facts.Authentication, host 
 	if err != nil {
 		return nil, fmt.Errorf("looking up user: %w", err)
 	}
-	var h *inventory.ResolvedHost
-	revision := s.InventoryRevision
-	if snapshots, ok := s.Hosts.(interface {
-		LookupHostSnapshot(context.Context, string) (*inventory.ResolvedHost, string, error)
-	}); ok {
-		h, revision, err = snapshots.LookupHostSnapshot(ctx, host)
-	} else {
-		h, err = s.Hosts.LookupHost(ctx, host)
-	}
+	h, revision, err := s.Hosts.LookupHost(ctx, host)
 
 	if err != nil {
 		return nil, fmt.Errorf("looking up host: %w", err)

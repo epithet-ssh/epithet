@@ -41,13 +41,31 @@ hosts:
 
 const inventoryGeneratedDomain = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
+func TestStaticLookupReturnsRevisionIncludingMissingHosts(t *testing.T) {
+	s, err := NewStatic([]string{writeInv(t, "inventory.yaml", basicInventory)})
+	require.NoError(t, err)
+	for _, name := range []string{"prod-db-1", "ci-runner-42", "missing"} {
+		t.Run(name, func(t *testing.T) {
+			host, revision, err := s.LookupHost(t.Context(), name)
+			require.NoError(t, err)
+			require.NotEmpty(t, revision)
+			require.Equal(t, s.InventoryRevision(), revision)
+			if name == "missing" {
+				require.Nil(t, host)
+			} else {
+				require.NotNil(t, host)
+			}
+		})
+	}
+}
+
 func TestMultipleNamesResolveOneHost(t *testing.T) {
 	src := "hosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    domain: " + inventoryGeneratedDomain + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
 	s, err := NewStatic([]string{writeInv(t, "names.yaml", src)})
 	require.NoError(t, err)
 	var first *ResolvedHost
 	for _, name := range []string{"freki.home", "freki.tailca597.ts.net"} {
-		host, err := s.LookupHost(t.Context(), name)
+		host, _, err := s.LookupHost(t.Context(), name)
 		require.NoError(t, err)
 		require.NotNil(t, host)
 		require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Policy.Names)
@@ -145,7 +163,7 @@ func TestDuplicateIDAcrossFilesIsError(t *testing.T) {
 
 func TestExactHostLowercasedAtLoad(t *testing.T) {
 	s := loadBasic(t)
-	h, err := s.LookupHost(context.Background(), "prod-db-1")
+	h, _, err := s.LookupHost(context.Background(), "prod-db-1")
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	require.Equal(t, []string{"prod-db-1"}, h.Policy.Names)
@@ -155,7 +173,7 @@ func TestExactHostLowercasedAtLoad(t *testing.T) {
 
 func TestHostWithoutAccountsIsUngrounded(t *testing.T) {
 	s := loadBasic(t)
-	h, err := s.LookupHost(context.Background(), "dev-box")
+	h, _, err := s.LookupHost(context.Background(), "dev-box")
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	require.Nil(t, h.Policy.Accounts)
@@ -163,7 +181,7 @@ func TestHostWithoutAccountsIsUngrounded(t *testing.T) {
 
 func TestPatternSynthesizesHost(t *testing.T) {
 	s := loadBasic(t)
-	h, err := s.LookupHost(context.Background(), "ci-runner-42")
+	h, _, err := s.LookupHost(context.Background(), "ci-runner-42")
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	require.Equal(t, []string{"ci-runner-42"}, h.Policy.Names, "synthesized host adopts the requested name")
@@ -173,7 +191,7 @@ func TestPatternSynthesizesHost(t *testing.T) {
 
 func TestPatternStarStopsAtLabelBoundary(t *testing.T) {
 	s := loadBasic(t)
-	h, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
+	h, _, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
 	require.NoError(t, err)
 	require.Nil(t, h)
 }
@@ -184,7 +202,7 @@ func TestPatternDoublestarCrossesLabelBoundaries(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, name := range []string{"controlplane.internal", "api.controlplane.internal", "blue.api.controlplane.internal"} {
-		h, err := s.LookupHost(context.Background(), name)
+		h, _, err := s.LookupHost(context.Background(), name)
 		require.NoError(t, err)
 		require.NotNil(t, h, name)
 	}
@@ -215,7 +233,7 @@ func TestHashedDefaultRequiresAndLoadsExactDomain(t *testing.T) {
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	h, err := s.LookupHost(context.Background(), "prod-1")
+	h, _, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, h.PrincipalMode)
 	require.Equal(t, inventoryGeneratedDomain, h.Domain.String())
@@ -233,7 +251,7 @@ hosts:
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	h, err := s.LookupHost(context.Background(), "ci-42")
+	h, _, err := s.LookupHost(context.Background(), "ci-42")
 	require.NoError(t, err)
 	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
 	require.Equal(t, []string{"ubuntu"}, h.Policy.Accounts)
@@ -251,7 +269,7 @@ hosts:
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	h, err := s.LookupHost(context.Background(), "legacy-1")
+	h, _, err := s.LookupHost(context.Background(), "legacy-1")
 	require.NoError(t, err)
 	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
 }
@@ -271,7 +289,7 @@ func TestHashedPatternLoadsDeclaredNamedDomain(t *testing.T) {
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	host, err := s.LookupHost(context.Background(), "prod-worker-1")
+	host, _, err := s.LookupHost(context.Background(), "prod-worker-1")
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, host.PrincipalMode)
 	require.Equal(t, "production", host.Domain.String())
@@ -349,9 +367,9 @@ hosts:
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
 
-	one, err := s.LookupHost(context.Background(), "prod-1")
+	one, _, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
-	two, err := s.LookupHost(context.Background(), "prod-2")
+	two, _, err := s.LookupHost(context.Background(), "prod-2")
 	require.NoError(t, err)
 	require.Equal(t, []string{"production"}, one.Policy.Names)
 	require.Equal(t, one.Policy, two.Policy)
@@ -399,7 +417,7 @@ func TestUnknownPrincipalModeIsError(t *testing.T) {
 
 func TestUnknownHostIsNilNil(t *testing.T) {
 	s := loadBasic(t)
-	h, err := s.LookupHost(context.Background(), "unknown-host")
+	h, _, err := s.LookupHost(context.Background(), "unknown-host")
 	require.NoError(t, err)
 	require.Nil(t, h)
 }
@@ -414,7 +432,7 @@ hosts:
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
-	h, err := s.LookupHost(context.Background(), "ci-runner-1")
+	h, _, err := s.LookupHost(context.Background(), "ci-runner-1")
 	require.NoError(t, err)
 	require.Equal(t, "prod", h.Policy.Labels["env"])
 }
@@ -429,7 +447,7 @@ hosts:
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
-	h, err := s.LookupHost(context.Background(), "ci-runner-1")
+	h, _, err := s.LookupHost(context.Background(), "ci-runner-1")
 	require.NoError(t, err)
 	require.Equal(t, "broad", h.Policy.Labels["tier"], "pattern entries match in file order")
 }
@@ -442,7 +460,7 @@ hosts:
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
-	h, err := s.LookupHost(context.Background(), "locked-down")
+	h, _, err := s.LookupHost(context.Background(), "locked-down")
 	require.NoError(t, err)
 	require.NotNil(t, h.Policy.Accounts, "accounts: [] grounds nothing, which is different from absent")
 	require.Empty(t, h.Policy.Accounts)
@@ -455,7 +473,7 @@ func TestMultipleFilesConcatenate(t *testing.T) {
 	require.NoError(t, err)
 	u, _ := s.LookupUser(context.Background(), "subject:alice@example.com")
 	require.NotNil(t, u)
-	h, _ := s.LookupHost(context.Background(), "web-1")
+	h, _, _ := s.LookupHost(context.Background(), "web-1")
 	require.NotNil(t, h)
 }
 

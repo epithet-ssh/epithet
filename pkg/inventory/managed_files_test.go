@@ -70,10 +70,10 @@ func TestHostnameLookupUsesIndexesWithoutFilesystemReads(t *testing.T) {
 	// Move the entire directory out of the way. A resolver which touched any
 	// record on disk would fail; committed in-memory lookup remains available.
 	require.NoError(t, os.Rename(m.files.dir, m.files.dir+".offline"))
-	got, _, err := m.LookupHostSnapshot(t.Context(), "HOST")
+	got, _, err := m.LookupHost(t.Context(), "HOST")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alice"}, got.Policy.Accounts)
-	missing, err := m.LookupHost(t.Context(), "fallback")
+	missing, _, err := m.LookupHost(t.Context(), "fallback")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, missing.Policy.Accounts)
 	require.NoError(t, os.Rename(m.files.dir+".offline", m.files.dir))
@@ -88,7 +88,7 @@ func TestRestartRebuildsNamesAfterRename(t *testing.T) {
 	h, err = m.Change("admin", "edit", h.ID, h.Revision, &p)
 	require.NoError(t, err)
 	r := readItem(t, m, h.ID)
-	_, oldRevision, err := m.LookupHostSnapshot(t.Context(), "current")
+	_, oldRevision, err := m.LookupHost(t.Context(), "current")
 	require.NoError(t, err)
 	require.NoError(t, m.Close())
 	// Offline emergency edit: rename the host. No index file needs repair.
@@ -99,12 +99,12 @@ func TestRestartRebuildsNamesAfterRename(t *testing.T) {
 	restarted, err := OpenManaged(m.files.root, m.static)
 	require.NoError(t, err)
 	defer restarted.Close()
-	got, newRevision, err := restarted.LookupHostSnapshot(t.Context(), "offline-name")
+	got, newRevision, err := restarted.LookupHost(t.Context(), "offline-name")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.NotEqual(t, oldRevision, newRevision)
 	for _, name := range []string{"old", "current"} {
-		got, err := restarted.LookupHost(t.Context(), name)
+		got, _, err := restarted.LookupHost(t.Context(), name)
 		require.NoError(t, err)
 		require.Equal(t, []string{"root"}, got.Policy.Accounts)
 	}
@@ -112,7 +112,7 @@ func TestRestartRebuildsNamesAfterRename(t *testing.T) {
 	again, err := OpenManaged(m.files.root, m.static)
 	require.NoError(t, err)
 	defer again.Close()
-	_, stable, err := again.LookupHostSnapshot(t.Context(), "offline-name")
+	_, stable, err := again.LookupHost(t.Context(), "offline-name")
 	require.NoError(t, err)
 	require.Equal(t, newRevision, stable)
 }
@@ -182,7 +182,7 @@ func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
 
 			_, err = m.Enroll(proposal("host"), value)
 			require.ErrorIs(t, err, ErrStorage)
-			_, err = m.LookupHost(t.Context(), "host")
+			_, _, err = m.LookupHost(t.Context(), "host")
 			require.ErrorIs(t, err, ErrStorage)
 			require.NoError(t, m.Close())
 			restarted, err := OpenManaged(m.files.root, m.static)

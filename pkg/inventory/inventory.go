@@ -62,6 +62,9 @@ type Host struct {
 }
 
 // Hosts resolves machines independently of the user directory.
+// LookupHost returns the host and the revision of the inventory used to resolve
+// it from one coherent read. A missing host returns nil with a nonempty revision;
+// lookup failures return an error.
 type Hosts interface {
-	LookupHost(context.Context, string) (*ResolvedHost, error)
+	LookupHost(context.Context, string) (*ResolvedHost, string, error)
 }

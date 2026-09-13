@@ -68,6 +68,7 @@ func TestResolverAuthenticationAndGrounding(t *testing.T) {
 			result, err := client.Resolve(t.Context(), request)
 			require.NoError(t, err)
 			require.Equal(t, request.Host, result.Target)
+			require.Equal(t, inv.InventoryRevision(), result.Inventory.Revision)
 			require.Equal(t, tc.accounts, result.Inventory.Host.Accounts)
 			require.Equal(t, "Platform", result.Directory.User.Department)
 			require.Equal(t, "Example", result.Directory.User.Organization)
@@ -91,6 +92,7 @@ func TestResolverAuthenticationAndGrounding(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result.Directory.User)
 	require.Nil(t, result.Inventory.Host)
+	require.Equal(t, inv.InventoryRevision(), result.Inventory.Revision)
 	wrongIssuer := req
 	wrongIssuer.Token = oidctest.New(t).MintIDToken("alice", time.Now().Add(time.Hour))
 	_, err = client.Resolve(t.Context(), wrongIssuer)

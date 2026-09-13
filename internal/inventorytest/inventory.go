@@ -16,7 +16,7 @@ import (
 )
 
 func Resolver(inv *inventory.Static) *inventoryserver.Resolver {
-	return &inventoryserver.Resolver{Directory: inv, Hosts: inv, DirectoryRevision: inv.DirectoryRevision(), InventoryRevision: inv.InventoryRevision()}
+	return &inventoryserver.Resolver{Directory: inv, Hosts: inv, DirectoryRevision: inv.DirectoryRevision()}
 }
 func Serve(t *testing.T, inv *inventory.Static, issuer string, key sshcert.RawPublicKey) *httptest.Server {
 	t.Helper()

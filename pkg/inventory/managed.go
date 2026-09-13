@@ -610,11 +610,9 @@ func (m *Managed) Audit() ([]AuditEvent, error) {
 	})
 	return events, nil
 }
-func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, error) {
-	h, _, err := m.LookupHostSnapshot(ctx, name)
-	return h, err
-}
-func (m *Managed) LookupHostSnapshot(ctx context.Context, name string) (*ResolvedHost, string, error) {
+
+// LookupHost resolves the host and its revision under the same read lock.
+func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, string, error) {
 	name = hostpattern.NormalizeName(name)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -633,7 +631,7 @@ func (m *Managed) LookupHostSnapshot(ctx context.Context, name string) (*Resolve
 		return &ResolvedHost{Policy: Host{Names: slices.Clone(p.Names), Labels: cloneLabels(p.Labels), Accounts: slices.Clone(p.Accounts)}, PrincipalMode: p.PrincipalMode, Domain: principal.Domain(p.Domain)}, revision, nil
 	}
 	if m.static != nil {
-		h, err := m.static.LookupHost(ctx, name)
+		h, _, err := m.static.LookupHost(ctx, name)
 		return h, revision, err
 	}
 	return nil, revision, nil

@@ -35,7 +35,7 @@ func TestManagedAdmissionConflictAndWildcardFallback(t *testing.T) {
 	require.NoError(t, err)
 	b, err := m.Enroll(proposal("a.example"), "")
 	require.NoError(t, err)
-	h, err := m.LookupHost(context.Background(), "a.example")
+	h, _, err := m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, h.Policy.Accounts, "pending must not change wildcard admission")
 	a, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
@@ -49,14 +49,14 @@ func TestManagedAdmissionConflictAndWildcardFallback(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Change("admin", "remove", a.ID, a.Revision, nil)
 	require.NoError(t, err)
-	h, err = m.LookupHost(context.Background(), "a.example")
+	h, _, err = m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, h.Policy.Accounts)
 	a, err = m.Enroll(proposal("a.example"), "")
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
 	require.NoError(t, err)
-	h, err = m.LookupHost(context.Background(), "a.example")
+	h, _, err = m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alice"}, h.Policy.Accounts)
 }
@@ -88,7 +88,7 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tok.ID, tokens[0].ID)
 	require.Equal(t, h.ID, tokens[0].UsedBy)
-	host, err := fresh.LookupHost(context.Background(), "one")
+	host, _, err := fresh.LookupHost(context.Background(), "one")
 	require.NoError(t, err)
 	require.NotNil(t, host)
 	_, err = fresh.Change("admin", "remove", h.ID, h.Revision, nil)
@@ -103,7 +103,7 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	tokens, err = fresh.Tokens()
 	require.NoError(t, err)
 	require.Empty(t, tokens)
-	host, err = fresh.LookupHost(t.Context(), "one")
+	host, _, err = fresh.LookupHost(t.Context(), "one")
 	require.NoError(t, err)
 	require.Nil(t, host)
 	_, err = fresh.Enroll(proposal("one"), secret)
@@ -170,9 +170,9 @@ func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
 	require.NoError(t, os.Mkdir(m.files.itemPath(h.ID), 0700))
 	_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 	require.Error(t, err)
-	_, err = m.LookupHost(context.Background(), "dynamic")
+	_, _, err = m.LookupHost(context.Background(), "dynamic")
 	require.Error(t, err)
-	_, err = m.LookupHost(context.Background(), "static")
+	_, _, err = m.LookupHost(context.Background(), "static")
 	require.ErrorIs(t, err, ErrStorage, "a failed managed store must not switch to static-only service")
 }
 func TestManagedRevisionLockAndValidation(t *testing.T) {
@@ -247,7 +247,7 @@ func TestManagedCorruptionFailsStartupEvenWithStaticOverrides(t *testing.T) {
 	repaired, err := OpenManaged(dir, m.static)
 	require.NoError(t, err)
 	defer repaired.Close()
-	host, err := repaired.LookupHost(t.Context(), "recovery")
+	host, _, err := repaired.LookupHost(t.Context(), "recovery")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, host.Policy.Accounts)
 }
@@ -266,13 +266,13 @@ func TestManagedSnapshotsDoNotExposeMutableState(t *testing.T) {
 	retry.Proposal.Labels["role"] = "hijacked"
 	h, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 	require.NoError(t, err)
-	host, revision, err := m.LookupHostSnapshot(t.Context(), "host")
+	host, revision, err := m.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
 	require.NotEmpty(t, revision)
 	require.Equal(t, "server", host.Policy.Labels["role"])
 	require.Equal(t, []string{"alice"}, host.Policy.Accounts)
 	host.Policy.Labels["role"] = "hijacked"
-	next, err := m.LookupHost(t.Context(), "host")
+	next, _, err := m.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
 	require.Equal(t, "server", next.Policy.Labels["role"])
 }
@@ -307,7 +307,7 @@ func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
 			fresh, err := OpenManaged(m.files.root, m.static)
 			require.NoError(t, err)
 			defer fresh.Close()
-			host, err := fresh.LookupHost(t.Context(), "host")
+			host, _, err := fresh.LookupHost(t.Context(), "host")
 			require.NoError(t, err)
 			require.Equal(t, accounts, host.Policy.Accounts)
 		})
@@ -337,7 +337,7 @@ func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", pending.ID, pending.Revision, nil)
 	require.ErrorIs(t, err, ErrConflict)
-	current, err := m.LookupHost(t.Context(), "static")
+	current, _, err := m.LookupHost(t.Context(), "static")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, current.Policy.Accounts)
 
@@ -374,12 +374,12 @@ func TestUnapprovedRecordsNeverAffectResolution(t *testing.T) {
 			}
 			check := func(store *Managed) {
 				for _, name := range []string{"old.example", "new.example"} {
-					h, err := store.LookupHost(t.Context(), name)
+					h, _, err := store.LookupHost(t.Context(), name)
 					require.NoError(t, err)
 					require.NotNil(t, h)
 					require.Equal(t, []string{"root"}, h.Policy.Accounts)
 				}
-				h, err := store.LookupHost(t.Context(), "accepted.example")
+				h, _, err := store.LookupHost(t.Context(), "accepted.example")
 				require.NoError(t, err)
 				require.Equal(t, []string{"alice"}, h.Policy.Accounts)
 			}

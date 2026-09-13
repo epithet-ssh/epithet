@@ -33,8 +33,8 @@ func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.Use
 	return f.users[identity], f.err
 }
 
-func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, error) {
-	return f.hosts[name], f.err
+func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, string, error) {
+	return f.hosts[name], "h1", f.err
 }
 
 func testInv() *fakeInv {
@@ -351,7 +351,7 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 	return e
 }
 func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
-	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv, DirectoryRevision: "d1", InventoryRevision: "h1"}
+	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv, DirectoryRevision: "d1"}
 	resolution, err := resolver.Resolve(ctx, facts.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
 	if err != nil {
 		return nil, err

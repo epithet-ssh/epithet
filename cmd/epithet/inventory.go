@@ -91,7 +91,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if err != nil {
 		return err
 	}
-	resolver := &inventoryserver.Resolver{Directory: inv, Hosts: inv, DirectoryRevision: inv.DirectoryRevision(), InventoryRevision: inv.InventoryRevision()}
+	resolver := &inventoryserver.Resolver{Directory: inv, Hosts: inv, DirectoryRevision: inv.DirectoryRevision()}
 	serverCfg := &inventoryserver.ServerConfig{CAPublicKey: key, OIDC: inventoryserver.OIDCConfig{
 		Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, ClientSecret: c.OIDC.ClientSecret,
 		IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim,
