@@ -68,7 +68,7 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 
 	h, err := m.Enroll(proposal("one"), secret)
 	require.NoError(t, err)
-	require.Equal(t, "approved", h.Status)
+	require.Equal(t, "active", h.Status)
 	_, err = m.Enroll(proposal("different"), secret)
 	require.ErrorIs(t, err, ErrToken)
 	_, err = m.Enroll(proposal("two"), secret)
@@ -187,7 +187,7 @@ func TestManagedRevisionLockAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 	require.ErrorIs(t, err, ErrRevision)
-	for _, body := range []string{"names: [a]\nprincipal-mode: account-name\n", "names: [a]\naccounts: []\nprincipal-mode: account-name\nstatus: approved\n", "names: [a]\naccounts: []\nprincipal-mode: account-name\n---\n{}"} {
+	for _, body := range []string{"names: [a]\nprincipal-mode: account-name\n", "names: [a]\naccounts: []\nprincipal-mode: account-name\nstatus: active\n", "names: [a]\naccounts: []\nprincipal-mode: account-name\n---\n{}"} {
 		_, err := ParseProposal([]byte(body))
 		require.Error(t, err)
 	}
@@ -307,7 +307,7 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	require.NoError(t, err)
 	b, err := m.Enroll(p, token.ID)
 	require.NoError(t, err)
-	require.Equal(t, "approved", b.Status)
+	require.Equal(t, "active", b.Status)
 	require.NoError(t, m.Close())
 	fresh, err := OpenManaged(m.files.root, m.static)
 	require.NoError(t, err)

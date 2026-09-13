@@ -44,7 +44,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 		rejected, localFailure bool
 	}{
 		{name: "pending", status: "pending"},
-		{name: "token admission", token: "one-use-token", status: "approved"},
+		{name: "token admission", token: "one-use-token", status: "active"},
 		{name: "rejection then rerun", status: "pending", rejected: true},
 		{name: "local failure", localFailure: true},
 		{name: "named domain flag", status: "pending", domain: "fleet"},

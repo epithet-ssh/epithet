@@ -69,7 +69,7 @@ func (r *itemRecord) validate(id string) error {
 			return err
 		}
 		switch h.Status {
-		case "pending", "approved", "denied":
+		case "pending", "active", "denied":
 		default:
 			return fmt.Errorf("unknown host status %q", h.Status)
 		}

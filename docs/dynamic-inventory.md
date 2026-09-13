@@ -86,6 +86,10 @@ Commands accept `--name PROFILE` or `--broker SOCKET` to select an agent. A full
 record ID always works; unique ID prefixes and unambiguous exact host names also
 work. If multiple proposals share a name, use the record ID.
 
+`inventory list` prints one row per host with its ID, status, source, and DNS names
+or pattern. Dynamic IDs are shown as 12-character prefixes. Use `inventory show`
+for the full record, including accounts, labels, principal domain, and audit metadata.
+
 ## Enrollment and review
 
 On the machine being enrolled, run as root:
@@ -124,7 +128,7 @@ submitted to inventory. An existing domain file must match the chosen value;
 enrollment does not replace an installed domain. Principal mode must match local
 enrollment settings; select it with `--principal-mode`.
 
-Domains prefixed with `epithet-host-id-v1:` remain unique to an approved host.
+Domains prefixed with `epithet-host-id-v1:` remain unique to an active host.
 Unprefixed names such as `fleet` are shared domains and require
 `principal-mode: epithet-principal-v1`. Declare them in the static inventory:
 
@@ -132,7 +136,7 @@ Unprefixed names such as `fleet` are shared domains and require
 domains: [fleet]
 ```
 
-Approval and token admission reject undeclared named domains. All approved members
+Approval and token admission reject undeclared named domains. All active members
 of a shared domain, including static hosts and patterns, must have identical labels
 and account restrictions. Account order does not matter, but `null` and `[]` differ.
 Writ authorizes the shared domain name, rather than individual member hostnames.
@@ -150,7 +154,7 @@ accounts. There is no silent omitted-field default in managed proposals.
 After a valid editor exit, enrollment installs the reviewed domain and CA key,
 then configures, validates, and reloads sshd before submitting the proposal.
 A local setup failure prevents submission. It prints `RECORD_ID` and
-`pending` or `approved`, separated by a tab, and exits. It does not poll. If
+`pending` or `active`, separated by a tab, and exits. It does not poll. If
 submission fails or is rejected, local setup remains installed and the error
 reports that registration did not complete. A rerun prepares, reviews, configures,
 and submits again. It reuses matching local identity and trust files; unchanged
@@ -164,14 +168,14 @@ made during approval or later edits are tracked in YATL task `508fj5h3`.
 `inventory approve HOST_ID` prints the complete record and prompts:
 
 ```text
-Approve / Edit / Deny / Exit [exit]:
+approve / edit / deny / [exit: default on Enter]:
 ```
 
 Editing returns to review. Approval and denial are explicit; exit does nothing.
 Editing alone preserves admission status. Admin edits to principal settings do
 not reconfigure the remote sshd; those settings must remain aligned with the host.
 A stale revision is rejected, and the
-review command reloads before presenting another choice. Once approved, a host
+review command reloads before presenting another choice. Approval changes the host status to `active`. Once active, a host
 can be used without rerunning enrollment, subject to ordinary certificate policy.
 
 Enrollment always uses the editor. There is no proposal-file or noninteractive
@@ -221,7 +225,7 @@ or automatic recovery of an earlier response. Rerunning submits a new proposal,
 including after a lost response; it does not resume or reconcile a previous record.
 A consumed token stays consumed and is rejected if supplied again.
 
-Pending proposals may overlap other pending proposals, approved dynamic hosts,
+Pending proposals may overlap other pending proposals, active dynamic hosts,
 and exact static records. They cannot be approved until the conflict is resolved.
 Token enrollment approves immediately, so it rejects an overlapping name without
 consuming the token. Approval checks uniqueness while holding the same lock as its write. Conflicts must be resolved by
@@ -244,7 +248,7 @@ Lookup precedence is:
 Static records are read-only through the API. Listings include static exact and
 pattern records with their source file, plus dynamic records and any names
 shadowed by static records. Removing a static override exposes underlying dynamic
-state again. Renaming or removing an approved record releases its former names;
+state again. Renaming or removing an active record releases its former names;
 normal static lookup, including wildcard patterns, applies to those names again.
 
 Anonymous enrollment has a global burst limit of 20 and sustained rate of one
@@ -300,7 +304,7 @@ are all in that one file: there is no transaction journal or multi-file commit
 for redemption. Interrupted temporary writes are ignored at startup.
 
 At startup (and with `inventory --check`), inventory scans and validates the item files and builds maps
-for records by ID, approved names to record IDs, and approved
+for records by ID, active names to record IDs, and active
 principal domains. **Hostname resolution does not scan files or host records.** Admission and conflict checks use these
 indexes too. The check command takes the same store lock as startup, so stop the
 writer before checking managed files. Mutations hold the write lock, persist the changed file, then update
@@ -309,7 +313,7 @@ Content revisions are calculated from in-memory per-item hashes; no index file
 is persisted. Unchanged restarts produce the same revision.
 
 When `inventory.state-dir` is configured, unreadable or invalid dynamic storage
-fails startup. Duplicate approved names are validation errors, never a reason to
+fails startup. Duplicate active names are validation errors, never a reason to
 choose an arbitrary winner. To run static-only, leave `inventory.state-dir` unset.
 Static exact records override dynamic records during normal operation. A write
 failure disables all lookups and operations through the managed store until
@@ -318,10 +322,15 @@ provide the same directory-fsync step through Go's file API.
 
 For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.
 There is no index to repair separately. Keep each ID equal to its filename,
-and use `pending`, `approved`, or `denied` for host status. Delete a host file to
+and use `pending`, `active`, or `denied` for host status. Delete a host file to
 remove its dynamic record. Live edits are not watched: the
 process continues reading its in-memory version, and its next write to that
 item replaces external changes. Keep a backup before manual edits.
+
+When upgrading from the former `approved` status, stop the service and change
+each host's `status: approved` to `status: active` in its record file before
+starting the new version. Leave approval audit events unchanged. This rename
+has no automatic migration; the old status is rejected during startup validation.
 
 A snapshot of the directory captures the authoritative records without derived
 indexes. Copy/restore with the writer stopped for a coherent ordinary file copy;

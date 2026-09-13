@@ -125,7 +125,7 @@ func TestRebuildRejectsConflictingApprovedItems(t *testing.T) {
 	_, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
 	require.NoError(t, err)
 	r := readItem(t, m, b.ID)
-	r.Host.Status = "approved"
+	r.Host.Status = "active"
 	require.NoError(t, m.Close())
 	data, err := yaml.Marshal(r)
 	require.NoError(t, err)

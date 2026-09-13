@@ -110,7 +110,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	response, status, err = client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "approve", ID: response.Host.ID, Revision: response.Host.Revision})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	require.Equal(t, "approved", response.Host.Status)
+	require.Equal(t, "active", response.Host.Status)
 	audit, err := m.Audit()
 	require.NoError(t, err)
 	require.Equal(t, "directory-admin", audit[len(audit)-1].Actor)

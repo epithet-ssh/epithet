@@ -49,6 +49,21 @@ chown root:epithet /usr/local/etc/epithet/ca.key
 chmod 0640 /usr/local/etc/epithet/ca.key
 ```
 
+When enabling managed inventory with
+`inventory.state-dir: /var/db/epithet/inventory`, create the directory before
+starting the service. Run this as root on the server (inside its jail when jailed):
+
+```sh
+install -d -m 0700 -o epithet -g epithet /var/db/epithet/inventory
+```
+
+Inventory creates a missing state directory with mode `0700`, but the service
+account normally cannot create directories under root-owned `/var/db`. The rc.d
+scripts prepare the run and log directories, not the inventory state directory.
+Use your configured state path and service account if they differ from these
+defaults. See [dynamic inventory setup](../../docs/dynamic-inventory.md) for the
+configuration and administrator grants.
+
 For the normal combined deployment, enable only the combined service:
 
 ```sh

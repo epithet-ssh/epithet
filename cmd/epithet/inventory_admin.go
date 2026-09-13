@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
@@ -136,13 +137,27 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 	if err != nil {
 		return err
 	}
-	hosts := []inventory.HostRecord{}
+	table := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(table, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
+		return err
+	}
 	for _, h := range r.Hosts {
-		if !c.Pending || h.Status == "pending" {
-			hosts = append(hosts, h)
+		if c.Pending && h.Status != "pending" {
+			continue
+		}
+		id := h.ID
+		if len(id) == 64 && h.Source != "static" {
+			id = id[:12]
+		}
+		names := strings.Join(h.Proposal.Names, ", ")
+		if h.Pattern != "" {
+			names = h.Pattern
+		}
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, names); err != nil {
+			return err
 		}
 	}
-	return printInventory(hosts)
+	return table.Flush()
 }
 
 type InventoryShowCLI struct {
@@ -207,7 +222,7 @@ func (c *InventoryApproveCLI) Run(p *InventoryCLI) error {
 		if err = printInventory(h); err != nil {
 			return err
 		}
-		choice, err := readChoice(input, "Approve / Edit / Deny / Exit [exit]: ")
+		choice, err := readChoice(input, "approve / edit / deny / [exit: default on Enter]: ")
 		if err != nil {
 			return err
 		}
@@ -382,7 +397,7 @@ func editProposal(initial inventory.Proposal, input *bufio.Reader, validators ..
 		}
 		if validation != nil {
 			fmt.Fprintln(os.Stderr, "Invalid host YAML:", validation)
-			choice, e := readChoice(input, "Edit / Cancel [cancel]: ")
+			choice, e := readChoice(input, "edit / [cancel: default on Enter]: ")
 			if e != nil {
 				return initial, e
 			}

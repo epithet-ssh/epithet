@@ -392,10 +392,10 @@ func (s *Static) Records() []HostRecord {
 			}
 		}
 		slices.Sort(names)
-		records = append(records, HostRecord{SourceFile: s.sourceFiles[h], ID: "static:" + names[0], Status: "approved", Source: "static", Proposal: Proposal{Names: names, Labels: maps.Clone(h.Policy.Labels), Accounts: slices.Clone(h.Policy.Accounts), PrincipalMode: h.PrincipalMode, Domain: string(h.Domain)}})
+		records = append(records, HostRecord{SourceFile: s.sourceFiles[h], ID: "static:" + names[0], Status: "active", Source: "static", Proposal: Proposal{Names: names, Labels: maps.Clone(h.Policy.Labels), Accounts: slices.Clone(h.Policy.Accounts), PrincipalMode: h.PrincipalMode, Domain: string(h.Domain)}})
 	}
 	for _, p := range s.patterns {
-		records = append(records, HostRecord{ID: "static-pattern:" + p.rawPattern, Status: "approved", Source: "static", SourceFile: p.sourceFile, Pattern: p.rawPattern, Proposal: Proposal{Labels: maps.Clone(p.labels), Accounts: slices.Clone(p.accounts), PrincipalMode: p.principalMode, Domain: string(p.domain)}})
+		records = append(records, HostRecord{ID: "static-pattern:" + p.rawPattern, Status: "active", Source: "static", SourceFile: p.sourceFile, Pattern: p.rawPattern, Proposal: Proposal{Labels: maps.Clone(p.labels), Accounts: slices.Clone(p.accounts), PrincipalMode: p.principalMode, Domain: string(p.domain)}})
 	}
 	slices.SortFunc(records, func(a, b HostRecord) int { return strings.Compare(a.ID, b.ID) })
 	return records

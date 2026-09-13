@@ -255,7 +255,7 @@ func (m *Managed) publish(r *itemRecord) {
 	}
 	m.records[id] = r
 	if h := r.Host; h != nil {
-		if h.Status == "approved" {
+		if h.Status == "active" {
 			for _, name := range h.Proposal.Names {
 				m.names[name] = id
 			}
@@ -278,7 +278,7 @@ func (m *Managed) unindex(r *itemRecord) {
 	if h == nil {
 		return
 	}
-	if h.Status == "approved" {
+	if h.Status == "active" {
 		for _, name := range h.Proposal.Names {
 			if m.names[name] == h.ID {
 				delete(m.names, name)
@@ -314,10 +314,10 @@ func (m *Managed) checkIndexes(r *itemRecord) error {
 	if h == nil {
 		return nil
 	}
-	if h.Status == "approved" {
+	if h.Status == "active" {
 		for _, n := range h.Proposal.Names {
 			if owner := m.names[n]; owner != "" && owner != h.ID {
-				return fmt.Errorf("%w: name %s is approved on hosts %s and %s", ErrConflict, n, owner, h.ID)
+				return fmt.Errorf("%w: name %s is active on hosts %s and %s", ErrConflict, n, owner, h.ID)
 			}
 		}
 		if err := m.checkDomain(h.Proposal, h.ID); err != nil {
@@ -368,7 +368,7 @@ func (m *Managed) checkDomain(p Proposal, except string) error {
 			continue
 		}
 		if domain.IsGeneratedHost() {
-			return fmt.Errorf("%w: principal domain is already approved on host %s", ErrConflict, id)
+			return fmt.Errorf("%w: principal domain is already active on host %s", ErrConflict, id)
 		}
 		policy := domainPolicy{labels: member.Proposal.Labels, accounts: member.Proposal.Accounts}
 		if !policy.matches(p.Labels, p.Accounts) {
@@ -448,7 +448,7 @@ func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
 		if err := m.conflict(p, ""); err != nil {
 			return nil, err
 		}
-		status = "approved"
+		status = "active"
 	} else if m.pending >= 1000 {
 		return nil, fmt.Errorf("pending enrollment queue is full")
 	}
@@ -508,10 +508,10 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		if p == nil {
 			return nil, fmt.Errorf("host proposal is required")
 		}
-		if h.Status != "pending" && h.Status != "approved" {
-			return nil, fmt.Errorf("only pending or approved records can be edited")
+		if h.Status != "pending" && h.Status != "active" {
+			return nil, fmt.Errorf("only pending or active records can be edited")
 		}
-		if h.Status == "approved" {
+		if h.Status == "active" {
 			if err := m.conflict(*p, id); err != nil {
 				return nil, err
 			}
@@ -524,7 +524,7 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		if err := m.conflict(h.Proposal, id); err != nil {
 			return nil, err
 		}
-		h.Status = "approved"
+		h.Status = "active"
 	case "deny":
 		if h.Status != "pending" {
 			return nil, fmt.Errorf("only pending records can be denied")

@@ -20,7 +20,7 @@ func TestProposalJSONRequiresExplicitAccounts(t *testing.T) {
 		{`,"accounts":[]`, []string{}, false},
 		{`,"accounts":["deploy"]`, []string{"deploy"}, false},
 		{`,"accounts":"deploy"`, nil, true},
-		{`,"accounts":null,"status":"approved"`, nil, true},
+		{`,"accounts":null,"status":"active"`, nil, true},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			data := []byte(`{"names":["host"],"labels":{},"principal-mode":"account-name"` + tc.field + `}`)
