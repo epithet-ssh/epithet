@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,79 +21,69 @@ import (
 // minted for this connection, so the keyring never accepts client-added
 // keys - see UseCredential and readOnlyKeyring.
 //
-// Concurrency: Agent is safe for concurrent use. readOnlyKeyring holds its
-// live credential behind an atomic.Pointer, so UseCredential can swap in a
-// fresh credential while other goroutines are mid-List/Sign without a lock.
-// The done channel and closeOnce provide safe shutdown coordination.
-//
-// Immutable after creation: agentSocketPath, log
-// Self-synchronized: keyring (atomic swap)
-// Protected by closeOnce: agentListener, done channel
-// agentListener/startErr: written once by Serve() (which may run in its own
-// goroutine), then guarded for readers by the ready channel - see WaitReady.
+// Start returns a fully initialized agent; its owner must call Close to stop
+// it. All methods are safe for concurrent use. The lifecycle mutex serializes
+// credential replacement and connection admission with shutdown; signing reads
+// the keyring's atomic snapshot without taking that mutex.
 type Agent struct {
-	keyring *readOnlyKeyring // Self-synchronized (atomic swap)
-	log     *slog.Logger     // Immutable after New()
+	keyring *readOnlyKeyring
+	log     *slog.Logger
 
-	agentSocketPath string // Immutable after New()
+	// Immutable after Start.
+	agentSocketPath string
 	agentListener   net.Listener
 
-	// ready is closed once startAgentListener has run (successfully or not).
-	// Callers that start Serve in a goroutine (e.g. broker.ensureAgent) must
-	// receive from Ready (or call WaitReady) before touching agentListener
-	// from another goroutine - e.g. before Close can safely run there.
-	// Without this, the write to agentListener inside Serve's goroutine and
-	// a later read in Close from a different goroutine have no
-	// happens-before relationship at all: a genuine data race, not merely a
-	// timing risk (caught by `go test -race`).
-	ready    chan struct{}
-	startErr error // Set before ready is closed; startAgentListener's result.
+	mu          sync.Mutex // Protects stopped, connections, and credential writes.
+	stopped     bool
+	connections map[net.Conn]struct{}
 
-	done      chan struct{} // Closed once by closeOnce
-	closeOnce sync.Once     // Protects Close() operations
+	serving   sync.WaitGroup // Accept loop and all admitted connections.
+	done      chan struct{}  // Closed after all serving goroutines have exited.
+	closeOnce sync.Once
 }
 
-// New creates a new SSH agent. This does not start listening - call Serve() to begin accepting connections.
-// If agentSocketPath is empty, a temporary socket will be created when Serve() is called.
-func New(logger *slog.Logger, agentSocketPath string) *Agent {
-	return &Agent{
+// Start installs the initial credential and starts serving a read-only SSH
+// agent. On success the socket is listening with mode 0600 and the credential
+// is ready for use. On failure no listener or serving goroutine remains.
+// An empty socket path selects a temporary socket. The caller owns the returned
+// agent and must Close it; its lifetime is independent of any match request.
+func Start(logger *slog.Logger, agentSocketPath string, credential Credential) (*Agent, error) {
+	keyring := newReadOnlyKeyring()
+	if err := keyring.swap(credential); err != nil {
+		return nil, err
+	}
+	if agentSocketPath == "" {
+		f, err := os.CreateTemp("", "epithet-agent.*")
+		if err != nil {
+			return nil, fmt.Errorf("unable to create agent socket: %w", err)
+		}
+		agentSocketPath = f.Name()
+		if err := f.Close(); err != nil {
+			os.Remove(agentSocketPath)
+			return nil, fmt.Errorf("unable to close temporary agent socket file: %w", err)
+		}
+	}
+
+	os.Remove(agentSocketPath) // Remove socket if it exists.
+	listener, err := net.Listen("unix", agentSocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to listen on %s: %w", agentSocketPath, err)
+	}
+	if err := os.Chmod(agentSocketPath, 0600); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("unable to set permissions on agent socket: %w", err)
+	}
+	a := &Agent{
 		agentSocketPath: agentSocketPath,
-		keyring:         newReadOnlyKeyring(),
+		agentListener:   listener,
+		keyring:         keyring,
 		log:             logger,
-		ready:           make(chan struct{}),
+		connections:     make(map[net.Conn]struct{}),
 		done:            make(chan struct{}),
 	}
-}
-
-// Serve starts the agent listening on the configured socket and blocks until the context is cancelled.
-// Returns an error if the listener cannot be started, otherwise returns ctx.Err() when shutdown completes.
-func (a *Agent) Serve(ctx context.Context) error {
-	err := a.startAgentListener()
-	a.startErr = err
-	close(a.ready) // See WaitReady: this is what makes agentListener safe to read from another goroutine.
-	if err != nil {
-		return err
-	}
-
-	// Serve connections in background
-	go a.serve(ctx)
-
-	// Block until context cancelled
-	<-ctx.Done()
-	a.Close()
-
-	return ctx.Err()
-}
-
-// WaitReady blocks until Serve has started the agent's listener (or failed
-// to) and returns any startup error. Callers that run Serve in a goroutine -
-// and especially any that may later call Close from a different goroutine -
-// must call this before doing either, so that the read of agentListener in
-// Close happens-after the write in startAgentListener (see the Agent struct
-// comment).
-func (a *Agent) WaitReady() error {
-	<-a.ready
-	return a.startErr
+	a.serving.Add(1)
+	go a.serve()
+	return a, nil
 }
 
 // Credential contains the private key and certificate in PEM format
@@ -106,9 +95,12 @@ type Credential struct {
 // UseCredential replaces the agent's live credential with the provided one.
 // The swap is atomic (see readOnlyKeyring): a client mid-List/Sign against
 // the old credential is unaffected, and no lock/Close dance is needed since
-// the old keyring is simply dropped, not mutated.
+// the old keyring is simply dropped, not mutated. Invalid credentials leave
+// the current credential intact. Replacement after shutdown begins fails.
 func (a *Agent) UseCredential(c Credential) error {
-	if !a.Running() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopped {
 		return errors.New("agent has been stopped")
 	}
 
@@ -116,71 +108,42 @@ func (a *Agent) UseCredential(c Credential) error {
 	return a.keyring.swap(c)
 }
 
-func (a *Agent) startAgentListener() error {
-	if a.agentSocketPath == "" {
-		f, err := os.CreateTemp("", "epithet-agent.*")
-		if err != nil {
-			a.Close()
-			return fmt.Errorf("unable to create agent socket: %w", err)
-		}
-		a.agentSocketPath = f.Name()
-		f.Close()
-		os.Remove(f.Name())
-	}
-
-	os.Remove(a.agentSocketPath) // Remove socket if it exists
-	agentListener, err := net.Listen("unix", a.agentSocketPath)
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to listen on %s: %w", a.agentSocketPath, err)
-	}
-
-	err = os.Chmod(a.agentSocketPath, 0600)
-	if err != nil {
-		a.Close()
-		return fmt.Errorf("unable to set permissions on agent socket: %w", err)
-	}
-	a.agentListener = agentListener
-	return nil
-}
-
-func (a *Agent) serve(ctx context.Context) {
+func (a *Agent) serve() {
+	defer a.serving.Done()
 	for {
-		// Check if context is done
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
 		conn, err := a.agentListener.Accept()
 		if err != nil {
-			if conn != nil {
-				conn.Close()
-			}
-			// Check if error is from listener being closed
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			// Check context again before logging
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				a.log.Warn("error on accept from SSH_AUTH_SOCK listener", "error", err)
-				continue
-			}
+			a.log.Warn("error on accept from SSH_AUTH_SOCK listener", "error", err)
+			continue
 		}
+		a.mu.Lock()
+		if a.stopped {
+			a.mu.Unlock()
+			conn.Close()
+			return
+		}
+		a.connections[conn] = struct{}{}
+		a.serving.Add(1)
+		a.mu.Unlock()
 		go a.serveAgent(conn)
 	}
 }
 
 func (a *Agent) serveAgent(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		a.mu.Lock()
+		delete(a.connections, conn)
+		a.mu.Unlock()
+		a.serving.Done()
+	}()
 
 	a.log.Debug("new connection to agent", "socket", a.agentSocketPath)
 	err := agent.ServeAgent(a.keyring, conn)
-	if err != nil && err != io.EOF {
+	if err != nil && err != io.EOF && !errors.Is(err, net.ErrClosed) {
 		a.log.Warn("error from ssh-agent", "error", err)
 	}
 }
@@ -196,14 +159,12 @@ func (a *Agent) Certificate() sshcert.RawCertificate {
 	return a.keyring.certificate()
 }
 
-// Running returns true if the agent is currently running and accepting connections
+// Running reports whether the agent is still accepting work. It becomes false
+// when shutdown begins; Done signals when cleanup is complete.
 func (a *Agent) Running() bool {
-	select {
-	case <-a.Done():
-		return false
-	default:
-		return true
-	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return !a.stopped
 }
 
 // Done returns a channel that is closed when the agent has been closed and cleanup is complete.
@@ -212,15 +173,25 @@ func (a *Agent) Done() <-chan struct{} {
 	return a.done
 }
 
-// Close stops the agent and cleans up resources. Safe to call multiple times.
+// Close discards the credential, closes the listener and existing agent
+// connections, and waits for all serving goroutines to exit. Concurrent and
+// repeated calls wait for the same completed shutdown. Established SSH sessions
+// are unaffected; operations still requiring this agent can no longer sign.
 func (a *Agent) Close() {
 	a.closeOnce.Do(func() {
-		// Drop the credential before closing the listener so clients already
-		// connected to this socket cannot keep using it for later requests.
+		a.mu.Lock()
+		a.stopped = true
 		a.keyring.clear()
-		if a.agentListener != nil {
-			_ = a.agentListener.Close() // Ignore error
+		a.agentListener.Close()
+		for conn := range a.connections {
+			conn.Close()
 		}
+		a.mu.Unlock()
+
+		// Admission and replacement are now disabled. The accept loop is
+		// counted from Start, so even an accepted-but-unregistered connection
+		// must be closed before this wait can finish.
+		a.serving.Wait()
 		close(a.done)
 	})
 }

@@ -295,6 +295,10 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 //
 // Acquires b.lock for the duration; do not call with b.lock held.
 func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Credential) error {
+	expiresAt, err := credential.Certificate.Expiry()
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate expiry: %w", err)
+	}
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	connectionHash := connection.Hash
@@ -307,11 +311,7 @@ func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Cred
 		if err != nil {
 			return fmt.Errorf("failed to update agent credential: %w", err)
 		}
-		// Update expiration time and certificate
-		expiresAt, err := credential.Certificate.Expiry()
-		if err != nil {
-			return fmt.Errorf("failed to parse certificate expiry: %w", err)
-		}
+		// Update routing metadata after the credential has been installed.
 		entry.expiresAt = expiresAt
 		entry.connection = connection
 		b.agents[connectionHash] = entry
@@ -323,43 +323,14 @@ func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Cred
 	b.log.Debug("creating new agent", "hash", connectionHash, "socket", socketPath)
 
 	// Ensure the socket directory exists
-	err := os.MkdirAll(b.agentSocketDir, 0700)
+	err = os.MkdirAll(b.agentSocketDir, 0700)
 	if err != nil {
 		return fmt.Errorf("failed to create agent socket directory: %w", err)
 	}
 
-	ag := agent.New(&b.log, socketPath)
-
-	// Start the agent in background
-	go func() {
-		err := ag.Serve(context.Background())
-		if err != nil && err != context.Canceled {
-			b.log.Error("agent serve error", "hash", connectionHash, "error", err)
-		}
-	}()
-
-	// Wait for the listener to actually start (or fail) before doing
-	// anything else with this agent. This also gives the eventual Close()
-	// call - which typically happens on a different goroutine (broker
-	// shutdown or cleanup, not this one) - a happens-before relationship
-	// with Serve's listener setup; without it that's a real data race, not
-	// just a timing risk (see the Agent struct's comment in pkg/agent).
-	if err := ag.WaitReady(); err != nil {
-		return fmt.Errorf("failed to start agent listener: %w", err)
-	}
-
-	// Set the credential
-	err = ag.UseCredential(credential)
+	ag, err := agent.Start(&b.log, socketPath, credential)
 	if err != nil {
-		ag.Close()
-		return fmt.Errorf("failed to set agent credential: %w", err)
-	}
-
-	// Parse certificate expiry
-	expiresAt, err := credential.Certificate.Expiry()
-	if err != nil {
-		ag.Close()
-		return fmt.Errorf("failed to parse certificate expiry: %w", err)
+		return fmt.Errorf("failed to start agent: %w", err)
 	}
 
 	// Store the agent entry

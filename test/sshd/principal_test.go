@@ -1,8 +1,6 @@
 package sshd_test
 
 import (
-	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,20 +41,12 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	a := agent.New(testLogger(t), "")
-	go func() {
-		if err := a.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("agent.Serve: %v", err)
-		}
-	}()
-	require.NoError(t, a.WaitReady())
-	t.Cleanup(a.Close)
-	require.NoError(t, a.UseCredential(agent.Credential{
+	a, err := agent.Start(testLogger(t), "", agent.Credential{
 		PrivateKey:  userPrivateKey,
 		Certificate: certificate,
-	}))
+	})
+	require.NoError(t, err)
+	t.Cleanup(a.Close)
 
 	out, err := hostA.Ssh(a)
 	require.NoError(t, err, "intended host should accept its derived principal; ssh output:\n%s\nsshd output:\n%s", out, hostA.Output.String())
@@ -90,20 +80,12 @@ func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	a := agent.New(testLogger(t), "")
-	go func() {
-		if err := a.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("agent.Serve: %v", err)
-		}
-	}()
-	require.NoError(t, a.WaitReady())
-	t.Cleanup(a.Close)
-	require.NoError(t, a.UseCredential(agent.Credential{
+	a, err := agent.Start(testLogger(t), "", agent.Credential{
 		PrivateKey:  userPrivateKey,
 		Certificate: certificate,
-	}))
+	})
+	require.NoError(t, err)
+	t.Cleanup(a.Close)
 
 	out, err := hostA.Ssh(a)
 	require.NoError(t, err, "first fleet host should accept its domain principal; ssh output:\n%s\nsshd output:\n%s", out, hostA.Output.String())

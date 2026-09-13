@@ -1,7 +1,6 @@
 package agent_test
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -33,31 +32,17 @@ func TestBasics(t *testing.T) {
 	userCert, err := sign(signer, userPub)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	a := agent.New(testLogger(t), "")
-
-	// Serve in background
-	go func() {
-		err := a.Serve(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("agent.Serve error: %v", err)
-		}
-	}()
-
-	// Give agent time to start listening
-	time.Sleep(10 * time.Millisecond)
+	a, err := agent.Start(testLogger(t), "", agent.Credential{
+		PrivateKey:  userPriv,
+		Certificate: userCert,
+	})
+	require.NoError(t, err)
+	t.Cleanup(a.Close)
 
 	server, err := sshd.Start(caPub)
 	require.NoError(t, err)
 	defer server.Close()
 
-	err = a.UseCredential(agent.Credential{
-		PrivateKey:  userPriv,
-		Certificate: userCert,
-	})
-	require.NoError(t, err)
 	require.Equal(t, userCert, a.Certificate())
 
 	out, err := server.Ssh(a)
@@ -67,7 +52,7 @@ func TestBasics(t *testing.T) {
 
 	require.Contains(t, out, "hello from sshd")
 
-	cancel()
+	a.Close()
 
 	// Wait for agent to complete cleanup using Done() channel
 	select {
@@ -80,7 +65,7 @@ func TestBasics(t *testing.T) {
 
 	_, err = os.Stat(a.AgentSocketPath())
 	if !os.IsNotExist(err) {
-		t.Fatalf("auth socket not cleaned up after cancel: %s", a.AgentSocketPath())
+		t.Fatalf("auth socket not cleaned up after Close: %s", a.AgentSocketPath())
 	}
 }
 
@@ -90,18 +75,9 @@ func TestBasics(t *testing.T) {
 // broker-issued credential; accepting client-added keys would let a
 // compromised child process smuggle its own identity onto the wire.
 func TestAgentRefusesAdd(t *testing.T) {
-	a := agent.New(testLogger(t), "")
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		err := a.Serve(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("agent.Serve error: %v", err)
-		}
-	}()
-	require.NoError(t, a.WaitReady())
+	a, err := agent.Start(testLogger(t), "", testCredential(t))
+	require.NoError(t, err)
+	t.Cleanup(a.Close)
 
 	conn, err := net.Dial("unix", a.AgentSocketPath())
 	require.NoError(t, err)

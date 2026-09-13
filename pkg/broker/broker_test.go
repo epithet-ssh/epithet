@@ -30,6 +30,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 // testCAClient creates a test CA client for use in tests.
@@ -407,11 +408,26 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 	secondCertificate := secondAgent.Certificate()
 	b.lock.Unlock()
 
+	agentConn, err := net.Dial("unix", firstAgent.AgentSocketPath())
+	require.NoError(t, err)
+	defer agentConn.Close()
+	require.NoError(t, agentConn.SetDeadline(time.Now().Add(5*time.Second)))
+	agentClient := sshagent.NewClient(agentConn)
+	_, err = agentClient.List()
+	require.NoError(t, err)
+
 	var killed KillResponse
 	require.NoError(t, b.Kill(KillRequest{ID: one.Hash}, &killed))
 	require.Equal(t, one.Hash, killed.ID)
 	require.Equal(t, one, killed.Connection)
 	require.Empty(t, firstAgent.Certificate(), "the killed agent must discard its credential")
+	select {
+	case <-firstAgent.Done():
+	default:
+		t.Fatal("Kill returned before the agent finished shutting down")
+	}
+	_, err = agentClient.List()
+	require.Error(t, err, "Kill must close existing agent connections")
 
 	b.lock.Lock()
 	_, oneStillExists := b.agents[one.Hash]
