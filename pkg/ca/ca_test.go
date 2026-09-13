@@ -1,4 +1,4 @@
-package ca_test
+package ca
 
 import (
 	"crypto/rand"
@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -66,10 +65,10 @@ func ascii(length int) ([]byte, error) {
 func TestCA_Sign(t *testing.T) {
 	require := require.New(t)
 
-	c, err := ca.New(caPrivKey, "")
+	c, err := New(caPrivKey, "")
 	require.NoError(err)
 
-	cert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{
+	cert, err := c.signPublicKey(sshcert.RawPublicKey(userPubKey), &certParams{
 		Identity:   "brianm",
 		Expiration: time.Second * 10000,
 		Names:      []string{"root", "deployer"},
@@ -85,18 +84,18 @@ func TestCA_Sign(t *testing.T) {
 
 // newTestCA builds a CA using the fixed test key material, with no policy
 // server URL since these tests only exercise local signing.
-func newTestCA(t *testing.T) *ca.CA {
+func newTestCA(t *testing.T) *CA {
 	t.Helper()
-	c, err := ca.New(caPrivKey, "")
+	c, err := New(caPrivKey, "")
 	require.NoError(t, err)
 	return c
 }
 
 // signTestCert signs userPubKey with the given params and parses the result,
 // so tests can assert on the decoded certificate fields directly.
-func signTestCert(t *testing.T, c *ca.CA, params *ca.CertParams) *ssh.Certificate {
+func signTestCert(t *testing.T, c *CA, params *certParams) *ssh.Certificate {
 	t.Helper()
-	rawCert, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), params)
+	rawCert, err := c.signPublicKey(sshcert.RawPublicKey(userPubKey), params)
 	require.NoError(t, err)
 
 	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(rawCert))
@@ -112,7 +111,7 @@ func signTestCert(t *testing.T, c *ca.CA, params *ca.CertParams) *ssh.Certificat
 func TestSignPublicKeyClampsToNotAfter(t *testing.T) {
 	c := newTestCA(t)
 	notAfter := time.Now().Add(90 * time.Second)
-	cert := signTestCert(t, c, &ca.CertParams{
+	cert := signTestCert(t, c, &certParams{
 		Identity:   "alice@example.com",
 		Names:      []string{"root"},
 		Expiration: 10 * time.Minute, // Would exceed the policy deadline.
@@ -126,7 +125,7 @@ func TestSignPublicKeyClampsToNotAfter(t *testing.T) {
 // validity.
 func TestSignPublicKeyUsesExpirationWhenNoNotAfter(t *testing.T) {
 	c := newTestCA(t)
-	cert := signTestCert(t, c, &ca.CertParams{
+	cert := signTestCert(t, c, &certParams{
 		Identity: "alice@example.com", Names: []string{"root"}, Expiration: 5 * time.Minute,
 	})
 	require.Greater(t, cert.ValidBefore, uint64(time.Now().Add(4*time.Minute).Unix()))
@@ -137,7 +136,7 @@ func TestSignPublicKeyUsesExpirationWhenNoNotAfter(t *testing.T) {
 // dead-on-arrival certificate.
 func TestSignPublicKeyRejectsPastNotAfter(t *testing.T) {
 	c := newTestCA(t)
-	_, err := c.SignPublicKey(sshcert.RawPublicKey(userPubKey), &ca.CertParams{
+	_, err := c.signPublicKey(sshcert.RawPublicKey(userPubKey), &certParams{
 		Identity:   "alice@example.com",
 		Names:      []string{"root"},
 		Expiration: 5 * time.Minute,
@@ -147,7 +146,7 @@ func TestSignPublicKeyRejectsPastNotAfter(t *testing.T) {
 }
 
 func TestCA_GetPublicKey(t *testing.T) {
-	c, err := ca.New(caPrivKey, "")
+	c, err := New(caPrivKey, "")
 	require.NoError(t, err)
 
 	t.Logf("%s", c.PublicKey())

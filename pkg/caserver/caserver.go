@@ -221,27 +221,20 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyResp, err := s.c.RequestPolicy(r.Context(), token, ccr.Connection)
+	issued, err := s.c.Issue(r.Context(), token, ccr.Connection, ccr.PublicKey)
 	if err != nil {
-		s.log.Warn("certificate authorization failed", "error", err)
-		s.failError(w, err)
-		return
-	}
-
-	cert, err := s.c.SignPublicKey(ccr.PublicKey, &policyResp.CertParams)
-	if err != nil {
-		s.log.Warn("certificate signing failed", "error", err)
+		s.log.Warn("certificate issuance failed", "error", err)
 		s.failError(w, err)
 		return
 	}
 
 	// Log certificate issuance (best-effort).
-	if err := s.logCertIssuance(r.Context(), cert, ccr.PublicKey, policyResp, ccr.Connection); err != nil {
+	if err := s.logCertIssuance(r.Context(), issued, ccr.PublicKey, ccr.Connection); err != nil {
 		s.log.Warn("failed to log certificate issuance", "error", err)
 	}
 
 	resp := CreateCertResponse{
-		Certificate: cert,
+		Certificate: issued.Certificate,
 	}
 	out, err := json.Marshal(&resp)
 	if err != nil {
@@ -275,12 +268,11 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 // logCertIssuance logs a certificate issuance event with all metadata.
 func (s *caServer) logCertIssuance(
 	ctx context.Context,
-	cert sshcert.RawCertificate,
+	issued *ca.IssuedCertificate,
 	pubKey sshcert.RawPublicKey,
-	policyResp *ca.Authorization,
 	conn policy.Connection,
 ) error {
-	parsedCert, err := sshcert.Parse(cert)
+	parsedCert, err := sshcert.Parse(issued.Certificate)
 	if err != nil {
 		return fmt.Errorf("failed to parse certificate: %w", err)
 	}
@@ -294,16 +286,16 @@ func (s *caServer) logCertIssuance(
 	certFP := ssh.FingerprintSHA256(parsedCert)
 
 	event := &CertEvent{
-		PolicyID: policyResp.PolicyID, DirectoryRevision: policyResp.DirectoryRevision, InventoryRevision: policyResp.InventoryRevision,
+		PolicyID: issued.Audit.PolicyID, DirectoryRevision: issued.Audit.DirectoryRevision, InventoryRevision: issued.Audit.InventoryRevision,
 		Timestamp:            time.Now(),
 		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
-		UserName:             policyResp.CertParams.Identity,
-		ID:                   policyResp.ID,
-		Principals:           policyResp.CertParams.Names,
+		UserName:             parsedCert.KeyId,
+		ID:                   issued.Audit.ID,
+		Principals:           parsedCert.ValidPrincipals,
 		Connection:           conn,
 		ValidAfter:           time.Unix(int64(parsedCert.ValidAfter), 0),
 		ValidBefore:          time.Unix(int64(parsedCert.ValidBefore), 0),
-		Extensions:           policyResp.CertParams.Extensions,
+		Extensions:           parsedCert.Extensions,
 		CertFingerprint:      certFP,
 		PublicKeyFingerprint: fingerprint,
 	}

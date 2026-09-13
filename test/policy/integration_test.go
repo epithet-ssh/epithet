@@ -49,7 +49,7 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 
 	// The default TTL stays at the deployment default (5m), deliberately
 	// distinct from the 2m token minted below so the CA expiry assertion
-	// discriminates (see TestPolicyIntegration_ValidToken_ReturnsSigningInputs).
+	// discriminates (see TestPolicyIntegration_ValidToken_IssuesCertificate).
 	eval, warnings, err := writpolicy.New(pol, &writpolicy.Registry{}, writpolicy.Options{})
 	require.NoError(t, err)
 	require.Empty(t, warnings)
@@ -68,25 +68,28 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	return authority, idp
 }
 
-// TestPolicyIntegration_ValidToken_ReturnsSigningInputs exercises inventory OIDC
+// TestPolicyIntegration_ValidToken_IssuesCertificate exercises inventory OIDC
 // validation, policy evaluation, and CA construction together. The CA derives
 // the requested principal and applies Writ's token-expiry deadline alongside TTL.
-func TestPolicyIntegration_ValidToken_ReturnsSigningInputs(t *testing.T) {
+func TestPolicyIntegration_ValidToken_IssuesCertificate(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
 	exp := time.Now().Add(2 * time.Minute).Truncate(time.Second)
+	userKey, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
 	token := idp.MintIDToken("alice@example.com", exp)
 
-	resp, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
+	resp, err := handler.Issue(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 		Port:       22,
-	})
+	}, userKey)
 	require.NoError(t, err)
-	require.Equal(t, []string{"root"}, resp.CertParams.Names)
-	require.Equal(t, "alice@example.com", resp.CertParams.Identity)
-	require.Equal(t, 5*time.Minute, resp.CertParams.Expiration)
-	require.WithinDuration(t, exp, resp.CertParams.NotAfter, 0)
+	cert, err := sshcert.Parse(resp.Certificate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"root"}, cert.ValidPrincipals)
+	require.Equal(t, "alice@example.com", cert.KeyId)
+	require.Equal(t, uint64(exp.Unix()), cert.ValidBefore)
 }
 
 // TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError verifies real expiry
@@ -95,12 +98,14 @@ func TestPolicyIntegration_ValidToken_ReturnsSigningInputs(t *testing.T) {
 func TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
+	userKey, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
 	token := idp.MintIDToken("alice@example.com", time.Now().Add(-time.Minute))
 
-	_, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
+	_, err = handler.Issue(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
-	})
+	}, userKey)
 	require.ErrorIs(t, err, ca.ErrInvalidAuthentication)
 }
 
@@ -110,12 +115,14 @@ func TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError(t *testing.T)
 func TestPolicyIntegration_WrongAudience_ReturnsAuthenticationError(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
+	userKey, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
 	token := idp.MintIDTokenWithAudience("alice@example.com", "someone-elses-client", time.Now().Add(time.Minute))
 
-	_, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
+	_, err = handler.Issue(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
-	})
+	}, userKey)
 	require.ErrorIs(t, err, ca.ErrInvalidAuthentication)
 }
 
@@ -125,12 +132,14 @@ func TestPolicyIntegration_WrongAudience_ReturnsAuthenticationError(t *testing.T
 func TestPolicyIntegration_UnknownUser_ReturnsDenial(t *testing.T) {
 	handler, idp := newIntegrationHandler(t)
 
+	userKey, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
 	token := idp.MintIDToken("mallory@example.com", time.Now().Add(time.Minute))
 
-	_, err := handler.RequestPolicy(t.Context(), token, policy.Connection{
+	_, err = handler.Issue(t.Context(), token, policy.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
-	})
+	}, userKey)
 	require.ErrorIs(t, err, ca.ErrAccessDenied)
 }
 

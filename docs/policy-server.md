@@ -832,13 +832,14 @@ The output-ownership change introduced in API 5 is retained. The old
 - Remove response `id`, `certParams.identity`, and `certParams.principals`. CA obtains the ID and username from inventory and derives the sole requested principal itself.
 - Retain `policyId` for private audit. Continue authorizing the exact user/host/account request and enforcing policy-owned limits.
 
-Go integrations now use `wire.PolicyResponse` for policy limits and `ca.CertParams`
-for local signing inputs. Policy evaluators implement
+Go integrations use `wire.PolicyResponse` for policy limits. Local signing inputs
+are private to CA. Policy evaluators implement
 `Evaluate(context.Context, policy.Connection, *wire.PolicyFacts)`; authentication
 comes from those facts rather than duplicate arguments. `pkg/facts` contains the
 shared user/authentication/host data types without inventory transport metadata.
-`CA.RequestPolicy` returns `ca.Authorization`, which
-combines CA-constructed signing inputs with private audit metadata. Client-facing
+`CA.Issue(ctx, token, connection, publicKey)` obtains approval and signs the key,
+returning `ca.IssuedCertificate` with the certificate and private `ca.AuditMetadata`.
+Callers no longer sequence policy lookup and signing themselves. Client-facing
 success responses still contain only the certificate. Combined deployment remains
 `epithet server`; static YAML and Writ syntax are unchanged.
 

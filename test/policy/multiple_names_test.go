@@ -56,18 +56,16 @@ func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
 				authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 				require.NoError(t, err)
 				for _, target := range []string{"Freki.HOME", "freki.tailca597.ts.net"} {
-					auth, err := authority.RequestPolicy(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), policy.Connection{RemoteHost: target, RemoteUser: "root"})
+					userKey, _, err := sshcert.GenerateKeys()
+					require.NoError(t, err)
+					issued, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), policy.Connection{RemoteHost: target, RemoteUser: "root"}, userKey)
 					if deny {
 						require.ErrorIs(t, err, ca.ErrAccessDenied)
-						require.Nil(t, auth)
+						require.Nil(t, issued)
 						continue
 					}
 					require.NoError(t, err)
-					userKey, _, err := sshcert.GenerateKeys()
-					require.NoError(t, err)
-					rawCert, err := authority.SignPublicKey(userKey, &auth.CertParams)
-					require.NoError(t, err)
-					cert, err := sshcert.Parse(rawCert)
+					cert, err := sshcert.Parse(issued.Certificate)
 					require.NoError(t, err)
 					require.Equal(t, "alice", cert.KeyId)
 					require.Equal(t, []string{expectedPrincipal}, cert.ValidPrincipals)

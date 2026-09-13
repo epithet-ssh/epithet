@@ -28,6 +28,8 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 	idp := oidctest.New(t)
 	pub, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
+	userKey, _, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
 	expiry := time.Now().Add(10 * time.Minute).Truncate(time.Second)
 	deadline := expiry.Add(-5 * time.Minute)
 	for _, mode := range []string{"account-name", "epithet-principal-v1"} {
@@ -50,6 +52,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 				body       string
 				notAfter   time.Time
 				invalid    bool
+				invalidKey bool
 			}{
 				{name: "TTL from signing", ttlSeconds: 60},
 				{name: "policy omits authentication ceiling", ttlSeconds: 3600},
@@ -57,6 +60,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 				{name: "TTL tighter than policy deadline", ttlSeconds: 60, notAfter: deadline},
 				{name: "policy extends beyond authentication", ttlSeconds: 3600, notAfter: expiry.Add(time.Hour)},
 				{name: "zero TTL", invalid: true},
+				{name: "invalid key after approval", ttlSeconds: 60, invalid: true, invalidKey: true},
 				{name: "one second", ttlSeconds: 1},
 				{name: "maximum duration", ttlSeconds: wire.MaxTTLSeconds},
 				{name: "overflowing seconds", ttlSeconds: wire.MaxTTLSeconds + 1, invalid: true},
@@ -102,24 +106,27 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 					defer ps.Close()
 					authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 					require.NoError(t, err)
-					result, err := authority.RequestPolicy(t.Context(), idp.MintIDToken("alice", expiry), policy.Connection{RemoteHost: "HOST", RemoteUser: "ubuntu"})
+					key := userKey
+					if tc.invalidKey {
+						key = "invalid key"
+					}
+					before := time.Now()
+					result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", expiry), policy.Connection{RemoteHost: "HOST", RemoteUser: "ubuntu"}, key)
 					if tc.invalid {
+						if tc.invalidKey {
+							require.ErrorIs(t, err, ca.ErrInvalidPublicKey)
+						}
 						require.Error(t, err)
 						require.Nil(t, result)
 						return
 					}
 					require.NoError(t, err)
-					require.WithinDuration(t, tc.notAfter, result.CertParams.NotAfter, 0)
-					require.Equal(t, "subject:alice", result.ID)
-					require.Equal(t, "sha256:policy", result.PolicyID)
-					require.Equal(t, inv.DirectoryRevision(), result.DirectoryRevision)
-					require.Equal(t, inv.InventoryRevision(), result.InventoryRevision)
-					if tc.name == "TTL from signing" {
-						// Waiting after approval must consume absolute deadlines, not the TTL.
-						time.Sleep(1100 * time.Millisecond)
-					}
-					before := time.Now()
-					cert := signTestCert(t, authority, &result.CertParams)
+					require.Equal(t, "subject:alice", result.Audit.ID)
+					require.Equal(t, "sha256:policy", result.Audit.PolicyID)
+					require.Equal(t, inv.DirectoryRevision(), result.Audit.DirectoryRevision)
+					require.Equal(t, inv.InventoryRevision(), result.Audit.InventoryRevision)
+					cert, err := sshcert.Parse(result.Certificate)
+					require.NoError(t, err)
 					after := time.Now()
 					require.Equal(t, "Alice", cert.KeyId)
 					require.Equal(t, []string{expected}, cert.ValidPrincipals)
@@ -145,6 +152,8 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 	idp := oidctest.New(t)
 	pub, priv, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	userKey, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name, user, host, account string
@@ -177,11 +186,12 @@ func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 			defer ps.Close()
 			authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
-			result, err := authority.RequestPolicy(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), policy.Connection{RemoteHost: "host", RemoteUser: tc.account})
+			result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), policy.Connection{RemoteHost: "host", RemoteUser: tc.account}, userKey)
 			if tc.allowed {
 				require.NoError(t, err)
 				require.NotNil(t, result)
-				cert := signTestCert(t, authority, &result.CertParams)
+				cert, err := sshcert.Parse(result.Certificate)
+				require.NoError(t, err)
 				require.Equal(t, "Alice", cert.KeyId)
 				require.Equal(t, []string{tc.account}, cert.ValidPrincipals)
 			} else {

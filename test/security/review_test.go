@@ -78,7 +78,7 @@ func TestReviewPolicyRedirectLeaksOIDCBody(t *testing.T) {
 	require.NoError(t, err)
 	authority, err := ca.New(priv, secure.URL, ca.WithTLSConfig(tlsconfigFor(t, secure)))
 	require.NoError(t, err)
-	_, err = authority.RequestPolicy(context.Background(), "review-only-oidc-token", policy.Connection{})
+	_, err = authority.Issue(context.Background(), "review-only-oidc-token", policy.Connection{}, "")
 	require.Error(t, err)
 	select {
 	case token := <-seen:

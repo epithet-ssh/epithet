@@ -207,7 +207,7 @@ The broker authenticates in-process via OIDC (`pkg/auth/oidc`); there is no exte
 - **`sshcert.RawPrivateKey`, `RawPublicKey`, `RawCertificate`**: Type-safe wrappers for SSH keys/certs in on-disk format (string-based)
 - **`wire.PolicyFacts`**: Normalized authentication, requested target, user, and host resource, without inventory metadata
 - **`wire.PolicyResponse`**: Policy-owned TTL, extensions, optional absolute deadline, and audit metadata
-- **`ca.Authorization` / `ca.CertParams`**: Local CA signing inputs and private issuance audit, assembled from trusted facts and policy limits
+- **`ca.IssuedCertificate` / `ca.AuditMetadata`**: Signed certificate and private audit metadata returned by `CA.Issue`; authorization and signing inputs stay inside CA
 - **`policy.Connection`**: Connection details (`%h`, `%p`, `%r`, `%C`, `%j`) passed through `match` → broker → CA → policy server
 - **`agent.Credential`**: Private key + certificate pair used by the agent
 - **`caclient.InvalidTokenError`, `PolicyDeniedError`, `PolicyPendingError`, `CAUnavailableError`**: Domain-specific error types for CA failures

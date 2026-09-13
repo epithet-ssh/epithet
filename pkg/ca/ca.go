@@ -40,9 +40,9 @@ type CA struct {
 	svcSigner *serviceauth.Signer
 }
 
-// CertParams are assembled by CA from trusted inventory and policy limits.
+// certParams are assembled by CA from trusted inventory and policy limits.
 // They are local signing inputs, not the policy service's wire contract.
-type CertParams struct {
+type certParams struct {
 	Identity   string
 	Names      []string
 	Expiration time.Duration
@@ -51,13 +51,39 @@ type CertParams struct {
 	NotAfter time.Time
 }
 
-// Authorization holds CA's signing inputs and private issuance audit metadata.
-type Authorization struct {
+// AuditMetadata identifies the identity and source revisions used for issuance.
+type AuditMetadata struct {
 	ID                string
 	PolicyID          string
 	DirectoryRevision string
 	InventoryRevision string
-	CertParams        CertParams
+}
+
+// IssuedCertificate contains a signed certificate and its private audit metadata.
+// Audit metadata is for server-side logging and is not part of the client response.
+type IssuedCertificate struct {
+	Certificate sshcert.RawCertificate
+	Audit       AuditMetadata
+}
+
+type authorization struct {
+	audit  AuditMetadata
+	params certParams
+}
+
+// Issue obtains policy approval and signs the requested key using inventory facts
+// and policy-provided limits. It returns a result only after signing succeeds;
+// callers never handle intermediate authorization or signing parameters.
+func (c *CA) Issue(ctx context.Context, token string, conn policy.Connection, publicKey sshcert.RawPublicKey) (*IssuedCertificate, error) {
+	auth, err := c.requestPolicy(ctx, token, conn)
+	if err != nil {
+		return nil, fmt.Errorf("certificate authorization failed: %w", err)
+	}
+	cert, err := c.signPublicKey(publicKey, &auth.params)
+	if err != nil {
+		return nil, fmt.Errorf("certificate signing failed: %w", err)
+	}
+	return &IssuedCertificate{Certificate: cert, Audit: auth.audit}, nil
 }
 
 // PolicyURL returns the URL of the policy server.
@@ -163,11 +189,11 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 	return discovery, nil
 }
 
-// RequestPolicy obtains policy approval and assembles certificate signing inputs.
+// requestPolicy obtains policy approval and assembles certificate signing inputs.
 // Policy owns eligibility and lifetime restrictions. CA validates construction
 // data and applies the returned limits without re-evaluating inventory policy.
 // The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
-func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connection) (*Authorization, error) {
+func (c *CA) requestPolicy(ctx context.Context, token string, conn policy.Connection) (*authorization, error) {
 	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
 	defer cancel()
 	if c.inventory == nil {
@@ -270,18 +296,20 @@ func (c *CA) RequestPolicy(ctx context.Context, token string, conn policy.Connec
 	if !policyResp.NotAfter.IsZero() && !policyResp.NotAfter.After(time.Now()) {
 		return nil, fmt.Errorf("%w: certificate authorization has expired", ErrDependency)
 	}
-	return &Authorization{
-		ID: user.ID, PolicyID: policyResp.PolicyID,
-		DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
-		CertParams: CertParams{
+	return &authorization{
+		audit: AuditMetadata{
+			ID: user.ID, PolicyID: policyResp.PolicyID,
+			DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
+		},
+		params: certParams{
 			Identity: user.UserName, Names: []string{expected},
 			Expiration: time.Duration(policyResp.TTLSeconds) * time.Second, Extensions: policyResp.Extensions, NotAfter: policyResp.NotAfter,
 		},
 	}, nil
 }
 
-// SignPublicKey signs a key to generate a certificate.
-func (c *CA) SignPublicKey(rawPubKey sshcert.RawPublicKey, params *CertParams) (sshcert.RawCertificate, error) {
+// signPublicKey signs a key to generate a certificate.
+func (c *CA) signPublicKey(rawPubKey sshcert.RawPublicKey, params *certParams) (sshcert.RawCertificate, error) {
 	if params.Expiration <= 0 {
 		return "", fmt.Errorf("certificate lifetime must be positive")
 	}

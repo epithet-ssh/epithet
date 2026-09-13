@@ -1,6 +1,7 @@
 package sshd_test
 
 import (
+	"crypto/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,11 +9,11 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
-	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
@@ -34,12 +35,7 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 
 	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	certificate, err := testCA.SignPublicKey(userPublicKey, &ca.CertParams{
-		Identity:   "destination-binding-test",
-		Names:      []string{hostAPrincipal},
-		Expiration: time.Minute,
-	})
-	require.NoError(t, err)
+	certificate := signPrincipalTestCertificate(t, testCA, userPublicKey, "destination-binding-test", hostAPrincipal)
 
 	a, err := agent.Start(testLogger(t), "", agent.Credential{
 		PrivateKey:  userPrivateKey,
@@ -73,12 +69,7 @@ func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
 	require.NoError(t, err)
 	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	certificate, err := testCA.SignPublicKey(userPublicKey, &ca.CertParams{
-		Identity:   "principal-domain-test",
-		Names:      []string{fleetPrincipal},
-		Expiration: time.Minute,
-	})
-	require.NoError(t, err)
+	certificate := signPrincipalTestCertificate(t, testCA, userPublicKey, "principal-domain-test", fleetPrincipal)
 
 	a, err := agent.Start(testLogger(t), "", agent.Credential{
 		PrivateKey:  userPrivateKey,
@@ -93,13 +84,29 @@ func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
 	require.NoError(t, err, "second fleet host should accept the shared domain principal; ssh output:\n%s\nsshd output:\n%s", out, hostB.Output.String())
 }
 
-func newPrincipalTestCA(t *testing.T) (*ca.CA, sshcert.RawPublicKey) {
+func newPrincipalTestCA(t *testing.T) (ssh.Signer, sshcert.RawPublicKey) {
 	t.Helper()
 	publicKey, privateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	testCA, err := ca.New(privateKey, "http://unused.invalid")
+	testCA, err := ssh.ParsePrivateKey([]byte(privateKey))
 	require.NoError(t, err)
 	return testCA, publicKey
+}
+
+// These tests exercise sshd principal matching with a locally signed fixture.
+func signPrincipalTestCertificate(t *testing.T, signer ssh.Signer, publicKey sshcert.RawPublicKey, identity, name string) sshcert.RawCertificate {
+	t.Helper()
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
+	require.NoError(t, err)
+	now := time.Now()
+	cert := &ssh.Certificate{
+		Key: key, KeyId: identity, CertType: ssh.UserCert,
+		ValidPrincipals: []string{name},
+		ValidAfter:      uint64(now.Add(-time.Minute).Unix()),
+		ValidBefore:     uint64(now.Add(time.Minute).Unix()),
+	}
+	require.NoError(t, cert.SignCert(rand.Reader, signer))
+	return sshcert.RawCertificate(ssh.MarshalAuthorizedKey(cert))
 }
 
 func buildEpithet(t *testing.T) string {
