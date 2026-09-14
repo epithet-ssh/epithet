@@ -43,7 +43,7 @@ var cli struct {
 	Match     MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
 	CA        CACLI           `cmd:"ca" help:"Run the epithet CA server"`
 	Host      HostCLI         `cmd:"host" help:"Manage and authorize Epithet hosts"`
-	Inventory InventoryCLI    `cmd:"inventory" help:"Serve or administer the user directory and host inventory"`
+	Inventory InventoryCLI    `cmd:"inventory" aliases:"i,inv" help:"Serve or administer the user directory and host inventory"`
 	Policy    PolicyServerCLI `cmd:"policy" help:"Run the policy server evaluating normalized facts"`
 	Router    RouterCLI       `cmd:"router" help:"Proxy HTTP to private CA and inventory Unix sockets"`
 	Server    ServerCLI       `cmd:"server" help:"Supervise an HTTP router with private CA, policy, and inventory services"`

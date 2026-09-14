@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
@@ -137,8 +136,7 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 	if err != nil {
 		return err
 	}
-	table := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
+	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
 		return err
 	}
 	for _, h := range r.Hosts {
@@ -153,11 +151,11 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 		if h.Pattern != "" {
 			names = h.Pattern
 		}
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, names); err != nil {
+		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, names); err != nil {
 			return err
 		}
 	}
-	return table.Flush()
+	return nil
 }
 
 type InventoryShowCLI struct {
