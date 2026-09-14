@@ -1,33 +1,33 @@
 # Releasing
 
-Releases are triggered by pushing an annotated `vX.Y.Z` git tag. Everything
-downstream — building binaries, publishing the GitHub Release, and updating the
-Homebrew tap — is automated in CI. You never
-run goreleaser by hand for a real release; you only create and push the tag.
+Stable releases use an annotated `vX.Y.Z` source tag. GitHub Actions produces
+optional binary archives. FreeBSD, Arch, and Homebrew packaging are owned by
+[`epithet-ssh/epithet-packaging`](https://github.com/epithet-ssh/epithet-packaging)
+and can run independently of Actions.
 
 ## Quick procedure
 
 ```bash
-jj st                   # confirm the working copy is clean and committed
+jj st                   # confirm the intended source revision
 make next-version       # sanity-check current vs. computed next version
-make release            # runs tests, then creates the vX.Y.Z tag
-git push origin vX.Y.Z  # this push is what triggers the release (make release prints it)
+make release            # runs tests, then creates the annotated tag
+git push origin vX.Y.Z  # publish the tag to the configured source remote
 ```
 
-Then watch the `release` workflow in GitHub Actions and confirm the GitHub
-Release, its `checksums.txt`, and the updated formula in the
-`epithet-ssh/homebrew-tap` repository.
+The self-hosted packaging builder can start immediately with
+`epithet-release release vX.Y.Z FULL_SOURCE_COMMIT`. Its optional one-minute
+source-tag poll provides a fallback. It checks the tag's exact commit, prepares a
+vendored source archive, and runs three independent jobs: native FreeBSD builds
+and package tests, Arch builds and package tests on a Linux VM, and macOS
+cross-compilation followed by a Homebrew tap update. macOS packaging tests are
+not run in v1. One failed target does not block the others.
 
-Once the GitHub Release is complete, explicitly publish the native FreeBSD
-repository from the FreeBSD build host:
-
-```sh
-ssh BUILD_HOST sudo epithet-pkg-publish publish vX.Y.Z
-```
-
-This separate command builds and tests the port before atomically updating the
-signed repository at `pkg.epithet.dev`. See
-[`contrib/freebsd/README.md`](../contrib/freebsd/README.md).
+Check the packaging builder's status and per-target logs to confirm publication.
+A green GitHub release workflow only confirms its optional download artifacts.
+The packaging repository contains setup, signing, VM, serving, and rollout
+instructions. This machinery must be deployed before its automatic packaging
+flow is active. Coordinate removing the old GoReleaser Homebrew writer with that
+cutover; this source change transfers tap ownership to the packaging builder.
 
 ## How the version is chosen
 
@@ -61,7 +61,8 @@ Two workflows split CI from releasing on the tag:
 - `.github/workflows/release.yml` runs **only on `v*` tags**. Pushing the tag
   is the release trigger.
 
-So a release happens exactly when — and only when — a `v*` tag is pushed.
+These triggers describe GitHub archives. The packaging builder reads stable
+source tags directly and does not wait for the GitHub workflow.
 
 ## What CI produces
 
@@ -70,14 +71,14 @@ So a release happens exactly when — and only when — a `v*` tag is pushed.
 1. **release** — checks out full history, runs `make test`, then goreleaser
    (`release --clean`, config in `.goreleaser.yaml`). goreleaser builds six
    binaries (linux, darwin, freebsd × amd64, arm64), publishes a GitHub Release
-   with a filtered changelog and `checksums.txt`, and pushes an updated formula
-   to `epithet-ssh/homebrew-tap`.
+   with a filtered changelog and `checksums.txt`. It does not update Homebrew;
+   that tap has a single writer in the packaging builder.
 
 ## Required secrets
 
-`release.yml` needs `HOMEBREW_TAP_GITHUB_TOKEN` (a token with write access to
-`epithet-ssh/homebrew-tap`) so goreleaser can push the formula update.
-`GITHUB_TOKEN` is provided automatically by Actions.
+Only the Actions-provided `GITHUB_TOKEN` is needed for GitHub archive releases.
+The packaging builder manages its own signing keys and Git tap credentials;
+those do not belong in source CI.
 
 ## Dry run before cutting a tag
 
@@ -89,12 +90,6 @@ make release-dry-run   # goreleaser release --snapshot --clean --skip=publish
 
 Artifacts land in `dist/`. Use this to catch build or config problems before
 creating a real tag.
-
-The dry run currently prints a deprecation warning: the `brews:` block in
-`.goreleaser.yaml` is deprecated in favor of `homebrew_casks` (see
-<https://goreleaser.com/deprecations#brews>). It still works with the pinned
-`~> v2` goreleaser, but should be migrated before bumping goreleaser to a
-version that removes it.
 
 ## Note on jj
 

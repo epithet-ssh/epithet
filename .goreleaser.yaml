@@ -41,25 +41,3 @@ release:
   github:
     owner: epithet-ssh
     name: epithet
-
-brews:
-  - name: epithet
-    repository:
-      owner: epithet-ssh
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
-    homepage: https://epithet.dev/
-    description: SSH certificate management
-    license: Apache-2.0
-    install: |
-      bin.install "epithet"
-    caveats: |
-      To start the agent:
-        brew services start epithet
-    service: |
-      run [opt_bin/"epithet", "--log-file=#{Dir.home}/Library/logs/dev.epithet/agent.log", "agent"]
-      keep_alive true
-      process_type :background
-    test: |
-      system bin/"epithet", "--version"
