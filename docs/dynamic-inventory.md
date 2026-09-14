@@ -87,7 +87,8 @@ record ID always works; unique ID prefixes and unambiguous exact host names also
 work. If multiple proposals share a name, use the record ID.
 
 `inventory list` prints one tab-separated row per host with its ID, status, source, and DNS names
-or pattern. Dynamic IDs are shown as 12-character prefixes. Use `inventory show`
+or pattern, sorted by the displayed `NAMES` column. Dynamic IDs are shown as
+12-character prefixes. Use `inventory show`
 for the full record, including accounts, labels, principal domain, and audit metadata.
 
 ## Enrollment and review

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -136,6 +137,15 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 	if err != nil {
 		return err
 	}
+	displayNames := func(h inventory.HostRecord) string {
+		if h.Pattern != "" {
+			return h.Pattern
+		}
+		return strings.Join(h.Proposal.Names, ", ")
+	}
+	slices.SortStableFunc(r.Hosts, func(a, b inventory.HostRecord) int {
+		return strings.Compare(displayNames(a), displayNames(b))
+	})
 	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
 		return err
 	}
@@ -147,11 +157,7 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 		if len(id) == 64 && h.Source != "static" {
 			id = id[:12]
 		}
-		names := strings.Join(h.Proposal.Names, ", ")
-		if h.Pattern != "" {
-			names = h.Pattern
-		}
-		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, names); err != nil {
+		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, displayNames(h)); err != nil {
 			return err
 		}
 	}

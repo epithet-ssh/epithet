@@ -148,6 +148,14 @@ inventory:
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", second.Host.Status)
 	require.Equal(t, created, second.Host.ID, "the enrollment token reserves the eventual host ID")
+	lines = strings.Split(strings.TrimSpace(string(admin("list"))), "\n")
+	var listedNames []string
+	for _, line := range lines[1:] {
+		fields := strings.Split(line, "\t")
+		require.Len(t, fields, 4)
+		listedNames = append(listedNames, fields[3])
+	}
+	require.Equal(t, []string{"*", "managed.example", "second.example"}, listedNames)
 	admin("remove", enrolled.Host.ID)
 	_, err = client.GetCert(t.Context(), token, &request)
 	require.NoError(t, err, "removal restores wildcard-based issuance")
