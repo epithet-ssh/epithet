@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -25,6 +26,14 @@ import (
 )
 
 func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.ControlResponse, error) {
+	logger := c.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("action", req.Action)
+	started := time.Now()
+	defer func() { logger.Debug("inventory agent request ended", "elapsed", time.Since(started)) }()
+	logger.Debug("resolving inventory agent socket", "profile", c.Name)
 	socket, err := resolveAgentBrokerSocket(&AgentCLI{Name: c.Name}, c.Broker)
 	if err != nil {
 		return nil, err
@@ -33,6 +42,7 @@ func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.C
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	logger.Debug("connecting to inventory agent", "socket", socket)
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
 		return nil, fmt.Errorf("connect to agent: %w; start epithet agent for this profile", err)
@@ -40,9 +50,11 @@ func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.C
 	defer conn.Close()
 	after := context.AfterFunc(ctx, func() { conn.Close() })
 	defer after()
+	logger.Debug("sending inventory request to agent")
 	if err = json.NewEncoder(conn).Encode(broker.Request{Inventory: &req}); err != nil {
 		return nil, err
 	}
+	logger.Debug("waiting for inventory agent response")
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 4096), inventoryclient.MaxControlResponse)
 	for scanner.Scan() {
@@ -54,6 +66,7 @@ func (c *InventoryCLI) request(req inventoryapi.ControlRequest) (*inventoryapi.C
 			fmt.Fprint(os.Stderr, event.Output)
 		}
 		if event.Inventory != nil {
+			logger.Debug("received inventory agent response", "elapsed", time.Since(started))
 			if event.Inventory.Error != "" {
 				return nil, errors.New(event.Inventory.Error)
 			}

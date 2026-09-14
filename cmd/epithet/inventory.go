@@ -26,6 +26,8 @@ type InventoryOIDCConfig struct {
 }
 
 type InventoryCLI struct {
+	logger *slog.Logger
+
 	StateDir    string              `help:"Directory for durable managed host state (enables enrollment)" name:"state-dir"`
 	AdminUsers  []string            `help:"Directory user ID granted inventory-admin (repeatable)" name:"admin-user"`
 	AdminGroups []string            `help:"Directory group granted inventory-admin (repeatable)" name:"admin-group"`

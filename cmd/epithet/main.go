@@ -59,6 +59,7 @@ func main() {
 		kong.Configuration(kongyaml.Loader, configPaths...),
 	)
 	logger := setupLogger()
+	cli.Inventory.logger = logger
 
 	// Create TLS config from global flags
 	tlsCfg := tlsconfig.Config{
