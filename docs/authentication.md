@@ -76,12 +76,29 @@ discovery. Upgrade the CA; there is no fallback.
 ## In-process OIDC flow
 
 `epithet agent` calls `pkg/auth/oidc.Authenticate(ctx, cfg, prev, out)`,
-which drives an authorization-code flow with PKCE:
+which drives one of two OIDC login flows when full authentication is needed.
+`--login-method` controls the choice and is also available as
+`agent.login-method` in configuration:
+
+- `auto` (the default) selects device authorization when `SSH_CONNECTION` or
+  `SSH_TTY` is set, and browser authorization otherwise.
+- `browser` always uses an authorization-code flow with PKCE and a local
+  callback listener.
+- `device` always uses RFC 8628 device authorization, printing the provider's
+  verification URL and user code to the terminal.
+
+Browser authorization:
 
 1. Opens the user's browser to the identity provider's authorization
    endpoint (or prints the URL to `out` if it can't launch a browser).
 2. Runs a local callback listener to receive the authorization code.
 3. Exchanges the code for tokens and returns the ID token (a JWT).
+
+Device authorization requires the issuer to advertise a
+`device_authorization_endpoint` and the configured OAuth client to permit the
+device grant. If automatic selection chooses device authorization but the
+issuer does not advertise it, Epithet reports the incompatibility and suggests
+`--login-method browser`; it does not try to open a browser remotely.
 
 Scopes are not configurable: the client always requests `openid profile email`.
 The inventory service resolves `id` using `inventory.oidc.identity-mode`.
@@ -108,7 +125,23 @@ or client settings also requires restarting agents to refresh their discovery. T
 
 On later calls, `prev` carries the previous `oauth2.Token` (including its
 refresh token). `Authenticate` reuses a still-valid access token or uses the
-refresh token to get a new one silently, without opening a browser.
+refresh token to get a new one silently, without starting either interactive
+flow.
+
+## Subprocess lifetime
+
+An optional command makes the broker's lifetime match that subprocess:
+
+```bash
+epithet agent zsh
+```
+
+Epithet waits until the broker socket is ready, launches the command with its
+normal environment and standard streams, and shuts the broker down when the
+command exits. The child's exit status becomes Epithet's exit status. SSH from
+the child continues to use the ordinary generated `.ssh/config`, including
+the existing `Match` and per-connection `IdentityAgent` behavior; subprocess
+mode does not set `SSH_AUTH_SOCK` or introduce a second agent-routing path.
 
 ## Refresh state
 

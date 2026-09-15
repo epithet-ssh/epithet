@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,8 +10,34 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
+	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/stretchr/testify/require"
 )
+
+type testBrokerProcess struct{ ready chan struct{} }
+
+func (b *testBrokerProcess) Ready() <-chan struct{} { return b.ready }
+func (b *testBrokerProcess) Serve(ctx context.Context) error {
+	close(b.ready)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRunAgentCommandReturnsChildStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	err := runAgentCommand(ctx, cancel, &testBrokerProcess{ready: make(chan struct{})}, []string{"sh", "-c", "exit 7"})
+	require.Error(t, err)
+	exitErr, ok := err.(interface{ ExitCode() int })
+	require.True(t, ok)
+	require.Equal(t, 7, exitErr.ExitCode())
+}
+
+func TestRunAgentCommandStopsBrokerAfterSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, runAgentCommand(ctx, cancel, &testBrokerProcess{ready: make(chan struct{})}, []string{"sh", "-c", "exit 0"}))
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+}
 
 func TestGenerateSSHConfigIsTagGated(t *testing.T) {
 	dir := t.TempDir()
@@ -32,6 +59,41 @@ func TestProfileNameValidation(t *testing.T) {
 	require.Error(t, validateProfileName("has space"))
 	require.Error(t, validateProfileName("has/slash"))
 	require.NoError(t, validateProfileName("home-2"))
+}
+
+func TestResolveLoginMethod(t *testing.T) {
+	tests := []struct {
+		name, configured   string
+		environment        map[string]string
+		want               authoidc.LoginMethod
+		wantInferredDevice bool
+	}{
+		{name: "local auto", configured: "auto", want: authoidc.LoginBrowser},
+		{name: "SSH connection", configured: "auto", environment: map[string]string{"SSH_CONNECTION": "client 1 server 2"}, want: authoidc.LoginDevice, wantInferredDevice: true},
+		{name: "SSH tty", configured: "auto", environment: map[string]string{"SSH_TTY": "/dev/pts/1"}, want: authoidc.LoginDevice, wantInferredDevice: true},
+		{name: "explicit browser overrides SSH", configured: "browser", environment: map[string]string{"SSH_CONNECTION": "set"}, want: authoidc.LoginBrowser},
+		{name: "explicit device", configured: "device", want: authoidc.LoginDevice},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			getenv := func(name string) string { return tc.environment[name] }
+			got, inferred := resolveLoginMethod(tc.configured, getenv)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.wantInferredDevice, inferred)
+		})
+	}
+}
+
+func TestAgentParsesLoginMethodAndSubprocess(t *testing.T) {
+	var command struct {
+		Agent AgentCLI `cmd:""`
+	}
+	parser, err := kong.New(&command)
+	require.NoError(t, err)
+	_, err = parser.Parse([]string{"agent", "--login-method", "browser", "zsh", "-f"})
+	require.NoError(t, err)
+	require.Equal(t, "browser", command.Agent.LoginMethod)
+	require.Equal(t, []string{"zsh", "-f"}, command.Agent.Start.Command)
 }
 
 func TestAgentControlCommandsResolveBrokerFromProfileWithoutCAURL(t *testing.T) {

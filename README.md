@@ -33,7 +33,21 @@ Include ~/.epithet/run/*/ssh-config.conf   # must come after Tag lines
 ssh server.example.com
 ```
 
-First connection opens your browser for authentication (~2-5 seconds). Subsequent connections reuse the refreshed token.
+First connection authenticates through your browser (~2-5 seconds). In an SSH
+session, Epithet automatically uses the OIDC device flow instead. Subsequent
+connections reuse the refreshed token.
+
+To scope the agent to a shell or another command, pass that command to the
+agent. It starts only after the broker is ready, and the agent exits when the
+command exits:
+
+```bash
+epithet agent zsh
+```
+
+The child uses the same generated `~/.ssh/config` setup shown above. Use
+`--login-method browser` or `--login-method device` to override automatic
+login-method selection.
 
 ## How it works
 

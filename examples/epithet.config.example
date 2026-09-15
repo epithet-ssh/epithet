@@ -19,6 +19,7 @@
 agent:
   ca-url: https://ca.example.com
   name: default   # profile name; determines the rundir and ssh Tag (epithet-<name>; just "epithet" for the default profile)
+  login-method: auto # auto uses device authorization under SSH; browser otherwise
 
 # CA server configuration (epithet ca)
 # ca:

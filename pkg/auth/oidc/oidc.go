@@ -6,6 +6,7 @@ package oidc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -20,6 +21,20 @@ import (
 // Policy maps a verified token to inventory using its configured identity mode.
 var Scopes = []string{"openid", "profile", "email"}
 
+// LoginMethod selects the interactive operation used when neither a valid
+// token nor a working refresh token is available. Its zero value preserves
+// the browser-based behavior used before device authorization was added.
+type LoginMethod uint8
+
+const (
+	LoginBrowser LoginMethod = iota
+	LoginDevice
+)
+
+// ErrDeviceAuthorizationUnsupported means the issuer did not advertise the
+// RFC 8628 endpoint required for device login.
+var ErrDeviceAuthorizationUnsupported = errors.New("OIDC issuer does not advertise device authorization")
+
 // openBrowser is a seam over browser.OpenURL so tests can stub it out —
 // otherwise every test that exercises the full auth-code flow would pop a
 // real browser window.
@@ -31,6 +46,7 @@ type Config struct {
 	ClientID     string
 	ClientSecret string // Optional for PKCE.
 	TLSConfig    tlsconfig.Config
+	LoginMethod  LoginMethod
 }
 
 // Authenticate returns a fresh ID token. prev carries refresh state from the
@@ -77,7 +93,7 @@ func Authenticate(ctx context.Context, cfg Config, prev *oauth2.Token, out io.Wr
 		if refreshErr != nil {
 			// Refresh failed, need full auth.
 			fmt.Fprintf(out, "Token refresh failed, performing full authentication: %v\n", refreshErr)
-			newToken, err = performFullAuth(ctx, oauth2Config, out)
+			newToken, err = performFullAuth(ctx, oauth2Config, out, cfg.LoginMethod)
 			if err != nil {
 				return "", nil, err
 			}
@@ -86,7 +102,7 @@ func Authenticate(ctx context.Context, cfg Config, prev *oauth2.Token, out io.Wr
 		}
 	} else {
 		// No valid token, perform full authentication.
-		newToken, err = performFullAuth(ctx, oauth2Config, out)
+		newToken, err = performFullAuth(ctx, oauth2Config, out, cfg.LoginMethod)
 		if err != nil {
 			return "", nil, err
 		}
@@ -102,9 +118,12 @@ func Authenticate(ctx context.Context, cfg Config, prev *oauth2.Token, out io.Wr
 	return tok, newToken, nil
 }
 
-// performFullAuth performs the full OAuth2 authorization code flow with PKCE.
-// It starts a local HTTP server, opens the browser, and waits for the callback.
-func performFullAuth(ctx context.Context, oauth2Config oauth2.Config, out io.Writer) (*oauth2.Token, error) {
+// performFullAuth dispatches the configured interactive login mechanism.
+func performFullAuth(ctx context.Context, oauth2Config oauth2.Config, out io.Writer, method LoginMethod) (*oauth2.Token, error) {
+	if method == LoginDevice {
+		return performDeviceAuth(ctx, oauth2Config, out)
+	}
+
 	// Create a channel to receive the local server URL.
 	readyChan := make(chan string, 1)
 
@@ -172,4 +191,29 @@ func performFullAuth(ctx context.Context, oauth2Config oauth2.Config, out io.Wri
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// performDeviceAuth implements RFC 8628 for machines where a browser cannot
+// receive a loopback callback, such as a remote shell. The OAuth library owns
+// the provider-specific polling interval and slow-down behavior.
+func performDeviceAuth(ctx context.Context, oauth2Config oauth2.Config, out io.Writer) (*oauth2.Token, error) {
+	if oauth2Config.Endpoint.DeviceAuthURL == "" {
+		return nil, ErrDeviceAuthorizationUnsupported
+	}
+	device, err := oauth2Config.DeviceAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("starting device authorization: %w", err)
+	}
+
+	if device.VerificationURIComplete != "" {
+		fmt.Fprintf(out, "To authenticate, visit: %s\n", device.VerificationURIComplete)
+	} else {
+		fmt.Fprintf(out, "To authenticate, visit: %s\nEnter code: %s\n", device.VerificationURI, device.UserCode)
+	}
+
+	token, err := oauth2Config.DeviceAccessToken(ctx, device)
+	if err != nil {
+		return nil, fmt.Errorf("device authorization failed: %w", err)
+	}
+	return token, nil
 }

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -86,10 +88,11 @@ func acquireProfileLock(runDir, name string) (*os.File, error) {
 // AgentCLI is the parent command for agent-related subcommands.
 // Shared flags are defined here and inherited by subcommands.
 type AgentCLI struct {
-	Name       string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>, or just epithet for the default profile)" default:"default"`
-	CaURL      []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
-	CaTimeout  time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
-	CaCooldown time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
+	Name        string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>, or just epithet for the default profile)" default:"default"`
+	CaURL       []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
+	CaTimeout   time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
+	CaCooldown  time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
+	LoginMethod string        `help:"Interactive login method" name:"login-method" enum:"auto,browser,device" default:"auto"`
 
 	Identity AgentIdentityCLI `cmd:"identity" aliases:"id,ide,iden,ident" help:"Authenticate the running agent and print its OIDC identity"`
 	Start    AgentStartCLI    `cmd:"" default:"withargs" help:"Start the epithet agent"`
@@ -98,7 +101,9 @@ type AgentCLI struct {
 }
 
 // AgentStartCLI is the default subcommand that starts the agent/broker.
-type AgentStartCLI struct{}
+type AgentStartCLI struct {
+	Command []string `arg:"" optional:"" passthrough:"" name:"command" help:"Command to run while the agent is available"`
+}
 
 func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	// Validate required fields for start
@@ -188,11 +193,14 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	}
 	logger.Info("discovered auth config from CA", "issuer", discovery.Auth.Issuer)
 
+	loginMethod, inferredDevice := resolveLoginMethod(parent.LoginMethod, os.Getenv)
+	logger.Info("selected interactive login method", "method", loginMethodName(loginMethod), "configured", parent.LoginMethod)
 	oidcCfg := authoidc.Config{
 		IssuerURL:    discovery.Auth.Issuer,
 		ClientID:     discovery.Auth.ClientID,
 		ClientSecret: discovery.Auth.ClientSecret,
 		TLSConfig:    tlsCfg,
+		LoginMethod:  loginMethod,
 	}
 	// Refresh state lives in this closure, in memory only. broker.Auth
 	// serializes invocations, so no locking is needed here.
@@ -209,6 +217,9 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		}
 		idToken, next, err := authoidc.Authenticate(ctx, oidcCfg, oauthState, out)
 		if err != nil {
+			if inferredDevice && errors.Is(err, authoidc.ErrDeviceAuthorizationUnsupported) {
+				return "", fmt.Errorf("automatic device login is unavailable: %w; use --login-method browser to use a local callback", err)
+			}
 			return "", err
 		}
 		oauthState = next
@@ -254,15 +265,97 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		logger.Debug("generated SSH config", "path", sshConfigPath)
 	}
 
-	// Start broker
+	// Start broker, optionally scoped to a subprocess.
 	logger.Info("starting broker", "socket", brokerSock)
-	err = b.Serve(ctx)
+	if len(s.Command) > 0 {
+		err = runAgentCommand(ctx, cancel, b, s.Command)
+	} else {
+		err = b.Serve(ctx)
+	}
 	if err != nil && err != context.Canceled {
+		var childErr childProcessError
+		if errors.As(err, &childErr) {
+			return childErr
+		}
 		return fmt.Errorf("broker serve error: %w", err)
 	}
 
 	logger.Info("broker shutdown complete")
 	return nil
+}
+
+// resolveLoginMethod keeps environment detection at the command boundary and
+// gives the authentication package only the concrete mechanism it must run.
+func resolveLoginMethod(configured string, getenv func(string) string) (method authoidc.LoginMethod, inferredDevice bool) {
+	switch configured {
+	case "device":
+		return authoidc.LoginDevice, false
+	case "browser":
+		return authoidc.LoginBrowser, false
+	default: // Kong restricts this field to auto, browser, or device.
+		if getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" {
+			return authoidc.LoginDevice, true
+		}
+		return authoidc.LoginBrowser, false
+	}
+}
+
+func loginMethodName(method authoidc.LoginMethod) string {
+	if method == authoidc.LoginDevice {
+		return "device"
+	}
+	return "browser"
+}
+
+type brokerProcess interface {
+	Serve(context.Context) error
+	Ready() <-chan struct{}
+}
+
+// runAgentCommand starts the broker before the child and tears it down when
+// the child exits. Standard streams and the environment are inherited so an
+// interactive shell behaves exactly as if it had been launched directly.
+func runAgentCommand(ctx context.Context, cancel context.CancelFunc, b brokerProcess, argv []string) error {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- b.Serve(ctx) }()
+
+	select {
+	case <-b.Ready():
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		cancel()
+		<-serveErr
+		return fmt.Errorf("start %q: %w", argv[0], err)
+	}
+
+	childErr := cmd.Wait()
+	cancel()
+	brokerErr := <-serveErr
+	if childErr != nil {
+		return childProcessError{childErr}
+	}
+	if brokerErr != nil && brokerErr != context.Canceled {
+		return fmt.Errorf("broker serve error: %w", brokerErr)
+	}
+	return nil
+}
+
+type childProcessError struct{ error }
+
+func (e childProcessError) ExitCode() int {
+	if exitErr, ok := e.error.(*exec.ExitError); ok {
+		return exitErr.ExitCode()
+	}
+	return 1
 }
 
 // profileTag returns the ssh Tag token for a profile. The default profile

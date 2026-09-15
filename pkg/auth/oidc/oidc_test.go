@@ -1,9 +1,12 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"sync"
 	"testing"
@@ -86,4 +89,52 @@ func TestAuthenticateReusesValidToken(t *testing.T) {
 	idToken, _, err := Authenticate(context.Background(), cfg, prev, io.Discard)
 	require.NoError(t, err)
 	require.NotEmpty(t, idToken)
+}
+
+func TestAuthenticateCompletesDeviceFlow(t *testing.T) {
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": server.URL, "authorization_endpoint": server.URL + "/auth",
+			"device_authorization_endpoint": server.URL + "/device", "token_endpoint": server.URL + "/token",
+			"jwks_uri": server.URL + "/keys", "response_types_supported": []string{"code"},
+			"subject_types_supported": []string{"public"}, "id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		require.Equal(t, "client", r.Form.Get("client_id"))
+		require.Contains(t, r.Form.Get("scope"), "openid")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"device_code": "device-code", "user_code": "ABCD-EFGH",
+			"verification_uri": server.URL + "/activate", "expires_in": 30, "interval": 1,
+		})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		require.Equal(t, "urn:ietf:params:oauth:grant-type:device_code", r.Form.Get("grant_type"))
+		require.Equal(t, "device-code", r.Form.Get("device_code"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "access", "token_type": "Bearer", "expires_in": 300, "id_token": "header.payload.signature",
+		})
+	})
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	var out bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	idToken, next, err := Authenticate(ctx, Config{IssuerURL: server.URL, ClientID: "client", LoginMethod: LoginDevice}, nil, &out)
+	require.NoError(t, err)
+	require.Equal(t, "header.payload.signature", idToken)
+	require.Equal(t, "access", next.AccessToken)
+	require.Contains(t, out.String(), "To authenticate, visit: "+server.URL+"/activate")
+	require.Contains(t, out.String(), "Enter code: ABCD-EFGH")
+}
+
+func TestDeviceLoginRequiresDiscoveryEndpoint(t *testing.T) {
+	_, err := performDeviceAuth(context.Background(), oauth2.Config{}, io.Discard)
+	require.ErrorIs(t, err, ErrDeviceAuthorizationUnsupported)
 }
