@@ -23,10 +23,11 @@ import (
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
 // It inherits Name from the parent AgentCLI.
 type AgentInspectCLI struct {
-	Broker  string                `help:"Broker socket path (overrides config-based discovery)" short:"b"`
-	JSON    bool                  `help:"Output in JSON format" short:"j" xor:"format"`
-	Compact bool                  `help:"Show one line per agent" xor:"format"`
-	ID      policy.ConnectionHash `arg:"" optional:"" name:"id" help:"Agent ID or unique prefix"`
+	Broker   string                `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	JSON     bool                  `help:"Output in JSON format" short:"j" xor:"format"`
+	Compact  bool                  `help:"Show one line per agent (default without an ID)" xor:"format"`
+	Expanded bool                  `help:"Show full details (default with an ID)" xor:"format"`
+	ID       policy.ConnectionHash `arg:"" optional:"" name:"id" help:"Agent ID or unique prefix"`
 }
 
 func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
@@ -71,19 +72,24 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		return fmt.Errorf("no response received from broker")
 	}
 
-	// Output results.
+	return i.writeOutput(os.Stdout, resp, time.Now())
+}
+
+// writeOutput applies the requested format, defaulting to compact for a list
+// and expanded for an explicitly selected agent, regardless of result count.
+func (i *AgentInspectCLI) writeOutput(w io.Writer, resp *broker.InspectResponse, now time.Time) error {
 	if i.JSON {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(resp)
 	}
 
-	if i.Compact {
-		writeCompactInspect(os.Stdout, resp, i.ID)
+	if i.Compact || (!i.Expanded && i.ID == "") {
+		writeCompactInspect(w, resp, i.ID, now)
 	} else if i.ID != "" {
-		writeInspectAgents(os.Stdout, resp.Agents, time.Now())
+		writeInspectAgents(w, resp.Agents, now)
 	} else {
-		writeInspect(os.Stdout, resp, time.Now())
+		writeInspect(w, resp, now)
 	}
 	return nil
 }
@@ -259,9 +265,9 @@ func escapeCertificateValue(value string) string {
 
 // writeCompactInspect abbreviates IDs against the complete snapshot. A selected
 // agent uses the supplied prefix, which the broker validated against all agents.
-func writeCompactInspect(w io.Writer, resp *broker.InspectResponse, selected policy.ConnectionHash) {
+func writeCompactInspect(w io.Writer, resp *broker.InspectResponse, selected policy.ConnectionHash, now time.Time) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tCONNECTION\tPRINCIPALS\tSERIAL")
+	fmt.Fprintln(tw, "ID\tCONNECTION\tSERIAL\tEXPIRES")
 	for _, ag := range resp.Agents {
 		id := ag.Hash
 		if selected != "" {
@@ -286,19 +292,18 @@ func writeCompactInspect(w io.Writer, resp *broker.InspectResponse, selected pol
 			fmt.Fprintf(&connection, "-p %d ", ag.Connection.Port)
 		}
 		fmt.Fprintf(&connection, "%s@%s", ag.Connection.RemoteUser, ag.Connection.RemoteHost)
-		principals, serial := "(none)", "-"
+		serial := "-"
 		if ag.Certificate != "" {
 			cert, err := sshcert.Parse(ag.Certificate)
-			if err != nil {
-				principals = "(parse error)"
-			} else {
-				if len(cert.ValidPrincipals) > 0 {
-					principals = strings.Join(cert.ValidPrincipals, ",")
-				}
+			if err == nil {
 				serial = strconv.FormatUint(cert.Serial, 10)
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", escapeCertificateValue(id), escapeCertificateValue(connection.String()), escapeCertificateValue(principals), serial)
+		expires := "expired"
+		if ag.ExpiresAt.After(now) {
+			expires = ag.ExpiresAt.Sub(now).Round(time.Second).String()
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", escapeCertificateValue(id), escapeCertificateValue(connection.String()), serial, expires)
 	}
 	tw.Flush()
 }

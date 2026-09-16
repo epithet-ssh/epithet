@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -118,30 +120,27 @@ func testCertificate(t *testing.T, now time.Time) sshcert.RawCertificate {
 }
 
 func TestCompactInspect(t *testing.T) {
-	now := time.Now()
-	cert, err := sshcert.Parse(testCertificate(t, now))
-	require.NoError(t, err)
-	cert.ValidPrincipals = []string{"brianm", "deploy"}
-	certificate := sshcert.RawCertificate(ssh.MarshalAuthorizedKey(cert))
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	certificate := testCertificate(t, now)
 	resp := &broker.InspectResponse{Agents: []broker.AgentInfo{
-		{Hash: "abcd1fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.home", Port: 22}, Certificate: certificate},
-		{Hash: "abcd2fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.tail", Port: 2222, ProxyJump: "bastion.example"}},
-		{Hash: "ef012fff", Connection: policy.Connection{RemoteUser: "user\nname", RemoteHost: "host\tname"}, Certificate: "invalid"},
+		{Hash: "abcd1fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.home", Port: 22}, Certificate: certificate, ExpiresAt: now.Add(6 * time.Minute)},
+		{Hash: "abcd2fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.tail", Port: 2222, ProxyJump: "bastion.example"}, ExpiresAt: now},
+		{Hash: "ef012fff", Connection: policy.Connection{RemoteUser: "user\nname", RemoteHost: "host\tname"}, Certificate: "invalid", ExpiresAt: now.Add(-time.Millisecond)},
 	}}
 	var out bytes.Buffer
-	writeCompactInspect(&out, resp, "")
+	writeCompactInspect(&out, resp, "", now)
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	require.Len(t, lines, 4)
-	require.Equal(t, []string{"ID", "CONNECTION", "PRINCIPALS", "SERIAL"}, strings.Fields(lines[0]))
-	require.Equal(t, []string{"abcd1", "brianm@freki.home", "brianm,deploy", "2457835461539698830"}, strings.Fields(lines[1]))
-	require.Equal(t, []string{"abcd2", "-J", "bastion.example", "-p", "2222", "brianm@freki.tail", "(none)", "-"}, strings.Fields(lines[2]))
-	require.Equal(t, []string{"ef01", `user\nname@host\tname`, "(parse", "error)", "-"}, strings.Fields(lines[3]))
+	require.Equal(t, []string{"ID", "CONNECTION", "SERIAL", "EXPIRES"}, strings.Fields(lines[0]))
+	require.Equal(t, []string{"abcd1", "brianm@freki.home", "2457835461539698830", "6m0s"}, strings.Fields(lines[1]))
+	require.Equal(t, []string{"abcd2", "-J", "bastion.example", "-p", "2222", "brianm@freki.tail", "-", "expired"}, strings.Fields(lines[2]))
+	require.Equal(t, []string{"ef01", `user\nname@host\tname`, "-", "expired"}, strings.Fields(lines[3]))
 	out.Reset()
-	writeCompactInspect(&out, &broker.InspectResponse{Agents: resp.Agents[:1]}, "abcd1")
+	writeCompactInspect(&out, &broker.InspectResponse{Agents: resp.Agents[:1]}, "abcd1", now)
 	require.Equal(t, "abcd1", strings.Fields(strings.Split(out.String(), "\n")[1])[0])
 	out.Reset()
-	writeCompactInspect(&out, &broker.InspectResponse{}, "")
-	require.Equal(t, []string{"ID", "CONNECTION", "PRINCIPALS", "SERIAL"}, strings.Fields(out.String()))
+	writeCompactInspect(&out, &broker.InspectResponse{}, "", now)
+	require.Equal(t, []string{"ID", "CONNECTION", "SERIAL", "EXPIRES"}, strings.Fields(out.String()))
 }
 
 func TestInspectArguments(t *testing.T) {
@@ -156,9 +155,81 @@ func TestInspectArguments(t *testing.T) {
 	require.True(t, command.Agent.Inspect.Compact)
 	require.Equal(t, policy.ConnectionHash("abcd"), command.Agent.Inspect.ID)
 
-	var inspect AgentInspectCLI
-	parser, err = kong.New(&inspect)
-	require.NoError(t, err)
-	_, err = parser.Parse([]string{"--compact", "--json"})
-	require.Error(t, err)
+	for _, args := range [][]string{
+		{"--compact", "--json"},
+		{"--expanded", "--json"},
+		{"--compact", "--expanded"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var inspect AgentInspectCLI
+			parser, err := kong.New(&inspect)
+			require.NoError(t, err)
+			_, err = parser.Parse(args)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestInspectOutputFormats(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		format string
+	}{
+		{"list default", nil, "compact"},
+		{"selected default", []string{"abcd"}, "selected"},
+		{"expanded list", []string{"--expanded"}, "expanded"},
+		{"compact selected", []string{"abcd", "--compact"}, "compact"},
+		{"compact list", []string{"--compact"}, "compact"},
+		{"expanded selected", []string{"abcd", "--expanded"}, "selected"},
+		{"json list", []string{"--json"}, "json"},
+		{"json selected", []string{"abcd", "--json"}, "json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var inspect AgentInspectCLI
+			parser, err := kong.New(&inspect)
+			require.NoError(t, err)
+			_, err = parser.Parse(tc.args)
+			require.NoError(t, err)
+			counts := []int{0, 1, 2}
+			if inspect.ID != "" {
+				counts = []int{1}
+			}
+			for _, count := range counts {
+				t.Run(fmt.Sprintf("%d agents", count), func(t *testing.T) {
+					resp := &broker.InspectResponse{SocketPath: "/broker.sock"}
+					for n := 0; n < count; n++ {
+						resp.Agents = append(resp.Agents, broker.AgentInfo{
+							Hash:       fmt.Sprintf("abcd%d", n),
+							Connection: policy.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Port: 22},
+							ExpiresAt:  now.Add(time.Minute),
+						})
+					}
+					var out bytes.Buffer
+					require.NoError(t, inspect.writeOutput(&out, resp, now))
+					switch tc.format {
+					case "compact":
+						lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+						require.Len(t, lines, count+1)
+						require.Equal(t, []string{"ID", "CONNECTION", "SERIAL", "EXPIRES"}, strings.Fields(lines[0]))
+					case "expanded":
+						require.Contains(t, out.String(), "Broker State\n")
+						require.Contains(t, out.String(), fmt.Sprintf("Agents (%d)\n", count))
+						if count > 0 {
+							require.Contains(t, out.String(), "    Host: server.example.com\n")
+						}
+					case "selected":
+						require.NotContains(t, out.String(), "Broker State")
+						require.Contains(t, out.String(), "    Host: server.example.com\n")
+					case "json":
+						var decoded broker.InspectResponse
+						require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+						require.Equal(t, resp.SocketPath, decoded.SocketPath)
+						require.Len(t, decoded.Agents, count)
+					}
+				})
+			}
+		})
+	}
 }
