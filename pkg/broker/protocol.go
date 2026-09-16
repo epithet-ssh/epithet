@@ -18,7 +18,7 @@ type Request struct {
 	Inventory *inventoryapi.ControlRequest `json:"inventory,omitempty"`
 	Identity  *struct{}                    `json:"identity,omitempty"`
 	Match     *policy.Connection           `json:"match,omitempty"`
-	Inspect   *struct{}                    `json:"inspect,omitempty"`
+	Inspect   *InspectRequest              `json:"inspect,omitempty"`
 	Kill      *KillRequest                 `json:"kill,omitempty"`
 }
 
@@ -138,7 +138,7 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 		_ = w.writeEvent(Event{Identity: &resp})
 	case req.Inspect != nil:
 		var resp InspectResponse
-		if err := b.Inspect(InspectRequest{}, &resp); err != nil {
+		if err := b.Inspect(*req.Inspect, &resp); err != nil {
 			_ = w.writeEvent(Event{Result: &MatchResponse{Allow: false, Error: err.Error()}})
 			return
 		}

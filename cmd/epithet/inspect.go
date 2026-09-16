@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"golang.org/x/crypto/ssh"
 )
@@ -21,8 +23,10 @@ import (
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
 // It inherits Name from the parent AgentCLI.
 type AgentInspectCLI struct {
-	Broker string `help:"Broker socket path (overrides config-based discovery)" short:"b"`
-	JSON   bool   `help:"Output in JSON format" short:"j"`
+	Broker  string                `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	JSON    bool                  `help:"Output in JSON format" short:"j" xor:"format"`
+	Compact bool                  `help:"Show one line per agent" xor:"format"`
+	ID      policy.ConnectionHash `arg:"" optional:"" name:"id" help:"Agent ID or unique prefix"`
 }
 
 func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
@@ -38,7 +42,7 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	if err := json.NewEncoder(conn).Encode(broker.Request{Inspect: &struct{}{}}); err != nil {
+	if err := json.NewEncoder(conn).Encode(broker.Request{Inspect: &broker.InspectRequest{ID: i.ID}}); err != nil {
 		return fmt.Errorf("failed to send inspect request: %w", err)
 	}
 
@@ -56,9 +60,7 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 			break
 		}
 		if ev.Result != nil {
-			// A malformed-request denial is the only Result an Inspect
-			// request can get back (the broker never returns a Match result
-			// here); surface it as the RPC error it effectively is.
+			// Inspect lookup failures and malformed requests arrive as Result errors.
 			return fmt.Errorf("broker error: %s", ev.Result.Error)
 		}
 	}
@@ -76,7 +78,13 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		return enc.Encode(resp)
 	}
 
-	writeInspect(os.Stdout, resp, time.Now())
+	if i.Compact {
+		writeCompactInspect(os.Stdout, resp, i.ID)
+	} else if i.ID != "" {
+		writeInspectAgents(os.Stdout, resp.Agents, time.Now())
+	} else {
+		writeInspect(os.Stdout, resp, time.Now())
+	}
 	return nil
 }
 
@@ -105,12 +113,16 @@ func writeInspect(w io.Writer, resp *broker.InspectResponse, now time.Time) {
 	}
 	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "Agents (%d)\n", len(resp.Agents))
+	writeInspectAgents(w, resp.Agents, now)
+}
+
+func writeInspectAgents(w io.Writer, agents []broker.AgentInfo, now time.Time) {
+	fmt.Fprintf(w, "Agents (%d)\n", len(agents))
 	fmt.Fprintln(w, "-----------")
-	if len(resp.Agents) == 0 {
+	if len(agents) == 0 {
 		fmt.Fprintln(w, "  (none)")
 	} else {
-		for _, ag := range resp.Agents {
+		for _, ag := range agents {
 			remaining := ag.ExpiresAt.Sub(now).Round(time.Second)
 			status := "valid"
 			if remaining < 0 {
@@ -243,4 +255,50 @@ func writeOptions(w io.Writer, label string, options map[string]string) {
 func escapeCertificateValue(value string) string {
 	quoted := strconv.QuoteToGraphic(value)
 	return quoted[1 : len(quoted)-1]
+}
+
+// writeCompactInspect abbreviates IDs against the complete snapshot. A selected
+// agent uses the supplied prefix, which the broker validated against all agents.
+func writeCompactInspect(w io.Writer, resp *broker.InspectResponse, selected policy.ConnectionHash) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tCONNECTION\tPRINCIPALS\tSERIAL")
+	for _, ag := range resp.Agents {
+		id := ag.Hash
+		if selected != "" {
+			id = string(selected)
+		} else {
+			length := min(4, len(id))
+			for _, other := range resp.Agents {
+				if other.Hash == id {
+					continue
+				}
+				for length < len(id) && strings.HasPrefix(other.Hash, id[:length]) {
+					length++
+				}
+			}
+			id = id[:length]
+		}
+		var connection strings.Builder
+		if ag.Connection.ProxyJump != "" {
+			fmt.Fprintf(&connection, "-J %s ", ag.Connection.ProxyJump)
+		}
+		if ag.Connection.Port != 0 && ag.Connection.Port != 22 {
+			fmt.Fprintf(&connection, "-p %d ", ag.Connection.Port)
+		}
+		fmt.Fprintf(&connection, "%s@%s", ag.Connection.RemoteUser, ag.Connection.RemoteHost)
+		principals, serial := "(none)", "-"
+		if ag.Certificate != "" {
+			cert, err := sshcert.Parse(ag.Certificate)
+			if err != nil {
+				principals = "(parse error)"
+			} else {
+				if len(cert.ValidPrincipals) > 0 {
+					principals = strings.Join(cert.ValidPrincipals, ",")
+				}
+				serial = strconv.FormatUint(cert.Serial, 10)
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", escapeCertificateValue(id), escapeCertificateValue(connection.String()), escapeCertificateValue(principals), serial)
+	}
+	tw.Flush()
 }

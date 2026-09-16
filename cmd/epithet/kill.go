@@ -15,7 +15,7 @@ import (
 // AgentKillCLI evicts one per-connection agent from the running broker.
 type AgentKillCLI struct {
 	Broker  string                `help:"Broker socket path (overrides config-based discovery)" short:"b"`
-	AgentID policy.ConnectionHash `arg:"" name:"agent-id" help:"Agent ID shown by epithet agent inspect" required:""`
+	AgentID policy.ConnectionHash `arg:"" name:"agent-id" help:"Agent ID or unique prefix shown by epithet agent inspect" required:""`
 }
 
 func (k *AgentKillCLI) Run(parent *AgentCLI) error {

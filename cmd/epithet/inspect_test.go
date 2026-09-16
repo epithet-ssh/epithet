@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -113,4 +115,50 @@ func testCertificate(t *testing.T, now time.Time) sshcert.RawCertificate {
 	require.NoError(t, cert.SignCert(rand.Reader, caSigner))
 
 	return sshcert.RawCertificate(ssh.MarshalAuthorizedKey(cert))
+}
+
+func TestCompactInspect(t *testing.T) {
+	now := time.Now()
+	cert, err := sshcert.Parse(testCertificate(t, now))
+	require.NoError(t, err)
+	cert.ValidPrincipals = []string{"brianm", "deploy"}
+	certificate := sshcert.RawCertificate(ssh.MarshalAuthorizedKey(cert))
+	resp := &broker.InspectResponse{Agents: []broker.AgentInfo{
+		{Hash: "abcd1fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.home", Port: 22}, Certificate: certificate},
+		{Hash: "abcd2fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.tail", Port: 2222, ProxyJump: "bastion.example"}},
+		{Hash: "ef012fff", Connection: policy.Connection{RemoteUser: "user\nname", RemoteHost: "host\tname"}, Certificate: "invalid"},
+	}}
+	var out bytes.Buffer
+	writeCompactInspect(&out, resp, "")
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	require.Len(t, lines, 4)
+	require.Equal(t, []string{"ID", "CONNECTION", "PRINCIPALS", "SERIAL"}, strings.Fields(lines[0]))
+	require.Equal(t, []string{"abcd1", "brianm@freki.home", "brianm,deploy", "2457835461539698830"}, strings.Fields(lines[1]))
+	require.Equal(t, []string{"abcd2", "-J", "bastion.example", "-p", "2222", "brianm@freki.tail", "(none)", "-"}, strings.Fields(lines[2]))
+	require.Equal(t, []string{"ef01", `user\nname@host\tname`, "(parse", "error)", "-"}, strings.Fields(lines[3]))
+	out.Reset()
+	writeCompactInspect(&out, &broker.InspectResponse{Agents: resp.Agents[:1]}, "abcd1")
+	require.Equal(t, "abcd1", strings.Fields(strings.Split(out.String(), "\n")[1])[0])
+	out.Reset()
+	writeCompactInspect(&out, &broker.InspectResponse{}, "")
+	require.Equal(t, []string{"ID", "CONNECTION", "PRINCIPALS", "SERIAL"}, strings.Fields(out.String()))
+}
+
+func TestInspectArguments(t *testing.T) {
+	var command struct {
+		Agent AgentCLI `cmd:""`
+	}
+	parser, err := kong.New(&command)
+	require.NoError(t, err)
+	_, err = parser.Parse([]string{"agent", "-c", "https://id.example.com", "inspect", "--compact", "abcd"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://id.example.com"}, command.Agent.CaURL)
+	require.True(t, command.Agent.Inspect.Compact)
+	require.Equal(t, policy.ConnectionHash("abcd"), command.Agent.Inspect.ID)
+
+	var inspect AgentInspectCLI
+	parser, err = kong.New(&inspect)
+	require.NoError(t, err)
+	_, err = parser.Parse([]string{"--compact", "--json"})
+	require.Error(t, err)
 }

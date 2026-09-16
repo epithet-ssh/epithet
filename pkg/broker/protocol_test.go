@@ -40,15 +40,20 @@ func newTestBroker(t *testing.T, tokenFn TokenFunc, verifyIdentity IdentityVerif
 	b.SetShutdownTimeout(0) // Skip waiting in tests.
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		err := b.Serve(ctx)
 		if err != nil && err != ctx.Err() {
 			t.Errorf("broker.Serve error: %v", err)
 		}
 	}()
-	t.Cleanup(b.Close)
+	t.Cleanup(func() {
+		// Cancel before closing the listener so shutdown cannot log into a finished test.
+		cancel()
+		b.Close()
+		<-done
+	})
 	<-b.Ready()
 
 	return b
@@ -192,7 +197,7 @@ func TestInspectReturnsInspectEvent(t *testing.T) {
 	b := newTestBroker(t, nil, testIdentityVerifier)
 	client := dialBroker(t, b)
 
-	require.NoError(t, json.NewEncoder(client).Encode(Request{Inspect: &struct{}{}}))
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Inspect: &InspectRequest{}}))
 
 	sc := bufio.NewScanner(client)
 	require.True(t, sc.Scan())
@@ -225,7 +230,7 @@ func TestInspectReturnsAgentConnection(t *testing.T) {
 	})
 
 	client := dialBroker(t, b)
-	require.NoError(t, json.NewEncoder(client).Encode(Request{Inspect: &struct{}{}}))
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Inspect: &InspectRequest{}}))
 
 	sc := bufio.NewScanner(client)
 	require.True(t, sc.Scan())
@@ -357,5 +362,64 @@ func TestClosingIdentityClientCancelsAuthentication(t *testing.T) {
 	case <-canceled:
 	case <-time.After(5 * time.Second):
 		t.Fatal("identity disconnect did not cancel authentication")
+	}
+}
+
+func TestAgentIDPrefixes(t *testing.T) {
+	for _, operation := range []string{"inspect", "kill"} {
+		for _, tc := range []struct{ name, prefix, errorText string }{
+			{"full", "abcd1fff", ""},
+			{"unique", "abcd1", ""},
+			{"ambiguous", "abcd", "ambiguous"},
+			{"missing", "ffff", "does not exist"},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				b := newTestBroker(t, nil, testIdentityVerifier)
+				b.lock.Lock()
+				for _, id := range []policy.ConnectionHash{"abcd1fff", "abcd2fff"} {
+					b.agents[id] = agentEntry{connection: policy.Connection{Hash: id}, expiresAt: time.Now().Add(time.Hour)}
+				}
+				b.lock.Unlock()
+				t.Cleanup(func() { b.lock.Lock(); clear(b.agents); b.lock.Unlock() })
+				request := Request{}
+				if operation == "inspect" {
+					request.Inspect = &InspectRequest{ID: policy.ConnectionHash(tc.prefix)}
+				} else {
+					request.Kill = &KillRequest{ID: policy.ConnectionHash(tc.prefix)}
+				}
+				client := dialBroker(t, b)
+				require.NoError(t, json.NewEncoder(client).Encode(request))
+				scanner := bufio.NewScanner(client)
+				require.True(t, scanner.Scan())
+				var event Event
+				require.NoError(t, json.Unmarshal(scanner.Bytes(), &event))
+				if operation == "inspect" {
+					if tc.errorText != "" {
+						require.NotNil(t, event.Result)
+						require.Contains(t, event.Result.Error, tc.errorText)
+					} else {
+						require.NotNil(t, event.Inspect)
+						require.Len(t, event.Inspect.Agents, 1)
+						require.Equal(t, "abcd1fff", event.Inspect.Agents[0].Hash)
+					}
+				} else {
+					require.NotNil(t, event.Kill)
+					if tc.errorText != "" {
+						require.Contains(t, event.Kill.Error, tc.errorText)
+					} else {
+						require.Empty(t, event.Kill.Error)
+						require.Equal(t, policy.ConnectionHash("abcd1fff"), event.Kill.ID)
+					}
+				}
+				b.lock.Lock()
+				defer b.lock.Unlock()
+				if operation == "kill" && tc.errorText == "" {
+					require.Len(t, b.agents, 1)
+				} else {
+					require.Len(t, b.agents, 2)
+				}
+				require.Contains(t, b.agents, policy.ConnectionHash("abcd2fff"))
+			})
+		}
 	}
 }

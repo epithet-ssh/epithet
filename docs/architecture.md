@@ -114,7 +114,8 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 - Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`. A plain `Match tagged` block selects the per-connection `IdentityAgent` on whichever pass first supplies the tag; a separate `Match final tagged` block invokes Epithet after hostname canonicalization. `%C` is expanded from the final connection in both places.
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
 - Creates in-process SSH agent instances for each unique connection
-- `epithet agent kill AGENT_ID` evicts the identified agent and its in-memory credential; the next match for that connection generates a new keypair and requests a fresh certificate. This is local cache eviction, not certificate revocation, and does not disconnect established SSH sessions.
+- `epithet agent inspect --compact` shows one row per agent: a unique ID prefix, SSH-shaped connection, certificate principals, and serial. ID prefixes start at four characters and grow as needed to distinguish current agents. `epithet agent inspect ID` accepts a full ID or any unique prefix and shows details for that agent. `--json` also supports selection; it is mutually exclusive with `--compact`. Compact inspection of a selected agent displays the supplied ID prefix, validated against the complete agent set.
+- `epithet agent kill AGENT_ID` accepts a full ID or unique prefix and evicts the identified agent and its in-memory credential; the next match for that connection generates a new keypair and requests a fresh certificate. This is local cache eviction, not certificate revocation, and does not disconnect established SSH sessions.
 - Graceful shutdown with proper cleanup
 
 ### epithet ca
@@ -220,7 +221,7 @@ Newline-framed JSON over the broker's unix socket — no gRPC, no protobuf. Both
 
 - `epithet match` sends one line: `{"match": {"remoteHost":...,"remoteUser":...,"port":...,"proxyJump":...,"hash":...}}`. The broker streams zero or more `{"output": "<text>"}` events (auth progress, e.g. the authorization URL to visit, written to the user's stderr) followed by exactly one `{"result": {"allow": bool, "error": "..."}}`.
 - `epithet agent identity` sends `{"identity": {}}`. The broker authenticates through its shared token cache and streams login progress as `output` events, followed by `{"identity": {"identity": {"issuer": "...", "subject": "..."}}}` or an `identity.error`. It verifies the token using the agent's configured issuer and audience, and includes optional `oid`, `email`, and `email_verified` diagnostic claims. Inventory identity mapping is owned by the inventory service and is not advertised to the agent. Tokens stay inside the agent, and no certificate is requested.
-- `epithet agent inspect` sends `{"inspect": {}}` and receives one `{"inspect": {...}}` response describing the broker's current agents (including each agent's host, user, port, ProxyJump, and `%C` hash) and CA endpoint states.
+- `epithet agent inspect` sends `{"inspect": {}}` and receives one `{"inspect": {...}}` response describing the broker's current agents (including each agent's host, user, port, ProxyJump, and `%C` hash) and CA endpoint states. An optional `id` in the inspect request selects one agent by full hash or unique prefix; missing and ambiguous IDs return an error.
 - `epithet agent kill AGENT_ID` sends `{"kill": {"id":"..."}}` and receives one `{"kill": {"id":"...","connection":{...}}}` response. A failed lookup returns the same typed response with an `error` field.
 
 ### Broker → CA protocol

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,11 +172,14 @@ type MatchResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// InspectRequest is the input for Broker.Inspect over the JSON line protocol
-type InspectRequest struct{}
+// InspectRequest optionally selects an agent by full ID or unique prefix.
+// An empty ID returns all agents.
+type InspectRequest struct {
+	ID policy.ConnectionHash `json:"id,omitempty"`
+}
 
 // KillRequest identifies one per-connection agent by the ID returned from
-// Inspect. The ID is the OpenSSH connection hash used as the broker's map key.
+// Inspect. The ID may be a full OpenSSH connection hash or a unique prefix.
 type KillRequest struct {
 	ID policy.ConnectionHash `json:"id"`
 }
@@ -450,10 +454,19 @@ func (b *Broker) Running() bool {
 	}
 }
 
-// Inspect is invoked by `epithet inspect` (over the broker's JSON line protocol) to get broker state.
-func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
+// Inspect is invoked by `epithet agent inspect` (over the broker's JSON line protocol) to get broker state.
+func (b *Broker) Inspect(request InspectRequest, output *InspectResponse) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
+
+	var selected policy.ConnectionHash
+	if request.ID != "" {
+		var err error
+		selected, err = b.resolveAgentID(request.ID)
+		if err != nil {
+			return err
+		}
+	}
 
 	output.SocketPath = b.brokerSocketPath
 	output.AgentSocketDir = b.agentSocketDir
@@ -461,6 +474,9 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 	// Get agent info
 	output.Agents = make([]AgentInfo, 0, len(b.agents))
 	for hash, entry := range b.agents {
+		if selected != "" && hash != selected {
+			continue
+		}
 		socketPath := filepath.Join(b.agentSocketDir, string(hash))
 		var certificate sshcert.RawCertificate
 		if entry.agent != nil {
@@ -491,24 +507,42 @@ func (b *Broker) Inspect(_ InspectRequest, output *InspectResponse) error {
 // Match for the connection requests a fresh certificate. This does not revoke
 // the issued certificate or disconnect an already-established SSH session.
 func (b *Broker) Kill(request KillRequest, output *KillResponse) error {
-	if request.ID == "" {
-		return fmt.Errorf("agent ID is empty")
-	}
-
 	b.lock.Lock()
-	entry, exists := b.agents[request.ID]
-	if !exists {
+	id, err := b.resolveAgentID(request.ID)
+	if err != nil {
 		b.lock.Unlock()
-		return fmt.Errorf("agent %q does not exist", request.ID)
+		return err
 	}
-	delete(b.agents, request.ID)
+	entry := b.agents[id]
+	delete(b.agents, id)
 	if entry.agent != nil {
 		entry.agent.Close()
 	}
 	b.lock.Unlock()
 
-	output.ID = request.ID
+	output.ID = id
 	output.Connection = entry.connection
-	b.log.Info("agent killed", "hash", request.ID, "host", entry.connection.RemoteHost, "user", entry.connection.RemoteUser)
+	b.log.Info("agent killed", "hash", id, "host", entry.connection.RemoteHost, "user", entry.connection.RemoteUser)
 	return nil
+}
+
+// resolveAgentID matches against the current agent set. Callers must hold b.lock
+// through any operation on the result so ambiguity checks and use are atomic.
+func (b *Broker) resolveAgentID(prefix policy.ConnectionHash) (policy.ConnectionHash, error) {
+	if prefix == "" {
+		return "", fmt.Errorf("agent ID is empty")
+	}
+	var match policy.ConnectionHash
+	for id := range b.agents {
+		if strings.HasPrefix(string(id), string(prefix)) {
+			if match != "" {
+				return "", fmt.Errorf("agent ID prefix %q is ambiguous", prefix)
+			}
+			match = id
+		}
+	}
+	if match == "" {
+		return "", fmt.Errorf("agent %q does not exist", prefix)
+	}
+	return match, nil
 }
