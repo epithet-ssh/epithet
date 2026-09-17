@@ -1,0 +1,51 @@
+# Start the standalone inventory/directory service:
+#   epithet --config examples/inventory-scim.example.yaml inventory
+# Validate its settings and storage:
+#   epithet --config examples/inventory-scim.example.yaml inventory --check
+# Replace the example paths, provider/client IDs, and token before use.
+# No agent configuration is needed by this service.
+
+inventory:
+  # Service listener and the CA allowed to call its private resolver.
+  listen: '127.0.0.1:9998'
+  ca-pubkey: /etc/epithet/ca.pub
+
+  # Authentication for certificate requests and human administration.
+  # CLI --oidc-issuer / --oidc-client-id become nested YAML keys here.
+  oidc:
+    issuer: https://identity.example.com
+    client-id: epithet
+    identity-mode: stable-id
+    # Pocket ID uses sub by default. No user-id-claim override is needed.
+    # client-secret: YOUR_OIDC_CLIENT_SECRET  # If using a confidential client.
+
+  # Authoritative user directory: scim or static (the default).
+  directory-source: scim
+
+  # Provisioning credential supplied to Pocket ID. Choose ONE form.
+  scim-token: REPLACE_WITH_YOUR_PROVISIONING_TOKEN
+  # scim-token-file: /etc/epithet/scim.token
+
+  # Host/domain declarations remain in separate inventory files.
+  # In SCIM mode, user records in these files are ignored.
+  static:
+    - /etc/epithet/hosts.yaml
+  principal-mode: account-name
+
+  # Optional: enable file-backed host enrollment and administration.
+  # Omit inventory-source to use only static hosts; SCIM still works.
+  inventory-source: managed
+
+  # Shared storage root defaults to Epithet's native system state directory:
+  # Linux: /var/lib/epithet; FreeBSD: /var/db/epithet;
+  # macOS: /Library/Application Support/Epithet.
+  # SCIM uses directory/directory.db; managed hosts use inventory/.
+  # state-dir: /custom/state  # Optional override for both stores.
+
+  # Grants the shared administration role for hosts and directory bindings.
+  # This user must be provisioned and active. Use Pocket ID's user ID/sub.
+  admin-user:
+    - YOUR_POCKET_ID_USER_ID
+  # Alternatively, or additionally, grant a bound policy group name:
+  # admin-group:
+  #   - infrastructure-admins

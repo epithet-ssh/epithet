@@ -37,6 +37,7 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 		return nil, nil, err
 	}
 	var inventory http.Handler
+	var scim http.Handler
 	var inventoryTransport *http.Transport
 	if inventoryEndpoint != "" {
 		proxy, transport, err := unixServiceProxy("inventory", inventoryEndpoint, "/manage", logger)
@@ -45,6 +46,13 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 			return nil, nil, err
 		}
 		inventory = proxy
+		// Both routes use one private transport, but only SCIM preserves its path.
+		scimProxy := *proxy
+		scimProxy.Rewrite = func(r *httputil.ProxyRequest) {
+			r.Out.URL.Scheme = "http"
+			r.Out.URL.Host = "inventory"
+		}
+		scim = &scimProxy
 		inventoryTransport = transport
 	}
 	closeIdle := func() {
@@ -54,10 +62,14 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only this exact public path maps to inventory. Its private resolver
-		// endpoints and policy service are never public router destinations.
+		// Only management and SCIM paths map to inventory. Its private resolver
+		// and the policy service are never public router destinations.
 		if r.URL.Path == "/inventory" && inventory != nil {
 			inventory.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/scim/v2/") && scim != nil {
+			scim.ServeHTTP(w, r)
 			return
 		}
 		ca.ServeHTTP(w, r)

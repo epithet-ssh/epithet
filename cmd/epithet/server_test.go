@@ -86,7 +86,7 @@ func TestServerRejectsUnknownPrincipalModeBeforeStartingServices(t *testing.T) {
 
 func TestInventoryChildManagedReadsCommandScopedConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  state-dir: /tmp/managed\n  admin-user: [admin]\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  inventory-source: managed\n  state-dir: /tmp/managed\n  admin-user: [admin]\n"), 0600))
 	managed, err := inventoryChildManaged([]string{"--config", path, "inventory", "--listen", "unix:///tmp/inventory.sock"})
 	require.NoError(t, err)
 	require.True(t, managed)

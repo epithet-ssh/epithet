@@ -1,0 +1,124 @@
+// Copy into Pocket ID v2.14.0 backend/internal/scimsync/epithet_test.go.
+package scimsync
+
+import (
+	"fmt"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/directory/scim"
+	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
+	datatype "github.com/pocket-id/pocket-id/backend/internal/model/types"
+	"github.com/stretchr/testify/require"
+)
+
+func TestEpithetProvisioningLifecycle(t *testing.T) {
+	f := newSCIMSyncFixture(t, true)
+	store, e := sqlitestore.Open(filepath.Join(t.TempDir(), "epithet.db"))
+	require.NoError(t, e)
+	defer store.Close()
+	handler, e := scim.New(store, t.Name())
+	require.NoError(t, e)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	require.NoError(t, f.db.Model(&f.provider).Update("Endpoint", server.URL+"/scim/v2").Error)
+	f.service.httpClient = server.Client()
+	email := "alice@example.test"
+	alice := f.createUser(t, "subject-alice", "alice", &email, false)
+	bob := f.createUser(t, "subject-bob", "bob", nil, false)
+	group := f.createGroup(t, "group-ops", "ops", alice, bob)
+	f.allowGroups(t, group)
+	sync := func() { t.Helper(); require.NoError(t, f.service.SyncServiceProvider(t.Context(), f.provider.ID)) }
+	lookup := func(id string) *directory.User {
+		t.Helper()
+		u, _, e := store.LookupUser(t.Context(), id)
+		require.NoError(t, e)
+		return u
+	}
+	sync()
+	require.Equal(t, []string{"ops friendly"}, lookup(alice.ID).Groups)
+	require.Equal(t, "alice", lookup(alice.ID).UserName)
+	initial, e := store.List(t.Context(), scim.Users, 1, 1000)
+	require.NoError(t, e)
+	require.Equal(t, 2, initial.Total)
+	var oldID string
+	for _, u := range initial.Resources {
+		if u.Document.Text("externalId") == alice.ID {
+			oldID = u.ID
+		}
+	}
+	require.NotEmpty(t, oldID)
+	require.NotEqual(t, alice.ID, oldID)
+	snapshot, e := store.Bindings(t.Context())
+	require.NoError(t, e)
+	sync()
+	unchanged, e := store.Bindings(t.Context())
+	require.NoError(t, e)
+	require.Equal(t, snapshot, unchanged)
+	// Upstream services update UpdatedAt on user/profile/group changes.
+	// Pocket ID persists timestamps in whole seconds. Model real changes on a
+	// later clock tick so its LastModified comparison observes each update.
+	touch := func() datatype.DateTime {
+		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
+		return datatype.DateTime(time.Now())
+	}
+	require.NoError(t, f.db.Model(&alice).Updates(map[string]any{"Username": "renamed", "Disabled": true, "UpdatedAt": touch()}).Error)
+	sync()
+	require.False(t, lookup(alice.ID).Active)
+	require.Equal(t, "renamed", lookup(alice.ID).UserName)
+	require.NoError(t, f.db.Model(&alice).Updates(map[string]any{"Disabled": false, "UpdatedAt": touch()}).Error)
+	require.NoError(t, f.db.Model(&group).Updates(map[string]any{"FriendlyName": "new name", "UpdatedAt": touch()}).Error)
+	sync()
+	require.True(t, lookup(alice.ID).Active)
+	require.Equal(t, []string{"ops friendly"}, lookup(alice.ID).Groups)
+	require.NoError(t, f.db.Model(&group).Association("Users").Replace(bob))
+	require.NoError(t, f.db.Model(&group).Update("UpdatedAt", touch()).Error)
+	sync()
+	require.Nil(t, lookup(alice.ID)) // Removing the last allowed group withdraws client assignment.
+	require.NoError(t, f.db.Model(&group).Association("Users").Replace(alice, bob))
+	require.NoError(t, f.db.Model(&group).Update("UpdatedAt", touch()).Error)
+	sync()
+	require.Equal(t, []string{"ops friendly"}, lookup(alice.ID).Groups)
+	current, e := store.List(t.Context(), scim.Users, 1, 1000)
+	require.NoError(t, e)
+	for _, u := range current.Resources {
+		if u.Document.Text("externalId") == alice.ID {
+			require.NotEqual(t, oldID, u.ID)
+		}
+	}
+	// Restore the original display name before testing deletion/recreation.
+	require.NoError(t, f.db.Model(&group).Updates(map[string]any{"FriendlyName": "ops friendly", "UpdatedAt": touch()}).Error)
+	sync()
+	// Withdraw the client's entire assignment, then restore it: aliases require human rebind.
+	f.allowGroups(t)
+	sync()
+	require.Nil(t, lookup(alice.ID))
+	f.allowGroups(t, group)
+	sync()
+	require.Empty(t, lookup(alice.ID).Groups)
+	bindings, e := store.Bindings(t.Context())
+	require.NoError(t, e)
+	var replacement string
+	for _, g := range bindings.Groups {
+		if g.Status != "deleted" {
+			replacement = g.ID
+		}
+	}
+	_, authorizationRevision, e := store.LookupUser(t.Context(), alice.ID)
+	require.NoError(t, e)
+	require.NoError(t, store.Rebind(t.Context(), "administrator", "ops friendly", replacement, bindings.Revision, authorizationRevision))
+	require.Equal(t, []string{"ops friendly"}, lookup(alice.ID).Groups)
+	// Force two remote pages. Pocket ID must enumerate and delete every unassigned user.
+	for n := 0; n < 1001; n++ {
+		raw := scim.Document{"externalId": []byte(fmt.Sprintf(`"extra-%d"`, n)), "userName": []byte(fmt.Sprintf(`"extra-%d"`, n))}
+		_, e := store.Create(t.Context(), scim.Users, raw)
+		require.NoError(t, e)
+	}
+	sync()
+	current, e = store.List(t.Context(), scim.Users, 1, 1000)
+	require.NoError(t, e)
+	require.Equal(t, 2, current.Total)
+}

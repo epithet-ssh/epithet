@@ -52,11 +52,11 @@ func TestInventoryCheckValidatesConfiguredManagedFiles(t *testing.T) {
 	static := filepath.Join(dir, "static.yaml")
 	require.NoError(t, os.WriteFile(static, []byte("users: []\n"), 0600))
 	state := filepath.Join(dir, "state")
-	records := filepath.Join(state, "records")
+	records := filepath.Join(state, "inventory", "records")
 	require.NoError(t, os.MkdirAll(records, 0700))
 	item := filepath.Join(records, strings.Repeat("a", 64)+".yaml")
 	require.NoError(t, os.WriteFile(item, []byte("version: 99\n"), 0600))
-	command := InventoryCLI{Check: true, Static: []string{static}, StateDir: state,
+	command := InventoryCLI{Check: true, Static: []string{static}, StateDir: state, InventorySource: "managed",
 		OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
 	err := command.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
 	require.ErrorContains(t, err, "unsupported item version")

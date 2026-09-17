@@ -58,7 +58,7 @@ func TestRouterForwardsThroughUnixSockets(t *testing.T) {
 		router, closeIdle, err := newServiceRouter(ca, endpoint, logger)
 		require.NoError(t, err)
 		t.Cleanup(closeIdle)
-		for _, path := range []string{"/", "/discovery?x=1", "/inventory?x=1", "/inventory/resolve", "/resolve", "/manage", "/policy", "/a%2Fb"} {
+		for _, path := range []string{"/", "/discovery?x=1", "/inventory?x=1", "/inventory/resolve", "/scim/v2/Users?count=1", "/scim/v2/Groups/id", "/resolve", "/manage", "/policy", "/a%2Fb"} {
 			for _, method := range []string{"GET", "POST"} {
 				req := httptest.NewRequest(method, "http://ca.example"+path, strings.NewReader("proposal"))
 				req.Header.Set("Authorization", "Bearer client-token")
@@ -72,6 +72,9 @@ func TestRouterForwardsThroughUnixSockets(t *testing.T) {
 				wantService, wantURI, wantStatus := "ca", path, http.StatusCreated
 				if enabled && strings.HasPrefix(path, "/inventory?") {
 					wantService, wantURI, wantStatus = "inventory", "/manage?x=1", http.StatusAccepted
+				}
+				if enabled && strings.HasPrefix(path, "/scim/v2/") {
+					wantService, wantURI, wantStatus = "inventory", path, http.StatusAccepted
 				}
 				require.Equal(t, wantStatus, out.Code, path)
 				var got received

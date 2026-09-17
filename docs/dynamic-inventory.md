@@ -1,7 +1,7 @@
 # File-backed dynamic inventory: first implementation
 
 This implements the enrollment and administration workflow discussed on September
-11–12, 2026. Enable it with `inventory.state-dir`. Existing static deployments keep
+11–12, 2026. Enable it with `inventory.inventory-source: managed`. Existing static deployments keep
 working, including local-only `host enroll` when the CA advertises no inventory
 link. Nothing has been deployed or enabled on a real host as part of this change.
 The [follow-up audit](dynamic-inventory-audit.md) distinguishes corrected workflow
@@ -21,9 +21,8 @@ errors from implementation assumptions that still need design review.
 - Exact static hosts win over accepted dynamic exact records, which win over patterns.
   Pending proposals do not affect resolution. Removal deletes the dynamic record.
   Competing pending requests cannot both be approved.
-- This milestone manages hosts, including shared named principal domains. Users,
-  role grants, and named-domain declarations remain static; SCIM, direct host
-  addition, and databases are deferred.
+- This milestone manages hosts, including shared named principal domains. User source selection is independent; [SCIM provisioning](scim.md) can now
+  manage users. Role grants and named-domain declarations remain static.
 
 ## Try it
 
@@ -33,7 +32,8 @@ Add the following to an existing combined-server configuration:
 inventory:
   static:
     - /etc/epithet/directory-and-static-hosts.yaml
-  state-dir: /var/lib/epithet/inventory
+  inventory-source: managed
+  # state-dir: /custom/state  # Optional native-default override.
   admin-user:
     - YOUR_EXISTING_DIRECTORY_ID
   # Alternatively, or additionally:
@@ -49,8 +49,8 @@ The ID in `admin-user` is the same `users[].id` used for certificate issuance.
 The user's record must exist and be active. `admin-group` matches memberships
 from that directory record, not arbitrary group claims submitted by the client.
 Both grant the single `inventory-admin` role; there are no custom roles or Writ
-rules for inventory administration. User records and grants are static in this
-first implementation. SCIM and dynamic user provisioning remain later work.
+rules for inventory administration. Grants remain configuration-owned; user records come from the selected static
+or [SCIM directory](scim.md).
 
 Start `epithet --config server.yaml server` as usual. A separate router process
 owns `server.listen`; CA, inventory, and policy each listen on a private Unix
@@ -82,7 +82,8 @@ epithet inventory remove HOST_ID
 epithet inventory audit
 ```
 
-Commands accept `--name PROFILE` or `--broker SOCKET` to select an agent. A full
+Commands inherit the configured `agent.name` (otherwise `default`). Use
+`--name PROFILE` or `--broker SOCKET` to override the selection. A full
 record ID always works; unique ID prefixes and unambiguous exact host names also
 work. If multiple proposals share a name, use the record ID.
 
@@ -260,7 +261,7 @@ enumeration. Pending proposals cannot change existing static or dynamic admissio
 
 ## Files, durability, and recovery
 
-The directory layout is:
+The host storage layout beneath `inventory.state-dir` is:
 
 ```text
 inventory/
@@ -313,15 +314,22 @@ only that record's index entries before allowing another reader or writer.
 Content revisions are calculated from in-memory per-item hashes; no index file
 is persisted. Unchanged restarts produce the same revision.
 
-When `inventory.state-dir` is configured, unreadable or invalid dynamic storage
+When `inventory.inventory-source: managed` is selected, unreadable or invalid dynamic storage
 fails startup. Duplicate active names are validation errors, never a reason to
-choose an arbitrary winner. To run static-only, leave `inventory.state-dir` unset.
+choose an arbitrary winner. To run static-only, select `inventory-source: static` (the default).
+`state-dir` is the shared storage root, defaulting to Epithet's native system
+state directory. Managed host storage lives in its `inventory/` subdirectory;
+SCIM directory storage lives in `directory/`. The path only overrides storage
+location. Existing managed-host configurations must add
+`inventory-source: managed` and place their host state under `inventory/`
+within the configured root; no files are moved automatically.
 Static exact records override dynamic records during normal operation. A write
 failure disables all lookups and operations through the managed store until
 repair/restart, including exact static lookups; it never switches to static-only service. Windows cannot
 provide the same directory-fsync step through Go's file API.
 
-For emergency repair: **stop inventory, grep/edit `records/*.yaml`, restart**.
+For emergency repair: **stop inventory, grep/edit `inventory/records/*.yaml`
+beneath `state-dir`, restart**.
 There is no index to repair separately. Keep each ID equal to its filename,
 and use `pending`, `active`, or `denied` for host status. Delete a host file to
 remove its dynamic record. Live edits are not watched: the

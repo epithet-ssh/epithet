@@ -29,12 +29,20 @@ type Request struct {
 // Output events followed by one Identity event. Inventory requests similarly
 // stream Output events followed by one Inventory event.
 type Event struct {
-	Inventory *inventoryapi.ControlResponse `json:"inventory,omitempty"`
-	Identity  *IdentityResponse             `json:"identity,omitempty"`
-	Output    string                        `json:"output,omitempty"`
-	Result    *MatchResponse                `json:"result,omitempty"`
-	Inspect   *InspectResponse              `json:"inspect,omitempty"`
-	Kill      *KillResponse                 `json:"kill,omitempty"`
+	Inventory *InventoryResponse `json:"inventory,omitempty"`
+	Identity  *IdentityResponse  `json:"identity,omitempty"`
+	Output    string             `json:"output,omitempty"`
+	Result    *MatchResponse     `json:"result,omitempty"`
+	Inspect   *InspectResponse   `json:"inspect,omitempty"`
+	Kill      *KillResponse      `json:"kill,omitempty"`
+}
+
+// InventoryResponse adds local agent context to the service result. CAURL comes
+// from the broker's CA discovery and is used by the CLI for enrollment instructions;
+// it is not part of the remote inventory API.
+type InventoryResponse struct {
+	inventoryapi.ControlResponse
+	CAURL string `json:"ca-url,omitempty"`
 }
 
 // eventWriter serializes Event writes to a single client connection. Auth

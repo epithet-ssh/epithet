@@ -32,6 +32,20 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	if err != nil {
 		return nil, err
 	}
+
+	if endpoint != "" {
+		client, e := inventoryclient.New(endpoint, cfg)
+		if e != nil {
+			return nil, e
+		}
+		capabilities, e := client.Capabilities(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if !slices.Contains(capabilities.Capabilities, "enroll") {
+			endpoint = ""
+		}
+	}
 	if endpoint == "" {
 		if c.Token != "" || c.TokenFile != "" {
 			return nil, fmt.Errorf("CA does not advertise managed inventory enrollment")

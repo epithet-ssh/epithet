@@ -111,7 +111,7 @@ func loadBasic(t *testing.T) *Static {
 
 func TestLookupUser(t *testing.T) {
 	s := loadBasic(t)
-	u, err := s.LookupUser(context.Background(), "subject:alice@example.com")
+	u, _, err := s.LookupUser(context.Background(), "subject:alice@example.com")
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	require.Equal(t, "alice@example.com", u.UserName)
@@ -125,7 +125,7 @@ func TestLookupUser(t *testing.T) {
 
 func TestInactiveUserLoads(t *testing.T) {
 	s := loadBasic(t)
-	u, err := s.LookupUser(context.Background(), "subject:mallory@example.com")
+	u, _, err := s.LookupUser(context.Background(), "subject:mallory@example.com")
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	require.False(t, u.Active)
@@ -133,7 +133,7 @@ func TestInactiveUserLoads(t *testing.T) {
 
 func TestUnknownUserIsNilNil(t *testing.T) {
 	s := loadBasic(t)
-	u, err := s.LookupUser(context.Background(), "nobody@example.com")
+	u, _, err := s.LookupUser(context.Background(), "nobody@example.com")
 	require.NoError(t, err)
 	require.Nil(t, u)
 }
@@ -141,7 +141,7 @@ func TestUnknownUserIsNilNil(t *testing.T) {
 func TestLookupUserNeverFallsBackToUserName(t *testing.T) {
 	s := loadBasic(t)
 	for _, subject := range []string{"alice@example.com", "Subject:alice@example.com", ""} {
-		u, err := s.LookupUser(context.Background(), subject)
+		u, _, err := s.LookupUser(context.Background(), subject)
 		require.NoError(t, err)
 		require.Nil(t, u, "ID must match exactly, without fallback: %q", subject)
 	}
@@ -471,7 +471,7 @@ func TestMultipleFilesConcatenate(t *testing.T) {
 	hosts := "hosts:\n  - names: [web-1]\n"
 	s, err := NewStatic([]string{writeInv(t, "users.yaml", users), writeInv(t, "hosts.yaml", hosts)})
 	require.NoError(t, err)
-	u, _ := s.LookupUser(context.Background(), "subject:alice@example.com")
+	u, _, _ := s.LookupUser(context.Background(), "subject:alice@example.com")
 	require.NotNil(t, u)
 	h, _, _ := s.LookupHost(context.Background(), "web-1")
 	require.NotNil(t, h)
@@ -514,7 +514,7 @@ func TestNoFilesIsError(t *testing.T) {
 func TestEmptyFileIsEmptyInventory(t *testing.T) {
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", "")})
 	require.NoError(t, err)
-	u, err := s.LookupUser(context.Background(), "anyone")
+	u, _, err := s.LookupUser(context.Background(), "anyone")
 	require.NoError(t, err)
 	require.Nil(t, u)
 }

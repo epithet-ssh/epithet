@@ -3,7 +3,8 @@
 `epithet inventory` serves the user directory and host inventory used during
 certificate issuance. It also verifies OIDC tokens and maps them to directory IDs. Static YAML can be combined with file-backed dynamic host enrollment and
 administration. See [dynamic inventory](dynamic-inventory.md) for configuration,
-commands, and the first implementation decisions. SCIM and LDAP remain later work.
+commands, and the first implementation decisions. [SCIM provisioning](scim.md)
+provides an alternative managed user directory; LDAP remains later work.
 
 ## Combined deployment
 
@@ -45,7 +46,8 @@ does not manage HTTPS certificates. Existing Caddy configurations that forward
 to the same `server.listen` address need no routing changes.
 
 The router forwards `/inventory` to inventory's `/manage` endpoint when
-`inventory.state-dir` is configured. Other paths go to the CA, including `/`
+`inventory.inventory-source: managed` or `inventory.directory-source: scim` is selected.
+SCIM paths also route to inventory. Other paths go to the CA, including `/`
 and `/discovery`. Policy and inventory resolution remain private. The router
 adds no service credentials and makes no authentication or authorization
 decisions. The CA advertises the relative inventory link but does not proxy
@@ -113,8 +115,9 @@ for local deployment. Plain HTTP clients require explicit `--insecure`.
 Only the CA can resolve inventory or ask policy for decisions. Both services
 verify request-bound JWTs against its public key, using different service
 audiences. No separate policy-to-inventory credential is needed. The static
-service has no write or enrollment routes. Configuring `inventory.state-dir` adds
-the separately authenticated `/manage` endpoint.
+service has no write or enrollment routes. Selecting managed host inventory (`inventory.inventory-source: managed`) or the SCIM directory adds
+the separately authenticated `/manage` endpoint. SCIM also adds `/scim/v2/…`.
+Directory administration alone does not enable host enrollment.
 
 ## Validation and migration
 

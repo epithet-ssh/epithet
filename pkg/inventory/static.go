@@ -31,6 +31,7 @@ import (
 // escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
+	ignoreUsers          bool
 	sourceFiles          map[*ResolvedHost]string
 	directoryHash        hash.Hash
 	inventoryHash        hash.Hash
@@ -67,7 +68,14 @@ type domainPolicy struct {
 	hostIndex int
 }
 
+// WithoutUsers selects only host configuration from static files when a managed
+// directory is authoritative. Static user records cannot become a fallback.
+func WithoutUsers() StaticOption {
+	return func(opts *staticOptions) error { opts.ignoreUsers = true; return nil }
+}
+
 type staticOptions struct {
+	ignoreUsers          bool
 	defaultPrincipalMode PrincipalMode
 }
 
@@ -129,6 +137,7 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 		}
 	}
 	s := &Static{
+		ignoreUsers:   opts.ignoreUsers,
 		sourceFiles:   map[*ResolvedHost]string{},
 		directoryHash: sha256.New(), inventoryHash: sha256.New(),
 		users:                map[string]*directory.User{},
@@ -158,6 +167,9 @@ func (s *Static) loadFile(path string) error {
 	var doc staticDoc
 	if err := strictUnmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parsing inventory %s: %w", path, err)
+	}
+	if s.ignoreUsers {
+		doc.Users = nil
 	}
 	usersJSON, _ := json.Marshal(doc.Users)
 	s.directoryHash.Write(usersJSON)
@@ -274,8 +286,8 @@ func (s *Static) loadFile(path string) error {
 }
 
 // LookupUser implements directory.Directory.
-func (s *Static) LookupUser(_ context.Context, id string) (*directory.User, error) {
-	return s.ids[id], nil
+func (s *Static) LookupUser(_ context.Context, id string) (*directory.User, directory.Revision, error) {
+	return s.ids[id], directory.Revision(s.DirectoryRevision()), nil
 }
 
 // LookupHost implements Hosts: exact entries first, then pattern

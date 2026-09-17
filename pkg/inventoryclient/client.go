@@ -82,3 +82,36 @@ func (c *Client) Control(ctx context.Context, bearer string, request inventoryap
 	}
 	return &result, response.StatusCode, nil
 }
+
+// Capabilities reads configured capabilities before host enrollment. Directory
+// administration alone does not enable managed host enrollment. Errors must not
+// be interpreted as absence: an outage cannot select static enrollment.
+func (c *Client) Capabilities(ctx context.Context) (inventoryapi.Capabilities, error) {
+	var result inventoryapi.Capabilities
+	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint, nil)
+	if err != nil {
+		return result, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return result, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return result, fmt.Errorf("inventory capability discovery failed (HTTP %d)", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
+	if err != nil {
+		return result, err
+	}
+	if len(data) > 65536 {
+		return result, fmt.Errorf("inventory capability response exceeds size limit")
+	}
+	if err = json.Unmarshal(data, &result); err != nil {
+		return result, fmt.Errorf("invalid inventory capability response")
+	}
+	if result.Version != 1 || result.Capabilities == nil {
+		return result, fmt.Errorf("invalid inventory capabilities")
+	}
+	return result, nil
+}

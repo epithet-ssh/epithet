@@ -11,13 +11,13 @@ import (
 // InventoryWithUserOutput sends an administrative operation through the agent's
 // CA-discovered inventory endpoint. Only the short-lived ID token goes to that
 // endpoint; no token or refresh state is returned over the local protocol.
-func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventoryapi.ControlRequest, out io.Writer) *inventoryapi.ControlResponse {
+func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventoryapi.ControlRequest, out io.Writer) *InventoryResponse {
 	logger := b.log.With("action", request.Action)
 	started := time.Now()
 	defer func() { logger.Debug("inventory request ended", "elapsed", time.Since(started)) }()
-	fail := func(err error) *inventoryapi.ControlResponse {
+	fail := func(err error) *InventoryResponse {
 		logger.Debug("inventory request failed", "error", err)
-		return &inventoryapi.ControlResponse{Error: err.Error()}
+		return &InventoryResponse{ControlResponse: inventoryapi.ControlResponse{Error: err.Error()}}
 	}
 	logger.Debug("authenticating inventory request")
 	token, err := b.auth.Token(ctx, out)
@@ -37,7 +37,11 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 	if err != nil {
 		return fail(err)
 	}
-	return response
+	result := &InventoryResponse{ControlResponse: *response}
+	if response.Token != nil {
+		result.CAURL = b.publicCAURL
+	}
+	return result
 }
 
 func (b *Broker) inventoryWithToken(ctx context.Context, token string, request inventoryapi.ControlRequest) (*inventoryapi.ControlResponse, int, error) {
@@ -45,8 +49,5 @@ func (b *Broker) inventoryWithToken(ctx context.Context, token string, request i
 	b.log.Debug("sending inventory HTTP request", "action", request.Action)
 	response, status, err := b.inventoryClient.Control(ctx, token, request)
 	b.log.Debug("inventory HTTP request ended", "action", request.Action, "status", status, "elapsed", time.Since(started))
-	if response != nil && response.Token != nil {
-		response.CAURL = b.publicCAURL
-	}
 	return response, status, err
 }

@@ -242,5 +242,5 @@ func inventoryChildManaged(args []string) (bool, error) {
 	if _, err = parser.Parse(args); err != nil {
 		return false, err
 	}
-	return root.Inventory.StateDir != "", nil
+	return root.Inventory.InventorySource == "managed" || root.Inventory.DirectorySource == "scim", nil
 }

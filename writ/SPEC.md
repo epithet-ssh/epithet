@@ -59,18 +59,18 @@ the Go implementation and this specification define current behavior.
 
 ## 2. Model
 
-The language matches against three entity kinds. Writ owns or mirrors
-all three inventories, which is what makes inventory-aware linting
-possible.
+The language matches against three entity kinds supplied by the surrounding
+service. Writ consumes normalized facts; it does not query provisioning or
+storage services.
 
 **Users** resolve through inventory independently of policy selectors. The
-policy view uses plain user facts; Epithet currently supplies them from static YAML.
-SCIM provisioning remains future integration work.
+policy view uses plain user facts; Epithet supplies them from static YAML or its
+managed SCIM directory.
 
 | Matcher | Inventory source |
 |---|---|
 | `userName:"..."` | Current, mutable `userName` |
-| `id:"..."` | Immutable, non-reassignable inventory ID within the configured provider/tenant |
+| `id:"..."` | Normalized provider identity within the configured provider/tenant |
 | `group:...` | Membership string in `groups` |
 | `userType:...` | `userType` |
 | `department:...` | `department` |
@@ -83,10 +83,12 @@ still applies: `deny !id:X` matches a resolved user without an ID.
 
 An intentional inventory `userName` rename changes which `userName:` rules
 match. Reusing that name for another user intentionally lets name-based rules
-match the replacement. In contrast, `id:` follows the same inventory record
-across renames and must never adopt a replacement just because a name was
-reused. Providers offering IDs must keep them stable for the record's lifetime
-and never reassign a deleted record's ID, including after reprovisioning.
+match the replacement. In contrast, `id:` follows the provider identity
+across renames and does not adopt a replacement just because a name was
+reused. Deleting and reprovisioning a local SCIM resource with the same provider
+identity preserves the meaning of explicit `id:` grants. A trusted provisioning
+change to `externalId` changes the normalized ID and which `id:` rules match.
+Providers should not reuse a person's identity for someone else.
 Group and attribute selectors always inspect the authenticated user's
 resolved record, independently of its current name.
 
@@ -95,13 +97,14 @@ an inventory `id` before Writ evaluation. Writ only sees that normalized ID;
 it does not interpret provider-specific OIDC or SCIM fields. Static YAML
 supplies `id` directly. Epithet defaults to OIDC `sub` for Google, Okta, and
 generic providers, and `oid` for tenant-specific Microsoft Entra issuers;
-`policy.oidc.user-id-claim` overrides the mapping. Inventory IDs are scoped
-to the configured provider/tenant. Future provisioning adapters must map
-the appropriate provider field to that same ID. There is no assumption that
-SCIM `id`, SCIM `externalId`, or OIDC `sub` universally share a value.
+`inventory.oidc.user-id-claim` overrides the mapping. Inventory IDs are scoped
+to the configured provider/tenant. Epithet SCIM maps user `externalId` to that
+normalized ID. With Pocket ID, `externalId` equals OIDC `sub`; the server-issued
+SCIM `id` is a separate provisioning key. Writ does not interpret those fields.
 A user with `active=false`, or with no inventory match, matches nothing —
 this is a structural gate no policy text can express or bypass. Certificate
-and audit identity remains the resolved `userName`.
+key ID remains the resolved `userName`; private issuance audit also records
+the normalized provider ID and directory revision.
 
 **Migration (breaking, pre-1.0):** Scalar selector names now use SCIM attribute
 names verbatim: `userName`, `id`, `userType`, `department`, and
@@ -109,7 +112,7 @@ names verbatim: `userName`, `id`, `userType`, `department`, and
 The former aliases `username`, `uid`, `type`,
 `dept`, and `org` are rejected. Replace old name-based `id:` rules with
 `userName:`, including in macros and negated denies. **The spelling `id:`
-now means only the immutable inventory resource ID.** There is no alias or
+now means only the normalized provider identity.** There is no alias or
 language-version declaration preserving the former meaning. Use it only
 with the normalized ID provided by inventory. Static inventory requires an
 explicit `id`; its former `subject` and `oidc-subject` keys are rejected.
@@ -127,8 +130,13 @@ The inventory field remains plural `groups`; the selector is singular
 attribute names. Matching retains Writ's exact, case-sensitive semantics.
 See [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643.html).
 
-A policy reference to a duplicated group `displayName` matches the
-union; sync warns loudly and points at the IdP as the thing to fix.
+Epithet inventory binds a policy group name to one SCIM group ID. The initial
+`displayName` claims an unused name; renames preserve that binding. A duplicate
+name provisions successfully but stays unbound, with a visible conflict and audit
+entry. Deleting a group reserves its policy name until an administrator explicitly
+rebinds it. Memberships of same-named groups are never implicitly combined.
+These bindings apply equally to allow, deny, negated selectors, and inventory
+administrator group grants. See [SCIM directory management](../docs/scim.md).
 
 **Hosts** resolve through the configured inventory. A resolved authorization
 resource has a nonempty set of equivalent `names`, a `map[string]string` of labels

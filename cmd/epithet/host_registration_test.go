@@ -86,6 +86,10 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 				fmt.Fprint(w, pub)
 			})
 			mux.HandleFunc("/manage", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
+					return
+				}
 				var req inventoryapi.ControlRequest
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					t.Error(err)
@@ -162,6 +166,10 @@ func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 	cmd, enrollment, env, runner, main, fragment := newSSHDConfigurationTest(t)
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/manage" {
+			json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
+			return
+		}
 		w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/inventory"`)
 		fmt.Fprint(w, pub)
 	}))
@@ -216,4 +224,37 @@ func TestEditorPreservesUnrestrictedAccounts(t *testing.T) {
 	edited, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
 	require.NoError(t, err)
 	require.Nil(t, edited.Accounts)
+}
+
+func TestDirectoryOnlyManagementDoesNotEnableHostEnrollment(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		fail       bool
+	}{
+		{"directory only", `{"version":1,"capabilities":["admin","directory"]}`, 200, false},
+		{"unavailable", `{}`, 503, true},
+		{"invalid response", `{}`, 200, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "GET", r.Method)
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+			cmd := HostEnrollCLI{}
+			enrollment := &hostEnrollment{CAFinalURL: server.URL + "/", AdvertisedLinkFields: []string{`<manage>; rel="https://epithet.dev/rel/inventory"`}}
+			registration, e := cmd.prepareRegistration(t.Context(), enrollment, nil, tlsconfig.Config{Insecure: true})
+			require.Nil(t, registration)
+			if tc.fail {
+				require.Error(t, e)
+			} else {
+				require.NoError(t, e)
+				cmd.Token = "token"
+				_, e = cmd.prepareRegistration(t.Context(), enrollment, nil, tlsconfig.Config{Insecure: true})
+				require.ErrorContains(t, e, "does not advertise")
+			}
+		})
+	}
 }

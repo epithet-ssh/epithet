@@ -11,7 +11,7 @@ The epithet policy server makes authorization decisions by evaluating a **writ p
 **Key features:**
 - Inventory handles OIDC validation (Google Workspace, Okta, Azure AD, etc.)
 - A readable, order-independent policy language (`.writ`) with explicit `allow`/`deny` rules — deny always wins
-- User inventory (groups, userType, department, organization) and labeled host inventory, pluggable behind an interface (static files today)
+- User inventory (groups, userType, department, organization) and labeled host inventory, pluggable behind an interface (static files or a managed SCIM directory)
 - Certificates minted per connection, using either compatible account-name principals or destination-bound hashed principals
 - Certificate validity clamped to the auth token's remaining lifetime
 - `epithet policy --check` validates policy; `epithet inventory --check` validates inventory
@@ -191,7 +191,7 @@ Cert **extensions** are deliberately not in the language: they are deployment co
 
 ## The inventory
 
-The inventory answers two questions at evaluation time: who is this identity, and what is this host? It is pluggable by design (databases are the expected future); the built-in implementation is one or more static YAML files served by `epithet inventory --static` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
+The inventory answers two questions at evaluation time: who is this identity, and what is this host? Users can come from [SCIM provisioning](scim.md) or static YAML, independently of host storage. The static implementation is one or more YAML files served by `epithet inventory --static` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
 
 ### Users
 
@@ -263,7 +263,7 @@ Email matching is byte-for-byte: there is no case folding, whitespace trimming, 
 
 `userName` remains an administrator-controlled, readable name for Writ's `userName:` selector and certificate/audit identity. A token's email change does not rename it. An intentional inventory rename changes which `userName:` rules match; group and attribute selectors continue to evaluate the same user's configured attributes.
 
-Writ `id:"provider-user-id"` matches the same `id` supplied in static YAML. In stable-ID deployments, keep it stable across `userName` renames and never reuse it for replacement users. Static inventory supplies the internal schema directly; future provisioning adapters will map provider fields into it. SCIM provisioning and its field mapping are not yet implemented.
+Writ `id:"provider-user-id"` matches the same `id` supplied in static YAML. In stable-ID deployments, keep it stable across `userName` renames and never reuse it for replacement users. Static inventory supplies the internal schema directly. In SCIM mode, inventory maps user `externalId` to this normalized `id`; the server-issued SCIM resource `id` is separate. Group names are persistent inventory-owned bindings. See [SCIM provisioning](scim.md).
 
 **Writ selector migration (breaking, pre-1.0):** Use the SCIM field names
 for scalar selectors; keep `group:` singular for a membership test. Replace the previous shorthand as follows:
@@ -822,7 +822,7 @@ Remove `schemas`; replace each group object with its `value` string; move
 `department` and `organization` out of the enterprise-extension URI property
 and directly into the user object. Group display values are no longer carried.
 Identity and group strings retain byte-exact matching. Static user YAML is unchanged;
-future SCIM adapters translate external records at the inventory boundary.
+the SCIM adapter translates provisioned records at the inventory boundary.
 
 API 7 replaces the response `ttl` (nanoseconds) with integer `ttlSeconds`.
 Divide old durations by 1,000,000,000, rounding down; reject results below one

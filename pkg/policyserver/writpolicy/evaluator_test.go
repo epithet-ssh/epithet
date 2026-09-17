@@ -29,8 +29,8 @@ type fakeInv struct {
 	err   error
 }
 
-func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.User, error) {
-	return f.users[identity], f.err
+func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.User, directory.Revision, error) {
+	return f.users[identity], "d1", f.err
 }
 
 func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, string, error) {
@@ -351,7 +351,7 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 	return e
 }
 func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
-	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv, DirectoryRevision: "d1"}
+	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv}
 	resolution, err := resolver.Resolve(ctx, facts.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
 	if err != nil {
 		return nil, err

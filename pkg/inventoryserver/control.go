@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/directory/scim"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -46,10 +47,11 @@ func (a Admins) Allows(u *directory.User) bool {
 }
 
 type Control struct {
-	Store     *inventory.Managed
-	Directory directory.Directory
-	Validator TokenValidator
-	Admins    Admins
+	Store            *inventory.Managed
+	ManagedDirectory scim.Store
+	Directory        directory.Directory
+	Validator        TokenValidator
+	Admins           Admins
 	// Bound anonymous enrollment to a small global burst and sustained rate.
 	mu        sync.Mutex
 	allowance float64
@@ -80,7 +82,14 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Error: msg})
 	}
 	if r.Method == http.MethodGet {
-		json.NewEncoder(w).Encode(map[string]any{"version": 1, "capabilities": []string{"enroll", "admin"}})
+		capabilities := []string{"admin"}
+		if c.Store != nil {
+			capabilities = append(capabilities, "enroll")
+		}
+		if c.ManagedDirectory != nil {
+			capabilities = append(capabilities, "directory")
+		}
+		json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: capabilities})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -105,7 +114,13 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(400, "invalid inventory request")
 		return
 	}
-	actor := ""
+	isDirectory := req.Action == "directory-groups" || req.Action == "directory-bind" || req.Action == "directory-audit"
+	if isDirectory && c.ManagedDirectory == nil || !isDirectory && c.Store == nil {
+		fail(404, "requested inventory capability is not configured")
+		return
+	}
+	var actor string
+	var authorizationRevision directory.Revision
 	if req.Action == "enroll" {
 		if !c.admit() {
 			fail(429, "enrollment rate limit; retry later")
@@ -122,7 +137,7 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(401, "invalid or expired authentication")
 			return
 		}
-		u, e := c.Directory.LookupUser(r.Context(), claims.UserID)
+		u, rev, e := c.Directory.LookupUser(r.Context(), claims.UserID)
 		if e != nil {
 			fail(503, "directory unavailable")
 			return
@@ -131,10 +146,18 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(403, "inventory-admin role required")
 			return
 		}
-		actor = u.ID
+		actor, authorizationRevision = u.ID, rev
 	}
 	var resp inventoryapi.ControlResponse
 	switch req.Action {
+	case "directory-groups":
+		var snapshot scim.BindingSnapshot
+		snapshot, err = c.ManagedDirectory.Bindings(r.Context())
+		resp.Directory = &snapshot
+	case "directory-bind":
+		err = c.ManagedDirectory.Rebind(r.Context(), actor, req.Alias, req.ID, req.Revision, authorizationRevision)
+	case "directory-audit":
+		resp.DirectoryAudit, err = c.ManagedDirectory.Audit(r.Context())
 	case "enroll":
 		if req.Host == nil {
 			err = fmt.Errorf("host proposal is required")
@@ -172,14 +195,18 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := 400
 		switch {
-		case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrRevision):
+		case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrRevision), errors.Is(err, scim.ErrConflict), errors.Is(err, scim.ErrVersion):
 			code = 409
-		case errors.Is(err, inventory.ErrNotFound):
+		case errors.Is(err, inventory.ErrNotFound), errors.Is(err, scim.ErrNotFound):
 			code = 404
 		case errors.Is(err, inventory.ErrToken):
 			code = 403
 		case errors.Is(err, inventory.ErrStorage):
 			code = 503
+		default:
+			if isDirectory && !errors.Is(err, scim.ErrInvalid) {
+				code = 503
+			}
 		}
 		if code == 503 {
 			fail(code, "inventory storage unavailable")
