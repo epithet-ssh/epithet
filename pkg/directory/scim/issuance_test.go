@@ -114,7 +114,7 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	bind("bob", g, false)
 	check("alice", true)
 	check("bob", false)
-	events, e := f.store.Audit(t.Context())
+	events, e := f.store.Audit(t.Context(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, "subject:bob", events[len(events)-1].Actor)
 	f.request("PUT", "Users/"+a, user("subject:alice", "renamed", false), "", 200)

@@ -1,7 +1,6 @@
 package sqlitestore
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -9,29 +8,22 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/directory/scim"
+	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/stretchr/testify/require"
 )
 
-func doc(s string) scim.Document {
-	var d scim.Document
-	if e := json.Unmarshal([]byte(s), &d); e != nil {
-		panic(e)
-	}
-	return d
-}
 func TestRollbackRestartAndCoherentReads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "directory.db")
 	s, e := Open(path)
 	require.NoError(t, e)
-	u, e := s.Create(t.Context(), scim.Users, doc(`{"externalId":"subject","userName":"v1","active":true}`))
+	u, e := s.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject", UserName: "v1", Active: true})
 	require.NoError(t, e)
 	_, rev, e := s.LookupUser(t.Context(), "subject")
 	require.NoError(t, e)
-	// Fail after resources/indexes/revision have changed, at the final audit insert.
+	// Fail after users/indexes/revision have changed, at the final audit insert.
 	_, e = s.db.Exec(`CREATE TRIGGER interrupt BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'interrupted write'); END`)
 	require.NoError(t, e)
-	_, e = s.Replace(t.Context(), scim.Users, u.ID, doc(`{"externalId":"new-subject","userName":"new","active":false}`), "")
+	_, e = s.ReplaceUser(t.Context(), u.ID, directory.ManagedUser{ExternalID: "new-subject", UserName: "new", Active: false}, "")
 	require.Error(t, e)
 	actual, actualRev, e := s.LookupUser(t.Context(), "subject")
 	require.NoError(t, e)
@@ -58,7 +50,7 @@ func TestRollbackRestartAndCoherentReads(t *testing.T) {
 	errs := make(chan error, 2)
 	wg.Go(func() {
 		for n := 2; n <= 40; n++ {
-			_, e := s.Replace(t.Context(), scim.Users, u.ID, doc(fmt.Sprintf(`{"externalId":"subject","userName":"v%d","active":true}`, n)), "")
+			_, e := s.ReplaceUser(t.Context(), u.ID, directory.ManagedUser{ExternalID: "subject", UserName: fmt.Sprintf("v%d", n), Active: true}, "")
 			if e != nil {
 				errs <- e
 				return
@@ -98,7 +90,7 @@ func TestFirstAliasClaimIsAtomicAcrossConnections(t *testing.T) {
 	errs := make(chan error, 2)
 	for _, s := range []*Store{a, b} {
 		wg.Go(func() {
-			_, e := s.Create(t.Context(), scim.Groups, doc(`{"displayName":"ops","members":[]}`))
+			_, e := s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 			errs <- e
 		})
 	}
@@ -121,19 +113,19 @@ func TestRebindRejectsChangedAuthorizationSnapshot(t *testing.T) {
 	s, e := Open(filepath.Join(t.TempDir(), "directory.db"))
 	require.NoError(t, e)
 	defer s.Close()
-	admin, e := s.Create(t.Context(), scim.Users, doc(`{"externalId":"admin","userName":"admin","active":true}`))
+	admin, e := s.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "admin", UserName: "admin", Active: true})
 	require.NoError(t, e)
-	first, e := s.Create(t.Context(), scim.Groups, doc(`{"displayName":"ops","members":[]}`))
+	first, e := s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 	require.NoError(t, e)
-	second, e := s.Create(t.Context(), scim.Groups, doc(`{"displayName":"ops","members":[]}`))
+	second, e := s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 	require.NoError(t, e)
 	_, authorized, e := s.LookupUser(t.Context(), "admin")
 	require.NoError(t, e)
-	_, e = s.Replace(t.Context(), scim.Users, admin.ID, doc(`{"externalId":"admin","userName":"admin","active":false}`), "")
+	_, e = s.ReplaceUser(t.Context(), admin.ID, directory.ManagedUser{ExternalID: "admin", UserName: "admin", Active: false}, "")
 	require.NoError(t, e)
 	snapshot, e := s.Bindings(t.Context())
 	require.NoError(t, e)
-	require.ErrorIs(t, s.Rebind(t.Context(), "admin", "ops", second.ID, snapshot.Revision, authorized), scim.ErrVersion)
+	require.ErrorIs(t, s.Rebind(t.Context(), "admin", "ops", second.ID, snapshot.Revision, authorized), directory.ErrVersion)
 	actual, e := s.Bindings(t.Context())
 	require.NoError(t, e)
 	require.Equal(t, snapshot, actual)
@@ -148,28 +140,28 @@ func TestGroupAndDeleteFailuresRollBackProjections(t *testing.T) {
 	s, e := Open(filepath.Join(t.TempDir(), "directory.db"))
 	require.NoError(t, e)
 	defer s.Close()
-	user, e := s.Create(t.Context(), scim.Users, doc(`{"externalId":"subject","userName":"user","active":true}`))
+	user, e := s.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject", UserName: "user", Active: true})
 	require.NoError(t, e)
-	groupDoc := doc(fmt.Sprintf(`{"displayName":"ops","members":[{"value":%q}]}`, user.ID))
-	g, e := s.Create(t.Context(), scim.Groups, groupDoc)
+	group := directory.Group{DisplayName: "ops", MemberIDs: []string{user.ID}}
+	g, e := s.CreateGroup(t.Context(), group)
 	require.NoError(t, e)
 	before, rev, e := s.LookupUser(t.Context(), "subject")
 	require.NoError(t, e)
-	history, e := s.Audit(t.Context())
+	history, e := s.Audit(t.Context(), 0, 0)
 	require.NoError(t, e)
 	_, e = s.db.Exec(`CREATE TRIGGER interrupt BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'interrupted write'); END`)
 	require.NoError(t, e)
-	require.Error(t, s.Delete(t.Context(), scim.Users, user.ID, ""))
-	_, e = s.Create(t.Context(), scim.Groups, doc(`{"displayName":"uncommitted","members":[]}`))
+	require.Error(t, s.DeleteUser(t.Context(), user.ID, ""))
+	_, e = s.CreateGroup(t.Context(), directory.Group{DisplayName: "uncommitted"})
 	require.Error(t, e)
 	actual, actualRev, e := s.LookupUser(t.Context(), "subject")
 	require.NoError(t, e)
 	require.Equal(t, before, actual)
 	require.Equal(t, rev, actualRev)
-	persisted, e := s.Get(t.Context(), scim.Groups, g.ID)
+	persisted, e := s.GetGroup(t.Context(), g.ID)
 	require.NoError(t, e)
 	require.Equal(t, g, persisted)
-	after, e := s.Audit(t.Context())
+	after, e := s.Audit(t.Context(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, history, after)
 	snapshot, e := s.Bindings(t.Context())
@@ -177,11 +169,97 @@ func TestGroupAndDeleteFailuresRollBackProjections(t *testing.T) {
 	require.Len(t, snapshot.Groups, 1)
 	_, e = s.db.Exec("DROP TRIGGER interrupt")
 	require.NoError(t, e)
-	_, e = s.db.Exec(`UPDATE resources SET document='{"externalId":"subject","userName":"user","active":null}' WHERE id=?`, user.ID)
-	require.NoError(t, e)
-	_, _, e = s.LookupUser(t.Context(), "subject")
-	require.ErrorContains(t, e, "active status")
+	// The schema rejects invalid active values instead of decoding JSON at lookup.
+	_, e = s.db.Exec(`UPDATE users SET active=NULL WHERE id=?`, user.ID)
+	require.Error(t, e)
+	_, e = s.db.Exec(`UPDATE users SET active=2 WHERE id=?`, user.ID)
+	require.Error(t, e)
 	require.NoError(t, s.Close())
 	_, _, e = s.LookupUser(t.Context(), "subject")
 	require.Error(t, e)
+}
+
+func TestAuditCursorDoesNotSkipEventsSharingARevision(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "directory.db"))
+	require.NoError(t, err)
+	defer s.Close()
+	_, err = s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
+	require.NoError(t, err)
+	first, err := s.Audit(t.Context(), 0, 1)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	require.Equal(t, "bind", first[0].Action)
+	second, err := s.Audit(t.Context(), first[0].Sequence, 1)
+	require.NoError(t, err)
+	require.Len(t, second, 1)
+	require.Equal(t, "create", second[0].Action)
+	require.Equal(t, first[0].Revision, second[0].Revision)
+	require.Greater(t, second[0].Sequence, first[0].Sequence)
+	empty, err := s.Audit(t.Context(), second[0].Sequence, 1)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	// New activity after reaching the end is visible through the same cursor.
+	_, err = s.CreateGroup(t.Context(), directory.Group{DisplayName: "dev"})
+	require.NoError(t, err)
+	next, err := s.Audit(t.Context(), second[0].Sequence, 0)
+	require.NoError(t, err)
+	require.Len(t, next, 2)
+	require.Greater(t, next[0].Sequence, second[0].Sequence)
+	for _, limit := range []int{-1, directory.MaxAuditLimit + 1} {
+		_, err = s.Audit(t.Context(), 0, limit)
+		require.ErrorIs(t, err, directory.ErrInvalid)
+	}
+}
+
+func TestReadersSeeCommittedSnapshotWhileAnotherConnectionWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "directory.db")
+	writer, err := Open(path)
+	require.NoError(t, err)
+	defer writer.Close()
+	u, err := writer.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject", UserName: "alice", Active: true})
+	require.NoError(t, err)
+	g, err := writer.CreateGroup(t.Context(), directory.Group{DisplayName: "ops", MemberIDs: []string{u.ID}})
+	require.NoError(t, err)
+	reader, err := Open(path)
+	require.NoError(t, err)
+	defer reader.Close()
+	_, err = reader.db.Exec("PRAGMA busy_timeout=50")
+	require.NoError(t, err)
+	before, revision, err := reader.LookupUser(t.Context(), "subject")
+	require.NoError(t, err)
+
+	tx, err := writer.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.Exec("UPDATE users SET active=0 WHERE id=?", u.ID)
+	require.NoError(t, err)
+	_, err = tx.Exec("UPDATE state SET revision=revision+1")
+	require.NoError(t, err)
+
+	// All public snapshot reads must work while the writer's transaction is open.
+	gotUser, err := reader.GetUser(t.Context(), u.ID)
+	require.NoError(t, err)
+	require.Equal(t, u, gotUser)
+	gotGroup, err := reader.GetGroup(t.Context(), g.ID)
+	require.NoError(t, err)
+	require.Equal(t, g, gotGroup)
+	users, total, err := reader.ListUsers(t.Context(), 1, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, []directory.ManagedUser{u}, users)
+	groups, total, err := reader.ListGroups(t.Context(), 1, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, []directory.Group{g}, groups)
+	facts, gotRevision, err := reader.LookupUser(t.Context(), "subject")
+	require.NoError(t, err)
+	require.Equal(t, before, facts)
+	require.Equal(t, revision, gotRevision)
+	bindings, err := reader.Bindings(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, g.Version, bindings.Revision)
+	require.Len(t, bindings.Groups, 1)
+	events, err := reader.Audit(t.Context(), 0, 0)
+	require.NoError(t, err)
+	require.Len(t, events, 3)
 }

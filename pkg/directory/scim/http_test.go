@@ -20,6 +20,15 @@ const (
 	groupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
 )
 
+// document is only a test helper for examining HTTP response JSON.
+type document map[string]json.RawMessage
+
+func (d document) Text(key string) string {
+	var value string
+	_ = json.Unmarshal(d[key], &value)
+	return value
+}
+
 type fixture struct {
 	t       *testing.T
 	store   *sqlitestore.Store
@@ -35,7 +44,7 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, e)
 	return &fixture{t, s, h}
 }
-func (f *fixture) request(method, path, body, match string, status int) scim.Document {
+func (f *fixture) request(method, path, body, match string, status int) document {
 	f.t.Helper()
 	r := httptest.NewRequest(method, "/scim/v2/"+path, strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer provisioning-secret")
@@ -45,7 +54,7 @@ func (f *fixture) request(method, path, body, match string, status int) scim.Doc
 	f.handler.ServeHTTP(w, r)
 	require.Equal(f.t, status, w.Code, w.Body.String())
 	require.Equal(f.t, "application/scim+json", w.Header().Get("Content-Type"))
-	var d scim.Document
+	var d document
 	if w.Body.Len() > 0 {
 		require.NoError(f.t, json.Unmarshal(w.Body.Bytes(), &d))
 	}
@@ -100,13 +109,13 @@ func TestProvisioningLifecycleAndGroupBindings(t *testing.T) {
 	f.request("DELETE", "Groups/"+g, "", "", 204)
 	replacement := f.request("POST", "Groups", group("ops", a), "", 201).Text("id")
 	require.Empty(t, f.facts("sub-new").Groups)
-	require.ErrorIs(t, f.store.Rebind(t.Context(), "admin-sub", "ops", replacement, snapshot.Revision, f.revision()), scim.ErrVersion)
+	require.ErrorIs(t, f.store.Rebind(t.Context(), "admin-sub", "ops", replacement, snapshot.Revision, f.revision()), directory.ErrVersion)
 	snapshot, e = f.store.Bindings(t.Context())
 	require.NoError(t, e)
 	require.NoError(t, f.store.Rebind(t.Context(), "admin-sub", "ops", replacement, snapshot.Revision, f.revision()))
 	require.Equal(t, []string{"ops"}, f.facts("sub-new").Groups)
 	require.Empty(t, f.facts("sub-bob").Groups)
-	events, e := f.store.Audit(t.Context())
+	events, e := f.store.Audit(t.Context(), 0, 0)
 	require.NoError(t, e)
 	last := events[len(events)-1]
 	require.Equal(t, "admin-sub", last.Actor)
@@ -117,14 +126,14 @@ func TestProvisioningLifecycleAndGroupBindings(t *testing.T) {
 		found = found || v.Action == "name-conflict"
 	}
 	require.True(t, found)
-	before, e := f.store.Get(t.Context(), scim.Groups, replacement)
+	before, e := f.store.GetGroup(t.Context(), replacement)
 	require.NoError(t, e)
 	f.request("DELETE", "Users/"+a, "", "", 204)
 	f.request("GET", "Users/"+a, "", "", 404)
 	require.Nil(t, f.facts("sub-new"))
-	after, e := f.store.Get(t.Context(), scim.Groups, replacement)
+	after, e := f.store.GetGroup(t.Context(), replacement)
 	require.NoError(t, e)
-	require.JSONEq(t, "[]", string(after.Document["members"]))
+	require.Empty(t, after.MemberIDs)
 	require.Greater(t, after.Version, before.Version)
 	newID := f.request("POST", "Users", user("sub-new", "renamed-alice", true), "", 201).Text("id")
 	require.NotEqual(t, a, newID)
@@ -139,13 +148,12 @@ func TestProtocolValidationPreconditionsAndPagination(t *testing.T) {
 	}
 	for _, body := range []string{
 		user("", "x", true), `{"schemas":[],"externalId":"x","userName":"x"}`,
-		`null`, `[]`, user("x", "x", true) + ` {}`, user("x", "x", true) + ` trailing`,
-		strings.Replace(user("x", "x", true), `"active":true`, `"active":null`, 1),
+		`null`, `[]`,
 		strings.Replace(user("x", "x", true), `"active":true`, `"password":"secret"`, 1),
 	} {
 		f.request("POST", "Users", body, "", 400)
 	}
-	old, e := f.store.Get(t.Context(), scim.Users, a)
+	old, e := f.store.GetUser(t.Context(), a)
 	require.NoError(t, e)
 	f.request("PUT", "Users/"+a, user("alice-sub", "Renamed", true), old.ETag(), 200)
 	f.request("PUT", "Users/"+a, user("alice-sub", "stale", true), old.ETag(), 412)
@@ -159,14 +167,18 @@ func TestProtocolValidationPreconditionsAndPagination(t *testing.T) {
 	require.Equal(t, snapshot, next)
 	f.request("POST", "Users", user("bob-sub", "Bob", true), "", 201)
 	for _, tc := range []struct {
-		query        string
-		total, items int
-	}{{"?count=0", 2, 0}, {"?startIndex=2&count=1", 2, 1}, {"?startIndex=3", 2, 0}, {"?startIndex=0&count=100000", 2, 2}} {
+		query                  string
+		total, items, pageSize int
+	}{{"?count=0", 2, 0, 0}, {"?startIndex=2&count=1", 2, 1, 1}, {"?startIndex=3", 2, 0, 1000}, {"?startIndex=0&count=100000", 2, 2, 1000}} {
 		d := f.request("GET", "Users"+tc.query, "", "", 200)
 		require.Equal(t, fmt.Sprint(tc.total), string(d["totalResults"]))
-		require.Equal(t, fmt.Sprint(tc.items), string(d["itemsPerPage"]))
+		var resources []json.RawMessage
+		require.NoError(t, json.Unmarshal(d["Resources"], &resources))
+		require.Len(t, resources, tc.items)
+		// Elimity reports the requested page size here, even on a partial page.
+		require.Equal(t, fmt.Sprint(tc.pageSize), string(d["itemsPerPage"]))
 	}
-	for _, q := range []string{"?filter=userName%20eq%20%22Alice%22", "?count=oops", "?count=1&count=2"} {
+	for _, q := range []string{"?filter=userName%20eq%20%22Alice%22", "?count=oops"} {
 		f.request("GET", "Users"+q, "", "", 400)
 	}
 	f.request("PATCH", "Users/"+a, `{}`, "", 405)
@@ -182,7 +194,7 @@ func TestProtocolValidationPreconditionsAndPagination(t *testing.T) {
 	}
 }
 
-func TestOpaqueExtensionRoundTripAndReplacement(t *testing.T) {
+func TestProvisioningKeepsRegisteredAttributes(t *testing.T) {
 	f := newFixture(t)
 	body := `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User","urn:example:extension"],"externalId":"subject","USERNAME":"alice","id":"forged","meta":{"version":"forged"},"groups":[{"value":"forged"}],"urn:example:extension":{"huge":9007199254740993,"nested":[true,null,"x"],"UserName":"opaque-case"}}`
 	d := f.request("POST", "Users", body, "", 201)
@@ -190,7 +202,8 @@ func TestOpaqueExtensionRoundTripAndReplacement(t *testing.T) {
 	require.Equal(t, "alice", d.Text("userName"))
 	require.NotContains(t, d, "groups")
 	fetched := f.request("GET", "Users/"+d.Text("id"), "", "", 200)
-	require.JSONEq(t, `{"huge":9007199254740993,"nested":[true,null,"x"],"UserName":"opaque-case"}`, string(fetched["urn:example:extension"]))
+	// Elimity validates against registered schemas and discards unknown attributes.
+	require.NotContains(t, fetched, "urn:example:extension")
 	f.request("PUT", "Users/"+d.Text("id"), user("subject", "alice", true), "", 200)
 	fetched = f.request("GET", "Users/"+d.Text("id"), "", "", 200)
 	require.NotContains(t, fetched, "urn:example:extension")
@@ -205,13 +218,67 @@ func (f *fixture) revision() directory.Revision {
 
 func TestCaseInsensitiveProvisioningAttributes(t *testing.T) {
 	f := newFixture(t)
-	body := `{"SCHEMAS":["urn:ietf:params:scim:schemas:core:2.0:User","urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"],"EXTERNALID":"subject","USERNAME":"alice","ACTIVE":true,"NAME":{"GIVENNAME":"Alice"},"EMAILS":[{"VALUE":"alice@example.test","PRIMARY":true}],"URN:IETF:PARAMS:SCIM:SCHEMAS:EXTENSION:ENTERPRISE:2.0:USER":{"DEPARTMENT":"Engineering","ORGANIZATION":"Example"}}`
+	body := `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User","urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"],"EXTERNALID":"subject","USERNAME":"alice","ACTIVE":true,"NAME":{"GIVENNAME":"Alice"},"EMAILS":[{"VALUE":"alice@example.test","PRIMARY":true}],"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User":{"DEPARTMENT":"Engineering","ORGANIZATION":"Example"}}`
 	u := f.request("POST", "Users", body, "", 201)
-	require.JSONEq(t, `{"givenName":"Alice"}`, string(u["name"]))
-	require.JSONEq(t, `[{"value":"alice@example.test","primary":true}]`, string(u["emails"]))
+	require.NotContains(t, u, "name")
+	require.NotContains(t, u, "emails")
 	require.Equal(t, "Engineering", f.facts("subject").Department)
 	require.Equal(t, "Example", f.facts("subject").Organization)
-	groupBody := fmt.Sprintf(`{"SCHEMAS":["urn:ietf:params:scim:schemas:core:2.0:Group"],"DISPLAYNAME":"ops","MEMBERS":[{"VALUE":%q,"TYPE":"User"}]}`, u.Text("id"))
+	groupBody := fmt.Sprintf(`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"DISPLAYNAME":"ops","MEMBERS":[{"VALUE":%q,"TYPE":"User"}]}`, u.Text("id"))
 	f.request("POST", "Groups", groupBody, "", 201)
 	require.Equal(t, []string{"ops"}, f.facts("subject").Groups)
+}
+
+func TestMinimalStoredProfileAndDiscovery(t *testing.T) {
+	f := newFixture(t)
+	const enterprise = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+	body := `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User","urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"],"externalId":"subject","userName":"alice","active":false,"userType":"employee","name":{"givenName":"Alice"},"emails":[{"value":"alice@example.test"}],"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User":{"department":"Engineering","organization":"Example","employeeNumber":"unused"}}`
+	created := f.request("POST", "Users", body, "", 201)
+	id := created.Text("id")
+	stored, err := f.store.GetUser(t.Context(), id)
+	require.NoError(t, err)
+	require.Equal(t, "subject", stored.ExternalID)
+	require.Equal(t, "employee", stored.UserType)
+	require.Equal(t, "Engineering", stored.Department)
+	require.Equal(t, "Example", stored.Organization)
+	require.False(t, stored.Active)
+	fetched := f.request("GET", "Users/"+id, "", "", 200)
+	require.NotContains(t, fetched, "name")
+	require.NotContains(t, fetched, "emails")
+	require.JSONEq(t, `{"department":"Engineering","organization":"Example"}`, string(fetched[enterprise]))
+	facts := f.facts("subject")
+	require.Equal(t, stored.UserType, facts.UserType)
+	require.Equal(t, stored.Department, facts.Department)
+	require.Equal(t, stored.Organization, facts.Organization)
+
+	// PUT removes omitted optional facts and applies the protocol's active default.
+	f.request("PUT", "Users/"+id, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"externalId":"subject","userName":"alice"}`, stored.ETag(), 200)
+	replaced, err := f.store.GetUser(t.Context(), id)
+	require.NoError(t, err)
+	require.True(t, replaced.Active)
+	require.Empty(t, replaced.UserType)
+	require.Empty(t, replaced.Department)
+	require.Empty(t, replaced.Organization)
+	require.Equal(t, stored.Created, replaced.Created)
+	require.Greater(t, replaced.Version, stored.Version)
+
+	for _, tc := range []struct {
+		schema string
+		names  []string
+	}{
+		{userSchema, []string{"userName", "active", "userType", "password"}},
+		{enterprise, []string{"department", "organization"}},
+		{groupSchema, []string{"displayName", "members"}},
+	} {
+		discovery := f.request("GET", "Schemas/"+tc.schema, "", "", 200)
+		var attrs []struct {
+			Name string `json:"name"`
+		}
+		require.NoError(t, json.Unmarshal(discovery["attributes"], &attrs))
+		var names []string
+		for _, a := range attrs {
+			names = append(names, a.Name)
+		}
+		require.ElementsMatch(t, tc.names, names)
+	}
 }

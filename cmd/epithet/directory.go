@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 )
 
@@ -21,7 +22,7 @@ type DirectoryCLI struct {
 type DirectoryGroupsCLI struct {
 	List  DirectoryGroupsListCLI  `cmd:"list" default:"withargs" help:"List directory groups, policy aliases, and conflicts"`
 	Bind  DirectoryGroupsBindCLI  `cmd:"bind" help:"Assign or explicitly rebind a policy alias to a SCIM group"`
-	Audit DirectoryGroupsAuditCLI `cmd:"audit" help:"Show directory mutation and binding audit"`
+	Audit DirectoryGroupsAuditCLI `cmd:"audit" help:"Show a page of directory mutation and binding audit"`
 }
 type DirectoryGroupsListCLI struct {
 	JSON bool `help:"Print the complete binding snapshot as JSON"`
@@ -56,10 +57,13 @@ func (c *DirectoryGroupsBindCLI) Run(p *DirectoryCLI) error {
 	return err
 }
 
-type DirectoryGroupsAuditCLI struct{}
+type DirectoryGroupsAuditCLI struct {
+	After directory.AuditSequence `help:"Return events after this audit sequence"`
+	Limit int                     `help:"Maximum events to return (1-1000; default 100)"`
+}
 
-func (*DirectoryGroupsAuditCLI) Run(p *DirectoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "directory-audit"})
+func (c *DirectoryGroupsAuditCLI) Run(p *DirectoryCLI) error {
+	r, err := p.request(inventoryapi.ControlRequest{Action: "directory-audit", AuditAfter: c.After, AuditLimit: c.Limit})
 	if err != nil {
 		return err
 	}

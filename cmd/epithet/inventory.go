@@ -85,7 +85,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 		return err
 	}
 	var users directory.Directory = inv
-	var directoryStore scim.Store
+	var directoryStore directory.Store
 	var scimHandler http.Handler
 	switch c.DirectorySource {
 	case "", "static": // Static recovery does not even open the managed database or secret.

@@ -1,4 +1,5 @@
-// Package directory owns the user and group facts supplied to authorization.
+// Package directory owns managed identities, administration, and the user and
+// group facts supplied to authorization.
 package directory
 
 import "context"

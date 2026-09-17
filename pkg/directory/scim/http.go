@@ -1,50 +1,59 @@
-// Package scim owns SCIM provisioning documents, the storage contract, and HTTP
-// handling. Authorization consumers depend only on the parent directory package.
+// Package scim adapts SCIM provisioning to the directory storage contract.
+// Elimity handles SCIM routing, schemas, validation, and response formatting;
+// Epithet owns authentication, identity rules, and atomic directory mutations.
 package scim
 
 import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
+
+	elimity "github.com/elimity-com/scim"
+	scimerrors "github.com/elimity-com/scim/errors"
+	"github.com/elimity-com/scim/optional"
+	"github.com/elimity-com/scim/schema"
+	"github.com/epithet-ssh/epithet/pkg/directory"
 )
+
+const enterpriseSchema = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 
 const maxBody = 4 << 20
 const maxPage = 1000
 
 type Handler struct {
-	store     Store
+	server    http.Handler
 	tokenHash [32]byte
 }
 
-// New mounts at /scim/v2 on either the standalone inventory listener or the
-// combined router. The secret is a distinct operator-supplied provisioning
-// credential; no OIDC or CA credentials are accepted by this boundary.
-func New(store Store, token string) (*Handler, error) {
+// New serves /scim/v2 with a distinct operator-supplied provisioning credential.
+// Library types stay within this adapter; storage remains behind Store.
+func New(store directory.Store, token string) (*Handler, error) {
 	if store == nil || token == "" || strings.ContainsAny(token, " \t\r\n") {
 		return nil, fmt.Errorf("SCIM requires a store and nonempty bearer token without whitespace")
 	}
-	return &Handler{store: store, tokenHash: sha256.Sum256([]byte(token))}, nil
-}
-func fail(w http.ResponseWriter, status int, typ, detail string) {
-	w.WriteHeader(status)
-	body := map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:Error"}, "status": strconv.Itoa(status), "detail": detail}
-	if typ != "" {
-		body["scimType"] = typ
+	server, err := elimity.NewServer(&elimity.ServerArgs{
+		ServiceProviderConfig: &elimity.ServiceProviderConfig{
+			MaxResults: maxPage,
+			AuthenticationSchemes: []elimity.AuthenticationScheme{{
+				Type: elimity.AuthenticationTypeOauthBearerToken, Name: "Provisioning bearer token",
+				Description: "Operator-supplied provisioning token", Primary: true,
+			}},
+		},
+		ResourceTypes: []elimity.ResourceType{
+			{ID: optional.NewString("User"), Name: "User", Endpoint: "/Users", Schema: selectedAttributes(schema.CoreUserSchema(), "userName", "active", "userType", "password"),
+				SchemaExtensions: []elimity.SchemaExtension{{Schema: selectedAttributes(schema.ExtensionEnterpriseUser(), "department", "organization")}}, Handler: userHandler{store}},
+			{ID: optional.NewString("Group"), Name: "Group", Endpoint: "/Groups", Schema: groupSchema(), Handler: groupHandler{store}},
+		},
+	}, elimity.WithBaseURL("/scim/v2"))
+	if err != nil {
+		return nil, err
 	}
-	_ = json.NewEncoder(w).Encode(body)
+	return &Handler{server: server, tokenHash: sha256.Sum256([]byte(token))}, nil
 }
-func write(w http.ResponseWriter, status int, body any) {
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/scim+json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -57,225 +66,61 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hash := sha256.Sum256([]byte(token))
 	if token == "" || subtle.ConstantTimeCompare(hash[:], h.tokenHash[:]) != 1 {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="scim"`)
-		fail(w, 401, "", "invalid provisioning credential")
-		return
-	}
-	if strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {
-		fail(w, 400, "invalidPath", "encoded path separators are not supported")
+		writeError(w, http.StatusUnauthorized, "invalid provisioning credential")
 		return
 	}
 	path, ok := strings.CutPrefix(r.URL.Path, "/scim/v2/")
 	if !ok {
-		fail(w, 404, "", "unknown SCIM endpoint")
+		writeError(w, http.StatusNotFound, "unknown SCIM endpoint")
 		return
 	}
-	path = strings.TrimSuffix(path, "/")
-	parts := strings.Split(path, "/")
-	if len(parts) == 1 && r.Method == http.MethodGet {
-		switch parts[0] {
-		case "ServiceProviderConfig":
-			write(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"}, "patch": map[string]any{"supported": false}, "bulk": map[string]any{"supported": false, "maxOperations": 0, "maxPayloadSize": 0}, "filter": map[string]any{"supported": false, "maxResults": maxPage}, "changePassword": map[string]any{"supported": false}, "sort": map[string]any{"supported": false}, "etag": map[string]any{"supported": true}, "authenticationSchemes": []any{map[string]any{"type": "oauthbearertoken", "name": "Provisioning bearer token", "description": "Operator-supplied provisioning token", "specUri": "https://www.rfc-editor.org/rfc/rfc6750", "primary": true}}})
-			return
-		case "ResourceTypes":
-			write(w, 200, listResponse(resourceTypes(), 1, len(resourceTypes())))
-			return
-		case "Schemas":
-			write(w, 200, listResponse(schemas(), 1, len(schemas())))
-			return
-		}
-	}
-	if len(parts) == 2 && r.Method == http.MethodGet && (parts[0] == "Schemas" || parts[0] == "ResourceTypes") {
-		entries := schemas()
-		if parts[0] == "ResourceTypes" {
-			entries = resourceTypes()
-		}
-		for _, v := range entries {
-			if v["id"] == parts[1] {
-				write(w, 200, v)
-				return
-			}
-		}
-		fail(w, 404, "", "unknown schema or resource type")
+	if r.Method == http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "PATCH is not supported")
 		return
 	}
-	kind := Kind(parts[0])
-	if kind != Users && kind != Groups || len(parts) > 2 {
-		fail(w, 404, "", "unknown SCIM endpoint")
-		return
-	}
-	id := ""
-	if len(parts) == 2 {
-		id = parts[1]
-		if id == "" {
-			fail(w, 404, "", "missing resource ID")
-			return
-		}
-	}
-	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		fail(w, 400, "invalidValue", "invalid query")
-		return
-	}
-	for key, values := range query {
-		if len(values) != 1 {
-			fail(w, 400, "invalidValue", "duplicate query parameter")
-			return
-		}
+	// The adapter implements the same limited provisioning operations as Store.
+	// Do not silently ignore requests for unsupported filtering or sorting.
+	for key := range r.URL.Query() {
 		if key != "startIndex" && key != "count" {
-			typ := "invalidValue"
-			if key == "filter" {
-				typ = "invalidFilter"
-			}
-			fail(w, 400, typ, "unsupported query parameter: "+key)
-			return
-		}
-		if r.Method != http.MethodGet || id != "" {
-			fail(w, 400, "invalidValue", "pagination applies only to resource lists")
+			writeError(w, http.StatusBadRequest, "unsupported query parameter: "+key)
 			return
 		}
 	}
-	if id == "" {
-		w.Header().Set("Allow", "GET, POST")
-	} else {
-		w.Header().Set("Allow", "GET, PUT, DELETE")
-	}
-	var resource Resource
-	switch r.Method {
-	case http.MethodGet:
-		if id != "" {
-			resource, err = h.store.Get(r.Context(), kind, id)
-			break
-		}
-		start, count := 1, maxPage
-		if v, ok := query["startIndex"]; ok {
-			start, err = strconv.Atoi(v[0])
-			if start < 1 {
-				start = 1
-			}
-		}
-		if err == nil {
-			if v, ok := query["count"]; ok {
-				count, err = strconv.Atoi(v[0])
-				count = max(0, min(maxPage, count))
-			}
-		}
-		if err != nil {
-			fail(w, 400, "invalidValue", "pagination requires integer values")
-			return
-		}
-		page, e := h.store.List(r.Context(), kind, start, count)
-		if e != nil {
-			h.storageError(w, e)
-			return
-		}
-		resources := make([]map[string]any, 0, len(page.Resources))
-		for _, v := range page.Resources {
-			resources = append(resources, representation(v))
-		}
-		write(w, 200, listResponse(resources, start, page.Total))
-		return
-	case http.MethodPost, http.MethodPut:
-		if r.Method == http.MethodPost && id != "" || r.Method == http.MethodPut && id == "" {
-			fail(w, 405, "", "method not allowed at this endpoint")
-			return
-		}
-		media, _, e := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if e != nil || media != "application/scim+json" && media != "application/json" {
-			fail(w, 415, "", "SCIM JSON content type required")
-			return
-		}
-		data, e := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
-		if e != nil {
-			fail(w, 413, "", "resource exceeds size limit")
-			return
-		}
-		doc, e := decodeDocument(kind, data)
-		if e != nil {
-			fail(w, 400, "invalidValue", e.Error())
-			return
-		}
-		if r.Method == http.MethodPost {
-			resource, err = h.store.Create(r.Context(), kind, doc)
-		} else {
-			resource, err = h.store.Replace(r.Context(), kind, id, doc, r.Header.Get("If-Match"))
-		}
-	case http.MethodDelete:
-		if id == "" {
-			fail(w, 405, "", "resource ID required")
-			return
-		}
-		err = h.store.Delete(r.Context(), kind, id, r.Header.Get("If-Match"))
-		if err == nil {
-			w.WriteHeader(204)
-			return
-		}
-	default:
-		fail(w, 405, "", "operation not supported")
-		return
-	}
-	if err != nil {
-		h.storageError(w, err)
-		return
-	}
-	w.Header().Set("ETag", resource.ETag())
-	w.Header().Set("Location", resourceLocation(resource))
-	status := 200
-	if r.Method == http.MethodPost {
-		status = 201
-	}
-	write(w, status, representation(resource))
+	r = r.Clone(r.Context())
+	r.URL.Path = "/v2/" + strings.TrimSuffix(path, "/")
+	r.URL.RawPath = ""
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	h.server.ServeHTTP(w, r)
 }
-func (h *Handler) storageError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		fail(w, 404, "", err.Error())
-	case errors.Is(err, ErrConflict):
-		fail(w, 409, "uniqueness", err.Error())
-	case errors.Is(err, ErrVersion):
-		fail(w, 412, "", err.Error())
-	case errors.Is(err, ErrInvalid):
-		fail(w, 400, "invalidValue", err.Error())
-	default:
-		fail(w, 503, "", "directory unavailable")
-	}
+
+func writeError(w http.ResponseWriter, status int, detail string) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(scimerrors.ScimError{Status: status, Detail: detail})
 }
-func resourceLocation(r Resource) string { return "/scim/v2/" + string(r.Kind) + "/" + r.ID }
-func representation(r Resource) map[string]any {
-	out := map[string]any{}
-	for k, v := range r.Document {
-		out[k] = v
+
+// Select the supported subset of Elimity's standard definitions so validation
+// and discovery agree. Password remains recognized solely to reject provisioning.
+func selectedAttributes(s schema.Schema, names ...string) schema.Schema {
+	attributes := make(schema.Attributes, 0, len(names))
+	for _, name := range names {
+		attribute, ok := s.Attributes.ContainsAttribute(name)
+		if !ok {
+			panic("missing SCIM schema attribute: " + name)
+		}
+		attributes = append(attributes, attribute)
 	}
-	out["id"] = r.ID
-	out["meta"] = map[string]any{"resourceType": strings.TrimSuffix(string(r.Kind), "s"), "created": r.Created, "lastModified": r.Modified, "version": r.ETag(), "location": resourceLocation(r)}
-	return out
+	s.Attributes = attributes
+	return s
 }
-func listResponse(resources []map[string]any, start, total int) map[string]any {
-	return map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "Resources": resources, "totalResults": total, "startIndex": start, "itemsPerPage": len(resources)}
-}
-func resourceTypes() []map[string]any {
-	return []map[string]any{
-		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": "User", "name": "User", "endpoint": "/Users", "schema": userSchema, "schemaExtensions": []any{map[string]any{"schema": enterpriseSchema, "required": false}}},
-		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": "Group", "name": "Group", "endpoint": "/Groups", "schema": groupSchema},
-	}
-}
-func schemas() []map[string]any {
-	attribute := func(name, typ string, required, multi bool) map[string]any {
-		return map[string]any{"name": name, "type": typ, "required": required, "multiValued": multi, "mutability": "readWrite", "returned": "default", "uniqueness": "none", "caseExact": true}
-	}
-	external := attribute("externalId", "string", true, false)
-	external["uniqueness"] = "server"
-	username := attribute("userName", "string", true, false)
-	username["caseExact"] = false
-	username["uniqueness"] = "server"
-	members := attribute("members", "complex", false, true)
-	members["subAttributes"] = []any{attribute("value", "string", true, false), attribute("display", "string", false, false), attribute("type", "string", false, false), attribute("$ref", "reference", false, false)}
-	name := attribute("name", "complex", false, false)
-	name["subAttributes"] = []any{attribute("formatted", "string", false, false), attribute("givenName", "string", false, false), attribute("familyName", "string", false, false), attribute("middleName", "string", false, false), attribute("honorificPrefix", "string", false, false), attribute("honorificSuffix", "string", false, false)}
-	emails := attribute("emails", "complex", false, true)
-	emails["subAttributes"] = []any{attribute("value", "string", false, false), attribute("type", "string", false, false), attribute("display", "string", false, false), attribute("primary", "boolean", false, false)}
-	return []map[string]any{
-		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:Schema"}, "id": userSchema, "name": "User", "attributes": []any{external, username, name, emails, attribute("active", "boolean", false, false), attribute("displayName", "string", false, false), attribute("userType", "string", false, false)}},
-		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:Schema"}, "id": groupSchema, "name": "Group", "attributes": []any{attribute("externalId", "string", false, false), attribute("displayName", "string", true, false), members}},
-		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:Schema"}, "id": enterpriseSchema, "name": "EnterpriseUser", "attributes": []any{attribute("department", "string", false, false), attribute("organization", "string", false, false)}},
-	}
+
+func groupSchema() schema.Schema {
+	s := selectedAttributes(schema.CoreGroupSchema(), "displayName")
+	s.Attributes = append(s.Attributes, schema.ComplexCoreAttribute(schema.ComplexParams{
+		Name: "members", MultiValued: true,
+		SubAttributes: []schema.SimpleParams{
+			schema.SimpleStringParams(schema.StringParams{Name: "value", Required: true, CaseExact: true}),
+			schema.SimpleStringParams(schema.StringParams{Name: "type", CanonicalValues: []string{"User"}}),
+		},
+	}))
+	return s
 }

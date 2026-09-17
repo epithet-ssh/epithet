@@ -23,8 +23,11 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/q-uint/parser v0.3.1 // indirect
+	github.com/q-uint/xsd-datetime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/scim2/filter-parser/v2 v2.3.1 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
@@ -33,6 +36,7 @@ require (
 
 require (
 	github.com/alecthomas/kong-yaml v0.2.0
+	github.com/elimity-com/scim v0.0.0-20260728105928-2641426a1539
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/sony/gobreaker/v2 v2.4.0
 	golang.org/x/sys v0.47.0

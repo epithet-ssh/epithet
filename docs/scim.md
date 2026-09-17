@@ -5,8 +5,11 @@ Pocket ID v2.14.0 is the first tested client. Users and groups live in an embedd
 SQLite database using `modernc.org/sqlite`; Epithet does not require CGO. Host
 inventory remains independent: static YAML and optional file-backed enrollment.
 
-`pkg/directory/scim` owns provisioning documents, resource metadata, pagination,
-the storage contract, and HTTP handling. `pkg/directory` exposes only user facts,
+`pkg/directory` owns the storage and administration contracts.
+`pkg/directory/scim` adapts Elimity for provisioning.
+Elimity supplies the schemas, validation, HTTP routing, pagination, and response
+formatting; Epithet supplies authentication and its identity/membership rules.
+`pkg/directory` exposes only user facts,
 lookup, and snapshot revisions to authorization consumers. The SQLite backend
 implements the SCIM storage contract in `pkg/directory/sqlitestore`.
 
@@ -92,9 +95,11 @@ Users require a nonempty, unique `externalId` and `userName`. Usernames are uniq
 under Unicode normalization and case folding; authentication IDs remain byte exact.
 Trusted provisioning can change `externalId`: the same transaction removes the old
 identity mapping and establishes the new mapping, preserving the resource's group
-memberships. `userName` remains mutable and readable. Profile attributes are retained;
-only `userType`, enterprise `department`/`organization`, active status, and bound
-group names join the identity fields in authorization facts.
+memberships. `userName` remains mutable and readable. Stored user attributes are
+limited to identity, active status, `userType`, and enterprise
+`department`/`organization`. Groups store their provider identity, display name,
+and direct member IDs; bound group names join the user attributes in authorization
+facts. SQLite stores users, groups, and memberships in separate tables.
 
 - `active: false` retains the user and memberships but prevents new certificates
   under Writ and prevents inventory administration. Omitted `active` defaults to true.
@@ -134,7 +139,13 @@ epithet directory groups list
 epithet directory groups list --json
 epithet directory groups bind 'operations' SCIM_GROUP_ID --revision 42
 epithet directory groups audit
+epithet directory groups audit --after 100 --limit 100
 ```
+
+Audit output is a page of events in sequence order (100 by default, at most 1000).
+Pass the last event's `sequence` as `--after` to continue; an empty page means you
+have reached the end. The cursor is an event sequence, not a directory revision:
+a single mutation can generate several audit events. Audit history is retained.
 
 List output is tab-separated with directory revision, full group ID, binding
 status, policy name, and current display name. Names with control characters or
@@ -157,13 +168,18 @@ The base path is `/scim/v2`. All endpoints require the provisioning bearer token
 - Users and Groups: GET collection/resource, POST collection, PUT resource, DELETE
   resource. PUT replaces writable attributes rather than merging them.
 - Paginated list responses use `startIndex` (one-based) and `count` (maximum 1000).
-  `count=0` reports the total without resources. Lists have deterministic ID order.
+  `count=0` reports the total without resources. Elimity reports the requested page
+  size in `itemsPerPage`, including when fewer resources are returned. Lists have
+  deterministic ID order.
 - Server-owned IDs, timestamps, versions, and locations; ETag/If-Match conditional
-  replace/delete. Stale preconditions return 412 without changing state.
+  replace/delete. Stale preconditions return 412 without changing state. Elimity
+  currently advertises `etag.supported: false` despite honoring these preconditions.
 - Discovery: ServiceProviderConfig, ResourceTypes, and Schemas. The supported profile
-  includes direct User group members, core identity/name/email fields, and enterprise
-  department/organization. Accepted additional attributes/extensions round-trip as
-  JSON without participating in authorization. Password provisioning is rejected.
+  includes user identity, active status, user type, enterprise department/organization,
+  and group identity, display name, and direct User member IDs. Names, email addresses,
+  other unused profile fields, and unregistered extensions are discarded. The
+  schemas describe this subset; password remains recognized solely to reject
+  provisioning, and is never stored.
 - PATCH, filters, sorting, bulk operations, password changes, nested groups, and
   attribute-selection query parameters are unsupported. Discovery advertises the
   corresponding optional capabilities as unsupported. Okta compatibility is deferred.
@@ -192,6 +208,3 @@ Return to `scim` and restart to use managed identities again. There is never an
 implicit merge of static and provisioned users. Group reservations and audit survive
 restarts in the database. Changing the configured OIDC provider also requires
 reconciling the directory's external identities; IDs are scoped to that provider.
-
-The isolated upstream-client validation is described in
-[the Pocket ID test harness](../test/pocketid/README.md).

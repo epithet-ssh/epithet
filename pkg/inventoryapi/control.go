@@ -1,7 +1,7 @@
 package inventoryapi
 
 import (
-	"github.com/epithet-ssh/epithet/pkg/directory/scim"
+	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 )
 
@@ -11,17 +11,19 @@ const InventoryRelation = "https://epithet.dev/rel/inventory"
 // An optional single-use token preapproves enrollment. Admin authentication is
 // the OIDC bearer header. Revision binds review/edit to the displayed record.
 type ControlRequest struct {
-	Alias           string              `json:"alias,omitempty"`
-	Action          string              `json:"action"`
-	ID              string              `json:"id,omitempty"`
-	Revision        uint64              `json:"revision,omitempty"`
-	Host            *inventory.Proposal `json:"host,omitempty"`
-	Token           string              `json:"token,omitempty"`
-	LifetimeSeconds int64               `json:"lifetime-seconds,omitempty"`
+	AuditAfter      directory.AuditSequence `json:"audit-after,omitempty"`
+	AuditLimit      int                     `json:"audit-limit,omitempty"`
+	Alias           string                  `json:"alias,omitempty"`
+	Action          string                  `json:"action"`
+	ID              string                  `json:"id,omitempty"`
+	Revision        uint64                  `json:"revision,omitempty"`
+	Host            *inventory.Proposal     `json:"host,omitempty"`
+	Token           string                  `json:"token,omitempty"`
+	LifetimeSeconds int64                   `json:"lifetime-seconds,omitempty"`
 }
 type ControlResponse struct {
-	Directory      *scim.BindingSnapshot       `json:"directory,omitempty"`
-	DirectoryAudit []scim.AuditEvent           `json:"directory-audit,omitempty"`
+	Directory      *directory.BindingSnapshot  `json:"directory,omitempty"`
+	DirectoryAudit []directory.AuditEvent      `json:"directory-audit,omitempty"`
 	Host           *inventory.HostRecord       `json:"host,omitempty"`
 	Hosts          []inventory.HostRecord      `json:"hosts,omitempty"`
 	Token          *inventory.EnrollmentToken  `json:"token,omitempty"`

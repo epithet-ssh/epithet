@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/scim"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -48,7 +47,7 @@ func (a Admins) Allows(u *directory.User) bool {
 
 type Control struct {
 	Store            *inventory.Managed
-	ManagedDirectory scim.Store
+	ManagedDirectory directory.Store
 	Directory        directory.Directory
 	Validator        TokenValidator
 	Admins           Admins
@@ -151,13 +150,13 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var resp inventoryapi.ControlResponse
 	switch req.Action {
 	case "directory-groups":
-		var snapshot scim.BindingSnapshot
+		var snapshot directory.BindingSnapshot
 		snapshot, err = c.ManagedDirectory.Bindings(r.Context())
 		resp.Directory = &snapshot
 	case "directory-bind":
 		err = c.ManagedDirectory.Rebind(r.Context(), actor, req.Alias, req.ID, req.Revision, authorizationRevision)
 	case "directory-audit":
-		resp.DirectoryAudit, err = c.ManagedDirectory.Audit(r.Context())
+		resp.DirectoryAudit, err = c.ManagedDirectory.Audit(r.Context(), req.AuditAfter, req.AuditLimit)
 	case "enroll":
 		if req.Host == nil {
 			err = fmt.Errorf("host proposal is required")
@@ -195,16 +194,16 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := 400
 		switch {
-		case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrRevision), errors.Is(err, scim.ErrConflict), errors.Is(err, scim.ErrVersion):
+		case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrRevision), errors.Is(err, directory.ErrConflict), errors.Is(err, directory.ErrVersion):
 			code = 409
-		case errors.Is(err, inventory.ErrNotFound), errors.Is(err, scim.ErrNotFound):
+		case errors.Is(err, inventory.ErrNotFound), errors.Is(err, directory.ErrNotFound):
 			code = 404
 		case errors.Is(err, inventory.ErrToken):
 			code = 403
 		case errors.Is(err, inventory.ErrStorage):
 			code = 503
 		default:
-			if isDirectory && !errors.Is(err, scim.ErrInvalid) {
+			if isDirectory && !errors.Is(err, directory.ErrInvalid) {
 				code = 503
 			}
 		}

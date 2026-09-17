@@ -66,3 +66,15 @@ func TestManagementAgentProfileConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectoryAuditPaginationFlags(t *testing.T) {
+	var root struct {
+		Directory DirectoryCLI `cmd:"directory"`
+	}
+	parser, err := kong.New(&root)
+	require.NoError(t, err)
+	_, err = parser.Parse([]string{"directory", "groups", "audit", "--after", "9007199254740993", "--limit", "25"})
+	require.NoError(t, err)
+	require.EqualValues(t, 9007199254740993, root.Directory.Groups.Audit.After)
+	require.Equal(t, 25, root.Directory.Groups.Audit.Limit)
+}

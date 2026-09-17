@@ -3,6 +3,7 @@ package inventoryserver_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -114,4 +117,59 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	audit, err := m.Audit()
 	require.NoError(t, err)
 	require.Equal(t, "directory-admin", audit[len(audit)-1].Actor)
+}
+
+func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "directory.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	_, err = store.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:admin", UserName: "admin", Active: true})
+	require.NoError(t, err)
+	// Build a real audit history larger than the client allows in one response.
+	// Names are retained on bind events; create events share their revisions.
+	for n := 0; n < 500; n++ {
+		_, err = store.CreateGroup(t.Context(), directory.Group{DisplayName: fmt.Sprintf("group-%d-", n) + strings.Repeat("x", 18<<10)})
+		require.NoError(t, err)
+	}
+	idp := oidctest.New(t)
+	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	require.NoError(t, err)
+	control := &inventoryserver.Control{ManagedDirectory: store, Directory: store, Validator: validator, Admins: inventoryserver.Admins{Users: []string{"subject:admin"}}}
+	server := httptest.NewServer(control)
+	defer server.Close()
+	client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
+	require.NoError(t, err)
+	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
+	var after directory.AuditSequence
+	var count, bytes int
+	for {
+		response, status, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "directory-audit", AuditAfter: after})
+		require.NoError(t, err)
+		require.Equal(t, 200, status)
+		events := response.DirectoryAudit
+		require.LessOrEqual(t, len(events), directory.DefaultAuditLimit)
+		if len(events) == 0 {
+			break
+		}
+		for _, event := range events {
+			require.Equal(t, after+1, event.Sequence)
+			after = event.Sequence
+		}
+		data, err := json.Marshal(events)
+		require.NoError(t, err)
+		bytes += len(data)
+		count += len(events)
+	}
+	require.Equal(t, 1001, count)
+	require.Greater(t, bytes, inventoryclient.MaxControlResponse)
+	response, _, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "directory-audit", AuditLimit: 1})
+	require.NoError(t, err)
+	require.Len(t, response.DirectoryAudit, 1)
+	_, status, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "directory-audit", AuditLimit: directory.MaxAuditLimit + 1})
+	require.Error(t, err)
+	require.Equal(t, 400, status)
+	// Authorization is still required on every page.
+	_, status, err = client.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "directory-audit", AuditAfter: after})
+	require.Error(t, err)
+	require.Equal(t, 401, status)
 }
