@@ -122,7 +122,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tc.status, first.Status)
 			}
-			require.Len(t, runner.calls, 4)
+			require.Len(t, runner.calls, 5)
 			req := <-requests
 			data, err := os.ReadFile(reviewFile)
 			require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "pending", second.Status)
 			require.Equal(t, 2, resolutions)
-			require.Len(t, runner.calls, 5, "unchanged setup only validates on rerun")
+			require.Len(t, runner.calls, 7, "unchanged setup only validates on rerun")
 			require.False(t, second.DomainCreated)
 			require.False(t, second.CAPublicKeyCreated)
 			require.Equal(t, reviewed.Domain, string(second.Domain))

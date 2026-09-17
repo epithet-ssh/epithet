@@ -273,7 +273,13 @@ func (c *HostEnrollCLI) adoptExistingSSHDEnrollment(env *sshdEnvironment) error 
 		return fmt.Errorf("reading Epithet enrollment from %s: %w", configFile, err)
 	}
 	if !managed {
-		return nil
+		fragmentFile, err = findIncludedSSHDEnrollment(mainConfig, env.goos)
+		if err != nil {
+			return fmt.Errorf("finding Epithet enrollment in %s: %w", configFile, err)
+		}
+		if fragmentFile == "" {
+			return nil
+		}
 	}
 	fragmentSnapshot, err := snapshotSSHDFile(fragmentFile, true)
 	if err != nil {
@@ -355,7 +361,7 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 		return fmt.Errorf("existing sshd configuration is invalid: %w", err)
 	}
 	if !mainChanged && !fragmentChanged {
-		return nil
+		return validateSSHDEffectiveEnrollment(ctx, env.runner, settings.sshdBinary, settings.configFile, fragment)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(settings.fragmentFile), 0o755); err != nil {
@@ -366,7 +372,13 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 		return err
 	}
 	defer os.Remove(tempFragment)
-	validationMain, err := renderManagedSSHDMain(mainSnapshot.data, tempFragment, env.goos)
+	// This preflight checks the new fragment's syntax. The installed check below
+	// also checks effective values in the host's actual include order, before reload.
+	validationBase, err := stripManagedSSHDMain(mainSnapshot.data)
+	if err != nil {
+		return err
+	}
+	validationMain, err := prependSSHDEnrollmentInclude(validationBase, tempFragment, env.goos)
 	if err != nil {
 		return err
 	}
@@ -396,6 +408,9 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 	}
 	if err := validateSSHD(ctx, env.runner, settings.sshdBinary, settings.configFile); err != nil {
 		return errors.Join(fmt.Errorf("installed sshd configuration is invalid: %w", err), rollback())
+	}
+	if err := validateSSHDEffectiveEnrollment(ctx, env.runner, settings.sshdBinary, settings.configFile, fragment); err != nil {
+		return errors.Join(err, rollback())
 	}
 	if err := reloadSSHD(ctx, env.runner, settings.reloadCandidates); err != nil {
 		restoreErr := rollback()
@@ -565,6 +580,19 @@ func renderManagedSSHDMain(original []byte, fragmentPath, goos string) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
+	patterns, err := globalSSHDIncludes(base, goos)
+	if err != nil {
+		return nil, err
+	}
+	for _, pattern := range patterns {
+		if matches, _ := filepath.Match(pattern, fragmentPath); matches {
+			return base, nil
+		}
+	}
+	return prependSSHDEnrollmentInclude(base, fragmentPath, goos)
+}
+
+func prependSSHDEnrollmentInclude(base []byte, fragmentPath, goos string) ([]byte, error) {
 	token, err := quoteSSHDToken(normalizeSSHDPath(fragmentPath, goos))
 	if err != nil {
 		return nil, err
@@ -686,6 +714,38 @@ func validateSSHD(ctx context.Context, runner sshdCommandRunner, binary, config 
 	output, err := runner.CombinedOutput(ctx, binary, "-t", "-f", config)
 	if err != nil {
 		return commandFailure(binary, []string{"-t", "-f", config}, output, err)
+	}
+	return nil
+}
+
+// validateSSHDEffectiveEnrollment checks global values using sshd itself. Syntax
+// validation alone cannot detect an earlier setting shadowing our drop-in.
+func validateSSHDEffectiveEnrollment(ctx context.Context, runner sshdCommandRunner, binary, config string, fragment []byte) error {
+	args := []string{"-T", "-f", config}
+	output, err := runner.CombinedOutput(ctx, binary, args...)
+	if err != nil {
+		return commandFailure(binary, args, output, err)
+	}
+	actual := make(map[string]string)
+	for _, line := range strings.Split(string(output), "\n") {
+		key, value := sshdDirective(line)
+		actual[key] = value
+	}
+	for _, line := range strings.Split(string(fragment), "\n") {
+		key, want := sshdDirective(line)
+		switch key {
+		case "trustedusercakeys":
+			want, err = strconv.Unquote(want)
+			if err != nil {
+				return err
+			}
+		case "authorizedprincipalscommand", "authorizedprincipalscommanduser":
+		default:
+			continue
+		}
+		if actual[key] != want {
+			return fmt.Errorf("sshd enrollment conflict: effective %s is %q, want %q; check earlier settings and Include order in %s", key, actual[key], want, config)
+		}
 	}
 	return nil
 }

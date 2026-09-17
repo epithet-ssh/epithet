@@ -245,7 +245,7 @@ func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
 	fragment, err := os.ReadFile(fragmentPath)
 	require.NoError(t, err)
 	require.Contains(t, string(fragment), "AuthorizedPrincipalsCommand")
-	require.Len(t, runner.calls, 4)
+	require.Len(t, runner.calls, 5)
 }
 
 func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
@@ -304,7 +304,7 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	require.Empty(t, secondCommand.DomainFile, "resolving existing state must not mutate CLI options")
 	require.Empty(t, secondCommand.CAPubkeyFile)
 	require.Empty(t, secondCommand.SSHDFragmentFile)
-	require.Len(t, secondRunner.calls, 1, "an unchanged rerun validates but does not reload sshd")
+	require.Len(t, secondRunner.calls, 2, "an unchanged rerun validates but does not reload sshd")
 }
 
 func newTestCAPublicKey(t *testing.T) sshcert.RawPublicKey {

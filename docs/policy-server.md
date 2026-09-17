@@ -490,9 +490,18 @@ select another layout or to support an otherwise unknown platform.
 
 The sshd defaults use `/etc/ssh/sshd_config` and
 `/etc/ssh/sshd_config.d/60-epithet.conf` on Unix-like systems, and the OpenSSH
-directory beneath `%ProgramData%` on Windows. The command reloads through the
-native service manager (`systemctl`/`service`, BSD rc, `launchctl`, SMF, AIX
-SRC, or PowerShell). Use `--sshd-config-file`, `--sshd-fragment-file`,
+directory beneath `%ProgramData%` on Windows. Enrollment uses an existing global
+`Include` that covers the fragment, including wildcard and nested includes. If
+none covers it, enrollment adds an explicit include for that file only; it does
+not enable the entire drop-in directory. Rerunning enrollment removes a redundant
+Epithet-managed include when another global include covers the fragment. The
+fragment keeps its `60-epithet.conf` name and the host's existing include order.
+Before reloading, enrollment checks the effective global Epithet settings with
+`sshd -T`; conflicting earlier settings cause an error and restoration of the
+previous configuration.
+
+The command reloads through the native service manager (`systemctl`/`service`,
+BSD rc, `launchctl`, SMF, AIX SRC, or PowerShell). Use `--sshd-config-file`, `--sshd-fragment-file`,
 `--sshd-binary`, `--epithet-binary`, or `--reload-command` with repeated
 `--reload-arg` options for a nonstandard installation.
 

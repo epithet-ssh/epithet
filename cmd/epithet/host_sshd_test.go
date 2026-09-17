@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,10 +25,66 @@ type recordingSSHDRunner struct {
 
 func (r *recordingSSHDRunner) CombinedOutput(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, recordedSSHDCommand{name: name, args: append([]string(nil), args...)})
-	if r.run == nil {
-		return nil, nil
+	if r.run != nil {
+		output, err := r.run(len(r.calls), name, args)
+		if output != nil || err != nil {
+			return output, err
+		}
 	}
-	return r.run(len(r.calls), name, args)
+	if len(args) == 3 && args[0] == "-T" {
+		return fakeSSHDEffectiveConfig(args[2])
+	}
+	return nil, nil
+}
+
+// Supply first-value output for mocked sshd calls. Real sshd coverage lives in
+// TestSSHDEnrollmentWithOpenSSH; this fake keeps rollback tests deterministic.
+func fakeSSHDEffectiveConfig(path string) ([]byte, error) {
+	values := make(map[string]string)
+	var read func(string) error
+	read = func(path string) error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			key, value := sshdDirective(line)
+			if key == "include" {
+				patterns, err := splitSSHDInclude(value)
+				if err != nil {
+					return err
+				}
+				for _, pattern := range patterns {
+					paths, err := filepath.Glob(pattern)
+					if err != nil {
+						return err
+					}
+					for _, path := range paths {
+						if err := read(path); err != nil {
+							return err
+						}
+					}
+				}
+			} else if _, exists := values[key]; !exists {
+				if key == "trustedusercakeys" && strings.HasPrefix(value, `"`) {
+					value, err = strconv.Unquote(value)
+					if err != nil {
+						return err
+					}
+				}
+				values[key] = value
+			}
+		}
+		return nil
+	}
+	if err := read(path); err != nil {
+		return nil, err
+	}
+	var output strings.Builder
+	for key, value := range values {
+		output.WriteString(key + " " + value + "\n")
+	}
+	return []byte(output.String()), nil
 }
 
 func TestPlatformSSHDDefaultsCoverSupportedSystems(t *testing.T) {
@@ -213,13 +270,13 @@ func TestConfigureSSHDInstallsValidCandidateAndIsIdempotent(t *testing.T) {
 	cmd, enrollment, env, runner, mainPath, fragmentPath := newSSHDConfigurationTest(t)
 
 	require.NoError(t, configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env))
-	require.Len(t, runner.calls, 4)
+	require.Len(t, runner.calls, 5)
 	require.Equal(t, "/test/sshd", runner.calls[0].name)
 	resolvedMainPath, err := filepath.EvalSymlinks(mainPath)
 	require.NoError(t, err)
 	require.Equal(t, []string{"-t", "-f", resolvedMainPath}, runner.calls[0].args)
-	require.Equal(t, "/test/reload", runner.calls[3].name)
-	require.Equal(t, []string{"reload", "sshd"}, runner.calls[3].args)
+	require.Equal(t, "/test/reload", runner.calls[4].name)
+	require.Equal(t, []string{"reload", "sshd"}, runner.calls[4].args)
 
 	main, err := os.ReadFile(mainPath)
 	require.NoError(t, err)
@@ -235,7 +292,7 @@ func TestConfigureSSHDInstallsValidCandidateAndIsIdempotent(t *testing.T) {
 	secondRunner := &recordingSSHDRunner{}
 	env.runner = secondRunner
 	require.NoError(t, configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env))
-	require.Len(t, secondRunner.calls, 1, "unchanged valid configuration must not be reloaded")
+	require.Len(t, secondRunner.calls, 2, "unchanged valid configuration must not be reloaded")
 }
 
 func TestConfigureSSHDRejectsCandidateWithoutChangingFiles(t *testing.T) {
