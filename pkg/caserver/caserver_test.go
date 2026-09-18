@@ -178,7 +178,7 @@ func TestCreateCert_Success(t *testing.T) {
 	userPubKey, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	certReq := caserver.CreateCertRequest{
+	certReq := wire.CreateCertRequest{
 		PublicKey: sshcert.RawPublicKey(userPubKey),
 		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
@@ -223,7 +223,7 @@ func TestCreateCert_PolicyError(t *testing.T) {
 	userPubKey, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	certReq := caserver.CreateCertRequest{
+	certReq := wire.CreateCertRequest{
 		PublicKey: sshcert.RawPublicKey(userPubKey),
 		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
@@ -249,7 +249,7 @@ func TestCreateCert_MissingPublicKey(t *testing.T) {
 	caHTTPServer, cleanup, _ := newTestCAServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer cleanup()
 
-	certReq := caserver.CreateCertRequest{
+	certReq := wire.CreateCertRequest{
 		Connection: wire.Connection{RemoteHost: "server.example.com", RemoteUser: "testuser", Port: 22},
 	}
 	body, _ := json.Marshal(certReq)
@@ -273,7 +273,7 @@ func TestCreateCert_MissingConnection(t *testing.T) {
 	userPubKey, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	certReq := caserver.CreateCertRequest{
+	certReq := wire.CreateCertRequest{
 		PublicKey: sshcert.RawPublicKey(userPubKey),
 	}
 	body, _ := json.Marshal(certReq)

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,7 +93,7 @@ func TestFindLinkTarget(t *testing.T) {
 			for _, v := range tt.values {
 				h.Add("Link", v)
 			}
-			got, ok := findLinkTarget(h, relAuth)
+			got, ok := findLinkTarget(h, wire.RelAuth)
 			require.Equal(t, tt.found, ok)
 			require.Equal(t, tt.want, got)
 		})

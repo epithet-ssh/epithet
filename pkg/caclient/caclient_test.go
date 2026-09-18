@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/assert"
@@ -104,7 +103,7 @@ func TestClient_StatusCodes(t *testing.T) {
 				RemoteUser: "user",
 				Port:       22,
 			}
-			_, err = client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+			_, err = client.GetCert(context.Background(), "test-token", &wire.CreateCertRequest{
 				PublicKey:  pubKey,
 				Connection: conn,
 			})
@@ -133,7 +132,7 @@ func TestGetCert_ReturnsCertificate(t *testing.T) {
 		RemoteUser: "alice",
 		Port:       22,
 	}
-	resp, err := client.GetCert(context.Background(), "test-token", &caserver.CreateCertRequest{
+	resp, err := client.GetCert(context.Background(), "test-token", &wire.CreateCertRequest{
 		PublicKey:  pubKey,
 		Connection: conn,
 	})
@@ -159,7 +158,7 @@ func TestRecoveredCAOutcomesDoNotFailOver(t *testing.T) {
 			defer backup.Close()
 			client, err := caclient.New([]caclient.CAEndpoint{{URL: primary.URL, Priority: 200}, {URL: backup.URL, Priority: 100}})
 			require.NoError(t, err)
-			req := &caserver.CreateCertRequest{PublicKey: "key", Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"}}
+			req := &wire.CreateCertRequest{PublicKey: "key", Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"}}
 			_, err = client.GetCert(t.Context(), "token", req)
 			var unavailable *caclient.AllCAsUnavailableError
 			require.ErrorAs(t, err, &unavailable)

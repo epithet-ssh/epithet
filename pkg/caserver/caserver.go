@@ -17,12 +17,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// relAuth is the extension relation type advertising the CA's auth config
-// document. Duplicated rather than shared with pkg/caclient: the wire value is
-// the contract between them, and importing one from the other would couple the
-// server to the client package.
-const relAuth = "https://epithet.dev/rel/auth"
-
 type caServer struct {
 	c          *ca.CA
 	log        *slog.Logger
@@ -152,17 +146,6 @@ func (s *caServer) failError(w http.ResponseWriter, err error) {
 	s.fail(w, code)
 }
 
-// CreateCertRequest asks for a signed cert. Both fields are required.
-type CreateCertRequest struct {
-	PublicKey  sshcert.RawPublicKey `json:"publicKey"`
-	Connection wire.Connection      `json:"connection"`
-}
-
-// CreateCertResponse is response from a CreateCert request.
-type CreateCertResponse struct {
-	Certificate sshcert.RawCertificate `json:"certificate"`
-}
-
 // parseAuthHeader extracts the Bearer token from the Authorization header.
 func parseAuthHeader(r *http.Request) (string, error) {
 	auth := r.Header.Get("Authorization")
@@ -192,7 +175,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ccr := CreateCertRequest{}
+	ccr := wire.CreateCertRequest{}
 	body, err := io.ReadAll(io.LimitReader(r.Body, wire.MaxBodySize+1))
 	if err != nil {
 		s.log.Warn("unable to read certificate request", "error", err)
@@ -232,7 +215,7 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("failed to log certificate issuance", "error", err)
 	}
 
-	resp := CreateCertResponse{
+	resp := wire.CreateCertResponse{
 		Certificate: issued.Certificate,
 	}
 	out, err := json.Marshal(&resp)
@@ -254,10 +237,10 @@ func (s *caServer) createCert(w http.ResponseWriter, r *http.Request) {
 func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	// Advertise the auth config with a relative target so the CA needs no
 	// knowledge of its own external URL: the client resolves it against the
-	// ca-url it already has. See ideas/link-header-auth-discovery.md.
-	w.Header().Set("Link", `<discovery>; rel="`+relAuth+`"`)
+	// ca-url it already has. See adr/link-header-auth-discovery.md.
+	w.Header().Set("Link", `<discovery>; rel="`+wire.RelAuth+`"`)
 	if s.PublicInventoryURL != "" {
-		w.Header().Add("Link", "<"+s.PublicInventoryURL+">; rel=\"https://epithet.dev/rel/inventory\"")
+		w.Header().Add("Link", "<"+s.PublicInventoryURL+">; rel=\""+wire.RelInventory+"\"")
 	}
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)

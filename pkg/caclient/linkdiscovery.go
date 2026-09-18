@@ -7,12 +7,6 @@ import (
 	"strings"
 )
 
-// relAuth is the extension relation type the CA uses to advertise its auth
-// config document. RFC 8288 requires extension relation types to be URIs. It
-// carries no version segment: the relation names the relationship, not the
-// payload schema.
-const relAuth = "https://epithet.dev/rel/auth"
-
 // findLinkTarget returns the target of the first link-value in h whose rel
 // list contains rel. A single rel parameter may hold several space-separated
 // relation types (RFC 8288 3.3), so membership is tested, not equality.

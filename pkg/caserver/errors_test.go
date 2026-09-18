@@ -51,7 +51,7 @@ func TestPublicPolicyErrorsKeepDiagnosticsPrivate(t *testing.T) {
 			defer closeServer()
 			pub, _, err := sshcert.GenerateKeys()
 			require.NoError(t, err)
-			body, err := json.Marshal(caserver.CreateCertRequest{PublicKey: pub, Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"}})
+			body, err := json.Marshal(wire.CreateCertRequest{PublicKey: pub, Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"}})
 			require.NoError(t, err)
 			r := httptest.NewRequest("POST", "/", bytes.NewReader(body))
 			r.Header.Set("Authorization", "Bearer "+token)

@@ -15,7 +15,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -261,7 +260,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, 
 		return b.deny(fmt.Errorf("authentication failed: %w", err))
 	}
 
-	certResp, err := b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
+	certResp, err := b.caClient.GetCert(ctx, token, &wire.CreateCertRequest{
 		PublicKey: publicKey, Connection: conn,
 	})
 	var invalidToken *caclient.InvalidTokenError
@@ -272,7 +271,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, 
 		if err != nil {
 			return b.deny(fmt.Errorf("re-authentication failed: %w", err))
 		}
-		certResp, err = b.caClient.GetCert(ctx, token, &caserver.CreateCertRequest{
+		certResp, err = b.caClient.GetCert(ctx, token, &wire.CreateCertRequest{
 			PublicKey: publicKey, Connection: conn,
 		})
 	}

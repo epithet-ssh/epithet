@@ -5,8 +5,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 )
 
-const InventoryRelation = "https://epithet.dev/rel/inventory"
-
 // ControlRequest is one operation at the complete advertised inventory URL.
 // An optional single-use token preapproves enrollment. Admin authentication is
 // the OIDC bearer header. Revision binds review/edit to the displayed record.

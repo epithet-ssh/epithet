@@ -6,6 +6,8 @@ package wire
 import (
 	"fmt"
 	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
 // MaxBodySize is the maximum request body and trusted-peer response body size.
@@ -66,4 +68,24 @@ type PolicyError struct {
 
 func (e *PolicyError) Error() string {
 	return fmt.Sprintf("policy error %d: %s", e.StatusCode, e.Message)
+}
+
+// RelAuth and RelInventory are the extension relation types the CA advertises
+// in Link headers on GET /. RFC 8288 requires extension relation types to be
+// URIs. They carry no version segment: a relation names the relationship, not
+// the payload schema.
+const (
+	RelAuth      = "https://epithet.dev/rel/auth"
+	RelInventory = "https://epithet.dev/rel/inventory"
+)
+
+// CreateCertRequest asks the CA for a signed cert. Both fields are required.
+type CreateCertRequest struct {
+	PublicKey  sshcert.RawPublicKey `json:"publicKey"`
+	Connection Connection           `json:"connection"`
+}
+
+// CreateCertResponse is the CA's response to a CreateCertRequest.
+type CreateCertResponse struct {
+	Certificate sshcert.RawCertificate `json:"certificate"`
 }

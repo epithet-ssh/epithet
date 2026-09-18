@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // InventoryURL follows only the configured CA's explicit inventory relation.
@@ -15,7 +15,7 @@ import (
 func InventoryURL(root *RootResponse, cfg tlsconfig.Config) (string, error) {
 	headers := http.Header{}
 	headers["Link"] = root.Links
-	ref, ok := findLinkTarget(headers, inventoryapi.InventoryRelation)
+	ref, ok := findLinkTarget(headers, wire.RelInventory)
 	if !ok {
 		return "", nil
 	}

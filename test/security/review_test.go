@@ -15,7 +15,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
@@ -43,7 +42,7 @@ func TestReviewHTTPSRedirectLeaksBearerAndTrustsPlaintextRoot(t *testing.T) {
 	require.NoError(t, cfg.ValidateURL(secure.URL))
 	client, err := caclient.New([]caclient.CAEndpoint{{URL: secure.URL}}, caclient.WithTLSConfig(cfg))
 	require.NoError(t, err)
-	_, err = client.GetCert(context.Background(), "review-only-bearer", &caserver.CreateCertRequest{
+	_, err = client.GetCert(context.Background(), "review-only-bearer", &wire.CreateCertRequest{
 		PublicKey: pub, Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"},
 	})
 	require.Error(t, err)

@@ -130,7 +130,7 @@ hosts:
 	ch := caserver.New(authority, slog.New(slog.NewTextHandler(io.Discard, nil)), certLogger).Handler()
 	attackerPub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	requestBody, err := json.Marshal(caserver.CreateCertRequest{
+	requestBody, err := json.Marshal(wire.CreateCertRequest{
 		PublicKey:  attackerPub,
 		Connection: wire.Connection{RemoteHost: "prod.example.com", RemoteUser: "root"},
 	})
@@ -208,7 +208,7 @@ hosts:
 			require.NotContains(t, entry, "user_id")
 			require.NotContains(t, issuanceLog.String(), token)
 			require.NotContains(t, issuanceLog.String(), "untrusted-token-id")
-			var issued caserver.CreateCertResponse
+			var issued wire.CreateCertResponse
 			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &issued))
 			parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(issued.Certificate))
 			require.NoError(t, err)

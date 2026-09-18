@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/breakerpool"
-	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -228,7 +227,7 @@ func (c *Client) EndpointStatus() []CAEndpointStatus {
 // It tries CAs in priority order, using circuit breakers to skip temporarily unavailable CAs.
 // The token is sent in the Authorization header, not in the request body.
 // Returns CertResponse containing the certificate.
-func (c *Client) GetCert(ctx context.Context, token string, req *caserver.CreateCertRequest) (*CertResponse, error) {
+func (c *Client) GetCert(ctx context.Context, token string, req *wire.CreateCertRequest) (*CertResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -373,7 +372,7 @@ func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*DiscoveryRe
 		return nil, err
 	}
 
-	ref, _ := findLinkTarget(links, relAuth) // fetchDiscoveryLinks requires this relation.
+	ref, _ := findLinkTarget(links, wire.RelAuth) // fetchDiscoveryLinks requires this relation.
 	target, err := resolveLinkTarget(final, ref)
 	if err != nil {
 		return nil, err
@@ -441,9 +440,9 @@ func (c *Client) fetchDiscoveryLinks(ctx context.Context, caURL string) (*url.UR
 		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("GET %s returned %d", caURL, res.StatusCode)}
 	}
 
-	_, ok := findLinkTarget(res.Header, relAuth)
+	_, ok := findLinkTarget(res.Header, wire.RelAuth)
 	if !ok {
-		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("CA at %s did not advertise its auth config (no Link with rel=%q); the CA is older than this client and must be upgraded", caURL, relAuth)}
+		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("CA at %s did not advertise its auth config (no Link with rel=%q); the CA is older than this client and must be upgraded", caURL, wire.RelAuth)}
 	}
 
 	// Resolve against where the response came from, not where it was sent, so
@@ -559,7 +558,7 @@ func (c *Client) doRequest(ctx context.Context, caURL string, token string, body
 		}
 	}
 
-	var caResp caserver.CreateCertResponse
+	var caResp wire.CreateCertResponse
 	err = json.Unmarshal(respBody, &caResp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal CA response (body=%s): %w", string(respBody), err)
