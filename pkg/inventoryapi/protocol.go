@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/principal"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // Version is the inventory resolution wire version.
@@ -23,7 +23,7 @@ type Principal struct {
 	Domain string `json:"domain,omitempty"`
 }
 type Host struct {
-	facts.HostResource
+	wire.HostResource
 	Principal Principal `json:"principal"`
 }
 
@@ -31,7 +31,7 @@ type Host struct {
 // metadata. Using a plain resource prevents promotion of HostResource's custom
 // decoder, which would otherwise consume the enclosing object by itself.
 func (h *Host) UnmarshalJSON(data []byte) error {
-	type resource facts.HostResource
+	type resource wire.HostResource
 	var raw struct {
 		resource
 		Accounts  json.RawMessage `json:"accounts"`
@@ -46,24 +46,24 @@ func (h *Host) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(raw.Accounts, &raw.resource.Accounts); err != nil {
 		return fmt.Errorf("invalid inventory host accounts: %w", err)
 	}
-	*h = Host{HostResource: facts.HostResource(raw.resource), Principal: raw.Principal}
+	*h = Host{HostResource: wire.HostResource(raw.resource), Principal: raw.Principal}
 	return nil
 }
 
 type DirectorySnapshot struct {
-	Revision string      `json:"revision"`
-	User     *facts.User `json:"user"`
+	Revision string     `json:"revision"`
+	User     *wire.User `json:"user"`
 }
 type HostSnapshot struct {
 	Revision string `json:"revision"`
 	Host     *Host  `json:"host"`
 }
 type Resolution struct {
-	Version        int                  `json:"version"`
-	Authentication facts.Authentication `json:"authentication"`
-	Target         string               `json:"target"`
-	Directory      DirectorySnapshot    `json:"directory"`
-	Inventory      HostSnapshot         `json:"inventory"`
+	Version        int                 `json:"version"`
+	Authentication wire.Authentication `json:"authentication"`
+	Target         string              `json:"target"`
+	Directory      DirectorySnapshot   `json:"directory"`
+	Inventory      HostSnapshot        `json:"inventory"`
 }
 
 // Validate checks both request binding and all fields whose omission could

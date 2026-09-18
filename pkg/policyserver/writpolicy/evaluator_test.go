@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/principal"
@@ -351,7 +350,7 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 }
 func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn wire.Connection) (*wire.PolicyResponse, error) {
 	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv}
-	resolution, err := resolver.Resolve(ctx, facts.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
+	resolution, err := resolver.Resolve(ctx, wire.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
 	if err != nil {
 		return nil, err
 	}

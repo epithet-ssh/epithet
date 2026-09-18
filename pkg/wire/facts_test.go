@@ -1,10 +1,10 @@
-package facts_test
+package wire_test
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +27,7 @@ func TestHostAccountsDecodeAtBoundary(t *testing.T) {
 			data := []byte(`{"names":["host"],"labels":{"env":"prod"}` + tc.field + `}`)
 			// Reusing a destination must not retain restrictions from its last
 			// value, and malformed input must not replace that value.
-			host := facts.HostResource{Names: []string{"old"}, Accounts: []string{"old"}}
+			host := wire.HostResource{Names: []string{"old"}, Accounts: []string{"old"}}
 			err := json.Unmarshal(data, &host)
 			if tc.invalid {
 				require.Error(t, err)

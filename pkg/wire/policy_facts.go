@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 )
 
@@ -14,10 +13,10 @@ import (
 // equivalent host names or the shared principal domain; Target binds the request.
 // Principal construction data, revisions, and protocol versions remain at CA.
 type PolicyFacts struct {
-	Authentication facts.Authentication `json:"authentication"`
-	Target         string               `json:"target"`
-	User           *facts.User          `json:"user"`
-	Host           *facts.HostResource  `json:"host"`
+	Authentication Authentication `json:"authentication"`
+	Target         string         `json:"target"`
+	User           *User          `json:"user"`
+	Host           *HostResource  `json:"host"`
 }
 
 // Validate preserves identity, connection binding, and authentication lifetime.

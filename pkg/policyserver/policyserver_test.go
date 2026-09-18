@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -75,7 +74,7 @@ func TestHandler_Success(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
+	req.Facts = &wire.PolicyFacts{Authentication: wire.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -116,7 +115,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
+	req.Facts = &wire.PolicyFacts{Authentication: wire.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -145,7 +144,7 @@ func TestHandler_ExpiredAuthentication(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(-time.Minute)}, Target: req.Connection.RemoteHost}
+	req.Facts = &wire.PolicyFacts{Authentication: wire.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(-time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -176,7 +175,7 @@ func TestHandler_Forbidden(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
+	req.Facts = &wire.PolicyFacts{Authentication: wire.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -206,7 +205,7 @@ func TestHandler_NotHandled(t *testing.T) {
 			Port:       22,
 		},
 	}
-	req.Facts = &wire.PolicyFacts{Authentication: facts.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
+	req.Facts = &wire.PolicyFacts{Authentication: wire.Authentication{ID: "test-id", ExpiresAt: time.Now().Add(time.Minute)}, Target: req.Connection.RemoteHost}
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -298,7 +297,7 @@ func TestPolicyRejectsMismatchedFacts(t *testing.T) {
 		{"missing", func(r *wire.PolicyRequest) { r.Facts = nil }},
 		{"different user", func(r *wire.PolicyRequest) { r.Facts.Authentication.ID = "mallory" }},
 		{"expired authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication.ExpiresAt = time.Now().Add(-time.Minute) }},
-		{"missing authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication = facts.Authentication{} }},
+		{"missing authentication", func(r *wire.PolicyRequest) { r.Facts.Authentication = wire.Authentication{} }},
 		{"different target", func(r *wire.PolicyRequest) { r.Facts.Target = "production" }},
 		{"substituted record", func(r *wire.PolicyRequest) { r.Facts.User.ID = "mallory" }},
 		{"missing active", func(r *wire.PolicyRequest) { r.Facts.User.Active = nil }},
@@ -308,8 +307,8 @@ func TestPolicyRejectsMismatchedFacts(t *testing.T) {
 			evaluator := &mockEvaluator{response: &wire.PolicyResponse{}}
 			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
 			active := true
-			auth := facts.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
-			r := wire.PolicyRequest{Connection: wire.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: nil}}}
+			auth := wire.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
+			r := wire.PolicyRequest{Connection: wire.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &wire.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &wire.HostResource{Names: []string{"host"}, Accounts: nil}}}
 			tc.change(&r)
 			body, err := json.Marshal(r)
 			require.NoError(t, err)

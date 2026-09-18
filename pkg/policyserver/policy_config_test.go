@@ -1,8 +1,9 @@
 package policyserver_test
 
 import (
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"testing"
+
+	"github.com/epithet-ssh/epithet/pkg/policyserver"
 )
 
 func TestDefaultExtensions(t *testing.T) {

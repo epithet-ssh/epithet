@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -159,7 +158,7 @@ func TestBoundGroupsPreserveDenyAndNegatedSelectorSemantics(t *testing.T) {
 			for _, id := range []string{"alice", "bob"} {
 				u := f.facts(id)
 				active := u.Active
-				facts := &wire.PolicyFacts{Authentication: facts.Authentication{ID: id, ExpiresAt: time.Now().Add(time.Hour)}, Target: "host", User: &facts.User{ID: id, UserName: u.UserName, Groups: u.Groups, Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: []string{"root"}}}
+				facts := &wire.PolicyFacts{Authentication: wire.Authentication{ID: id, ExpiresAt: time.Now().Add(time.Hour)}, Target: "host", User: &wire.User{ID: id, UserName: u.UserName, Groups: u.Groups, Active: &active}, Host: &wire.HostResource{Names: []string{"host"}, Accounts: []string{"root"}}}
 				_, e = evaluator.Evaluate(t.Context(), wire.Connection{RemoteHost: "host", RemoteUser: "root"}, facts)
 				allowed := tc.alice
 				if id == "bob" {

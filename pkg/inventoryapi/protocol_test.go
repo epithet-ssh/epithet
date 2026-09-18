@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,10 +59,10 @@ func TestPrincipalBindingWithMultipleNames(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := inventoryapi.Resolution{
 				Version: inventoryapi.Version, Target: "second",
-				Authentication: facts.Authentication{ID: "id", ExpiresAt: time.Now().Add(time.Hour)},
+				Authentication: wire.Authentication{ID: "id", ExpiresAt: time.Now().Add(time.Hour)},
 				Directory:      inventoryapi.DirectorySnapshot{Revision: "directory"},
 				Inventory: inventoryapi.HostSnapshot{Revision: "inventory", Host: &inventoryapi.Host{
-					HostResource: facts.HostResource{Names: tc.names, Accounts: nil},
+					HostResource: wire.HostResource{Names: tc.names, Accounts: nil},
 					Principal:    inventoryapi.Principal{Mode: tc.mode, Domain: tc.domain},
 				}},
 			}

@@ -1,6 +1,4 @@
-// Package facts defines normalized authentication, user, and host data shared
-// by inventory resolution and policy evaluation, without transport metadata.
-package facts
+package wire
 
 import (
 	"bytes"

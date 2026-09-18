@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
@@ -136,7 +135,7 @@ func TestClientRejectsMalformedAndUnavailableInventory(t *testing.T) {
 	inv, req, _ := fixture(t)
 	_, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	valid, err := inventorytest.Resolver(inv).Resolve(t.Context(), facts.Authentication{ID: "subject:alice", ExpiresAt: time.Now().Add(time.Hour)}, req.Host)
+	valid, err := inventorytest.Resolver(inv).Resolve(t.Context(), wire.Authentication{ID: "subject:alice", ExpiresAt: time.Now().Add(time.Hour)}, req.Host)
 	require.NoError(t, err)
 	encoded, err := json.Marshal(valid)
 	require.NoError(t, err)
