@@ -1,3 +1,6 @@
+// Package inventoryapi defines the inventory and directory administration
+// control API: the JSON operations an administrator or enrolling host sends to
+// the advertised inventory endpoint, and the records it returns.
 package inventoryapi
 
 import (

@@ -15,7 +15,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -75,7 +74,7 @@ func NewHandler(config Config) (http.Handler, error) {
 			http.Error(w, "method not allowed", 405)
 			return
 		}
-		var req inventoryapi.ResolveRequest
+		var req wire.ResolveRequest
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
@@ -157,7 +156,7 @@ func NewClient(endpoint string, key sshcert.RawPrivateKey, cfg tlsconfig.Config)
 	return &Client{url: endpoint, http: client, signer: signer}, nil
 }
 
-func (c *Client) Resolve(ctx context.Context, req inventoryapi.ResolveRequest) (*inventoryapi.Resolution, error) {
+func (c *Client) Resolve(ctx context.Context, req wire.ResolveRequest) (*wire.Resolution, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -191,7 +190,7 @@ func (c *Client) Resolve(ctx context.Context, req inventoryapi.ResolveRequest) (
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("inventory resolution returned HTTP %d", resp.StatusCode)
 	}
-	var result inventoryapi.Resolution
+	var result wire.Resolution
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("invalid inventory response: %w", err)
 	}

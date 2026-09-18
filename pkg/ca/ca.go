@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
@@ -198,7 +197,7 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 	if c.inventory == nil {
 		return nil, fmt.Errorf("inventory service is required")
 	}
-	lookup := inventoryapi.ResolveRequest{Token: token, Host: hostpattern.NormalizeName(conn.RemoteHost)}
+	lookup := wire.ResolveRequest{Token: token, Host: hostpattern.NormalizeName(conn.RemoteHost)}
 	facts, err := c.inventory.Resolve(ctx, lookup)
 	if err != nil {
 		var policyErr *wire.PolicyError

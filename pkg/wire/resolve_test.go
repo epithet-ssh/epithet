@@ -1,11 +1,10 @@
-package inventoryapi_test
+package wire_test
 
 import (
 	"encoding/json"
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +23,7 @@ func TestHostDecodingPreservesPrincipalAndAccountRestrictions(t *testing.T) {
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			data := []byte(`{"names":["production"],"labels":{"env":"prod"},"principal":{"mode":"epithet-principal-v1","domain":"production"}` + tc.field + `}`)
-			var host inventoryapi.Host
+			var host wire.Host
 			err := json.Unmarshal(data, &host)
 			if tc.invalid {
 				require.Error(t, err)
@@ -34,7 +33,7 @@ func TestHostDecodingPreservesPrincipalAndAccountRestrictions(t *testing.T) {
 			require.Equal(t, tc.want, host.Accounts)
 			require.Equal(t, []string{"production"}, host.Names)
 			require.Equal(t, map[string]string{"env": "prod"}, host.Labels)
-			require.Equal(t, inventoryapi.Principal{Mode: "epithet-principal-v1", Domain: "production"}, host.Principal)
+			require.Equal(t, wire.Principal{Mode: "epithet-principal-v1", Domain: "production"}, host.Principal)
 			encoded, err := json.Marshal(host)
 			require.NoError(t, err)
 			require.JSONEq(t, string(data), string(encoded))
@@ -57,13 +56,13 @@ func TestPrincipalBindingWithMultipleNames(t *testing.T) {
 		{"member instead of domain", "epithet-principal-v1", "production", []string{"second"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := inventoryapi.Resolution{
-				Version: inventoryapi.Version, Target: "second",
+			r := wire.Resolution{
+				Version: wire.ResolveVersion, Target: "second",
 				Authentication: wire.Authentication{ID: "id", ExpiresAt: time.Now().Add(time.Hour)},
-				Directory:      inventoryapi.DirectorySnapshot{Revision: "directory"},
-				Inventory: inventoryapi.HostSnapshot{Revision: "inventory", Host: &inventoryapi.Host{
+				Directory:      wire.DirectorySnapshot{Revision: "directory"},
+				Inventory: wire.HostSnapshot{Revision: "inventory", Host: &wire.Host{
 					HostResource: wire.HostResource{Names: tc.names, Accounts: nil},
-					Principal:    inventoryapi.Principal{Mode: tc.mode, Domain: tc.domain},
+					Principal:    wire.Principal{Mode: tc.mode, Domain: tc.domain},
 				}},
 			}
 			if tc.valid {

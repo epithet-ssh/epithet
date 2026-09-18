@@ -1,6 +1,10 @@
-// Package wire holds every type that crosses a process boundary (CA,
-// policy server, CA client). Consolidating these shapes here means later
-// changes to the wire format only need to happen in one place.
+// Package wire holds every type that crosses a process boundary on the
+// certificate issuance path: the client's cert request to the CA, the CA's
+// resolve request to inventory, the CA's evaluation request to the policy
+// server, the discovery document, and the Link relations that advertise it.
+// Consolidating these shapes here means later changes to the wire format only
+// need to happen in one place. The administrative control API (host and
+// directory management) is a separate contract and lives in pkg/inventoryapi.
 package wire
 
 import (

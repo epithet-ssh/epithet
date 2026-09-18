@@ -1,6 +1,4 @@
-// Package inventoryapi defines the v2 resolver protocol independently of Writ
-// and storage implementations. CA projects policy inputs from validated results.
-package inventoryapi
+package wire
 
 import (
 	"encoding/json"
@@ -8,22 +6,29 @@ import (
 	"slices"
 
 	"github.com/epithet-ssh/epithet/pkg/principal"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// Version is the inventory resolution wire version.
-const Version = 2
+// ResolveVersion is the CA-to-inventory resolve protocol version.
+const ResolveVersion = 2
 
+// ResolveRequest asks inventory for the facts bound to one authenticated
+// identity (the bearer token) and one normalized target host.
 type ResolveRequest struct {
 	Token string `json:"token"`
 	Host  string `json:"host"`
 }
+
+// Principal tells the CA how the resolved host expects its certificate
+// principal to be constructed.
 type Principal struct {
 	Mode   string `json:"mode"`
 	Domain string `json:"domain,omitempty"`
 }
+
+// Host is one resolved inventory host: the policy-facing resource plus the
+// principal metadata the CA needs and policy never sees.
 type Host struct {
-	wire.HostResource
+	HostResource
 	Principal Principal `json:"principal"`
 }
 
@@ -31,7 +36,7 @@ type Host struct {
 // metadata. Using a plain resource prevents promotion of HostResource's custom
 // decoder, which would otherwise consume the enclosing object by itself.
 func (h *Host) UnmarshalJSON(data []byte) error {
-	type resource wire.HostResource
+	type resource HostResource
 	var raw struct {
 		resource
 		Accounts  json.RawMessage `json:"accounts"`
@@ -46,31 +51,31 @@ func (h *Host) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(raw.Accounts, &raw.resource.Accounts); err != nil {
 		return fmt.Errorf("invalid inventory host accounts: %w", err)
 	}
-	*h = Host{HostResource: wire.HostResource(raw.resource), Principal: raw.Principal}
+	*h = Host{HostResource: HostResource(raw.resource), Principal: raw.Principal}
 	return nil
 }
 
 type DirectorySnapshot struct {
-	Revision string     `json:"revision"`
-	User     *wire.User `json:"user"`
+	Revision string `json:"revision"`
+	User     *User  `json:"user"`
 }
 type HostSnapshot struct {
 	Revision string `json:"revision"`
 	Host     *Host  `json:"host"`
 }
 type Resolution struct {
-	Version        int                 `json:"version"`
-	Authentication wire.Authentication `json:"authentication"`
-	Target         string              `json:"target"`
-	Directory      DirectorySnapshot   `json:"directory"`
-	Inventory      HostSnapshot        `json:"inventory"`
+	Version        int               `json:"version"`
+	Authentication Authentication    `json:"authentication"`
+	Target         string            `json:"target"`
+	Directory      DirectorySnapshot `json:"directory"`
+	Inventory      HostSnapshot      `json:"inventory"`
 }
 
 // Validate checks both request binding and all fields whose omission could
 // broaden authorization. Absence of an entity is represented only by null.
 func (r *Resolution) Validate(host string) error {
-	if r == nil || r.Version != Version {
-		return fmt.Errorf("inventory resolution version %d is required", Version)
+	if r == nil || r.Version != ResolveVersion {
+		return fmt.Errorf("inventory resolution version %d is required", ResolveVersion)
 	}
 	if r.Target != host || host == "" || r.Authentication.ID == "" {
 		return fmt.Errorf("inventory facts do not match authenticated identity and target")

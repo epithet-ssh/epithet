@@ -17,7 +17,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
@@ -27,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func fixture(t *testing.T) (*inventory.Static, inventoryapi.ResolveRequest, *oidctest.IdP) {
+func fixture(t *testing.T) (*inventory.Static, wire.ResolveRequest, *oidctest.IdP) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "inventory.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`users:
@@ -47,7 +46,7 @@ hosts:
 	inv, err := inventory.NewStatic([]string{path})
 	require.NoError(t, err)
 	idp := oidctest.New(t)
-	return inv, inventoryapi.ResolveRequest{Token: idp.MintIDToken("alice", time.Now().Add(time.Hour)), Host: "grounded"}, idp
+	return inv, wire.ResolveRequest{Token: idp.MintIDToken("alice", time.Now().Add(time.Hour)), Host: "grounded"}, idp
 }
 
 func TestResolverAuthenticationAndGrounding(t *testing.T) {
@@ -97,7 +96,7 @@ func TestResolverAuthenticationAndGrounding(t *testing.T) {
 	_, err = client.Resolve(t.Context(), wrongIssuer)
 	require.Error(t, err)
 	for _, token := range []string{"", "invalid", idp.MintIDToken("alice", time.Now().Add(-time.Minute)), idp.MintIDTokenWithAudience("alice", "wrong-client", time.Now().Add(time.Hour))} {
-		_, err := client.Resolve(t.Context(), inventoryapi.ResolveRequest{Token: token, Host: req.Host})
+		_, err := client.Resolve(t.Context(), wire.ResolveRequest{Token: token, Host: req.Host})
 		var authErr *wire.PolicyError
 		require.ErrorAs(t, err, &authErr)
 		require.Equal(t, 401, authErr.StatusCode)
