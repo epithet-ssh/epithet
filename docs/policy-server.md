@@ -848,9 +848,9 @@ The output-ownership change introduced in API 5 is retained. The old
 
 Go integrations use `wire.PolicyResponse` for policy limits. Local signing inputs
 are private to CA. Policy evaluators implement
-`Evaluate(context.Context, policy.Connection, *wire.PolicyFacts)`; authentication
-comes from those facts rather than duplicate arguments. `pkg/facts` contains the
-shared user/authentication/host data types without inventory transport metadata.
+`Evaluate(context.Context, wire.Connection, *wire.PolicyFacts)`; authentication
+comes from those facts rather than duplicate arguments. `pkg/wire` also holds the
+shared user/authentication/host fact types without inventory transport metadata.
 `CA.Issue(ctx, token, connection, publicKey)` obtains approval and signs the key,
 returning `ca.IssuedCertificate` with the certificate and private `ca.AuditMetadata`.
 Callers no longer sequence policy lookup and signing themselves. Client-facing

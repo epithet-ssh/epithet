@@ -90,7 +90,7 @@ Policy uses `wire.PolicyFacts`, independent of the inventory envelope/version.
 unexpired authentication ID. CA validates inventory host/domain binding before
 projection: the policy host names contain all equivalent DNS names, or only a shared
 principal domain rather than individual member DNS names. User/host fields must be present; null denotes absence and
-leads to structural denial. Shared fact shapes live in `pkg/facts` without
+leads to structural denial. Shared fact shapes live in `pkg/wire` without
 transport metadata.
 
 ## Public outcomes
