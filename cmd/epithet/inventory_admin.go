@@ -36,7 +36,7 @@ func printInventory(v any) error {
 	_, err = os.Stdout.Write(data)
 	return err
 }
-func (c *InventoryCLI) find(id string) (*inventory.HostRecord, error) {
+func (c *InventoryCLI) find(id string) (*inventoryapi.HostRecord, error) {
 	// Full IDs use the server's record index rather than downloading every host.
 	_, hexErr := hex.DecodeString(id)
 	if (len(id) == 64 && hexErr == nil) || strings.HasPrefix(id, "static:") {
@@ -54,7 +54,7 @@ func (c *InventoryCLI) find(id string) (*inventory.HostRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	var matches []inventory.HostRecord
+	var matches []inventoryapi.HostRecord
 	for _, h := range resp.Hosts {
 		if h.ID == id {
 			return &h, nil
@@ -85,13 +85,13 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 	if err != nil {
 		return err
 	}
-	displayNames := func(h inventory.HostRecord) string {
+	displayNames := func(h inventoryapi.HostRecord) string {
 		if h.Pattern != "" {
 			return h.Pattern
 		}
 		return strings.Join(h.Proposal.Names, ", ")
 	}
-	slices.SortStableFunc(r.Hosts, func(a, b inventory.HostRecord) int {
+	slices.SortStableFunc(r.Hosts, func(a, b inventoryapi.HostRecord) int {
 		return strings.Compare(displayNames(a), displayNames(b))
 	})
 	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
@@ -142,15 +142,16 @@ func (c *InventoryEditCLI) Run(p *InventoryCLI) error {
 	}
 	return printInventory(h)
 }
-func editInventoryHost(p *InventoryCLI, h *inventory.HostRecord, input *bufio.Reader) (*inventory.HostRecord, error) {
+func editInventoryHost(p *InventoryCLI, h *inventoryapi.HostRecord, input *bufio.Reader) (*inventoryapi.HostRecord, error) {
 	if h.Source == "static" || strings.HasPrefix(h.ID, "static:") {
 		return nil, fmt.Errorf("static record: edit the inventory.static YAML configuration and restart inventory")
 	}
-	proposal, err := editProposal(h.Proposal, input)
+	proposal, err := editProposal(inventory.ProposalFromControl(h.Proposal), input)
 	if err != nil {
 		return nil, err
 	}
-	r, err := p.request(inventoryapi.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &proposal})
+	submitted := proposal.ControlProposal()
+	r, err := p.request(inventoryapi.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &submitted})
 	if err != nil {
 		return nil, err
 	}

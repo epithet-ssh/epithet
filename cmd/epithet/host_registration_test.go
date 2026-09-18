@@ -106,7 +106,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 					json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Error: "rejected"})
 					return
 				}
-				json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Host: &inventory.HostRecord{ID: "record", Status: tc.status}})
+				json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Host: &inventoryapi.HostRecord{ID: "record", Status: tc.status}})
 			})
 			server := httptest.NewServer(mux)
 			defer server.Close()
@@ -132,7 +132,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			var reviewed inventory.Proposal
 			require.NoError(t, yaml.Unmarshal(data, &reviewed))
-			require.Equal(t, reviewed, *req.Host)
+			require.Equal(t, reviewed.ControlProposal(), *req.Host)
 			if tc.editedDomain != "" {
 				require.Equal(t, tc.editedDomain, reviewed.Domain)
 			} else if tc.domain != "" {
@@ -155,7 +155,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			require.False(t, second.CAPublicKeyCreated)
 			require.Equal(t, reviewed.Domain, string(second.Domain))
 			resubmitted := <-requests
-			require.Equal(t, reviewed, *resubmitted.Host)
+			require.Equal(t, reviewed.ControlProposal(), *resubmitted.Host)
 			require.Empty(t, resubmitted.Token)
 			require.NoFileExists(t, filepath.Join(filepath.Dir(cmd.DomainFile), "enrollment.key"))
 		})

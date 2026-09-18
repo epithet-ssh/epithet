@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -21,12 +22,12 @@ func TestInventoryDisplayPreservesRevisionAndSource(t *testing.T) {
 	original := os.Stdout
 	os.Stdout = output
 	defer func() { os.Stdout = original }()
-	record := inventory.HostRecord{
+	record := inventoryapi.HostRecord{
 		ID:         strings.Repeat("a", 64),
 		Revision:   9007199254740993,
 		Source:     "dynamic",
 		SourceFile: "/inventory/records/item.yaml",
-		Proposal:   inventory.Proposal{Names: []string{"host"}, PrincipalMode: inventory.AccountNamePrincipals},
+		Proposal:   inventoryapi.Proposal{Names: []string{"host"}, PrincipalMode: "account-name"},
 	}
 	require.NoError(t, printInventory(record))
 	_, err = output.Seek(0, 0)

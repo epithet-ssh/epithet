@@ -1,10 +1,10 @@
-package inventory_test
+package inventoryapi_test
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ func TestProposalJSONRequiresExplicitAccounts(t *testing.T) {
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			data := []byte(`{"names":["host"],"labels":{},"principal-mode":"account-name"` + tc.field + `}`)
-			var proposal inventory.Proposal
+			var proposal inventoryapi.Proposal
 			err := json.Unmarshal(data, &proposal)
 			if tc.invalid {
 				require.Error(t, err)
@@ -32,7 +32,7 @@ func TestProposalJSONRequiresExplicitAccounts(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tc.want, proposal.Accounts)
-			require.Equal(t, inventory.AccountNamePrincipals, proposal.PrincipalMode)
+			require.Equal(t, "account-name", proposal.PrincipalMode)
 			encoded, err := json.Marshal(proposal)
 			require.NoError(t, err)
 			require.JSONEq(t, string(data), string(encoded))

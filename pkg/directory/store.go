@@ -49,17 +49,17 @@ type Group struct {
 }
 
 type GroupBinding struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Alias       string `json:"alias,omitempty"`
-	Status      string `json:"status"`
+	ID          string
+	DisplayName string
+	Alias       string
+	Status      string
 }
 
 // BindingSnapshot lets administrators bind a review to the exact directory
 // revision they inspected. Deleted bindings retain the former group ID.
 type BindingSnapshot struct {
-	Revision uint64         `json:"revision"`
-	Groups   []GroupBinding `json:"groups"`
+	Revision uint64
+	Groups   []GroupBinding
 }
 
 // AuditSequence identifies one audit event, independently of directory revisions:
@@ -70,14 +70,14 @@ const DefaultAuditLimit = 100
 const MaxAuditLimit = 1000
 
 type AuditEvent struct {
-	Sequence   AuditSequence `json:"sequence"`
-	Revision   uint64        `json:"revision"`
-	Time       time.Time     `json:"time"`
-	Actor      string        `json:"actor"`
-	Action     string        `json:"action"`
-	ID         string        `json:"id"`
-	Alias      string        `json:"alias,omitempty"`
-	PreviousID string        `json:"previous-id,omitempty"`
+	Sequence   AuditSequence
+	Revision   uint64
+	Time       time.Time
+	Actor      string
+	Action     string
+	ID         string
+	Alias      string
+	PreviousID string
 }
 
 // Store owns directory persistence and all changes to authorization indexes.

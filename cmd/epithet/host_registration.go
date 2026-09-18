@@ -107,9 +107,10 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 	if err != nil {
 		return err
 	}
+	proposal := r.proposal.ControlProposal()
 	response, _, err := client.Control(ctx, "", inventoryapi.ControlRequest{
 		Action: "enroll",
-		Host:   &r.proposal,
+		Host:   &proposal,
 		Token:  r.token,
 	})
 	if err != nil {

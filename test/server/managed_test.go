@@ -20,7 +20,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
@@ -99,7 +98,7 @@ inventory:
 	_, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "list"})
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
-	proposal := inventory.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}
+	proposal := inventoryapi.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
 	enrolled, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)

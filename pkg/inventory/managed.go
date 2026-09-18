@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,32 +30,11 @@ var (
 // Proposal is the entire editable authorization record. Admission and ownership
 // are server-owned metadata, never fields a host can approve for itself.
 type Proposal struct {
-	Names         []string          `yaml:"names" json:"names"`
-	Labels        map[string]string `yaml:"labels" json:"labels"`
-	Accounts      []string          `yaml:"accounts" json:"accounts"`
-	PrincipalMode PrincipalMode     `yaml:"principal-mode" json:"principal-mode"`
-	Domain        string            `yaml:"domain,omitempty" json:"domain,omitempty"`
-}
-
-// UnmarshalJSON requires accounts at the input boundary, just as UnmarshalYAML
-// does for editor proposals. Explicit null is unrestricted; [] permits none.
-func (p *Proposal) UnmarshalJSON(data []byte) error {
-	type plain Proposal
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if _, ok := fields["accounts"]; !ok {
-		return fmt.Errorf("accounts must be explicit")
-	}
-	var raw plain
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&raw); err != nil {
-		return err
-	}
-	*p = Proposal(raw)
-	return nil
+	Names         []string          `yaml:"names"`
+	Labels        map[string]string `yaml:"labels"`
+	Accounts      []string          `yaml:"accounts"`
+	PrincipalMode PrincipalMode     `yaml:"principal-mode"`
+	Domain        string            `yaml:"domain,omitempty"`
 }
 
 // UnmarshalYAML applies the same field-presence contract to on-disk snapshots
@@ -183,30 +161,30 @@ func DecodeYAML(data []byte, dst any) error {
 }
 
 type HostRecord struct {
-	SourceFile string `yaml:"-" json:"source-file,omitempty"`
-	Pattern    string `yaml:"-" json:"pattern,omitempty"`
+	SourceFile string `yaml:"-"`
+	Pattern    string `yaml:"-"`
 
-	ID            string    `yaml:"id" json:"id"`
-	Revision      uint64    `yaml:"revision" json:"revision"`
-	Status        string    `yaml:"status" json:"status"`
-	Proposal      Proposal  `yaml:"host" json:"host"`
-	CreatedAt     time.Time `yaml:"created-at" json:"created-at"`
-	UpdatedAt     time.Time `yaml:"updated-at" json:"updated-at"`
-	Source        string    `yaml:"-" json:"source,omitempty"`
-	ShadowedNames []string  `yaml:"-" json:"shadowed-names,omitempty"`
+	ID            string    `yaml:"id"`
+	Revision      uint64    `yaml:"revision"`
+	Status        string    `yaml:"status"`
+	Proposal      Proposal  `yaml:"host"`
+	CreatedAt     time.Time `yaml:"created-at"`
+	UpdatedAt     time.Time `yaml:"updated-at"`
+	Source        string    `yaml:"-"`
+	ShadowedNames []string  `yaml:"-"`
 }
 
 type EnrollmentToken struct {
-	ID        string    `yaml:"id" json:"id"`
-	ExpiresAt time.Time `yaml:"expires-at" json:"expires-at"`
-	UsedBy    string    `yaml:"used-by,omitempty" json:"used-by,omitempty"`
-	Revoked   bool      `yaml:"revoked" json:"revoked"`
+	ID        string    `yaml:"id"`
+	ExpiresAt time.Time `yaml:"expires-at"`
+	UsedBy    string    `yaml:"used-by,omitempty"`
+	Revoked   bool      `yaml:"revoked"`
 }
 type AuditEvent struct {
-	At       time.Time `yaml:"at" json:"at"`
-	Actor    string    `yaml:"actor" json:"actor"`
-	Action   string    `yaml:"action" json:"action"`
-	Resource string    `yaml:"resource" json:"resource"`
+	At       time.Time `yaml:"at"`
+	Actor    string    `yaml:"actor"`
+	Action   string    `yaml:"action"`
+	Resource string    `yaml:"resource"`
 }
 
 // Managed loads item files once, then resolves names entirely through indexes.

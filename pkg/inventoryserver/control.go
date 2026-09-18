@@ -152,24 +152,38 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "directory-groups":
 		var snapshot directory.BindingSnapshot
 		snapshot, err = c.ManagedDirectory.Bindings(r.Context())
-		resp.Directory = &snapshot
+		resp.Directory = controlBindings(snapshot)
 	case "directory-bind":
 		err = c.ManagedDirectory.Rebind(r.Context(), actor, req.Alias, req.ID, req.Revision, authorizationRevision)
 	case "directory-audit":
-		resp.DirectoryAudit, err = c.ManagedDirectory.Audit(r.Context(), req.AuditAfter, req.AuditLimit)
+		var events []directory.AuditEvent
+		events, err = c.ManagedDirectory.Audit(r.Context(), directory.AuditSequence(req.AuditAfter), req.AuditLimit)
+		resp.DirectoryAudit = controlSlice(events, controlDirectoryEvent)
 	case "enroll":
 		if req.Host == nil {
 			err = fmt.Errorf("host proposal is required")
 			break
 		}
-
-		resp.Host, err = c.Store.Enroll(*req.Host, req.Token)
+		var h *inventory.HostRecord
+		h, err = c.Store.Enroll(inventory.ProposalFromControl(*req.Host), req.Token)
+		resp.Host = controlRecord(h)
 	case "list":
-		resp.Hosts, err = c.Store.List()
+		var hosts []inventory.HostRecord
+		hosts, err = c.Store.List()
+		resp.Hosts = controlSlice(hosts, inventory.HostRecord.ControlRecord)
 	case "get":
-		resp.Host, err = c.Store.Get(req.ID)
+		var h *inventory.HostRecord
+		h, err = c.Store.Get(req.ID)
+		resp.Host = controlRecord(h)
 	case "edit", "approve", "deny", "remove":
-		resp.Host, err = c.Store.Change(actor, req.Action, req.ID, req.Revision, req.Host)
+		var proposal *inventory.Proposal
+		if req.Host != nil {
+			p := inventory.ProposalFromControl(*req.Host)
+			proposal = &p
+		}
+		var h *inventory.HostRecord
+		h, err = c.Store.Change(actor, req.Action, req.ID, req.Revision, proposal)
+		resp.Host = controlRecord(h)
 	case "token-create":
 		seconds := req.LifetimeSeconds
 		if seconds == 0 {
@@ -181,13 +195,18 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var t inventory.EnrollmentToken
 		t, err = c.Store.CreateToken(actor, time.Duration(seconds)*time.Second)
-		resp.Token = &t
+		token := t.ControlToken()
+		resp.Token = &token
 	case "token-list":
-		resp.Tokens, err = c.Store.Tokens()
+		var tokens []inventory.EnrollmentToken
+		tokens, err = c.Store.Tokens()
+		resp.Tokens = controlSlice(tokens, inventory.EnrollmentToken.ControlToken)
 	case "token-revoke":
 		err = c.Store.RevokeToken(actor, req.ID)
 	case "audit":
-		resp.Audit, err = c.Store.Audit()
+		var events []inventory.AuditEvent
+		events, err = c.Store.Audit()
+		resp.Audit = controlSlice(events, inventory.AuditEvent.ControlEvent)
 	default:
 		err = fmt.Errorf("unknown inventory action")
 	}

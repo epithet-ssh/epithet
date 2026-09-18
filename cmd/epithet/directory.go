@@ -8,7 +8,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 )
 
@@ -58,8 +57,8 @@ func (c *DirectoryGroupsBindCLI) Run(p *DirectoryCLI) error {
 }
 
 type DirectoryGroupsAuditCLI struct {
-	After directory.AuditSequence `help:"Return events after this audit sequence"`
-	Limit int                     `help:"Maximum events to return (1-1000; default 100)"`
+	After uint64 `help:"Return events after this audit sequence"`
+	Limit int    `help:"Maximum events to return (1-1000; default 100)"`
 }
 
 func (c *DirectoryGroupsAuditCLI) Run(p *DirectoryCLI) error {

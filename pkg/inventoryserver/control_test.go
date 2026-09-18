@@ -104,7 +104,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 		require.Equal(t, 401, status)
 		require.Error(t, err)
 	}
-	p := inventory.Proposal{Names: []string{"new-host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
+	p := inventoryapi.Proposal{Names: []string{"new-host"}, Accounts: []string{}, PrincipalMode: "account-name"}
 	response, status, err := client.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &p})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
@@ -140,7 +140,7 @@ func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
 	client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
-	var after directory.AuditSequence
+	var after uint64
 	var count, bytes int
 	for {
 		response, status, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "directory-audit", AuditAfter: after})
