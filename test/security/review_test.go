@@ -16,7 +16,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
@@ -45,7 +44,7 @@ func TestReviewHTTPSRedirectLeaksBearerAndTrustsPlaintextRoot(t *testing.T) {
 	client, err := caclient.New([]caclient.CAEndpoint{{URL: secure.URL}}, caclient.WithTLSConfig(cfg))
 	require.NoError(t, err)
 	_, err = client.GetCert(context.Background(), "review-only-bearer", &caserver.CreateCertRequest{
-		PublicKey: pub, Connection: policy.Connection{RemoteHost: "host", RemoteUser: "root"},
+		PublicKey: pub, Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"},
 	})
 	require.Error(t, err)
 	select {
@@ -78,7 +77,7 @@ func TestReviewPolicyRedirectLeaksOIDCBody(t *testing.T) {
 	require.NoError(t, err)
 	authority, err := ca.New(priv, secure.URL, ca.WithTLSConfig(tlsconfigFor(t, secure)))
 	require.NoError(t, err)
-	_, err = authority.Issue(context.Background(), "review-only-oidc-token", policy.Connection{}, "")
+	_, err = authority.Issue(context.Background(), "review-only-oidc-token", wire.Connection{}, "")
 	require.Error(t, err)
 	select {
 	case token := <-seen:

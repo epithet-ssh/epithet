@@ -11,12 +11,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
 )
@@ -58,7 +58,7 @@ func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
 				for _, target := range []string{"Freki.HOME", "freki.tailca597.ts.net"} {
 					userKey, _, err := sshcert.GenerateKeys()
 					require.NoError(t, err)
-					issued, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), policy.Connection{RemoteHost: target, RemoteUser: "root"}, userKey)
+					issued, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), wire.Connection{RemoteHost: target, RemoteUser: "root"}, userKey)
 					if deny {
 						require.ErrorIs(t, err, ca.ErrAccessDenied)
 						require.Nil(t, issued)

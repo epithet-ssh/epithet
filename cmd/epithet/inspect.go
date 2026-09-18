@@ -15,19 +15,19 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"golang.org/x/crypto/ssh"
 )
 
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
 // It inherits Name from the parent AgentCLI.
 type AgentInspectCLI struct {
-	Broker   string                `help:"Broker socket path (overrides config-based discovery)" short:"b"`
-	JSON     bool                  `help:"Output in JSON format" short:"j" xor:"format"`
-	Compact  bool                  `help:"Show one line per agent (default without an ID)" xor:"format"`
-	Expanded bool                  `help:"Show full details (default with an ID)" xor:"format"`
-	ID       policy.ConnectionHash `arg:"" optional:"" name:"id" help:"Agent ID or unique prefix"`
+	Broker   string              `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	JSON     bool                `help:"Output in JSON format" short:"j" xor:"format"`
+	Compact  bool                `help:"Show one line per agent (default without an ID)" xor:"format"`
+	Expanded bool                `help:"Show full details (default with an ID)" xor:"format"`
+	ID       wire.ConnectionHash `arg:"" optional:"" name:"id" help:"Agent ID or unique prefix"`
 }
 
 func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
@@ -265,7 +265,7 @@ func escapeCertificateValue(value string) string {
 
 // writeCompactInspect abbreviates IDs against the complete snapshot. A selected
 // agent uses the supplied prefix, which the broker validated against all agents.
-func writeCompactInspect(w io.Writer, resp *broker.InspectResponse, selected policy.ConnectionHash, now time.Time) {
+func writeCompactInspect(w io.Writer, resp *broker.InspectResponse, selected wire.ConnectionHash, now time.Time) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tCONNECTION\tSERIAL\tEXPIRES")
 	for _, ag := range resp.Agents {

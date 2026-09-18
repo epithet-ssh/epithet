@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // CertLogger logs certificate issuance events for audit, compliance, and analytics.
@@ -23,7 +23,7 @@ type CertEvent struct {
 	ID                   string // Resolved inventory ID; empty if the policy server omitted it.
 	UserName             string
 	Principals           []string
-	Connection           policy.Connection
+	Connection           wire.Connection
 	ValidAfter           time.Time
 	ValidBefore          time.Time
 	Extensions           map[string]string

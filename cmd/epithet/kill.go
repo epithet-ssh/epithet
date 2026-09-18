@@ -9,13 +9,13 @@ import (
 	"os"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // AgentKillCLI evicts one per-connection agent from the running broker.
 type AgentKillCLI struct {
-	Broker  string                `help:"Broker socket path (overrides config-based discovery)" short:"b"`
-	AgentID policy.ConnectionHash `arg:"" name:"agent-id" help:"Agent ID or unique prefix shown by epithet agent inspect" required:""`
+	Broker  string              `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	AgentID wire.ConnectionHash `arg:"" name:"agent-id" help:"Agent ID or unique prefix shown by epithet agent inspect" required:""`
 }
 
 func (k *AgentKillCLI) Run(parent *AgentCLI) error {
@@ -38,7 +38,7 @@ func (k *AgentKillCLI) Run(parent *AgentCLI) error {
 	return nil
 }
 
-func requestAgentKill(conn net.Conn, id policy.ConnectionHash) (*broker.KillResponse, error) {
+func requestAgentKill(conn net.Conn, id wire.ConnectionHash) (*broker.KillResponse, error) {
 	if err := json.NewEncoder(conn).Encode(broker.Request{Kill: &broker.KillRequest{ID: id}}); err != nil {
 		return nil, fmt.Errorf("failed to send kill request: %w", err)
 	}

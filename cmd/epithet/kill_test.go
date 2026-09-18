@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +27,7 @@ func TestRequestAgentKillUsesTypedProtocol(t *testing.T) {
 		received <- request
 		_ = json.NewEncoder(server).Encode(broker.Event{Kill: &broker.KillResponse{
 			ID: "agent-id",
-			Connection: policy.Connection{
+			Connection: wire.Connection{
 				RemoteHost: "host.example.com",
 				RemoteUser: "root",
 				Port:       22,
@@ -38,10 +38,10 @@ func TestRequestAgentKillUsesTypedProtocol(t *testing.T) {
 
 	response, err := requestAgentKill(client, "agent-id")
 	require.NoError(t, err)
-	require.Equal(t, policy.ConnectionHash("agent-id"), response.ID)
+	require.Equal(t, wire.ConnectionHash("agent-id"), response.ID)
 	request := <-received
 	require.NotNil(t, request.Kill)
-	require.Equal(t, policy.ConnectionHash("agent-id"), request.Kill.ID)
+	require.Equal(t, wire.ConnectionHash("agent-id"), request.Kill.ID)
 }
 
 func TestRequestAgentKillSurfacesTypedError(t *testing.T) {
@@ -70,7 +70,7 @@ func TestWriteAgentKillNamesConnection(t *testing.T) {
 	var output bytes.Buffer
 	writeAgentKill(&output, &broker.KillResponse{
 		ID: "agent-id",
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "host.example.com",
 			RemoteUser: "root",
 			Port:       2222,

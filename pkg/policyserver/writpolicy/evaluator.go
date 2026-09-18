@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
@@ -87,7 +86,7 @@ func New(pol *il.Policy, reg *Registry, opts Options) (*Evaluator, []string, err
 // Evaluate implements policyserver.PolicyEvaluator using supplied facts.
 // Policy denials return 403; pending
 // requirements return 202.
-func (e *Evaluator) Evaluate(ctx context.Context, conn policy.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
+func (e *Evaluator) Evaluate(ctx context.Context, conn wire.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
 	if facts == nil {
 		return nil, fmt.Errorf("inventory facts are required")
 	}
@@ -162,7 +161,7 @@ func (e *Evaluator) flagResolver(ctx context.Context) eval.FlagFunc {
 	}
 }
 
-func (e *Evaluator) factResolver(ctx context.Context, req eval.Request, conn policy.Connection) eval.FactFunc {
+func (e *Evaluator) factResolver(ctx context.Context, req eval.Request, conn wire.Connection) eval.FactFunc {
 	// Request-scoped memoization: several allows naming the same fact
 	// resolve it once.
 	cache := map[string]eval.FactState{}
@@ -201,7 +200,7 @@ func (e *Evaluator) factResolver(ctx context.Context, req eval.Request, conn pol
 // notify fires the registered targets for the rules that fired. It is
 // fire-and-forget by contract: dispatch happens on a detached context
 // and never affects the decision.
-func (e *Evaluator) notify(ctx context.Context, event, identity string, conn policy.Connection, byTarget map[string]string) {
+func (e *Evaluator) notify(ctx context.Context, event, identity string, conn wire.Connection, byTarget map[string]string) {
 	for target, ruleLabel := range byTarget {
 		n, ok := e.reg.Notifiers[target]
 		if !ok || !slices.Contains(n.Events(), event) {
@@ -219,7 +218,7 @@ func (e *Evaluator) notify(ctx context.Context, event, identity string, conn pol
 	}
 }
 
-func (e *Evaluator) notifyDeny(ctx context.Context, identity string, conn policy.Connection, d *il.DenyRule) {
+func (e *Evaluator) notifyDeny(ctx context.Context, identity string, conn wire.Connection, d *il.DenyRule) {
 	targets := map[string]string{}
 	for _, t := range d.Notify {
 		targets[t] = ruleRef(d.Label, d.ContentID())

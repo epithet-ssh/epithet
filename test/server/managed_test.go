@@ -25,9 +25,9 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,7 +107,7 @@ inventory:
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
 	pub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	request := caserver.CreateCertRequest{PublicKey: pub, Connection: policy.Connection{RemoteHost: "managed.example", RemoteUser: "root", Port: 22}}
+	request := caserver.CreateCertRequest{PublicKey: pub, Connection: wire.Connection{RemoteHost: "managed.example", RemoteUser: "root", Port: 22}}
 	_, err = client.GetCert(t.Context(), token, &request)
 	require.NoError(t, err, "pending must preserve existing wildcard-based issuance")
 	// Run the real admin CLI through the broker's Unix socket and existing login.

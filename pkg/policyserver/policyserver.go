@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -33,7 +32,7 @@ type PolicyEvaluator interface {
 	// Error handling:
 	// - Return policyserver.Forbidden (403) if access denied by policy
 	// - Return other errors (500) for internal errors
-	Evaluate(ctx context.Context, conn policy.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error)
+	Evaluate(ctx context.Context, conn wire.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error)
 }
 
 // Forbidden returns a 403 error with the given message.

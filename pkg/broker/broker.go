@@ -17,8 +17,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // cleanupInterval is how often the broker checks for expired agents to clean up
@@ -39,7 +39,7 @@ const expiryBuffer = 5 * time.Second
 // broker needs. The credential itself is owned only by the agent.
 type agentEntry struct {
 	agent      *agent.Agent
-	connection policy.Connection
+	connection wire.Connection
 	expiresAt  time.Time
 }
 
@@ -73,9 +73,9 @@ type Broker struct {
 	brokerSocketPath string // Immutable after New()
 	brokerListener   net.Listener
 
-	verifyIdentity IdentityVerifier                     // Immutable after New(); safe for concurrent calls
-	auth           *Auth                                // Has internal locking, safe to call concurrently
-	agents         map[policy.ConnectionHash]agentEntry // Protected by b.lock
+	verifyIdentity IdentityVerifier                   // Immutable after New(); safe for concurrent calls
+	auth           *Auth                              // Has internal locking, safe to call concurrently
+	agents         map[wire.ConnectionHash]agentEntry // Protected by b.lock
 
 	inventoryClient *inventoryclient.Client // Immutable after New()
 	publicCAURL     string                  // Public CA URL for token enrollment instructions; immutable after New()
@@ -102,7 +102,7 @@ func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient
 
 	b := &Broker{
 		auth:             NewAuth(fetch),
-		agents:           make(map[policy.ConnectionHash]agentEntry),
+		agents:           make(map[wire.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
 		caClient:         caClient,
@@ -175,27 +175,27 @@ type MatchResponse struct {
 // InspectRequest optionally selects an agent by full ID or unique prefix.
 // An empty ID returns all agents.
 type InspectRequest struct {
-	ID policy.ConnectionHash `json:"id,omitempty"`
+	ID wire.ConnectionHash `json:"id,omitempty"`
 }
 
 // KillRequest identifies one per-connection agent by the ID returned from
 // Inspect. The ID may be a full OpenSSH connection hash or a unique prefix.
 type KillRequest struct {
-	ID policy.ConnectionHash `json:"id"`
+	ID wire.ConnectionHash `json:"id"`
 }
 
 // KillResponse confirms which agent was evicted. Error is populated on the
 // wire when a protocol request cannot be completed.
 type KillResponse struct {
-	ID         policy.ConnectionHash `json:"id"`
-	Connection policy.Connection     `json:"connection"`
-	Error      string                `json:"error,omitempty"`
+	ID         wire.ConnectionHash `json:"id"`
+	Connection wire.Connection     `json:"connection"`
+	Error      string              `json:"error,omitempty"`
 }
 
 // AgentInfo contains information about a running agent
 type AgentInfo struct {
 	Hash        string                 `json:"hash"`
-	Connection  policy.Connection      `json:"connection"`
+	Connection  wire.Connection        `json:"connection"`
 	SocketPath  string                 `json:"socketPath"`
 	ExpiresAt   time.Time              `json:"expiresAt"`
 	Certificate sshcert.RawCertificate `json:"certificate"`
@@ -226,7 +226,7 @@ func (b *Broker) deny(err error) MatchResponse {
 // to userOutput. This is the core match implementation used by the JSON
 // protocol server (protocol.go). Canceling ctx (e.g. the requesting
 // `epithet match` process went away) abandons this match's auth and CA work.
-func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection, userOutput io.Writer) MatchResponse {
+func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, userOutput io.Writer) MatchResponse {
 	b.log.Debug("match request received", "connection", conn)
 
 	// Step 1: Check if agent already exists for this connection hash.
@@ -298,7 +298,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn policy.Connection
 // If an agent already exists, it updates the credential. If not, it creates a new agent.
 //
 // Acquires b.lock for the duration; do not call with b.lock held.
-func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Credential) error {
+func (b *Broker) ensureAgent(connection wire.Connection, credential agent.Credential) error {
 	expiresAt, err := credential.Certificate.Expiry()
 	if err != nil {
 		return fmt.Errorf("failed to parse certificate expiry: %w", err)
@@ -350,7 +350,7 @@ func (b *Broker) ensureAgent(connection policy.Connection, credential agent.Cred
 
 // AgentSocketPath returns the socket path for a given connection hash.
 // This is used by SSH to connect to the per-connection agent.
-func (b *Broker) AgentSocketPath(hash policy.ConnectionHash) string {
+func (b *Broker) AgentSocketPath(hash wire.ConnectionHash) string {
 	return filepath.Join(b.agentSocketDir, string(hash))
 }
 
@@ -385,7 +385,7 @@ func (b *Broker) cleanupExpiredAgentsOnce() {
 	defer b.lock.Unlock()
 
 	now := time.Now().Add(expiryBuffer)
-	expired := []policy.ConnectionHash{}
+	expired := []wire.ConnectionHash{}
 
 	// Find all expired agents
 	for hash, entry := range b.agents {
@@ -438,7 +438,7 @@ func (b *Broker) Close() {
 			b.log.Debug("closing agent on broker shutdown", "hash", hash)
 			entry.agent.Close()
 		}
-		b.agents = make(map[policy.ConnectionHash]agentEntry)
+		b.agents = make(map[wire.ConnectionHash]agentEntry)
 		b.lock.Unlock()
 
 		close(b.done)
@@ -459,7 +459,7 @@ func (b *Broker) Inspect(request InspectRequest, output *InspectResponse) error 
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	var selected policy.ConnectionHash
+	var selected wire.ConnectionHash
 	if request.ID != "" {
 		var err error
 		selected, err = b.resolveAgentID(request.ID)
@@ -528,11 +528,11 @@ func (b *Broker) Kill(request KillRequest, output *KillResponse) error {
 
 // resolveAgentID matches against the current agent set. Callers must hold b.lock
 // through any operation on the result so ambiguity checks and use are atomic.
-func (b *Broker) resolveAgentID(prefix policy.ConnectionHash) (policy.ConnectionHash, error) {
+func (b *Broker) resolveAgentID(prefix wire.ConnectionHash) (wire.ConnectionHash, error) {
 	if prefix == "" {
 		return "", fmt.Errorf("agent ID is empty")
 	}
-	var match policy.ConnectionHash
+	var match wire.ConnectionHash
 	for id := range b.agents {
 		if strings.HasPrefix(string(id), string(prefix)) {
 			if match != "" {

@@ -13,11 +13,11 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
 )
@@ -79,7 +79,7 @@ func TestPolicyIntegration_ValidToken_IssuesCertificate(t *testing.T) {
 	require.NoError(t, err)
 	token := idp.MintIDToken("alice@example.com", exp)
 
-	resp, err := handler.Issue(t.Context(), token, policy.Connection{
+	resp, err := handler.Issue(t.Context(), token, wire.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 		Port:       22,
@@ -102,7 +102,7 @@ func TestPolicyIntegration_ExpiredToken_ReturnsAuthenticationError(t *testing.T)
 	require.NoError(t, err)
 	token := idp.MintIDToken("alice@example.com", time.Now().Add(-time.Minute))
 
-	_, err = handler.Issue(t.Context(), token, policy.Connection{
+	_, err = handler.Issue(t.Context(), token, wire.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	}, userKey)
@@ -119,7 +119,7 @@ func TestPolicyIntegration_WrongAudience_ReturnsAuthenticationError(t *testing.T
 	require.NoError(t, err)
 	token := idp.MintIDTokenWithAudience("alice@example.com", "someone-elses-client", time.Now().Add(time.Minute))
 
-	_, err = handler.Issue(t.Context(), token, policy.Connection{
+	_, err = handler.Issue(t.Context(), token, wire.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	}, userKey)
@@ -136,7 +136,7 @@ func TestPolicyIntegration_UnknownUser_ReturnsDenial(t *testing.T) {
 	require.NoError(t, err)
 	token := idp.MintIDToken("mallory@example.com", time.Now().Add(time.Minute))
 
-	_, err = handler.Issue(t.Context(), token, policy.Connection{
+	_, err = handler.Issue(t.Context(), token, wire.Connection{
 		RemoteHost: "prod.example.com",
 		RemoteUser: "root",
 	}, userKey)

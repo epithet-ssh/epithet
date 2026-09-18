@@ -18,7 +18,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -181,7 +180,7 @@ func TestCreateCert_Success(t *testing.T) {
 
 	certReq := caserver.CreateCertRequest{
 		PublicKey: sshcert.RawPublicKey(userPubKey),
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -226,7 +225,7 @@ func TestCreateCert_PolicyError(t *testing.T) {
 
 	certReq := caserver.CreateCertRequest{
 		PublicKey: sshcert.RawPublicKey(userPubKey),
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -251,7 +250,7 @@ func TestCreateCert_MissingPublicKey(t *testing.T) {
 	defer cleanup()
 
 	certReq := caserver.CreateCertRequest{
-		Connection: policy.Connection{RemoteHost: "server.example.com", RemoteUser: "testuser", Port: 22},
+		Connection: wire.Connection{RemoteHost: "server.example.com", RemoteUser: "testuser", Port: 22},
 	}
 	body, _ := json.Marshal(certReq)
 

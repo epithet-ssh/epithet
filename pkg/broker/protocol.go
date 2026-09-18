@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
@@ -17,7 +16,7 @@ import (
 type Request struct {
 	Inventory *inventoryapi.ControlRequest `json:"inventory,omitempty"`
 	Identity  *struct{}                    `json:"identity,omitempty"`
-	Match     *policy.Connection           `json:"match,omitempty"`
+	Match     *wire.Connection             `json:"match,omitempty"`
 	Inspect   *InspectRequest              `json:"inspect,omitempty"`
 	Kill      *KillRequest                 `json:"kill,omitempty"`
 }

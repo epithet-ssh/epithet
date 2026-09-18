@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/eval"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
 )
@@ -58,7 +58,7 @@ type FactRequest struct {
 	User        eval.User
 	Host        eval.Host
 	Account     string
-	Connection  policy.Connection
+	Connection  wire.Connection
 	RuleLabel   string
 }
 
@@ -86,7 +86,7 @@ type NotifyEvent struct {
 	Identity   string
 	Account    string
 	Host       string
-	Connection policy.Connection
+	Connection wire.Connection
 	RuleLabel  string
 }
 

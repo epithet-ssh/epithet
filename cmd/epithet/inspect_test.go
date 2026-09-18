@@ -12,8 +12,8 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -25,7 +25,7 @@ func TestWriteInspectShowsAgentConnection(t *testing.T) {
 		AgentSocketDir: "/run/epithet/agent",
 		Agents: []broker.AgentInfo{{
 			Hash: "connection-hash",
-			Connection: policy.Connection{
+			Connection: wire.Connection{
 				RemoteHost: "server.example.com",
 				RemoteUser: "deploy",
 				Port:       2222,
@@ -123,9 +123,9 @@ func TestCompactInspect(t *testing.T) {
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
 	certificate := testCertificate(t, now)
 	resp := &broker.InspectResponse{Agents: []broker.AgentInfo{
-		{Hash: "abcd1fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.home", Port: 22}, Certificate: certificate, ExpiresAt: now.Add(6 * time.Minute)},
-		{Hash: "abcd2fff", Connection: policy.Connection{RemoteUser: "brianm", RemoteHost: "freki.tail", Port: 2222, ProxyJump: "bastion.example"}, ExpiresAt: now},
-		{Hash: "ef012fff", Connection: policy.Connection{RemoteUser: "user\nname", RemoteHost: "host\tname"}, Certificate: "invalid", ExpiresAt: now.Add(-time.Millisecond)},
+		{Hash: "abcd1fff", Connection: wire.Connection{RemoteUser: "brianm", RemoteHost: "freki.home", Port: 22}, Certificate: certificate, ExpiresAt: now.Add(6 * time.Minute)},
+		{Hash: "abcd2fff", Connection: wire.Connection{RemoteUser: "brianm", RemoteHost: "freki.tail", Port: 2222, ProxyJump: "bastion.example"}, ExpiresAt: now},
+		{Hash: "ef012fff", Connection: wire.Connection{RemoteUser: "user\nname", RemoteHost: "host\tname"}, Certificate: "invalid", ExpiresAt: now.Add(-time.Millisecond)},
 	}}
 	var out bytes.Buffer
 	writeCompactInspect(&out, resp, "", now)
@@ -153,7 +153,7 @@ func TestInspectArguments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://id.example.com"}, command.Agent.CaURL)
 	require.True(t, command.Agent.Inspect.Compact)
-	require.Equal(t, policy.ConnectionHash("abcd"), command.Agent.Inspect.ID)
+	require.Equal(t, wire.ConnectionHash("abcd"), command.Agent.Inspect.ID)
 
 	for _, args := range [][]string{
 		{"--compact", "--json"},
@@ -202,7 +202,7 @@ func TestInspectOutputFormats(t *testing.T) {
 					for n := 0; n < count; n++ {
 						resp.Agents = append(resp.Agents, broker.AgentInfo{
 							Hash:       fmt.Sprintf("abcd%d", n),
-							Connection: policy.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Port: 22},
+							Connection: wire.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Port: 22},
 							ExpiresAt:  now.Add(time.Minute),
 						})
 					}

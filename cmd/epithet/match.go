@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // scannerBufferSize caps how large a single response line from the broker
@@ -42,12 +42,12 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	req := broker.Request{Match: &policy.Connection{
+	req := broker.Request{Match: &wire.Connection{
 		RemoteHost: m.Host,
 		RemoteUser: m.User,
 		Port:       m.Port,
 		ProxyJump:  m.Jump,
-		Hash:       policy.ConnectionHash(m.Hash),
+		Hash:       wire.ConnectionHash(m.Hash),
 	}}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return fmt.Errorf("failed to send match request: %w", err)

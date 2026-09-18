@@ -19,9 +19,9 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,7 +94,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			require.NoError(t, err)
 			b.SetShutdownTimeout(0)
 			t.Cleanup(b.Close)
-			conn := policy.Connection{RemoteHost: "host", RemoteUser: "root", Hash: "connection"}
+			conn := wire.Connection{RemoteHost: "host", RemoteUser: "root", Hash: "connection"}
 			result := b.MatchWithUserOutput(t.Context(), conn, io.Discard)
 			require.False(t, result.Allow)
 			require.NotContains(t, result.Error, "private")

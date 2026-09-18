@@ -15,7 +15,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -111,7 +110,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						key = "invalid key"
 					}
 					before := time.Now()
-					result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", expiry), policy.Connection{RemoteHost: "HOST", RemoteUser: "ubuntu"}, key)
+					result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", expiry), wire.Connection{RemoteHost: "HOST", RemoteUser: "ubuntu"}, key)
 					if tc.invalid {
 						if tc.invalidKey {
 							require.ErrorIs(t, err, ca.ErrInvalidPublicKey)
@@ -186,7 +185,7 @@ func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 			defer ps.Close()
 			authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
-			result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), policy.Connection{RemoteHost: "host", RemoteUser: tc.account}, userKey)
+			result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), wire.Connection{RemoteHost: "host", RemoteUser: tc.account}, userKey)
 			if tc.allowed {
 				require.NoError(t, err)
 				require.NotNil(t, result)

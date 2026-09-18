@@ -28,11 +28,11 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/lmittmann/tint"
@@ -164,7 +164,7 @@ func TestBrokerEndToEnd(t *testing.T) {
 	// Simulate what `epithet match` would do over the wire: call
 	// MatchWithUserOutput directly (TestBrokerEndToEnd_TagGatedSSHConfig
 	// below drives the real subprocess/wire path instead).
-	conn := policy.Connection{
+	conn := wire.Connection{
 		RemoteHost: "localhost",
 		RemoteUser: stack.sshdServer.User,
 		Port:       uint(stack.sshdServer.Port),
@@ -352,14 +352,14 @@ func testLogger(t *testing.T) *slog.Logger {
 	}))
 }
 
-func computeConnectionHash(t *testing.T, s *sshd.Server) policy.ConnectionHash {
+func computeConnectionHash(t *testing.T, s *sshd.Server) wire.ConnectionHash {
 	// This must match the hash computation in SshWithBroker
 	localHost, err := os.Hostname()
 	require.NoError(t, err)
 
 	hashInput := fmt.Sprintf("%slocalhost%d%s", localHost, s.Port, s.User)
 	hash := sha256.Sum256([]byte(hashInput))
-	return policy.ConnectionHash(hex.EncodeToString(hash[:])[:16])
+	return wire.ConnectionHash(hex.EncodeToString(hash[:])[:16])
 }
 
 // shortTempDir creates a short temporary directory suitable for Unix

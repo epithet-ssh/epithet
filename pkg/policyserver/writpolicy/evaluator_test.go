@@ -12,7 +12,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
@@ -55,8 +54,8 @@ func mustPolicy(t *testing.T, src string) *il.Policy {
 	return pol
 }
 
-func conn(account, host string) policy.Connection {
-	return policy.Connection{RemoteHost: host, RemoteUser: account, Port: 22}
+func conn(account, host string) wire.Connection {
+	return wire.Connection{RemoteHost: host, RemoteUser: account, Port: 22}
 }
 
 func TestIssueReturnsPolicyLimits(t *testing.T) {
@@ -350,7 +349,7 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 	}
 	return e
 }
-func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn policy.Connection) (*wire.PolicyResponse, error) {
+func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn wire.Connection) (*wire.PolicyResponse, error) {
 	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv}
 	resolution, err := resolver.Resolve(ctx, facts.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
 	if err != nil {

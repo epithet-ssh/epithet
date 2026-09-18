@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +68,7 @@ func TestBroker_NoAgentReturnsNotAllowed(t *testing.T) {
 	<-b.Ready()
 
 	// Make a Match request with no existing agent.
-	result := callMatch(t, socketPath, policy.Connection{
+	result := callMatch(t, socketPath, wire.Connection{
 		RemoteHost: "server.example.com",
 		Hash:       "nonexistent-hash",
 	})

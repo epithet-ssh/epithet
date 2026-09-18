@@ -22,11 +22,11 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -69,7 +69,7 @@ func testTokenFunc(t *testing.T, idp *oidctest.IdP) TokenFunc {
 
 // callMatch dials socketPath, sends a Match request for conn, and returns
 // the terminal Result event (discarding any Output events along the way).
-func callMatch(t *testing.T, socketPath string, conn policy.Connection) *MatchResponse {
+func callMatch(t *testing.T, socketPath string, conn wire.Connection) *MatchResponse {
 	t.Helper()
 	c, err := net.Dial("unix", socketPath)
 	require.NoError(t, err)
@@ -114,7 +114,7 @@ func Test_RpcBasics(t *testing.T) {
 	// Wait for broker to be ready.
 	<-b.Ready()
 
-	result := callMatch(t, socketPath, policy.Connection{})
+	result := callMatch(t, socketPath, wire.Connection{})
 
 	// With no agent available, should return false.
 	require.False(t, result.Allow)
@@ -147,7 +147,7 @@ func Test_MatchRequestFields(t *testing.T) {
 	<-b.Ready()
 
 	// Test with all fields populated.
-	result := callMatch(t, socketPath, policy.Connection{
+	result := callMatch(t, socketPath, wire.Connection{
 		RemoteHost: "server.example.com",
 		RemoteUser: "root",
 		Port:       22,
@@ -199,19 +199,19 @@ func TestCleanupExpiredAgents(t *testing.T) {
 	b.lock.Lock()
 
 	// Agent 1: Already expired.
-	b.agents[policy.ConnectionHash("expired1")] = agentEntry{
+	b.agents[wire.ConnectionHash("expired1")] = agentEntry{
 		agent:     nil, // We don't need a real agent for this test.
 		expiresAt: time.Now().Add(-10 * time.Second),
 	}
 
 	// Agent 2: Expires very soon (within expiryBuffer).
-	b.agents[policy.ConnectionHash("expiring-soon")] = agentEntry{
+	b.agents[wire.ConnectionHash("expiring-soon")] = agentEntry{
 		agent:     nil,
 		expiresAt: time.Now().Add(3 * time.Second), // Less than expiryBuffer (5s).
 	}
 
 	// Agent 3: Still valid (expires well in the future).
-	b.agents[policy.ConnectionHash("valid")] = agentEntry{
+	b.agents[wire.ConnectionHash("valid")] = agentEntry{
 		agent:     nil,
 		expiresAt: time.Now().Add(1 * time.Hour),
 	}
@@ -231,14 +231,14 @@ func TestCleanupExpiredAgents(t *testing.T) {
 	require.Equal(t, 1, len(b.agents))
 
 	// The valid agent should still be there.
-	_, exists := b.agents[policy.ConnectionHash("valid")]
+	_, exists := b.agents[wire.ConnectionHash("valid")]
 	require.True(t, exists, "valid agent should not be cleaned up")
 
 	// The expired agents should be gone.
-	_, exists = b.agents[policy.ConnectionHash("expired1")]
+	_, exists = b.agents[wire.ConnectionHash("expired1")]
 	require.False(t, exists, "expired agent should be cleaned up")
 
-	_, exists = b.agents[policy.ConnectionHash("expiring-soon")]
+	_, exists = b.agents[wire.ConnectionHash("expiring-soon")]
 	require.False(t, exists, "expiring-soon agent should be cleaned up")
 }
 
@@ -343,7 +343,7 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	t.Cleanup(b.Close)
 	<-b.Ready()
 
-	conns := []policy.Connection{
+	conns := []wire.Connection{
 		{RemoteHost: "host-a.example.com", RemoteUser: "alice", Hash: "hash-a"},
 		{RemoteHost: "host-b.example.com", RemoteUser: "bob", Hash: "hash-b"},
 		{RemoteHost: "host-c.example.com", RemoteUser: "carol", Hash: "hash-c"},
@@ -395,8 +395,8 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 	t.Cleanup(b.Close)
 	<-b.Ready()
 
-	one := policy.Connection{RemoteHost: "one.example.com", RemoteUser: "root", Hash: "hash-one"}
-	two := policy.Connection{RemoteHost: "two.example.com", RemoteUser: "root", Hash: "hash-two"}
+	one := wire.Connection{RemoteHost: "one.example.com", RemoteUser: "root", Hash: "hash-one"}
+	two := wire.Connection{RemoteHost: "two.example.com", RemoteUser: "root", Hash: "hash-two"}
 	require.True(t, callMatch(t, b.brokerSocketPath, one).Allow)
 	require.True(t, callMatch(t, b.brokerSocketPath, two).Allow)
 	require.Equal(t, int32(2), atomic.LoadInt32(hits))
@@ -450,7 +450,7 @@ func TestKillUnknownAgentLeavesBrokerStateUnchanged(t *testing.T) {
 	t.Parallel()
 	b := newTestBroker(t, nil, testIdentityVerifier)
 	b.lock.Lock()
-	b.agents["known"] = agentEntry{connection: policy.Connection{Hash: "known"}}
+	b.agents["known"] = agentEntry{connection: wire.Connection{Hash: "known"}}
 	b.lock.Unlock()
 	t.Cleanup(func() {
 		b.lock.Lock()
@@ -463,7 +463,7 @@ func TestKillUnknownAgentLeavesBrokerStateUnchanged(t *testing.T) {
 
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	require.Contains(t, b.agents, policy.ConnectionHash("known"))
+	require.Contains(t, b.agents, wire.ConnectionHash("known"))
 }
 
 // TestMatchCADown_ReturnsHumanLegibleError covers the other deletion-risk
@@ -502,7 +502,7 @@ func TestMatchCADown_ReturnsHumanLegibleError(t *testing.T) {
 	t.Cleanup(b.Close)
 	<-b.Ready()
 
-	resp := b.MatchWithUserOutput(ctx, policy.Connection{
+	resp := b.MatchWithUserOutput(ctx, wire.Connection{
 		RemoteHost: "down.example.com",
 		RemoteUser: "root",
 		Hash:       "downhash",

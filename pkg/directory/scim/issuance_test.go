@@ -15,7 +15,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -64,7 +63,7 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	check := func(subject string, allowed bool) {
 		t.Helper()
 		token := idp.MintIDToken(subject, time.Now().Add(time.Hour))
-		result, e := authority.Issue(t.Context(), token, policy.Connection{RemoteHost: "host", RemoteUser: "root"}, userKey)
+		result, e := authority.Issue(t.Context(), token, wire.Connection{RemoteHost: "host", RemoteUser: "root"}, userKey)
 		_, status, adminErr := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "directory-groups"})
 		if allowed {
 			require.NoError(t, e)
@@ -161,7 +160,7 @@ func TestBoundGroupsPreserveDenyAndNegatedSelectorSemantics(t *testing.T) {
 				u := f.facts(id)
 				active := u.Active
 				facts := &wire.PolicyFacts{Authentication: facts.Authentication{ID: id, ExpiresAt: time.Now().Add(time.Hour)}, Target: "host", User: &facts.User{ID: id, UserName: u.UserName, Groups: u.Groups, Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: []string{"root"}}}
-				_, e = evaluator.Evaluate(t.Context(), policy.Connection{RemoteHost: "host", RemoteUser: "root"}, facts)
+				_, e = evaluator.Evaluate(t.Context(), wire.Connection{RemoteHost: "host", RemoteUser: "root"}, facts)
 				allowed := tc.alice
 				if id == "bob" {
 					allowed = tc.bob

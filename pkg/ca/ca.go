@@ -18,7 +18,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -74,7 +73,7 @@ type authorization struct {
 // Issue obtains policy approval and signs the requested key using inventory facts
 // and policy-provided limits. It returns a result only after signing succeeds;
 // callers never handle intermediate authorization or signing parameters.
-func (c *CA) Issue(ctx context.Context, token string, conn policy.Connection, publicKey sshcert.RawPublicKey) (*IssuedCertificate, error) {
+func (c *CA) Issue(ctx context.Context, token string, conn wire.Connection, publicKey sshcert.RawPublicKey) (*IssuedCertificate, error) {
 	auth, err := c.requestPolicy(ctx, token, conn)
 	if err != nil {
 		return nil, fmt.Errorf("certificate authorization failed: %w", err)
@@ -193,7 +192,7 @@ func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
 // Policy owns eligibility and lifetime restrictions. CA validates construction
 // data and applies the returned limits without re-evaluating inventory policy.
 // The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
-func (c *CA) requestPolicy(ctx context.Context, token string, conn policy.Connection) (*authorization, error) {
+func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connection) (*authorization, error) {
 	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
 	defer cancel()
 	if c.inventory == nil {

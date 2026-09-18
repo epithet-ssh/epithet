@@ -1,4 +1,4 @@
-package policy
+package wire
 
 // ConnectionHash is the OpenSSH %C hash value that uniquely identifies a connection.
 // This is computed by OpenSSH from the connection parameters (local host, remote host, port, user, ProxyJump).

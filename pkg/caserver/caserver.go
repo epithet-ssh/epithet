@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"golang.org/x/crypto/ssh"
@@ -156,7 +155,7 @@ func (s *caServer) failError(w http.ResponseWriter, err error) {
 // CreateCertRequest asks for a signed cert. Both fields are required.
 type CreateCertRequest struct {
 	PublicKey  sshcert.RawPublicKey `json:"publicKey"`
-	Connection policy.Connection    `json:"connection"`
+	Connection wire.Connection      `json:"connection"`
 }
 
 // CreateCertResponse is response from a CreateCert request.
@@ -270,7 +269,7 @@ func (s *caServer) logCertIssuance(
 	ctx context.Context,
 	issued *ca.IssuedCertificate,
 	pubKey sshcert.RawPublicKey,
-	conn policy.Connection,
+	conn wire.Connection,
 ) error {
 	parsedCert, err := sshcert.Parse(issued.Certificate)
 	if err != nil {

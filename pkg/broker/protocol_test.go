@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +82,7 @@ func TestMatchStreamsOutputThenResult(t *testing.T) {
 	b := newTestBroker(t, tokenFn, testIdentityVerifier)
 	client := dialBroker(t, b)
 
-	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &policy.Connection{
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &wire.Connection{
 		RemoteHost: "h", RemoteUser: "u", Hash: "abc",
 	}}))
 
@@ -171,7 +171,7 @@ func TestClientCloseCancelsMatch(t *testing.T) {
 	b := newTestBroker(t, tokenFn, testIdentityVerifier)
 	client := dialBroker(t, b)
 
-	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &policy.Connection{
+	require.NoError(t, json.NewEncoder(client).Encode(Request{Match: &wire.Connection{
 		RemoteHost: "h", RemoteUser: "u", Hash: "close-test",
 	}}))
 
@@ -210,7 +210,7 @@ func TestInspectReturnsInspectEvent(t *testing.T) {
 func TestInspectReturnsAgentConnection(t *testing.T) {
 	t.Parallel()
 	b := newTestBroker(t, nil, testIdentityVerifier)
-	conn := policy.Connection{
+	conn := wire.Connection{
 		RemoteHost: "server.example.com",
 		RemoteUser: "deploy",
 		Port:       2222,
@@ -244,7 +244,7 @@ func TestInspectReturnsAgentConnection(t *testing.T) {
 func TestKillReturnsTypedEventAndRemovesAgent(t *testing.T) {
 	t.Parallel()
 	b := newTestBroker(t, nil, testIdentityVerifier)
-	connection := policy.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Hash: "connection-hash"}
+	connection := wire.Connection{RemoteHost: "server.example.com", RemoteUser: "deploy", Hash: "connection-hash"}
 	b.lock.Lock()
 	b.agents[connection.Hash] = agentEntry{connection: connection}
 	b.lock.Unlock()
@@ -277,7 +277,7 @@ func TestKillUnknownAgentReturnsTypedError(t *testing.T) {
 	var event Event
 	require.NoError(t, json.Unmarshal(scanner.Bytes(), &event))
 	require.NotNil(t, event.Kill)
-	require.Equal(t, policy.ConnectionHash("missing"), event.Kill.ID)
+	require.Equal(t, wire.ConnectionHash("missing"), event.Kill.ID)
 	require.Contains(t, event.Kill.Error, "does not exist")
 }
 
@@ -322,7 +322,7 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 		}
 		conn.Close()
 	}
-	result := b.MatchWithUserOutput(context.Background(), policy.Connection{RemoteHost: "h", RemoteUser: "u", Hash: "identity-reuse"}, io.Discard)
+	result := b.MatchWithUserOutput(context.Background(), wire.Connection{RemoteHost: "h", RemoteUser: "u", Hash: "identity-reuse"}, io.Discard)
 	require.False(t, result.Allow) // This fixture intentionally returns no certificate.
 	require.Contains(t, result.Error, "certificate request failed")
 	require.Equal(t, int32(1), fetches.Load(), "identity and SSH must share the same cached authentication")
@@ -376,16 +376,16 @@ func TestAgentIDPrefixes(t *testing.T) {
 			t.Run(operation+"/"+tc.name, func(t *testing.T) {
 				b := newTestBroker(t, nil, testIdentityVerifier)
 				b.lock.Lock()
-				for _, id := range []policy.ConnectionHash{"abcd1fff", "abcd2fff"} {
-					b.agents[id] = agentEntry{connection: policy.Connection{Hash: id}, expiresAt: time.Now().Add(time.Hour)}
+				for _, id := range []wire.ConnectionHash{"abcd1fff", "abcd2fff"} {
+					b.agents[id] = agentEntry{connection: wire.Connection{Hash: id}, expiresAt: time.Now().Add(time.Hour)}
 				}
 				b.lock.Unlock()
 				t.Cleanup(func() { b.lock.Lock(); clear(b.agents); b.lock.Unlock() })
 				request := Request{}
 				if operation == "inspect" {
-					request.Inspect = &InspectRequest{ID: policy.ConnectionHash(tc.prefix)}
+					request.Inspect = &InspectRequest{ID: wire.ConnectionHash(tc.prefix)}
 				} else {
-					request.Kill = &KillRequest{ID: policy.ConnectionHash(tc.prefix)}
+					request.Kill = &KillRequest{ID: wire.ConnectionHash(tc.prefix)}
 				}
 				client := dialBroker(t, b)
 				require.NoError(t, json.NewEncoder(client).Encode(request))
@@ -408,7 +408,7 @@ func TestAgentIDPrefixes(t *testing.T) {
 						require.Contains(t, event.Kill.Error, tc.errorText)
 					} else {
 						require.Empty(t, event.Kill.Error)
-						require.Equal(t, policy.ConnectionHash("abcd1fff"), event.Kill.ID)
+						require.Equal(t, wire.ConnectionHash("abcd1fff"), event.Kill.ID)
 					}
 				}
 				b.lock.Lock()
@@ -418,7 +418,7 @@ func TestAgentIDPrefixes(t *testing.T) {
 				} else {
 					require.Len(t, b.agents, 2)
 				}
-				require.Contains(t, b.agents, policy.ConnectionHash("abcd2fff"))
+				require.Contains(t, b.agents, wire.ConnectionHash("abcd2fff"))
 			})
 		}
 	}

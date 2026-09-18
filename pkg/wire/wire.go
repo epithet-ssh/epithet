@@ -6,8 +6,6 @@ package wire
 import (
 	"fmt"
 	"time"
-
-	"github.com/epithet-ssh/epithet/pkg/policy"
 )
 
 // MaxBodySize is the maximum request body and trusted-peer response body size.
@@ -17,8 +15,8 @@ const MaxBodySize = 64 * 1024
 
 // PolicyRequest is the CA→policy-server cert evaluation request body.
 type PolicyRequest struct {
-	Facts      *PolicyFacts      `json:"facts"`
-	Connection policy.Connection `json:"connection"`
+	Facts      *PolicyFacts `json:"facts"`
+	Connection Connection   `json:"connection"`
 }
 
 // MaxTTLSeconds is the largest whole-second lifetime representable by Go's

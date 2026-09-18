@@ -23,12 +23,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -132,7 +132,7 @@ hosts:
 	require.NoError(t, err)
 	requestBody, err := json.Marshal(caserver.CreateCertRequest{
 		PublicKey:  attackerPub,
-		Connection: policy.Connection{RemoteHost: "prod.example.com", RemoteUser: "root"},
+		Connection: wire.Connection{RemoteHost: "prod.example.com", RemoteUser: "root"},
 	})
 	require.NoError(t, err)
 	for _, tc := range []struct {

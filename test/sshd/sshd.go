@@ -20,9 +20,9 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // safeBuffer is a thread-safe wrapper around bytes.Buffer
@@ -256,7 +256,7 @@ func (s *Server) SshWithBroker(b *broker.Broker) (string, error) {
 	// OpenSSH computes this as: hash of "%l%h%p%r%j" (local host, remote host, port, remote user, jump)
 	hashInput := fmt.Sprintf("%slocalhost%d%s", localHost, s.Port, s.User)
 	hash := sha256.Sum256([]byte(hashInput))
-	connectionHash := policy.ConnectionHash(hex.EncodeToString(hash[:])[:16]) // Use first 16 chars like OpenSSH
+	connectionHash := wire.ConnectionHash(hex.EncodeToString(hash[:])[:16]) // Use first 16 chars like OpenSSH
 
 	// Get the agent socket path from the broker
 	agentSocket := b.AgentSocketPath(connectionHash)

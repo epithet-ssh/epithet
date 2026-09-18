@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
-	"github.com/epithet-ssh/epithet/pkg/policy"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -49,7 +48,7 @@ type mockEvaluator struct {
 	err      error
 }
 
-func (m *mockEvaluator) Evaluate(ctx context.Context, conn policy.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
+func (m *mockEvaluator) Evaluate(ctx context.Context, conn wire.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
 	m.calls++
 	if m.err != nil {
 		return nil, m.err
@@ -70,7 +69,7 @@ func TestHandler_Success(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -111,7 +110,7 @@ func TestHandler_Unauthorized(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -140,7 +139,7 @@ func TestHandler_ExpiredAuthentication(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -171,7 +170,7 @@ func TestHandler_Forbidden(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -201,7 +200,7 @@ func TestHandler_NotHandled(t *testing.T) {
 	})
 
 	req := wire.PolicyRequest{
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "unknown.example.com",
 			RemoteUser: "testuser",
 			Port:       22,
@@ -310,7 +309,7 @@ func TestPolicyRejectsMismatchedFacts(t *testing.T) {
 			handler, sign := newHandler(t, policyserver.Config{Evaluator: evaluator})
 			active := true
 			auth := facts.Authentication{ID: "alice-id", ExpiresAt: time.Now().Add(time.Minute)}
-			r := wire.PolicyRequest{Connection: policy.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: nil}}}
+			r := wire.PolicyRequest{Connection: wire.Connection{RemoteHost: "host"}, Facts: &wire.PolicyFacts{Authentication: auth, Target: "host", User: &facts.User{ID: auth.ID, UserName: "alice", Active: &active}, Host: &facts.HostResource{Names: []string{"host"}, Accounts: nil}}}
 			tc.change(&r)
 			body, err := json.Marshal(r)
 			require.NoError(t, err)

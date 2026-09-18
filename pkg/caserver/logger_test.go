@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policy"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 func TestSlogCertLogger(t *testing.T) {
@@ -26,7 +26,7 @@ func TestSlogCertLogger(t *testing.T) {
 		UserName:     "alice@example.com",
 		ID:           "directory-alice",
 		Principals:   []string{"alice", "admin"},
-		Connection: policy.Connection{
+		Connection: wire.Connection{
 			RemoteHost: "server.example.com",
 			RemoteUser: "alice",
 			Port:       22,
