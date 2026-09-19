@@ -55,12 +55,16 @@ func TestHostEnrollExplicitDomainPreservesExistingState(t *testing.T) {
 }
 
 func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "state")
+	root := t.TempDir()
+	dir := filepath.Join(root, "state")
+	sshdConfig := filepath.Join(root, "sshd_config")
+	require.NoError(t, os.WriteFile(sshdConfig, nil, 0o600))
 	cmd := HostEnrollCLI{
-		CAURL:         "https://ca.example.com/",
-		DomainFile:    filepath.Join(dir, "domain"),
-		CAPubkeyFile:  filepath.Join(dir, "epithet-ca.pub"),
-		PrincipalMode: "mystery",
+		CAURL:          "https://ca.example.com/",
+		DomainFile:     filepath.Join(dir, "domain"),
+		CAPubkeyFile:   filepath.Join(dir, "epithet-ca.pub"),
+		PrincipalMode:  "mystery",
+		SSHDConfigFile: sshdConfig,
 		sshdEnv: &sshdEnvironment{
 			goos:       "linux",
 			getenv:     func(string) string { return "" },
