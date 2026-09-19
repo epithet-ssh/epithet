@@ -94,6 +94,8 @@ type AgentCLI struct {
 	CaCooldown  time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 	LoginMethod string        `help:"Interactive login method" name:"login-method" enum:"auto,browser,device" default:"auto"`
 
+	Login    AgentLoginCLI    `cmd:"login" help:"Authenticate the running agent without requesting a certificate"`
+	Logout   AgentLogoutCLI   `cmd:"logout" help:"Clear this profile's certificate agents and login state"`
 	Identity AgentIdentityCLI `cmd:"identity" aliases:"id,ide,iden,ident" help:"Authenticate the running agent and print its OIDC identity"`
 	Start    AgentStartCLI    `cmd:"" default:"withargs" help:"Start the epithet agent"`
 	Inspect  AgentInspectCLI  `cmd:"inspect" aliases:"in,ins,insp" help:"Inspect broker state (certificates, agents)"`
@@ -202,28 +204,30 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		TLSConfig:    tlsCfg,
 		LoginMethod:  loginMethod,
 	}
-	// Refresh state lives in this closure, in memory only. broker.Auth
-	// serializes invocations, so no locking is needed here.
-	var oauthState *oauth2.Token
-	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
-		if force && oauthState != nil {
-			// The broker calls us with force=true only after the CA rejected a
-			// token, i.e. after 401'ing on the id_token derived from this exact
-			// oauthState. Authenticate treats a time-valid access token as
-			// reusable and would hand back that same rejected id_token, so we
-			// backdate its expiry to force the refresh-token (or full re-auth)
-			// path, which mints a genuinely new id_token.
-			oauthState.Expiry = time.Now().Add(-time.Minute)
-		}
-		idToken, next, err := authoidc.Authenticate(ctx, oidcCfg, oauthState, out)
-		if err != nil {
-			if inferredDevice && errors.Is(err, authoidc.ErrDeviceAuthorizationUnsupported) {
-				return "", fmt.Errorf("automatic device login is unavailable: %w; use --login-method browser to use a local callback", err)
+	// Each login session owns its refresh state. Logout discards the entire
+	// session; Auth serializes calls within that session.
+	tokenFactory := func() broker.TokenFunc {
+		var oauthState *oauth2.Token
+		return func(ctx context.Context, out io.Writer, force bool) (string, error) {
+			if force && oauthState != nil {
+				// The broker calls us with force=true only after the CA rejected a
+				// token, i.e. after 401'ing on the id_token derived from this exact
+				// oauthState. Authenticate treats a time-valid access token as
+				// reusable and would hand back that same rejected id_token, so we
+				// backdate its expiry to force the refresh-token (or full re-auth)
+				// path, which mints a genuinely new id_token.
+				oauthState.Expiry = time.Now().Add(-time.Minute)
 			}
-			return "", err
+			idToken, next, err := authoidc.Authenticate(ctx, oidcCfg, oauthState, out)
+			if err != nil {
+				if inferredDevice && errors.Is(err, authoidc.ErrDeviceAuthorizationUnsupported) {
+					return "", fmt.Errorf("automatic device login is unavailable: %w; use --login-method browser to use a local callback", err)
+				}
+				return "", err
+			}
+			oauthState = next
+			return idToken, nil
 		}
-		oauthState = next
-		return idToken, nil
 	}
 
 	// Bind inventory management to the endpoint advertised by the CA.
@@ -231,7 +235,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	if err != nil {
 		return err
 	}
-	b, err := broker.New(*logger, brokerSock, tokenFn, caClient, discovery.PublicCAURL, inventoryClient,
+	b, err := broker.New(*logger, brokerSock, tokenFactory, caClient, discovery.PublicCAURL, inventoryClient,
 		makeAgentIdentityVerifier(*discovery.Auth, tlsCfg), agentDir)
 	if err != nil {
 		return fmt.Errorf("failed to create broker: %w", err)

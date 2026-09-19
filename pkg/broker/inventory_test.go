@@ -28,7 +28,10 @@ func TestInventoryResponseKeepsCAURLLocal(t *testing.T) {
 			defer server.Close()
 			client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
-			b := &Broker{log: *testLogger(t), auth: &Auth{token: "test-token", expiresAt: time.Now().Add(time.Hour)}, inventoryClient: client, publicCAURL: "https://configured.example/"}
+			session := newAuthSession(func() TokenFunc { return stubTokenFunc })
+			defer session.cancel()
+			session.auth = &Auth{token: "test-token", expiresAt: time.Now().Add(time.Hour)}
+			b := &Broker{log: *testLogger(t), session: session, inventoryClient: client, publicCAURL: "https://configured.example/"}
 			response := b.InventoryWithUserOutput(t.Context(), inventoryapi.ControlRequest{Action: tc.name}, io.Discard)
 			require.Empty(t, response.Error)
 			require.Equal(t, tc.wantURL, response.CAURL)

@@ -109,7 +109,7 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 - Starts the broker daemon, listening on `~/.epithet/run/<name>/broker.sock`
 - `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
 - `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
-- `agent identity`, `agent inspect`, and `agent kill` locate the running broker from this profile name; `--broker` overrides the derived socket path.
+- `agent identity`, `agent login`, `agent logout`, `agent inspect`, and `agent kill` locate the running broker from this profile name; `--broker` overrides the derived socket path.
 - Fetches OIDC issuer/client ID from the CA's auth config once at startup (discovered via Link header on `GET /`) — no local auth configuration
 - Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`. A plain `Match tagged` block selects the per-connection `IdentityAgent` on whichever pass first supplies the tag; a separate `Match final tagged` block invokes Epithet after hostname canonicalization. `%C` is expanded from the final connection in both places.
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
@@ -167,7 +167,7 @@ epithet server --listen <addr> --ca-key <path>
 
 2. **CA Client** (`pkg/caclient`): HTTP client library the broker uses to request certificates and fetch discovery from the CA. Sends the user's token in the `Authorization: Bearer` header. Includes domain-specific error types for different failure modes (`InvalidTokenError`, `PolicyDeniedError`, `PolicyPendingError`, `CAUnavailableError`). Supports multi-CA failover with circuit breakers (`gobreaker`).
 
-3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and OIDC authentication on endpoints. Communicates with `epithet match` and `epithet agent identity`/`inspect`/`kill` over newline-framed JSON on a unix socket — see [Protocols](#protocols). Implements per-connection agent creation and automatic expiry cleanup. Its agent map holds routing and expiry metadata, not copies of credentials.
+3. **Broker** (`pkg/broker`): The daemon process managing certificate lifecycle and OIDC authentication on endpoints. Communicates with `epithet match` and `epithet agent identity`/`login`/`logout`/`inspect`/`kill` over newline-framed JSON on a unix socket — see [Protocols](#protocols). Implements per-connection agent creation and automatic expiry cleanup. Its agent map holds routing and expiry metadata, not copies of credentials.
 
 4. **Per-connection agents** (`pkg/agent`): In-process, read-only (`List`/`Sign` only) SSH agent implementation using `golang.org/x/crypto/ssh/agent`. One agent instance per unique connection, each owning its private key and certificate and exposing a unix socket at `~/.epithet/run/<name>/agent/%C`.
 
@@ -221,6 +221,8 @@ Newline-framed JSON over the broker's unix socket — no gRPC, no protobuf. Both
 
 - `epithet match` sends one line: `{"match": {"remoteHost":...,"remoteUser":...,"port":...,"proxyJump":...,"hash":...}}`. The broker streams zero or more `{"output": "<text>"}` events (auth progress, e.g. the authorization URL to visit, written to the user's stderr) followed by exactly one `{"result": {"allow": bool, "error": "..."}}`.
 - `epithet agent identity` sends `{"identity": {}}`. The broker authenticates through its shared token cache and streams login progress as `output` events, followed by `{"identity": {"identity": {"issuer": "...", "subject": "..."}}}` or an `identity.error`. It verifies the token using the agent's configured issuer and audience, and includes optional `oid`, `email`, and `email_verified` diagnostic claims. Inventory identity mapping is owned by the inventory service and is not advertised to the agent. Tokens stay inside the agent, and no certificate is requested.
+- `epithet agent login` uses the identity request above, but prints only a login confirmation. It shares the broker's authentication cache and does not mint a certificate.
+- `epithet agent logout` sends `{"logout": {}}` and receives `{"logout": {"agentsCleared": N}}` or a `logout.error`. The broker cancels the current login session, closes its certificate agents, and replaces both the ID token cache and the refresh-state fetcher. Requests from the canceled session cannot install agents afterward. The broker remains available for a fresh login.
 - `epithet agent inspect` sends `{"inspect": {}}` and receives one `{"inspect": {...}}` response describing the broker's current agents (including each agent's host, user, port, ProxyJump, and `%C` hash) and CA endpoint states. An optional `id` in the inspect request selects one agent by full hash or unique prefix; missing and ambiguous IDs return an error.
 - `epithet agent kill AGENT_ID` sends `{"kill": {"id":"..."}}` and receives one `{"kill": {"id":"...","connection":{...}}}` response. A failed lookup returns the same typed response with an `error` field.
 

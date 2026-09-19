@@ -90,7 +90,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 				return token, nil
 			}
 			dir := shortTempDir(t)
-			b, err := New(*logger, dir+"/b.sock", tokenFn, client, "https://ca.example", testInventoryClient(t), testIdentityVerifier, dir+"/agents")
+			b, err := New(*logger, dir+"/b.sock", func() TokenFunc { return tokenFn }, client, "https://ca.example", testInventoryClient(t), testIdentityVerifier, dir+"/agents")
 			require.NoError(t, err)
 			b.SetShutdownTimeout(0)
 			t.Cleanup(b.Close)

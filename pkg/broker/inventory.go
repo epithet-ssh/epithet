@@ -12,6 +12,8 @@ import (
 // CA-discovered inventory endpoint. Only the short-lived ID token goes to that
 // endpoint; no token or refresh state is returned over the local protocol.
 func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventoryapi.ControlRequest, out io.Writer) *InventoryResponse {
+	session, ctx, cancel := b.sessionRequest(ctx)
+	defer cancel()
 	logger := b.log.With("action", request.Action)
 	started := time.Now()
 	defer func() { logger.Debug("inventory request ended", "elapsed", time.Since(started)) }()
@@ -20,7 +22,7 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 		return &InventoryResponse{ControlResponse: inventoryapi.ControlResponse{Error: err.Error()}}
 	}
 	logger.Debug("authenticating inventory request")
-	token, err := b.auth.Token(ctx, out)
+	token, err := session.auth.Token(ctx, out)
 	if err != nil {
 		return fail(err)
 	}
@@ -28,13 +30,16 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 	response, status, err := b.inventoryWithToken(ctx, token, request)
 	if status == 401 {
 		logger.Debug("inventory rejected authentication; refreshing token")
-		token, err = b.auth.ForceRefresh(ctx, out)
+		token, err = session.auth.ForceRefresh(ctx, out)
 		if err != nil {
 			return fail(err)
 		}
 		response, _, err = b.inventoryWithToken(ctx, token, request)
 	}
 	if err != nil {
+		return fail(err)
+	}
+	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
 	result := &InventoryResponse{ControlResponse: *response}

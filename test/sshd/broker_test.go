@@ -122,7 +122,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
 		return nil, fmt.Errorf("unexpected identity request in SSH test")
 	}
-	b, err := broker.New(*logger, brokerSocketPath, tokenFn, caClient, caHTTPServer.URL, inventoryClient, verifyIdentity, agentSocketDir)
+	b, err := broker.New(*logger, brokerSocketPath, func() broker.TokenFunc { return tokenFn }, caClient, caHTTPServer.URL, inventoryClient, verifyIdentity, agentSocketDir)
 	require.NoError(t, err)
 
 	go func() {

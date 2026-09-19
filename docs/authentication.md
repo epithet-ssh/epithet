@@ -123,6 +123,26 @@ for a named profile or `--broker` to select an explicit socket. Start the
 agent first. Inventory mapping changes require restarting inventory. Changing login issuer
 or client settings also requires restarting agents to refresh their discovery. The standalone `epithet identity` command has been removed.
 
+`epithet agent login` authenticates without requesting a certificate or printing
+identity claims. It reuses a valid login; to authenticate afresh, run:
+
+```bash
+epithet agent logout
+epithet agent login
+```
+
+`logout` closes all certificate agents for the selected profile and discards
+its ID token and OAuth refresh state. Pending authentication and certificate
+requests are canceled. The broker stays running, and the next login or SSH
+request can authenticate again. Other profiles and established SSH sessions
+are unaffected. This does not sign out the identity provider's browser session;
+to switch users, you may also need to sign out there.
+
+Both commands use `agent.name` and accept `--broker`, like `agent identity`.
+For example, use `epithet agent --name work logout` for the `work` profile.
+Start the broker first, and restart an older broker with the updated binary
+before using `logout`.
+
 On later calls, `prev` carries the previous `oauth2.Token` (including its
 refresh token). `Authenticate` reuses a still-valid access token or uses the
 refresh token to get a new one silently, without starting either interactive

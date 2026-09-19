@@ -88,7 +88,9 @@ inventory:
 			require.NoError(t, err)
 			socket := filepath.Join(dir, "broker.sock")
 			token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
-			b, err := broker.New(*slog.New(slog.DiscardHandler), socket, func(context.Context, io.Writer, bool) (string, error) { return token, nil }, ca, root.FinalURL, client, func(context.Context, string) (*broker.Identity, error) {
+			b, err := broker.New(*slog.New(slog.DiscardHandler), socket, func() broker.TokenFunc {
+				return func(context.Context, io.Writer, bool) (string, error) { return token, nil }
+			}, ca, root.FinalURL, client, func(context.Context, string) (*broker.Identity, error) {
 				return nil, fmt.Errorf("unexpected identity request")
 			}, filepath.Join(dir, "agents"))
 			require.NoError(t, err)

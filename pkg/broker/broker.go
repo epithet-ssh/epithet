@@ -47,10 +47,10 @@ type agentEntry struct {
 // - there is no cross-connection certificate cache.
 //
 // Concurrency: Broker is safe for concurrent access from multiple RPC clients.
-// The primary lock (b.lock) protects the agents map and coordinates with Auth.
+// The primary lock (b.lock) protects the agents map and current login session.
 //
 // Locking invariants:
-//   - b.lock protects: agents map (both reads and writes)
+//   - b.lock protects: agents map and session
 //   - Auth has its own internal lock (auth.mu) - safe to call without b.lock
 //   - Match() only holds b.lock around agents-map access, never across auth or
 //     CA calls, so concurrent matches can share an in-flight auth attempt.
@@ -59,11 +59,11 @@ type agentEntry struct {
 //   - ensureAgent() acquires b.lock itself; do not call it with b.lock held
 //
 // Immutable after New(): brokerSocketPath, agentSocketDir, caClient, inventoryClient, log
-// Protected by b.lock: agents map
+// Protected by b.lock: agents map and session
 // Protected by closeOnce: brokerListener, done channel
-// Self-synchronized: auth (has internal lock)
+// Self-synchronized: each session's Auth (has internal lock)
 type Broker struct {
-	lock      sync.Mutex // Protects agents map
+	lock      sync.Mutex // Protects agents and session
 	done      chan struct{}
 	ready     chan struct{} // Closed when broker is ready to accept connections
 	closeOnce sync.Once
@@ -73,7 +73,8 @@ type Broker struct {
 	brokerListener   net.Listener
 
 	verifyIdentity IdentityVerifier                   // Immutable after New(); safe for concurrent calls
-	auth           *Auth                              // Has internal locking, safe to call concurrently
+	session        *authSession                       // Protected by b.lock
+	newToken       TokenFactory                       // Immutable after New()
 	agents         map[wire.ConnectionHash]agentEntry // Protected by b.lock
 
 	inventoryClient *inventoryclient.Client // Immutable after New()
@@ -87,7 +88,7 @@ type Broker struct {
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient.Client, publicCAURL string, inventoryClient *inventoryclient.Client, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
+func New(log slog.Logger, socketPath string, newToken TokenFactory, caClient *caclient.Client, publicCAURL string, inventoryClient *inventoryclient.Client, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
 	if caClient == nil {
 		return nil, fmt.Errorf("caClient is required")
 	}
@@ -100,7 +101,8 @@ func New(log slog.Logger, socketPath string, fetch TokenFunc, caClient *caclient
 	}
 
 	b := &Broker{
-		auth:             NewAuth(fetch),
+		session:          newAuthSession(newToken),
+		newToken:         newToken,
 		agents:           make(map[wire.ConnectionHash]agentEntry),
 		brokerSocketPath: socketPath,
 		agentSocketDir:   agentSocketDir,
@@ -226,10 +228,16 @@ func (b *Broker) deny(err error) MatchResponse {
 // protocol server (protocol.go). Canceling ctx (e.g. the requesting
 // `epithet match` process went away) abandons this match's auth and CA work.
 func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, userOutput io.Writer) MatchResponse {
+	session, ctx, cancel := b.sessionRequest(ctx)
+	defer cancel()
 	b.log.Debug("match request received", "connection", conn)
 
 	// Step 1: Check if agent already exists for this connection hash.
 	b.lock.Lock()
+	if session != b.session || session.ctx.Err() != nil {
+		b.lock.Unlock()
+		return b.deny(context.Canceled)
+	}
 	if entry, exists := b.agents[conn.Hash]; exists {
 		// Check if agent's certificate is still valid (with buffer).
 		if time.Now().Add(expiryBuffer).Before(entry.expiresAt) {
@@ -255,7 +263,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, 
 		return b.deny(fmt.Errorf("failed to generate keypair: %w", err))
 	}
 
-	token, err := b.auth.Token(ctx, userOutput)
+	token, err := session.auth.Token(ctx, userOutput)
 	if err != nil {
 		return b.deny(fmt.Errorf("authentication failed: %w", err))
 	}
@@ -267,7 +275,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, 
 	if errors.As(err, &invalidToken) {
 		// Safety net: server-side revocation or clock skew. One forced refresh.
 		b.log.Warn("CA rejected token despite local validity, refreshing once")
-		token, err = b.auth.ForceRefresh(ctx, userOutput)
+		token, err = session.auth.ForceRefresh(ctx, userOutput)
 		if err != nil {
 			return b.deny(fmt.Errorf("re-authentication failed: %w", err))
 		}
@@ -286,7 +294,7 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, 
 		PrivateKey:  privateKey,
 		Certificate: certResp.Certificate,
 	}
-	if err := b.ensureAgent(conn, credential); err != nil {
+	if err := b.ensureAgent(session, conn, credential); err != nil {
 		return b.deny(fmt.Errorf("failed to create agent: %w", err))
 	}
 
@@ -297,13 +305,17 @@ func (b *Broker) MatchWithUserOutput(ctx context.Context, conn wire.Connection, 
 // If an agent already exists, it updates the credential. If not, it creates a new agent.
 //
 // Acquires b.lock for the duration; do not call with b.lock held.
-func (b *Broker) ensureAgent(connection wire.Connection, credential agent.Credential) error {
+func (b *Broker) ensureAgent(session *authSession, connection wire.Connection, credential agent.Credential) error {
 	expiresAt, err := credential.Certificate.Expiry()
 	if err != nil {
 		return fmt.Errorf("failed to parse certificate expiry: %w", err)
 	}
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	// Logout may have completed while the CA was issuing this certificate.
+	if session != b.session || session.ctx.Err() != nil {
+		return context.Canceled
+	}
 	connectionHash := connection.Hash
 
 	// Check if agent already exists
@@ -414,6 +426,10 @@ func (b *Broker) Close() {
 		if b.brokerListener != nil {
 			_ = b.brokerListener.Close()
 		}
+
+		b.lock.Lock()
+		b.session.cancel()
+		b.lock.Unlock()
 
 		// Wait for in-flight RPCs to complete (with timeout)
 		if b.shutdownTimeout > 0 {

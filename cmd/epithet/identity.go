@@ -38,51 +38,60 @@ func (c *AgentIdentityCLI) Run(parent *AgentCLI) error {
 }
 
 func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress io.Writer) error {
+	identity, err := authenticateAgent(ctx, socket, progress)
+	if err != nil {
+		return err
+	}
+	if c.JSON {
+		return json.NewEncoder(out).Encode(identity)
+	}
+	return writeAgentIdentity(out, identity)
+}
+
+// authenticateAgent uses the broker's shared auth flow without minting a certificate.
+func authenticateAgent(ctx context.Context, socket string, progress io.Writer) (*broker.Identity, error) {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
-		return fmt.Errorf("cannot connect to agent at %s; start it with epithet agent: %w", socket, err)
+		return nil, fmt.Errorf("cannot connect to agent at %s; start it with epithet agent: %w", socket, err)
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	if err := json.NewEncoder(conn).Encode(broker.Request{Identity: &struct{}{}}); err != nil {
-		return fmt.Errorf("sending identity request: %w", err)
+		return nil, fmt.Errorf("sending identity request: %w", err)
 	}
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
 	for scanner.Scan() {
 		var event broker.Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return fmt.Errorf("reading agent identity: %w", err)
+			return nil, fmt.Errorf("reading agent identity: %w", err)
 		}
 		if event.Output != "" {
 			if _, err := io.WriteString(progress, event.Output); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if event.Identity != nil {
 			if event.Identity.Error != "" {
-				return fmt.Errorf("agent identity: %s", event.Identity.Error)
+				return nil, fmt.Errorf("agent identity: %s", event.Identity.Error)
 			}
 			if event.Identity.Identity == nil {
-				return fmt.Errorf("agent returned no identity")
+				return nil, fmt.Errorf("agent returned no identity")
 			}
-			if c.JSON {
-				return json.NewEncoder(out).Encode(event.Identity.Identity)
-			}
-			return writeAgentIdentity(out, event.Identity.Identity)
+			return event.Identity.Identity, nil
 		}
 		if event.Result != nil {
-			return fmt.Errorf("agent identity: %s (restart the agent if it predates identity support)", event.Result.Error)
+			return nil, fmt.Errorf("agent identity: %s (restart the agent if it predates identity support)", event.Result.Error)
 		}
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("reading agent identity: %w", err)
+		return nil, fmt.Errorf("reading agent identity: %w", err)
 	}
-	return fmt.Errorf("agent closed connection without an identity")
+	return nil, fmt.Errorf("agent closed connection without an identity")
 }
 
 func writeAgentIdentity(out io.Writer, identity *broker.Identity) error {

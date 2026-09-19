@@ -22,25 +22,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAgentIdentityUsesProfileAndSocketOverride(t *testing.T) {
+func TestAgentSessionUsesProfileAndSocketOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("agent:\n  name: work\n  ca-url: https://ca.example\n"), 0600))
-	for _, args := range [][]string{{"agent", "identity"}, {"agent", "--name", "personal", "identity", "--broker", "/tmp/identity.sock"}} {
-		var root struct {
-			Agent AgentCLI `cmd:"agent"`
-		}
-		parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
-		require.NoError(t, err)
-		_, err = parser.Parse(args)
-		require.NoError(t, err)
-		socket, err := resolveAgentBrokerSocket(&root.Agent, root.Agent.Identity.Broker)
-		require.NoError(t, err)
-		if len(args) == 2 {
-			home, err := os.UserHomeDir()
+	for _, command := range []string{"identity", "login", "logout"} {
+		for _, args := range [][]string{{"agent", command}, {"agent", "--name", "personal", command, "--broker", "/tmp/identity.sock"}} {
+			var root struct {
+				Agent AgentCLI `cmd:"agent"`
+			}
+			parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
 			require.NoError(t, err)
-			require.Equal(t, filepath.Join(home, ".epithet/run/work/broker.sock"), socket)
-		} else {
-			require.Equal(t, "/tmp/identity.sock", socket)
+			_, err = parser.Parse(args)
+			require.NoError(t, err)
+			override := root.Agent.Identity.Broker
+			if command == "login" {
+				override = root.Agent.Login.Broker
+			}
+			if command == "logout" {
+				override = root.Agent.Logout.Broker
+			}
+			socket, err := resolveAgentBrokerSocket(&root.Agent, override)
+			require.NoError(t, err)
+			if len(args) == 2 {
+				home, err := os.UserHomeDir()
+				require.NoError(t, err)
+				require.Equal(t, filepath.Join(home, ".epithet/run/work/broker.sock"), socket)
+			} else {
+				require.Equal(t, "/tmp/identity.sock", socket)
+			}
 		}
 	}
 }

@@ -18,6 +18,7 @@ type Request struct {
 	Identity  *struct{}                    `json:"identity,omitempty"`
 	Match     *wire.Connection             `json:"match,omitempty"`
 	Inspect   *InspectRequest              `json:"inspect,omitempty"`
+	Logout    *struct{}                    `json:"logout,omitempty"`
 	Kill      *KillRequest                 `json:"kill,omitempty"`
 }
 
@@ -26,13 +27,15 @@ type Request struct {
 // auth-code+PKCE URL to visit) followed by exactly one Result event. For an
 // Inspect request: exactly one Inspect event. Identity requests stream auth
 // Output events followed by one Identity event. Inventory requests similarly
-// stream Output events followed by one Inventory event.
+// stream Output events followed by one Inventory event. Kill and Logout each
+// return one event of their respective type.
 type Event struct {
 	Inventory *InventoryResponse `json:"inventory,omitempty"`
 	Identity  *IdentityResponse  `json:"identity,omitempty"`
 	Output    string             `json:"output,omitempty"`
 	Result    *MatchResponse     `json:"result,omitempty"`
 	Inspect   *InspectResponse   `json:"inspect,omitempty"`
+	Logout    *LogoutResponse    `json:"logout,omitempty"`
 	Kill      *KillResponse      `json:"kill,omitempty"`
 }
 
@@ -150,6 +153,9 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		_ = w.writeEvent(Event{Inspect: &resp})
+	case req.Logout != nil:
+		resp := b.Logout()
+		_ = w.writeEvent(Event{Logout: &resp})
 	case req.Kill != nil:
 		resp := KillResponse{ID: req.Kill.ID}
 		if err := b.Kill(*req.Kill, &resp); err != nil {
@@ -159,7 +165,7 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	default:
 		_ = w.writeEvent(Event{Result: &MatchResponse{
 			Allow: false,
-			Error: "request must set exactly one of match, inspect, identity, inventory, or kill",
+			Error: "request must set exactly one of match, inspect, identity, inventory, kill, or logout",
 		}})
 	}
 }

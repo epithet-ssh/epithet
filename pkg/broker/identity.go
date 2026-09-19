@@ -30,13 +30,18 @@ type IdentityVerifier func(context.Context, string) (*Identity, error)
 // login as SSH requests. It does not request a certificate or require an
 // inventory record, so administrators can use it to prepare that record.
 func (b *Broker) IdentityWithUserOutput(ctx context.Context, out io.Writer) IdentityResponse {
-	token, err := b.auth.Token(ctx, out)
+	session, ctx, cancel := b.sessionRequest(ctx)
+	defer cancel()
+	token, err := session.auth.Token(ctx, out)
 	if err != nil {
 		return IdentityResponse{Error: fmt.Sprintf("agent authentication failed: %v", err)}
 	}
 	identity, err := b.verifyIdentity(ctx, token)
 	if err != nil {
 		return IdentityResponse{Error: fmt.Sprintf("verifying agent identity: %v", err)}
+	}
+	if err := ctx.Err(); err != nil {
+		return IdentityResponse{Error: err.Error()}
 	}
 	return IdentityResponse{Identity: identity}
 }
