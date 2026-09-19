@@ -22,7 +22,7 @@ func TestServerPrincipalModePrecedence(t *testing.T) {
 		{
 			name:   "unspecified retains inventory default",
 			config: "{}\n",
-			want:   inventory.AccountNamePrincipals,
+			want:   inventory.EpithetPrincipalV1,
 		},
 		{
 			name:   "inherits hashed inventory configuration",
@@ -84,17 +84,17 @@ func TestServerRejectsUnknownPrincipalModeBeforeStartingServices(t *testing.T) {
 	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
 }
 
-func TestInventoryChildManagedReadsCommandScopedConfiguration(t *testing.T) {
+func TestInventoryChildManagementReadsCommandScopedConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  inventory-source: managed\n  state-dir: /tmp/managed\n  admin-user: [admin]\n"), 0600))
-	managed, err := inventoryChildManaged([]string{"--config", path, "inventory", "--listen", "unix:///tmp/inventory.sock"})
+	managed, err := inventoryChildManagementEnabled([]string{"--config", path, "inventory", "--listen", "unix:///tmp/inventory.sock"})
 	require.NoError(t, err)
 	require.True(t, managed)
 }
 
 func TestServerOwnsChildListenersAndInventoryRouting(t *testing.T) {
 	// Combined topology must override standalone command configuration, including
-	// disabling a configured inventory route when the child has no managed store.
+	// disabling a configured inventory route when the child has no management endpoint.
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`ca:
   listen: :9999

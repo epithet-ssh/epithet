@@ -24,3 +24,12 @@ type Revision string
 type Directory interface {
 	LookupUser(context.Context, string) (*User, Revision, error)
 }
+
+// UserLister supplies administration with all users, including inactive users,
+// and their policy-visible groups from one snapshot. IDs are authentication
+// identities, not provisioning resource IDs. Results are ordered by userName
+// then ID; users and group slices are independent copies, with groups sorted by
+// name. Authorization consumers need only Directory.LookupUser.
+type UserLister interface {
+	ListUserFacts(context.Context) ([]User, Revision, error)
+}

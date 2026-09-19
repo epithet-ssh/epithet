@@ -119,6 +119,90 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	require.Equal(t, "directory-admin", audit[len(audit)-1].Actor)
 }
 
+func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
+	for _, source := range []string{"static", "scim"} {
+		t.Run(source, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "static.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(`users:
+ - id: subject:admin
+   userName: admin
+   groups: [wheel]
+ - id: subject:ordinary
+   userName: ordinary
+ - id: subject:disabled
+   userName: disabled
+   active: false
+   groups: [wheel]
+`), 0600))
+			static, err := inventory.NewStatic([]string{path})
+			require.NoError(t, err)
+			var selected directory.Directory = static
+			var managed directory.Store
+			if source == "scim" {
+				store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "directory.db"))
+				require.NoError(t, err)
+				defer store.Close()
+				var members []string
+				for _, name := range []string{"admin", "ordinary", "disabled"} {
+					u, err := store.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:" + name, UserName: name + "-scim", Active: name != "disabled"})
+					require.NoError(t, err)
+					if name != "ordinary" {
+						members = append(members, u.ID)
+					}
+				}
+				_, err = store.CreateGroup(t.Context(), directory.Group{DisplayName: "wheel", MemberIDs: members})
+				require.NoError(t, err)
+				selected, managed = store, store
+			}
+			idp := oidctest.New(t)
+			validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+			require.NoError(t, err)
+			// No managed hosts: directory inspection must be independently available.
+			control := &inventoryserver.Control{Directory: selected, ManagedDirectory: managed, Validator: validator, Admins: inventoryserver.Admins{Groups: []string{"wheel"}}}
+			server := httptest.NewServer(control)
+			defer server.Close()
+			client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
+			require.NoError(t, err)
+			for _, tc := range []struct {
+				name   string
+				status int
+			}{{"admin", 200}, {"ordinary", 403}, {"disabled", 403}, {"missing", 403}, {"", 401}} {
+				token := ""
+				if tc.name != "" {
+					token = idp.MintIDToken(tc.name, time.Now().Add(time.Hour))
+				}
+				resp, status, err := client.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "directory-users"})
+				require.Equal(t, tc.status, status)
+				if tc.status != 200 {
+					require.Error(t, err)
+					continue
+				}
+				require.NoError(t, err)
+				require.NotNil(t, resp.DirectoryUsers)
+				require.NotEmpty(t, resp.DirectoryUsers.Revision)
+				require.Len(t, resp.DirectoryUsers.Users, 3)
+				admin := resp.DirectoryUsers.Users[0]
+				require.Equal(t, "subject:admin", admin.ID)
+				require.Equal(t, []string{"wheel"}, admin.Groups)
+				wantName := "admin"
+				if source == "scim" {
+					wantName = "admin-scim"
+				}
+				require.Equal(t, wantName, admin.UserName)
+				require.False(t, resp.DirectoryUsers.Users[1].Active)
+			}
+			_, status, err := client.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll"})
+			require.Error(t, err)
+			require.Equal(t, 404, status, "listing users must not enable host enrollment")
+			if source == "static" {
+				_, status, err = client.Control(t.Context(), idp.MintIDToken("admin", time.Now().Add(time.Hour)), inventoryapi.ControlRequest{Action: "directory-groups"})
+				require.Error(t, err)
+				require.Equal(t, 404, status, "SCIM binding operations stay unavailable in static mode")
+			}
+		})
+	}
+}
+
 func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
 	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "directory.db"))
 	require.NoError(t, err)

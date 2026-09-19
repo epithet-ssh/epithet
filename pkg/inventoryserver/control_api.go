@@ -34,6 +34,11 @@ func controlBindings(s directory.BindingSnapshot) *inventoryapi.BindingSnapshot 
 	return &inventoryapi.BindingSnapshot{Revision: s.Revision, Groups: controlSlice(s.Groups, controlGroupBinding)}
 }
 
+func controlUser(u directory.User) inventoryapi.DirectoryUser {
+	return inventoryapi.DirectoryUser{UserName: u.UserName, ID: u.ID, Active: u.Active,
+		Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
+}
+
 func controlGroupBinding(g directory.GroupBinding) inventoryapi.GroupBinding {
 	return inventoryapi.GroupBinding{ID: g.ID, DisplayName: g.DisplayName, Alias: g.Alias, Status: g.Status}
 }

@@ -1,9 +1,10 @@
 # File-backed dynamic inventory: first implementation
 
 This implements the enrollment and administration workflow discussed on September
-11–12, 2026. Enable it with `inventory.inventory-source: managed`. Existing static deployments keep
-working, including local-only `host enroll` when the CA advertises no inventory
-link. Nothing has been deployed or enabled on a real host as part of this change.
+11–12, 2026. Managed hosts are enabled by default, alongside static host records.
+Select `inventory.inventory-source: static` to disable managed host storage and
+enrollment. Local-only `host enroll` still works when the CA advertises no
+inventory link or the advertised endpoint has no enrollment capability.
 The [follow-up audit](dynamic-inventory-audit.md) distinguishes corrected workflow
 errors from implementation assumptions that still need design review.
 
@@ -32,7 +33,7 @@ Add the following to an existing combined-server configuration:
 inventory:
   static:
     - /etc/epithet/directory-and-static-hosts.yaml
-  inventory-source: managed
+  # inventory-source: managed  # Default; static disables host enrollment.
   # state-dir: /custom/state  # Optional native-default override.
   admin-user:
     - YOUR_EXISTING_DIRECTORY_ID
@@ -316,13 +317,14 @@ is persisted. Unchanged restarts produce the same revision.
 
 When `inventory.inventory-source: managed` is selected, unreadable or invalid dynamic storage
 fails startup. Duplicate active names are validation errors, never a reason to
-choose an arbitrary winner. To run static-only, select `inventory-source: static` (the default).
+choose an arbitrary winner. To run static-only, select `inventory-source: static`.
 `state-dir` is the shared storage root, defaulting to Epithet's native system
 state directory. Managed host storage lives in its `inventory/` subdirectory;
 SCIM directory storage lives in `directory/`. The path only overrides storage
-location. Existing managed-host configurations must add
-`inventory-source: managed` and place their host state under `inventory/`
-within the configured root; no files are moved automatically.
+location. Configurations that previously pointed directly to the host-state
+directory must instead point to its parent, with host state under `inventory/`.
+The service user needs write access to that directory. No files are moved
+automatically, and `inventory --check` opens managed host storage by default.
 Static exact records override dynamic records during normal operation. A write
 failure disables all lookups and operations through the managed store until
 repair/restart, including exact static lookups; it never switches to static-only service. Windows cannot

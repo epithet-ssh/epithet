@@ -3,7 +3,7 @@ yatl_version: 1
 title: Revisit whether managed host inventory should require opt-in
 id: 2krqtk0f
 created: 2026-09-17T23:02:40.091214Z
-updated: 2026-09-17T23:03:37.945901Z
+updated: 2026-09-19T00:25:51.036303Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -24,3 +24,13 @@ Acceptance: record the decision and rationale, implement any agreed default/conf
 # Log: 2026-09-17T23:02:40Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-19T00:24:07Z Brian McCallister
+
+User explicitly selected managed host inventory as the default during deployment follow-up. Managed mode composes static records with enrolled hosts; inventory-source: static remains the opt-out. This removes the extra activation setting encountered during the SCIM upgrade. Startup and inventory --check consequently require usable managed host storage, and existing state-dir paths must use the shared root.
+
+---
+# Log: 2026-09-19T00:25:51Z Brian McCallister
+
+Closed: Selected and implemented managed host inventory by default, preserving explicit static opt-out. Also made epithet-principal-v1 the inventory service default at the user request. Updated help, examples, migration guidance, and tests; full suite and combined-server default enrollment validation pass.

@@ -274,7 +274,7 @@ hosts:
 		{"", "", true}, {oidc.StableID, "email", true}, {oidc.VerifiedEmail, "", true},
 		{oidc.VerifiedEmail, "email", false}, {"typo", "", false},
 	} {
-		c := InventoryCLI{Check: true, Static: []string{invPath},
+		c := InventoryCLI{Check: true, InventorySource: "static", PrincipalMode: "account-name", Static: []string{invPath},
 			OIDC: InventoryOIDCConfig{Issuer: "https://invalid.invalid", IdentityMode: tc.mode, UserIDClaim: tc.claim}}
 		err := c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{})
 		if tc.valid {

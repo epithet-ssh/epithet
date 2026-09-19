@@ -32,7 +32,7 @@ Then validate the pair:
 
 ```bash
 ./epithet policy --check --policy-file policy.writ
-./epithet inventory --check --static inventory.yaml
+./epithet inventory --check --inventory-source static --principal-mode account-name --static inventory.yaml
 ```
 
 You also need a small config file (`policy.yaml`) for the server settings:
@@ -46,7 +46,7 @@ inventory:
     client-id: "your-client-id"
   static:
     - ./inventory.yaml
-  # Compatibility default. See "Destination-bound mode" below before changing.
+  # Explicit compatibility mode for this example. See "Destination-bound mode" below.
   principal-mode: account-name
 ```
 
@@ -192,8 +192,7 @@ hosts:
     domain: "epithet-host-id-v1:..."
 ```
 
-Set `inventory.principal-mode: epithet-principal-v1` to make this the deployment
-default. Entries that inherit that default still need a `domain`. Static
+`inventory.principal-mode` defaults to `epithet-principal-v1`. Entries that inherit that default still need a `domain`. Static
 ephemeral patterns may share a declared human-readable domain:
 
 ```yaml

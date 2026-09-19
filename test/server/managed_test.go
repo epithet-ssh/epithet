@@ -49,7 +49,7 @@ func TestManagedCombinedEnrollmentAdminCLIAndIssuance(t *testing.T) {
 policy:
   policy-file: %s/policy.writ
 inventory:
-  inventory-source: managed
+  principal-mode: account-name
   static: [%s/static.yaml]
   state-dir: %s/state
   admin-group: [operators]

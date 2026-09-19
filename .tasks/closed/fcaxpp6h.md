@@ -3,7 +3,7 @@ yatl_version: 1
 title: Choose the default principal mode before 1.0
 id: fcaxpp6h
 created: 2026-09-03T03:47:35.369058Z
-updated: 2026-09-06T03:18:13.925844Z
+updated: 2026-09-19T00:26:07.302860Z
 author: Brian McCallister
 priority: high
 tags:
@@ -23,3 +23,8 @@ Created task.
 # Log: 2026-09-06T03:18:13Z Brian McCallister
 
 Security review 2026-09-05: account-name remains an intentional compatibility mode, but its credentials are reusable for that account on other trusting hosts. Resolve this release decision alongside the confirmed findings in docs/security-review-2026-09-05.md.
+
+---
+# Log: 2026-09-19T00:26:07Z Brian McCallister
+
+Closed: User chose epithet-principal-v1 as the inventory service default during the SCIM deployment follow-up. Implemented standalone and combined configuration defaults, retained explicit account-name overrides, documented that inherited static hosts require domains, and validated precedence, missing-domain failures, overrides, full tests, and the build.

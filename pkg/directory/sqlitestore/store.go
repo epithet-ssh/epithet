@@ -483,6 +483,21 @@ func (s *Store) DeleteGroup(ctx context.Context, id, match string) error {
 }
 
 func (s *Store) LookupUser(ctx context.Context, externalID string) (*directory.User, directory.Revision, error) {
+	users, rev, err := s.userFacts(ctx, &externalID)
+	if err != nil || len(users) == 0 {
+		return nil, rev, err
+	}
+	return &users[0], rev, nil
+}
+
+func (s *Store) ListUserFacts(ctx context.Context) ([]directory.User, directory.Revision, error) {
+	return s.userFacts(ctx, nil)
+}
+
+// userFacts projects authentication identities and bound group names together.
+// A nil externalID selects the entire directory. Sharing this read with lookup
+// keeps the administrative view identical to the facts used for authorization.
+func (s *Store) userFacts(ctx context.Context, externalID *string) ([]directory.User, directory.Revision, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, "", err
@@ -492,39 +507,45 @@ func (s *Store) LookupUser(ctx context.Context, externalID string) (*directory.U
 	if err != nil {
 		return nil, "", err
 	}
-	rev := directory.Revision(fmt.Sprintf("%s:%d", instance, n))
-	var id string
-	err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE external_id=?", externalID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, rev, tx.Commit()
+	query := `SELECT u.external_id,u.user_name,u.active,u.user_type,u.department,u.organization,a.name
+FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN aliases a ON a.group_id=m.group_id`
+	var args []any
+	if externalID != nil {
+		query += " WHERE u.external_id=?"
+		args = append(args, *externalID)
 	}
+	query += " ORDER BY u.user_name,u.external_id,a.name"
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", err
 	}
-	stored, err := readUser(ctx, tx, id)
-	if err != nil {
-		return nil, "", err
-	}
-	u := directory.User{ID: stored.ExternalID, UserName: stored.UserName, UserType: stored.UserType, Active: stored.Active, Department: stored.Department, Organization: stored.Organization}
-	u.Groups = []string{}
-	rows, err := tx.QueryContext(ctx, "SELECT a.name FROM members m JOIN aliases a ON a.group_id=m.group_id WHERE m.user_id=? ORDER BY a.name", id)
-	if err != nil {
-		return nil, "", err
-	}
+	defer rows.Close()
+	users := []directory.User{}
 	for rows.Next() {
-		var alias string
-		if err = rows.Scan(&alias); err != nil {
-			rows.Close()
+		var u directory.User
+		var group sql.NullString
+		if err = rows.Scan(&u.ID, &u.UserName, &u.Active, &u.UserType, &u.Department, &u.Organization, &group); err != nil {
 			return nil, "", err
 		}
-		u.Groups = append(u.Groups, alias)
+		if len(users) == 0 || users[len(users)-1].ID != u.ID {
+			u.Groups = []string{}
+			users = append(users, u)
+		}
+		if group.Valid {
+			last := &users[len(users)-1]
+			last.Groups = append(last.Groups, group.String)
+		}
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, "", err
 	}
-	return &u, rev, tx.Commit()
+	if err = rows.Close(); err != nil {
+		return nil, "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, "", err
+	}
+	return users, directory.Revision(fmt.Sprintf("%s:%d", instance, n)), nil
 }
 
 func (s *Store) Bindings(ctx context.Context) (directory.BindingSnapshot, error) {

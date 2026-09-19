@@ -93,6 +93,7 @@ type AuditEvent struct {
 // concurrent change to that authorization snapshot also invalidates the write.
 type Store interface {
 	Directory
+	UserLister
 	CreateUser(context.Context, ManagedUser) (ManagedUser, error)
 	ReplaceUser(ctx context.Context, id string, user ManagedUser, match string) (ManagedUser, error)
 	DeleteUser(ctx context.Context, id, match string) error

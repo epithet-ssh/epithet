@@ -17,7 +17,7 @@ The epithet policy server makes authorization decisions by evaluating a **writ p
 - `epithet policy --check` validates policy; `epithet inventory --check` validates inventory
 - Built-in to the epithet binary (no separate deployment needed)
 
-**Security boundary:** `account-name`, the compatibility default,
+**Security boundary:** `account-name`, the explicit compatibility mode,
 puts the requested account name (for example, `root`) in the SSH certificate.
 It does not put the host identity in the credential. A certificate authorized
 for `root@dev-1` can therefore authenticate as `root` on `prod-1` while it
@@ -95,12 +95,18 @@ hosts:
     labels: {env: dev, ephemeral: "true"}
 ```
 
+These example hosts use account-name compatibility. The inventory service now
+defaults to destination-bound `epithet-principal-v1`; either set
+`inventory.principal-mode: account-name` explicitly for this example, or enroll
+the hosts and record their domains. The check below selects static-only mode so
+it validates the YAML without opening managed host storage.
+
 ### 4. Check and start the policy server
 
 ```bash
 # Validate without starting a server
 epithet policy --check --policy-file ~/.epithet/policy.writ
-epithet inventory --check --static ~/.epithet/inventory.yaml
+epithet inventory --check --inventory-source static --principal-mode account-name --static ~/.epithet/inventory.yaml
 
 # Start (flags may instead come from the policy: config section)
 epithet policy \
@@ -430,14 +436,14 @@ inventory:
 - **`inventory.oidc.user-id-claim`** (inventory service, optional): top-level claim mapped to inventory `id` in `stable-id` mode; overrides the provider default. Even `email` is allowed without checking verification. CLI: `--oidc-user-id-claim`; environment: `EPITHET_INVENTORY_OIDC_USER_ID_CLAIM`. Flags override file configuration; environment variables supply defaults when the file omits a setting.
 - **`policy-file`** (required): the writ policy file.
 - **`inventory.static`** (inventory service): inventory file paths or globs.
-- **`inventory.principal-mode`** (inventory service): deployment default, either `account-name` (the compatibility default) or `epithet-principal-v1`. A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
+- **`inventory.principal-mode`** (inventory service): deployment default, either `epithet-principal-v1` (the default) or `account-name` (explicit compatibility). A host entry's `principal-mode` overrides it. Naming the concrete protocol version allows different hosts to remain on v1 or move to a future version independently during rollout.
 - **`default-expiration`** (optional): cert TTL when no satisfied rule sets a `ttl` (default `5m`). Always further clamped to the auth token's remaining lifetime.
 - **`extension`** (flag only): repeatable `name=value` cert extensions.
 
 When using `epithet server`, `inventory.principal-mode` also supplies the default
 for the inventory subprocess. An explicitly configured `server.principal-mode`
 overrides it, and `epithet server --principal-mode ...` overrides both config
-settings. If none is set, the inventory default remains `account-name`.
+settings. If none is set, the inventory default is `epithet-principal-v1`.
 
 Policy and inventory are read by their respective services once at startup; restart the relevant service to pick up changes. `epithet inventory --check` validates inventory, and `epithet policy --check` validates policy (parse and compile errors with positions, unknown require/when/notify references, warnings such as unused macros or already-expired `until` rules) and exits non-zero on errors.
 

@@ -30,6 +30,7 @@ type ControlRequest struct {
 // ControlResponse carries the result of one ControlRequest. Only the fields
 // relevant to the requested action are set; Error accompanies a non-2xx status.
 type ControlResponse struct {
+	DirectoryUsers *UserSnapshot         `json:"directory-users,omitempty"`
 	Directory      *BindingSnapshot      `json:"directory,omitempty"`
 	DirectoryAudit []DirectoryAuditEvent `json:"directory-audit,omitempty"`
 	Host           *HostRecord           `json:"host,omitempty"`
@@ -124,6 +125,23 @@ type GroupBinding struct {
 type BindingSnapshot struct {
 	Revision uint64         `json:"revision"`
 	Groups   []GroupBinding `json:"groups"`
+}
+
+// UserSnapshot is the selected directory's authorization view. IDs identify
+// users to OIDC and policy; groups are policy names, not SCIM resource IDs.
+type UserSnapshot struct {
+	Revision string          `json:"revision"`
+	Users    []DirectoryUser `json:"users"`
+}
+
+type DirectoryUser struct {
+	UserName     string   `json:"userName"`
+	ID           string   `json:"id"`
+	Active       bool     `json:"active"`
+	Groups       []string `json:"groups"`
+	UserType     string   `json:"userType,omitempty"`
+	Department   string   `json:"department,omitempty"`
+	Organization string   `json:"organization,omitempty"`
 }
 
 // DirectoryAuditEvent records one directory mutation. Sequence identifies the

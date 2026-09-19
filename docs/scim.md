@@ -72,11 +72,15 @@ The root defaults to Epithet's native system state directory:
 | Solaris, illumos, AIX | `/var/opt/epithet` |
 | Windows | `%ProgramData%\Epithet` |
 
-Set `inventory.inventory-source: managed` to enable managed host enrollment;
-the default is `static`. Storage path settings only override locations and do not
-enable either source. Existing managed-host configurations must add
-`inventory-source: managed`; `state-dir` alone no longer enables enrollment.
-Static sources do not open their corresponding managed stores.
+Managed host enrollment is enabled by default (`inventory.inventory-source: managed`),
+alongside static host records. Select `inventory-source: static` for static hosts
+only; SCIM user provisioning remains independent. Storage path settings only
+override locations. The service user needs write access to the enabled stores
+under `inventory.state-dir`; static sources do not open their managed stores.
+
+For configurations from before the shared storage root, change a state path such
+as `/var/db/epithet/inventory` to `/var/db/epithet` so existing host records stay in
+the `inventory/` subdirectory. No files are moved automatically.
 
 `epithet --config server.yaml inventory --check` validates configuration and opens
 (or initializes) the managed directory. The database's parent directory is created
@@ -121,6 +125,19 @@ An explicit management `--name` (or command-scoped `name` setting) overrides tha
 profile; `--broker` overrides the socket path. Configuration comes from the usual
 `/etc/epithet/*.{yaml,yml,json}` and `~/.epithet/*.{yaml,yml,json}` files, or the
 explicit `--config` path.
+
+## Inspect provisioned users
+
+```sh
+epithet directory users list
+epithet directory users list --json
+```
+
+The listing includes inactive users. Its `ID` is the provider identity used for
+OIDC and Writ (`externalId` in SCIM), and `GROUPS` contains bound policy names.
+It uses the same agent login and administrator grants as group management.
+See [user inspection](inventory.md#inspect-directory-users) for output details
+and static-directory support.
 
 ## Stable policy group names
 

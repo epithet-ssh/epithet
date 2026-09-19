@@ -2,7 +2,7 @@
 
 `epithet inventory` serves the user directory and host inventory used during
 certificate issuance. It also verifies OIDC tokens and maps them to directory IDs. Static YAML can be combined with file-backed dynamic host enrollment and
-administration. See [dynamic inventory](dynamic-inventory.md) for configuration,
+administration (enabled by default; select `inventory-source: static` to opt out). See [dynamic inventory](dynamic-inventory.md) for configuration,
 commands, and the first implementation decisions. [SCIM provisioning](scim.md)
 provides an alternative managed user directory; LDAP remains later work.
 
@@ -29,8 +29,11 @@ router plus CA, inventory, and policy. All three services listen on separate
 Unix sockets in a private temporary directory; the router owns `server.listen`.
 CA public-key configuration and private socket addresses are supplied
 automatically. OIDC is configured only on inventory; all user IDs
-belong to that configured provider. Select principal mode deliberately; see
-[principal modes](principals.md).
+belong to that configured provider. The inventory service defaults to `principal-mode: epithet-principal-v1`.
+Static entries inheriting this mode must declare a principal domain; managed
+hosts supply it during enrollment. Set `principal-mode: account-name` explicitly
+for deployments or individual hosts using account-name certificates. The example
+above selects that compatibility mode. See [principal modes](principals.md).
 
 Keep TLS termination and ACME in Caddy (or your existing front end). For the
 loopback listener above, a Caddy site can forward all requests unchanged:
@@ -46,7 +49,8 @@ does not manage HTTPS certificates. Existing Caddy configurations that forward
 to the same `server.listen` address need no routing changes.
 
 The router forwards `/inventory` to inventory's `/manage` endpoint when
-`inventory.inventory-source: managed` or `inventory.directory-source: scim` is selected.
+`inventory.inventory-source: managed` (the default), `inventory.directory-source: scim`,
+or an `inventory.admin-user`/`inventory.admin-group` grant is configured.
 SCIM paths also route to inventory. Other paths go to the CA, including `/`
 and `/discovery`. Policy and inventory resolution remain private. The router
 adds no service credentials and makes no authentication or authorization
@@ -69,6 +73,31 @@ The existing YAML record format is unchanged: top-level `users`, `hosts`, and
 `domains`, with explicit user `id` and `userName`. Files may contain users, hosts,
 or both. Paths/globs concatenate in order; duplicates and unknown fields are
 errors. See [user and host records](policy-server.md#inventory).
+
+## Inspect directory users
+
+```sh
+epithet directory users list
+epithet directory users list --json
+```
+
+These commands use the existing agent session and require an active user with an
+`inventory.admin-user` or `inventory.admin-group` grant. They list the selected
+user directory, independently of host inventory mode. In SCIM mode, static users
+are not included. Static-only deployments can configure either administrator grant
+to enable inspection without enabling managed host storage.
+
+Default output is one tab-separated row per user with `USERNAME`, `ID`, `ACTIVE`,
+and `GROUPS` columns, ordered by username then ID. Inactive users are included.
+`ID` is the authentication and policy identity, not a SCIM resource ID. Groups are
+sorted, comma-separated policy names; control characters and backslashes in
+columns are quoted and escaped. Use JSON to preserve group-name boundaries exactly.
+
+`--json` returns an object containing an opaque `revision` and a `users` array,
+including `userName`, `id`, `active`, `groups`, and any configured `userType`,
+`department`, and `organization`. Empty directories return `users: []`. Users,
+memberships, and revision are read from one snapshot. As with other management
+commands, the agent must also be updated to understand the new response.
 
 ## Multiple DNS names
 
@@ -114,10 +143,11 @@ for local deployment. Plain HTTP clients require explicit `--insecure`.
 
 Only the CA can resolve inventory or ask policy for decisions. Both services
 verify request-bound JWTs against its public key, using different service
-audiences. No separate policy-to-inventory credential is needed. The static
-service has no write or enrollment routes. Selecting managed host inventory (`inventory.inventory-source: managed`) or the SCIM directory adds
-the separately authenticated `/manage` endpoint. SCIM also adds `/scim/v2/…`.
-Directory administration alone does not enable host enrollment.
+audiences. No separate policy-to-inventory credential is needed. Managed host
+inventory is the default and adds the separately authenticated `/manage` endpoint.
+With `inventory-source: static`, that endpoint is still available for a SCIM
+directory or when an administrator grant is configured, but host enrollment and
+host mutations remain unavailable. SCIM also adds `/scim/v2/…`.
 
 ## Validation and migration
 

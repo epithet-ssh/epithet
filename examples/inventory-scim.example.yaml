@@ -30,11 +30,12 @@ inventory:
   # In SCIM mode, user records in these files are ignored.
   static:
     - /etc/epithet/hosts.yaml
-  principal-mode: account-name
+  # Default: destination-bound principals; static entries require a domain.
+  # principal-mode: epithet-principal-v1
 
-  # Optional: enable file-backed host enrollment and administration.
-  # Omit inventory-source to use only static hosts; SCIM still works.
-  inventory-source: managed
+  # File-backed host enrollment and administration are enabled by default.
+  # Set inventory-source: static to use only static hosts; SCIM still works.
+  # inventory-source: managed
 
   # Shared storage root defaults to Epithet's native system state directory:
   # Linux: /var/lib/epithet; FreeBSD: /var/db/epithet;

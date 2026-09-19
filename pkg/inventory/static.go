@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -288,6 +289,20 @@ func (s *Static) loadFile(path string) error {
 // LookupUser implements directory.Directory.
 func (s *Static) LookupUser(_ context.Context, id string) (*directory.User, directory.Revision, error) {
 	return s.ids[id], directory.Revision(s.DirectoryRevision()), nil
+}
+
+func (s *Static) ListUserFacts(_ context.Context) ([]directory.User, directory.Revision, error) {
+	users := make([]directory.User, 0, len(s.ids))
+	for _, user := range s.ids {
+		u := *user
+		u.Groups = append([]string{}, user.Groups...)
+		slices.Sort(u.Groups)
+		users = append(users, u)
+	}
+	slices.SortFunc(users, func(a, b directory.User) int {
+		return cmp.Or(cmp.Compare(a.UserName, b.UserName), cmp.Compare(a.ID, b.ID))
+	})
+	return users, directory.Revision(s.DirectoryRevision()), nil
 }
 
 // LookupHost implements Hosts: exact entries first, then pattern

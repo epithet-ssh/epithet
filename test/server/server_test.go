@@ -74,6 +74,8 @@ policy:
   ca-pubkey: "%s"
   policy-file: %s
 inventory:
+  principal-mode: account-name
+  inventory-source: static
   oidc:
     issuer: "%s"
     client-id: "%s"

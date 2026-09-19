@@ -77,7 +77,7 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	inventorySock := filepath.Join(tmpDir, "inventory.sock")
 	caSock := filepath.Join(tmpDir, "ca.sock")
 	inventoryArgs := c.inventoryArgs(globalArgs, inventorySock, caPubkey)
-	managed, err := inventoryChildManaged(inventoryArgs)
+	management, err := inventoryChildManagementEnabled(inventoryArgs)
 	if err != nil {
 		return err
 	}
@@ -89,8 +89,8 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	children := []child{
 		{"inventory", inventoryArgs, inventorySock},
 		{"policy", c.policyArgs(globalArgs, policySock, caPubkey), policySock},
-		{"ca", c.caArgs(globalArgs, caSock, policySock, inventorySock, managed), caSock},
-		{"router", c.routerArgs(globalArgs, caSock, inventorySock, managed), ""},
+		{"ca", c.caArgs(globalArgs, caSock, policySock, inventorySock, management), caSock},
+		{"router", c.routerArgs(globalArgs, caSock, inventorySock, management), ""},
 	}
 	var wg sync.WaitGroup
 	exited := make(chan error, len(children))
@@ -134,9 +134,9 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 }
 
-func (c *ServerCLI) caArgs(globalArgs []string, caSock, policySock, inventorySock string, managed bool) []string {
+func (c *ServerCLI) caArgs(globalArgs []string, caSock, policySock, inventorySock string, management bool) []string {
 	publicURL := ""
-	if managed {
+	if management {
 		publicURL = "inventory"
 	}
 	return append(append([]string{}, globalArgs...), "ca", "--listen", "unix://"+caSock,
@@ -144,9 +144,9 @@ func (c *ServerCLI) caArgs(globalArgs []string, caSock, policySock, inventorySoc
 		"--key", c.CAKey, "--inventory-public-url", publicURL)
 }
 
-func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string, managed bool) []string {
+func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string, management bool) []string {
 	endpoint := ""
-	if managed {
+	if management {
 		endpoint = "unix://" + inventorySock
 	}
 	return append(append([]string{}, globalArgs...), "router", "--listen", c.Listen,
@@ -226,7 +226,7 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 // Kong loads command-scoped configuration for the selected command only. Parse
 // the actual inventory child arguments to make the composition decision using
 // precisely the same files/defaults as that child.
-func inventoryChildManaged(args []string) (bool, error) {
+func inventoryChildManagementEnabled(args []string) (bool, error) {
 	var root struct {
 		Config    kong.ConfigFlag `name:"config"`
 		Verbose   int             `short:"v" type:"counter"`
@@ -242,5 +242,5 @@ func inventoryChildManaged(args []string) (bool, error) {
 	if _, err = parser.Parse(args); err != nil {
 		return false, err
 	}
-	return root.Inventory.InventorySource == "managed" || root.Inventory.DirectorySource == "scim", nil
+	return root.Inventory.managementEnabled(), nil
 }

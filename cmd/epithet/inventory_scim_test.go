@@ -19,7 +19,7 @@ import (
 func TestStaticDirectoryRecoveryIgnoresDatabaseAndToken(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "static.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("users:\n - id: admin-sub\n   userName: admin\n"), 0600))
-	c := InventoryCLI{Check: true, DirectorySource: "static", StateDir: "/unavailable/state", SCIMTokenFile: "/missing/secret", Static: []string{path}, OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
+	c := InventoryCLI{Check: true, InventorySource: "static", DirectorySource: "static", StateDir: "/unavailable/state", SCIMTokenFile: "/missing/secret", Static: []string{path}, OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
 	require.NoError(t, c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{}))
 	c.DirectorySource = "scim"
 	require.ErrorContains(t, c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{}), "reading SCIM token file")
@@ -31,8 +31,8 @@ func TestStaticDirectoryRecoveryIgnoresDatabaseAndToken(t *testing.T) {
 }
 func TestSCIMAloneEnablesInventoryAdministration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  directory-source: scim\n  state-dir: /tmp/state\n  scim-token-file: /tmp/scim.token\n"), 0600))
-	managed, e := inventoryChildManaged([]string{"--config", path, "inventory"})
+	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  directory-source: scim\n  inventory-source: static\n  state-dir: /tmp/state\n  scim-token-file: /tmp/scim.token\n"), 0600))
+	managed, e := inventoryChildManagementEnabled([]string{"--config", path, "inventory"})
 	require.NoError(t, e)
 	require.True(t, managed)
 }
@@ -79,7 +79,8 @@ func TestSCIMServerTokenConfiguration(t *testing.T) {
 				require.NoError(t, err)
 			}
 			if source == "static" {
-				require.NoDirExists(t, root.Inventory.StateDir)
+				require.NoDirExists(t, filepath.Join(root.Inventory.StateDir, "directory"))
+				require.DirExists(t, filepath.Join(root.Inventory.StateDir, "inventory", "records"))
 			}
 		})
 	}
@@ -107,7 +108,7 @@ func TestServiceStatePathsAndSourceSelection(t *testing.T) {
 				// Service startup must not consult client profile/socket configuration.
 				c.ManagementCLI = ManagementCLI{Name: "invalid/profile", Broker: "/missing/agent.sock"}
 				require.NoError(t, c.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{}))
-				if source == "managed" {
+				if source != "static" {
 					require.DirExists(t, filepath.Join(state, "inventory", "records"))
 				} else {
 					require.NoDirExists(t, filepath.Join(state, "inventory"))
@@ -116,7 +117,7 @@ func TestServiceStatePathsAndSourceSelection(t *testing.T) {
 					require.FileExists(t, filepath.Join(state, "directory", "directory.db"))
 				} else {
 					require.NoDirExists(t, filepath.Join(state, "directory"))
-					if source != "managed" {
+					if source == "static" {
 						require.NoDirExists(t, state)
 					}
 				}
@@ -125,21 +126,49 @@ func TestServiceStatePathsAndSourceSelection(t *testing.T) {
 	}
 }
 
-func TestServiceConfigDoesNotRequireAgentAndDefaultPathsDoNotEnableStorage(t *testing.T) {
+func TestServiceManagementDefaultsAndStaticOptOut(t *testing.T) {
 	for _, settings := range []struct {
 		yaml    string
 		managed bool
 	}{
-		{"", false},
-		{"  state-dir: /unavailable/host-state\n", false},
+		{"", true},
+		{"  state-dir: /unavailable/host-state\n", true},
+		{"  inventory-source: static\n", false},
+		{"  inventory-source: static\n  state-dir: /unavailable/host-state\n", false},
 		{"  inventory-source: managed\n", true},
-		{"  directory-source: scim\n", true},
+		{"  inventory-source: static\n  directory-source: scim\n", true},
+		{"  inventory-source: static\n  admin-user: [admin]\n", true},
+		{"  inventory-source: static\n  admin-group: [operators]\n", true},
 	} {
 		path := filepath.Join(t.TempDir(), "config.yaml")
 		// An invalid agent profile must not affect server configuration parsing.
 		require.NoError(t, os.WriteFile(path, []byte("agent:\n  name: invalid/profile\ninventory:\n  listen: 127.0.0.1:9998\n"+settings.yaml), 0600))
-		enabled, err := inventoryChildManaged([]string{"--config", path, "inventory"})
+		enabled, err := inventoryChildManagementEnabled([]string{"--config", path, "inventory"})
 		require.NoError(t, err)
 		require.Equal(t, settings.managed, enabled)
+	}
+}
+
+func TestInventoryPrincipalModeDefaultAndOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name, configMode, hostFields string
+		wantError                    bool
+	}{
+		{name: "default requires a domain", wantError: true},
+		{name: "default accepts a domain", hostFields: "    domain: fleet\n"},
+		{name: "explicit account-name default", configMode: "account-name"},
+		{name: "per-host account-name override", hostFields: "    principal-mode: account-name\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "static.yaml")
+			require.NoError(t, os.WriteFile(path, []byte("domains: [fleet]\nhosts:\n  - names: [host.example]\n"+tc.hostFields), 0600))
+			c := InventoryCLI{Check: true, InventorySource: "static", PrincipalMode: tc.configMode, Static: []string{path}, OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
+			err := c.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
+			if tc.wantError {
+				require.ErrorContains(t, err, "uses epithet-principal-v1 but has no domain")
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }

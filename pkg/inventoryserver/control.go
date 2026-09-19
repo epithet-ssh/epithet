@@ -74,6 +74,7 @@ func (c *Control) admit() bool {
 	return true
 }
 func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	users, canListUsers := c.Directory.(directory.UserLister)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	fail := func(code int, msg string) {
@@ -87,6 +88,9 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.ManagedDirectory != nil {
 			capabilities = append(capabilities, "directory")
+		}
+		if canListUsers {
+			capabilities = append(capabilities, "directory-users")
 		}
 		json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: capabilities})
 		return
@@ -113,8 +117,10 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(400, "invalid inventory request")
 		return
 	}
-	isDirectory := req.Action == "directory-groups" || req.Action == "directory-bind" || req.Action == "directory-audit"
-	if isDirectory && c.ManagedDirectory == nil || !isDirectory && c.Store == nil {
+	isUserList := req.Action == "directory-users"
+	isManagedDirectory := req.Action == "directory-groups" || req.Action == "directory-bind" || req.Action == "directory-audit"
+	isDirectory := isUserList || isManagedDirectory
+	if isUserList && !canListUsers || isManagedDirectory && c.ManagedDirectory == nil || !isDirectory && c.Store == nil {
 		fail(404, "requested inventory capability is not configured")
 		return
 	}
@@ -149,6 +155,11 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var resp inventoryapi.ControlResponse
 	switch req.Action {
+	case "directory-users":
+		var facts []directory.User
+		var revision directory.Revision
+		facts, revision, err = users.ListUserFacts(r.Context())
+		resp.DirectoryUsers = &inventoryapi.UserSnapshot{Revision: string(revision), Users: controlSlice(facts, controlUser)}
 	case "directory-groups":
 		var snapshot directory.BindingSnapshot
 		snapshot, err = c.ManagedDirectory.Bindings(r.Context())

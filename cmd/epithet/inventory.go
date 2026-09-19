@@ -36,7 +36,7 @@ type InventoryCLI struct {
 	DirectorySource string              `help:"Authoritative user directory: static or scim" name:"directory-source" default:"static" enum:"static,scim"`
 	SCIMToken       string              `help:"Literal SCIM provisioning bearer token (alternative to scim-token-file)" name:"scim-token"`
 	SCIMTokenFile   string              `help:"File containing the operator-supplied SCIM provisioning bearer token" name:"scim-token-file"`
-	InventorySource string              `help:"Host inventory: static or managed (static files plus enrolled hosts)" name:"inventory-source" default:"static" enum:"static,managed"`
+	InventorySource string              `help:"Host inventory: static or managed (static files plus enrolled hosts)" name:"inventory-source" default:"managed" enum:"static,managed"`
 	StateDir        string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
 	AdminUsers      []string            `help:"Directory user ID granted inventory-admin (repeatable)" name:"admin-user"`
 	AdminGroups     []string            `help:"Directory group granted inventory-admin (repeatable)" name:"admin-group"`
@@ -53,7 +53,7 @@ type InventoryCLI struct {
 	CAPubkey      string              `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
 	OIDC          InventoryOIDCConfig `embed:"" prefix:"oidc-"`
 	Static        []string            `help:"Static inventory file path or glob (repeatable)" name:"static"`
-	PrincipalMode string              `help:"Default host principal mode" name:"principal-mode" default:"account-name" enum:"account-name,epithet-principal-v1"`
+	PrincipalMode string              `help:"Default host principal mode" name:"principal-mode" default:"epithet-principal-v1" enum:"account-name,epithet-principal-v1"`
 	Check         bool                `help:"Validate inventory files, then exit" name:"check"`
 }
 
@@ -76,7 +76,11 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if len(paths) == 0 {
 		return fmt.Errorf("no inventory files match %s", strings.Join(c.Static, ", "))
 	}
-	options := []inventory.StaticOption{inventory.WithDefaultPrincipalMode(inventory.PrincipalMode(c.PrincipalMode))}
+	principalMode := inventory.PrincipalMode(c.PrincipalMode)
+	if principalMode == "" {
+		principalMode = inventory.EpithetPrincipalV1
+	}
+	options := []inventory.StaticOption{inventory.WithDefaultPrincipalMode(principalMode)}
 	if c.DirectorySource == "scim" {
 		options = append(options, inventory.WithoutUsers())
 	}
@@ -126,7 +130,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 		return fmt.Errorf("unknown directory-source %q", c.DirectorySource)
 	}
 	var managed *inventory.Managed
-	if c.InventorySource == "managed" {
+	if c.InventorySource != "static" {
 		stateDir, err := serviceStatePath(c.StateDir, "inventory")
 		if err != nil {
 			return err
@@ -170,7 +174,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if managed != nil {
 		resolver.Hosts = managed
 	}
-	if managed != nil || directoryStore != nil {
+	if c.managementEnabled() {
 		control := &inventoryserver.Control{Store: managed, ManagedDirectory: directoryStore, Directory: users, Validator: validator, Admins: inventoryserver.Admins{Users: c.AdminUsers, Groups: c.AdminGroups}}
 		mux := http.NewServeMux()
 		mux.Handle("/manage", control)
@@ -182,6 +186,12 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	}
 	logger.Info("starting inventory server", "listen", c.Listen, "files", len(paths), "directorySource", c.DirectorySource, "inventoryRevision", inv.InventoryRevision())
 	return listenAndServe(c.Listen, handler)
+}
+
+// Static directories expose user inspection when an administrator is configured;
+// management availability does not enable host enrollment or managed storage.
+func (c *InventoryCLI) managementEnabled() bool {
+	return c.InventorySource != "static" || c.DirectorySource == "scim" || len(c.AdminUsers) > 0 || len(c.AdminGroups) > 0
 }
 
 // Resolve paths only for enabled stores; static mode never opens managed state.

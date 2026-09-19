@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/stretchr/testify/require"
 )
 
@@ -546,4 +547,39 @@ func TestDirectoryAndHostRevisionsAreIndependent(t *testing.T) {
 	require.Equal(t, original.InventoryRevision(), renamed.InventoryRevision())
 	require.Equal(t, original.DirectoryRevision(), newHost.DirectoryRevision())
 	require.NotEqual(t, original.InventoryRevision(), newHost.InventoryRevision())
+}
+
+func TestListUserFacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`users:
+ - id: z-id
+   userName: zed
+   active: false
+ - id: a-id
+   userName: alice
+   groups: [wheel, ops]
+   department: engineering
+`), 0600))
+	inv, err := NewStatic([]string{path})
+	require.NoError(t, err)
+	users, revision, err := inv.ListUserFacts(t.Context())
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	require.Equal(t, "alice", users[0].UserName)
+	require.Equal(t, "a-id", users[0].ID)
+	require.Equal(t, "engineering", users[0].Department)
+	require.Equal(t, []string{"ops", "wheel"}, users[0].Groups)
+	require.False(t, users[1].Active)
+	require.Equal(t, directory.Revision(inv.DirectoryRevision()), revision)
+	users[0].UserName = "changed"
+	users[0].Groups[0] = "changed"
+	fact, _, err := inv.LookupUser(t.Context(), "a-id")
+	require.NoError(t, err)
+	require.Equal(t, "alice", fact.UserName)
+	require.ElementsMatch(t, []string{"wheel", "ops"}, fact.Groups)
+	hostsOnly, err := NewStatic([]string{path}, WithoutUsers())
+	require.NoError(t, err)
+	users, _, err = hostsOnly.ListUserFacts(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []directory.User{}, users)
 }
