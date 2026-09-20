@@ -28,7 +28,7 @@ mode as issuance-time conditions and the effective credential scope as
 `epithet-principal-v1` makes issuance destination-bound using the v1 encoding.
 The CA derives a versioned principal from the inventory principal domain and
 requested account name after policy authorizes the human-readable `account@host`
-tuple (or `account@domain` for a shared named domain). An offline
+tuple. An offline
 `AuthorizedPrincipalsCommand` on the target derives the same
 value from its local domain and account name. It requires no per-account
 registry, account synchronization, or online authorization check by sshd.
@@ -374,7 +374,7 @@ hosts:
 A connection's host must resolve in the inventory or the request is denied — this is what makes label selectors trustworthy. Two entry forms:
 
 - **Exact entries** (`names:`) are individual hosts with one or more equivalent DNS names, looked up first. Use either `names` or `pattern`; they cannot be combined. Names are normalized with ASCII case folding and must be nonempty and unique across all host records and files.
-- **Pattern entries** (`pattern:`) resolve any requested name they match. They use the same label-aware hostname globs as Writ host selectors. In account-name mode they adopt the requested name. A destination-bound named domain exposes the domain name to Writ instead, because the resulting certificate is valid throughout that domain. Patterns are the escape hatch for short-lived fleets (VM pools, CI runners) that follow a naming pattern but cannot be enumerated. Patterns match in file order; first match wins.
+- **Pattern entries** (`pattern:`) resolve any requested name they match. They use the same label-aware hostname globs as Writ host selectors. They adopt the requested name, independent of principal mode or domain. Patterns are the escape hatch for short-lived fleets (VM pools, CI runners) that follow a naming pattern but cannot be enumerated. Patterns match in file order; first match wins.
 
 An exact hostname matcher or glob matches if it matches **any** name of the
 resolved host. A deny matching one name therefore applies through every other
@@ -398,12 +398,12 @@ not use generated per-host domains. Exact entries win before patterns;
 otherwise the first matching pattern wins.
 
 Every host accepting one domain derives the same principal for a given
-account. That is intentional for aliases and fleets, but it also means policy
-authorization cannot honestly be narrower than the domain. Put only hosts
-that should accept interchangeable account credentials in one domain. Static
-inventory requires every entry sharing a named domain to have identical labels
-and account grounding, and Writ matches the domain name rather than an
-individual member hostname.
+account. Put only hosts that should accept interchangeable account credentials
+in one domain: a certificate issued for one member can be accepted by another.
+Static inventory requires every entry sharing a named domain to have identical
+labels and account grounding. Issuance policy still evaluates the requested
+host's names, labels, and account restrictions; the principal domain is opaque
+to Writ and never substitutes for a hostname.
 
 **Account grounding:** if a host entry lists `accounts`, certificates are only issuable for accounts in that list — even a policy `*` cannot reach an unlisted account. If the entry has no `accounts` key, account matching is ungrounded and rules match against the requested account name directly.
 
@@ -737,7 +737,7 @@ Content-Type: application/json
 - `facts.authentication`: verified `id` and unexpired `expiresAt`. No bearer token or provider settings.
 - `facts.target`: the requested hostname, equal to `connection.remoteHost` after ASCII case folding.
 - `facts.user`: the user record, whose `id` must match `authentication.id`; explicit `null` means absent.
-- `facts.host`: the policy resource (`names`, `labels`, `accounts`); explicit `null` means absent. CA validates inventory's host/domain binding before supplying this resource. For an ordinary host, `names` contains all equivalent DNS names; for a shared principal domain it contains only that domain, which can differ from `target`.
+- `facts.host`: the policy resource (`names`, `labels`, `accounts`); explicit `null` means absent. CA validates that inventory's host names include `target` before supplying this resource. `names` always contains the equivalent host names, independent of principal mode or domain.
 
 Missing `user` or `host` fields are malformed, while explicit null records produce
 structural denial. `host.accounts` is required: null is ungrounded, [] permits no
@@ -817,8 +817,8 @@ construction inputs and response encoding but does not repeat those policy decis
 API 8 replaces `facts.host.name` with nonempty `facts.host.names`. Inventory
 resolution version 2 makes the same change in `inventory.host`. Match each
 hostname/glob against the entire names list, then apply negation, so aliases
-cannot evade a deny. A shared principal domain must remain a singleton list
-containing the domain, without member DNS names. `target` remains the requested
+cannot evade a deny. Principal domains never replace host names in this list.
+`target` must be in the list and remains the requested
 connection name. Static exact-host entries require `names`, including for a
 single name. Custom Go host fact and Writ evaluator structs use `Names []string`.
 

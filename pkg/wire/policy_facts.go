@@ -9,8 +9,8 @@ import (
 )
 
 // PolicyFacts is CA's normalized input for one requested target. CA validates
-// the inventory's host/domain binding before projecting Host. Host.Names lists the
-// equivalent host names or the shared principal domain; Target binds the request.
+// that inventory host names include the target before projecting Host. Host.Names lists the
+// equivalent host names, independent of principal metadata; Target binds the request.
 // Principal construction data, revisions, and protocol versions remain at CA.
 type PolicyFacts struct {
 	Authentication Authentication `json:"authentication"`

@@ -95,22 +95,14 @@ func (r *Resolution) Validate(host string) error {
 		if err := h.HostResource.Validate(); err != nil {
 			return err
 		}
+		if !slices.Contains(h.Names, host) {
+			return fmt.Errorf("inventory host names do not contain requested target")
+		}
 		switch h.Principal.Mode {
 		case "account-name":
-			if !slices.Contains(h.Names, host) {
-				return fmt.Errorf("invalid account-name host binding")
-			}
 		case "epithet-principal-v1":
-			domain, err := principal.ParseDomain(h.Principal.Domain)
-			if err != nil {
+			if _, err := principal.ParseDomain(h.Principal.Domain); err != nil {
 				return fmt.Errorf("invalid principal domain: %w", err)
-			}
-			if domain.IsGeneratedHost() {
-				if !slices.Contains(h.Names, host) {
-					return fmt.Errorf("invalid principal-domain host binding")
-				}
-			} else if !slices.Equal(h.Names, []string{string(domain)}) {
-				return fmt.Errorf("invalid principal-domain host binding")
 			}
 		default:
 			return fmt.Errorf("unknown principal mode %q", h.Principal.Mode)

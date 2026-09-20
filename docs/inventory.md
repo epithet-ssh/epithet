@@ -117,9 +117,9 @@ record are rejected. Exact names take precedence over patterns.
 
 Writ matches any registered name, including for denies; negation is applied
 after matching the whole list. Changing the requested DNS name cannot evade
-a deny on that host. A shared **principal domain** still exposes only the domain
-to Writ, preserving its authorization boundary. Principal domains and DNS
-domains are separate concepts.
+a deny on that host. This applies regardless of the host's **principal domain**.
+Principal domains are opaque issuance metadata, independent of host names and
+DNS domains; they never replace the host's names in Writ.
 
 Inventory resolution version 2 and policy API 8 carry `names` arrays in host
 facts, replacing `name`. Upgrade the private services and CA together. The
@@ -201,8 +201,9 @@ Client and agent identity output are unchanged by the extraction.
 The [v2 API](inventory-api.yaml) returns separate directory and inventory
 snapshots with content revisions, the requested connection `target`, the normalized
 authenticated `id`, and an `expiresAt` bound. `target` must match the request
-`host`; `inventory.host.names` lists the equivalent host names and may instead contain only
-a shared domain. Inventory never returns the bearer token. CA validates the
+`host`; `inventory.host.names` lists the equivalent host names and must include
+that requested host, regardless of principal mode or domain. Inventory never
+returns the bearer token. CA validates the
 full resolution, retains both revisions and principal metadata,
 and sends only authentication, requested target, user, and host resource fields to
 policy with the connection. Policy has no OIDC configuration or inventory envelope.

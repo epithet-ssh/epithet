@@ -61,23 +61,27 @@ func TestStaticLookupReturnsRevisionIncludingMissingHosts(t *testing.T) {
 }
 
 func TestMultipleNamesResolveOneHost(t *testing.T) {
-	src := "hosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    domain: " + inventoryGeneratedDomain + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
-	s, err := NewStatic([]string{writeInv(t, "names.yaml", src)})
-	require.NoError(t, err)
-	var first *ResolvedHost
-	for _, name := range []string{"freki.home", "freki.tailca597.ts.net"} {
-		host, _, err := s.LookupHost(t.Context(), name)
-		require.NoError(t, err)
-		require.NotNil(t, host)
-		require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Policy.Names)
-		require.Equal(t, inventoryGeneratedDomain, host.Domain.String())
-		require.Equal(t, []string{"brianm"}, host.Policy.Accounts)
-		require.Equal(t, "server", host.Policy.Labels["role"])
-		if first == nil {
-			first = host
-		} else {
-			require.Same(t, first, host)
-		}
+	for _, domain := range []string{inventoryGeneratedDomain, "fleet"} {
+		t.Run(domain, func(t *testing.T) {
+			src := "domains: [fleet]\nhosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    domain: " + domain + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
+			s, err := NewStatic([]string{writeInv(t, "names.yaml", src)})
+			require.NoError(t, err)
+			var first *ResolvedHost
+			for _, name := range []string{"freki.home", "freki.tailca597.ts.net"} {
+				host, _, err := s.LookupHost(t.Context(), name)
+				require.NoError(t, err)
+				require.NotNil(t, host)
+				require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Policy.Names)
+				require.Equal(t, domain, host.Domain.String())
+				require.Equal(t, []string{"brianm"}, host.Policy.Accounts)
+				require.Equal(t, "server", host.Policy.Labels["role"])
+				if first == nil {
+					first = host
+				} else {
+					require.Same(t, first, host)
+				}
+			}
+		})
 	}
 }
 
@@ -294,7 +298,7 @@ func TestHashedPatternLoadsDeclaredNamedDomain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, host.PrincipalMode)
 	require.Equal(t, "production", host.Domain.String())
-	require.Equal(t, []string{"production"}, host.Policy.Names, "Writ authorizes the shared domain, not one member hostname")
+	require.Equal(t, []string{"prod-worker-1"}, host.Policy.Names)
 }
 
 func TestPatternWithGeneratedHostDomainIsError(t *testing.T) {
@@ -352,7 +356,7 @@ hosts:
 	require.ErrorContains(t, err, "different authorization attributes")
 }
 
-func TestNamedDomainEntriesResolveToSamePolicyResource(t *testing.T) {
+func TestNamedDomainEntriesPreserveHostNames(t *testing.T) {
 	src := `
 domains: [production]
 hosts:
@@ -372,8 +376,10 @@ hosts:
 	require.NoError(t, err)
 	two, _, err := s.LookupHost(context.Background(), "prod-2")
 	require.NoError(t, err)
-	require.Equal(t, []string{"production"}, one.Policy.Names)
-	require.Equal(t, one.Policy, two.Policy)
+	require.Equal(t, []string{"prod-1"}, one.Policy.Names)
+	require.Equal(t, []string{"prod-2"}, two.Policy.Names)
+	require.Equal(t, one.Policy.Labels, two.Policy.Labels)
+	require.Equal(t, one.Policy.Accounts, two.Policy.Accounts)
 	require.Equal(t, one.Domain, two.Domain)
 }
 

@@ -26,9 +26,8 @@ import (
 // Host entries come in two forms. An exact entry (`names:`) is one
 // registered host. A pattern entry (`pattern:`) uses the same DNS-label-aware
 // hostname patterns as Writ host selectors. Exact entries expose all their names;
-// pattern entries adopt the requested name. Destination-bound named domains
-// expose that domain as the Writ resource so policy cannot claim per-member
-// isolation. Patterns are the
+// pattern entries adopt the requested name. Principal domains are separate
+// issuance metadata and never replace host names. Patterns are the
 // escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
@@ -252,7 +251,7 @@ func (s *Static) loadFile(path string) error {
 			}
 			slices.Sort(names)
 			host := &ResolvedHost{
-				Policy:        resolvedPolicyHost(names, domain, h.Labels, h.Accounts),
+				Policy:        Host{Names: names, Labels: h.Labels, Accounts: h.Accounts},
 				PrincipalMode: mode,
 				Domain:        domain,
 			}
@@ -314,7 +313,7 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, stri
 	for _, p := range s.patterns {
 		if p.pattern.Match(name) {
 			return &ResolvedHost{
-				Policy:        resolvedPolicyHost([]string{name}, p.domain, p.labels, p.accounts),
+				Policy:        Host{Names: []string{name}, Labels: p.labels, Accounts: p.accounts},
 				PrincipalMode: p.principalMode,
 				Domain:        p.domain,
 			}, s.InventoryRevision(), nil
@@ -375,13 +374,6 @@ func (p domainPolicy) matches(labels map[string]string, accounts []string) bool 
 	slices.Sort(previous)
 	slices.Sort(proposed)
 	return slices.Equal(previous, proposed)
-}
-
-func resolvedPolicyHost(names []string, domain principal.Domain, labels map[string]string, accounts []string) Host {
-	if domain != "" && !domain.IsGeneratedHost() {
-		names = []string{domain.String()}
-	}
-	return Host{Names: names, Labels: labels, Accounts: accounts}
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an

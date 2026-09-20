@@ -650,7 +650,7 @@ func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, s
 	if id := m.names[name]; id != "" {
 		p := m.records[id].Host.Proposal
 		domain := principal.Domain(p.Domain)
-		return &ResolvedHost{Policy: resolvedPolicyHost(slices.Clone(p.Names), domain, cloneLabels(p.Labels), slices.Clone(p.Accounts)), PrincipalMode: p.PrincipalMode, Domain: domain}, revision, nil
+		return &ResolvedHost{Policy: Host{Names: slices.Clone(p.Names), Labels: cloneLabels(p.Labels), Accounts: slices.Clone(p.Accounts)}, PrincipalMode: p.PrincipalMode, Domain: domain}, revision, nil
 	}
 	if m.static != nil {
 		h, _, err := m.static.LookupHost(ctx, name)

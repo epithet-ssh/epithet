@@ -147,10 +147,10 @@ one name applies through every other name of the same host.
 
 An inventory implementation may carry other host data, but Writ does not
 observe it. Static inventory supports exact host records with multiple DNS
-names and ordered patterns for ephemeral fleets. When hosts share a
-destination-bound principal domain, inventory exposes only that principal
-domain as the singleton names set so policy cannot imply per-member isolation
-that SSH does not enforce. A principal domain is independent of DNS domains.
+names and ordered patterns for ephemeral fleets. Principal domains are opaque
+issuance metadata, independent of host names and DNS domains. They never
+replace the host's names in policy evaluation, even when several hosts have
+the same principal domain.
 Label selector `{k=v, ...}` entries remain ANDed.
 
 **Accounts** are byte-exact local login names. If a resolved host supplies an

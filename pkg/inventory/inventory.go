@@ -45,9 +45,8 @@ func (m PrincipalMode) Effective() PrincipalMode {
 }
 
 // ResolvedHost carries both the authorization resource consumed by Writ and
-// issuance metadata that must remain outside the pure policy model. For a
-// shared named domain, Policy.Names contains only the domain rather than individual
-// DNS names because the resulting credential is portable across every member.
+// issuance metadata that must remain outside the pure policy model. Policy.Names
+// always contains the host's names, independent of its principal mode or domain.
 type ResolvedHost struct {
 	Policy        Host
 	PrincipalMode PrincipalMode

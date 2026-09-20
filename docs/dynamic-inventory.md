@@ -132,7 +132,7 @@ enrollment does not replace an installed domain. Principal mode must match local
 enrollment settings; select it with `--principal-mode`.
 
 Domains prefixed with `epithet-host-id-v1:` remain unique to an active host.
-Unprefixed names such as `fleet` are shared domains and require
+Unprefixed names such as `fleet` are named domains and require
 `principal-mode: epithet-principal-v1`. Declare them in the static inventory:
 
 ```yaml
@@ -142,7 +142,8 @@ domains: [fleet]
 Approval and token admission reject undeclared named domains. All active members
 of a shared domain, including static hosts and patterns, must have identical labels
 and account restrictions. Account order does not matter, but `null` and `[]` differ.
-Writ authorizes the shared domain name, rather than individual member hostnames.
+Writ evaluates each resolved host using its names, labels, and account restrictions.
+The principal domain is separate issuance metadata and never replaces host names.
 
 A successful editor exit with valid YAML proceeds to local setup and submission. Invalid YAML
 produces an error and an edit/cancel choice. Unknown fields, multiple YAML documents,

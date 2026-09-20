@@ -94,11 +94,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 							assert.NotContains(t, string(data), `"`+field+`"`)
 						}
 						assert.Equal(t, "host", request.Facts.Target)
-						if mode == "epithet-principal-v1" {
-							assert.Equal(t, []string{"production"}, request.Facts.Host.Names)
-						} else {
-							assert.Equal(t, []string{"host"}, request.Facts.Host.Names)
-						}
+						assert.Equal(t, []string{"host"}, request.Facts.Host.Names)
 						response := wire.PolicyResponse{PolicyID: "sha256:policy", TTLSeconds: tc.ttlSeconds, NotAfter: tc.notAfter, Extensions: map[string]string{"permit-pty": ""}}
 						json.NewEncoder(w).Encode(response)
 					}))

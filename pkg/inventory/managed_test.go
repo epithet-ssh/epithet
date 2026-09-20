@@ -298,6 +298,7 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	p := proposal("first")
 	p.PrincipalMode, p.Domain = EpithetPrincipalV1, "fleet"
 	p.Accounts = []string{"alice", "root"}
+	p.Names = []string{"first", "first.example.com"}
 	a, err := m.Enroll(p, "")
 	require.NoError(t, err)
 	a, err = m.Change("admin", "approve", a.ID, a.Revision, nil)
@@ -312,11 +313,13 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	fresh, err := OpenManaged(m.files.root, m.static)
 	require.NoError(t, err)
 	defer fresh.Close()
-	for _, name := range []string{"first", "second"} {
-		h, _, err := fresh.LookupHost(t.Context(), name)
-		require.NoError(t, err)
-		require.Equal(t, "fleet", string(h.Domain))
-		require.Equal(t, []string{"fleet"}, h.Policy.Names)
+	for _, names := range [][]string{{"first", "first.example.com"}, {"second"}} {
+		for _, name := range names {
+			h, _, err := fresh.LookupHost(t.Context(), name)
+			require.NoError(t, err)
+			require.Equal(t, "fleet", string(h.Domain))
+			require.Equal(t, names, h.Policy.Names)
+		}
 	}
 
 	// One member cannot change the shared authorization attributes.
@@ -330,7 +333,8 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	require.NoError(t, err)
 	h, _, err := fresh.LookupHost(t.Context(), "second")
 	require.NoError(t, err)
-	require.Equal(t, []string{"other"}, h.Policy.Names)
+	require.Equal(t, []string{"second"}, h.Policy.Names)
+	require.Equal(t, "other", string(h.Domain))
 	p.Domain, p.Names = "fleet", []string{"third"}
 	c, err := fresh.Enroll(p, "")
 	require.NoError(t, err)

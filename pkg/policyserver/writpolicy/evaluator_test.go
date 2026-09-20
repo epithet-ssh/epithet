@@ -96,12 +96,11 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 	}
 }
 
-func TestIssueAuthorizesDomainHost(t *testing.T) {
+func TestIssueAuthorizesHostWithPrincipalDomain(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	inv.hosts["prod-db-1"].Domain = evaluatorDomain
-	inv.hosts["prod-db-1"].Policy.Names = []string{string(evaluatorDomain)}
 	e := NewForTesting(pol, inv)
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
@@ -477,13 +476,12 @@ func TestUserFactsPreserveAuthorization(t *testing.T) {
 }
 
 func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
-	for _, sharedDomain := range []bool{false, true} {
+	for _, principalDomain := range []bool{false, true} {
 		inv := testInv()
 		host := inv.hosts["prod-db-1"]
 		host.Policy.Names = []string{"prod-db-1", "database.internal"}
 		inv.hosts["database.internal"] = host
-		if sharedDomain {
-			host.Policy.Names = []string{string(evaluatorDomain)}
+		if principalDomain {
 			host.PrincipalMode = inventory.EpithetPrincipalV1
 			host.Domain = evaluatorDomain
 		}
@@ -491,20 +489,20 @@ func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
 			rule    string
 			allowed bool
 		}{
-			{"allow * -> root@prod-db-1\n", !sharedDomain},
-			{"allow * -> root@*.internal\n", !sharedDomain},
-			{"allow * -> root@production-database\n", sharedDomain},
-			{"allow * -> root@*\ndeny * -> root@database.internal\n", sharedDomain},
-			{"allow * -> root@*\ndeny * -> root@*.internal\n", sharedDomain},
-			{"allow * -> root@*\ndeny * -> root@!prod-db-1\n", !sharedDomain},
-			{"allow * -> root@*\ndeny * -> root@!*.internal\n", !sharedDomain},
-			{"allow * -> root@*\ndeny * -> root@production-database\n", !sharedDomain},
+			{"allow * -> root@prod-db-1\n", true},
+			{"allow * -> root@*.internal\n", true},
+			{"allow * -> root@production-database\n", false},
+			{"allow * -> root@*\ndeny * -> root@database.internal\n", false},
+			{"allow * -> root@*\ndeny * -> root@*.internal\n", false},
+			{"allow * -> root@*\ndeny * -> root@!prod-db-1\n", true},
+			{"allow * -> root@*\ndeny * -> root@!*.internal\n", true},
+			{"allow * -> root@*\ndeny * -> root@production-database\n", true},
 		} {
 			for _, name := range []string{"prod-db-1", "database.internal"} {
 				e := NewForTesting(mustPolicy(t, tc.rule), inv)
 				response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", name))
 				if tc.allowed {
-					require.NoError(t, err, "shared=%v target=%s rule=%s", sharedDomain, name, tc.rule)
+					require.NoError(t, err, "principalDomain=%v target=%s rule=%s", principalDomain, name, tc.rule)
 					require.NotNil(t, response)
 				} else {
 					var denied *wire.PolicyError
