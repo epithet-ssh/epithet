@@ -40,6 +40,10 @@ keys and socket addresses, and copies CA's OIDC settings to control. Static user
 and hosts can share a file; each fact service reads its own records. The optional
 `server.inventory` override supplies static paths to both services.
 
+With `inventory-source: managed` (the default), `inventory.static` is optional;
+omit it when all hosts are managed. Static mode still requires inventory files,
+and configured static paths must match files.
+
 The example explicitly selects account-name compatibility. Inventory defaults to
 `epithet-principal-v1`; static hosts in that mode need domains, and managed hosts
 supply their domain during enrollment. See [principal modes](principals.md).

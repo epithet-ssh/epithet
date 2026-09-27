@@ -50,16 +50,43 @@ func TestInventoryDisplayPreservesRevisionAndSource(t *testing.T) {
 
 func TestInventoryCheckValidatesConfiguredManagedFiles(t *testing.T) {
 	dir := t.TempDir()
-	static := filepath.Join(dir, "static.yaml")
-	require.NoError(t, os.WriteFile(static, []byte("users: []\n"), 0600))
 	state := filepath.Join(dir, "state")
 	records := filepath.Join(state, "inventory", "records")
 	require.NoError(t, os.MkdirAll(records, 0700))
 	item := filepath.Join(records, strings.Repeat("a", 64)+".yaml")
 	require.NoError(t, os.WriteFile(item, []byte("version: 99\n"), 0600))
-	command := InventoryCLI{Check: true, Static: []string{static}, StateDir: state, InventorySource: "managed"}
+	command := InventoryCLI{Check: true, StateDir: state, InventorySource: "managed"}
 	err := command.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
 	require.ErrorContains(t, err, "unsupported item version")
 	require.NoError(t, os.Remove(item))
 	require.NoError(t, command.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{}))
+}
+
+func TestInventoryStaticFilesOptionalOnlyInManagedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, pattern string
+		wantError             bool
+	}{
+		{name: "managed without static", source: "managed"},
+		{name: "default without static"},
+		{name: "static requires files", source: "static", wantError: true},
+		{name: "managed missing file", source: "managed", pattern: "missing.yaml", wantError: true},
+		{name: "managed unmatched glob", source: "managed", pattern: "*.yaml", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			command := InventoryCLI{Check: true, StateDir: state, InventorySource: tc.source}
+			if tc.pattern != "" {
+				command.Static = []string{filepath.Join(state, tc.pattern)}
+			}
+			err := command.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
+			if tc.wantError {
+				require.ErrorContains(t, err, "no inventory files match")
+				require.NoDirExists(t, filepath.Join(state, "inventory"))
+			} else {
+				require.NoError(t, err)
+				require.DirExists(t, filepath.Join(state, "inventory", "records"))
+			}
+		})
+	}
 }

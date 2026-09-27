@@ -32,7 +32,7 @@ type InventoryCLI struct {
 	Listen        string   `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
 	ControlPubkey string   `help:"Control service public key for administration" name:"control-pubkey"`
 	CAPubkey      string   `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
-	Static        []string `help:"Static inventory file path or glob (repeatable)" name:"static"`
+	Static        []string `help:"Static inventory file path or glob (repeatable; optional in managed mode)" name:"static"`
 	PrincipalMode string   `help:"Default host principal mode" name:"principal-mode" default:"epithet-principal-v1" enum:"account-name,epithet-principal-v1"`
 	Check         bool     `help:"Validate inventory files, then exit" name:"check"`
 }
@@ -50,16 +50,20 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if err != nil {
 		return err
 	}
-	if len(paths) == 0 {
+	if len(paths) == 0 && (len(c.Static) > 0 || c.InventorySource == "static") {
 		return fmt.Errorf("no inventory files match %s", strings.Join(c.Static, ", "))
 	}
 	mode := inventory.PrincipalMode(c.PrincipalMode)
 	if mode == "" {
 		mode = inventory.EpithetPrincipalV1
 	}
-	inv, err := inventory.NewStatic(paths, inventory.WithDefaultPrincipalMode(mode), inventory.WithoutUsers())
-	if err != nil {
-		return err
+	// Managed inventory can run without a static fallback.
+	var inv *inventory.Static
+	if len(paths) > 0 {
+		inv, err = inventory.NewStatic(paths, inventory.WithDefaultPrincipalMode(mode), inventory.WithoutUsers())
+		if err != nil {
+			return err
+		}
 	}
 	var hosts inventory.Hosts = inv
 	var managed *inventory.Managed

@@ -26,10 +26,11 @@ control:
   # directory-admin-group: [directory-operators]
   # inventory-admin-group: [host-operators]
 inventory:
-  static: [/etc/epithet/hosts.yaml]
+  inventory-source: managed
+  # Optional static hosts alongside managed hosts:
+  # static: [/etc/epithet/hosts.yaml]
   # Host storage: <state-dir>/inventory/records. Native system defaults apply.
   # state-dir: /custom/state
-  # inventory-source: managed  # Default; static disables managed hosts only.
   # principal-mode: epithet-principal-v1  # Default; static hosts require domains.
 
 # Independently supervised services additionally configure:
