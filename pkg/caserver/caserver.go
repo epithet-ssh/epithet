@@ -22,9 +22,9 @@ type caServer struct {
 	log        *slog.Logger
 	certLogger CertLogger
 
-	// PublicInventoryURL is the client-facing management address advertised in Link.
-	// It may differ from the private inventory resolver used by the CA. Set before serving.
-	PublicInventoryURL string
+	// PublicControlURL is the client-facing management address advertised in Link.
+	// It is independent of the private fact-service URLs. Set before serving.
+	PublicControlURL string
 }
 
 // New creates a new CA Server which needs to then
@@ -61,7 +61,7 @@ func (s *caServer) Handler() http.Handler {
 }
 
 // DiscoveryHandler returns an http.Handler that serves the /discovery
-// endpoint: an anonymous pass-through of the inventory service's auth config.
+// endpoint: the CA's local login configuration, available anonymously.
 // There is no authenticated variant — clients need this before they have a
 // token, so it is never gated.
 func (s *caServer) DiscoveryHandler() http.Handler {
@@ -73,7 +73,7 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 
 		discovery, err := s.c.FetchDiscovery(r.Context())
 		if err != nil {
-			s.log.Warn("failed to fetch discovery from inventory service", "error", err)
+			s.log.Warn("failed to read CA discovery", "error", err)
 			s.failError(w, err)
 			return
 		}
@@ -87,8 +87,7 @@ func (s *caServer) DiscoveryHandler() http.Handler {
 			return
 		}
 
-		// Pass through the inventory service's Cache-Control header so clients
-		// respect the upstream's caching intent. Fall back to 5 minutes.
+		// Login discovery can be cached independently of uncached fact lookups.
 		cc := discovery.CacheControl
 		if cc == "" {
 			cc = "max-age=300"
@@ -239,8 +238,8 @@ func (s *caServer) getPubKey(w http.ResponseWriter, r *http.Request) {
 	// knowledge of its own external URL: the client resolves it against the
 	// ca-url it already has. See adr/link-header-auth-discovery.md.
 	w.Header().Set("Link", `<discovery>; rel="`+wire.RelAuth+`"`)
-	if s.PublicInventoryURL != "" {
-		w.Header().Add("Link", "<"+s.PublicInventoryURL+">; rel=\""+wire.RelInventory+"\"")
+	if s.PublicControlURL != "" {
+		w.Header().Add("Link", "<"+s.PublicControlURL+">; rel=\""+wire.RelControl+"\"")
 	}
 	w.Header().Add("Content-type", "text/plain")
 	w.WriteHeader(200)

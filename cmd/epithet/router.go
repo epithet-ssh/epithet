@@ -16,13 +16,13 @@ import (
 // RouterCLI is a plain HTTP reverse proxy. TLS termination belongs to the
 // deployment's front end (for example Caddy); authentication stays in services.
 type RouterCLI struct {
-	Listen    string `help:"HTTP address to listen on" short:"l" default:"127.0.0.1:8080"`
-	CA        string `help:"Private CA Unix socket URL" name:"ca" required:"true"`
-	Inventory string `help:"Private inventory Unix socket URL (enables /inventory)" name:"inventory"`
+	Listen  string `help:"HTTP address to listen on" short:"l" default:"127.0.0.1:8080"`
+	CA      string `help:"Private CA Unix socket URL" name:"ca" required:"true"`
+	Control string `help:"Private control Unix socket URL (enables /inventory and SCIM)" name:"control"`
 }
 
 func (c *RouterCLI) Run(logger *slog.Logger) error {
-	handler, closeIdle, err := newServiceRouter(c.CA, c.Inventory, logger)
+	handler, closeIdle, err := newServiceRouter(c.CA, c.Control, logger)
 	if err != nil {
 		return err
 	}
@@ -62,8 +62,8 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only management and SCIM paths map to inventory. Its private resolver
-		// and the policy service are never public router destinations.
+		// Only management and SCIM paths map to control. Fact lookups
+		// are never public router destinations.
 		if r.URL.Path == "/inventory" && inventory != nil {
 			inventory.ServeHTTP(w, r)
 			return

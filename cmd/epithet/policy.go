@@ -4,28 +4,18 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
-	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writ/diag"
 )
 
-// PolicyServerCLI defines the CLI flags for the policy server.
-// Configuration comes from CLI flags, config files, or tagged env vars
-// (resolved by Kong in that precedence order); config-file keys under
-// `policy:` use the flag names verbatim (kebab-case).
-type PolicyServerCLI struct {
-	Listen string `help:"Address to listen on" short:"l" default:"0.0.0.0:9999"`
-
-	CAPubkey string `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
-
+// PolicyConfig is shared by CA startup and offline policy validation.
+type PolicyConfig struct {
 	PolicyFile string `help:"Path to the writ policy file" name:"policy-file"`
 	// <review>
 	// Outside scope of this change, but do we want to allow multiple policy files?
@@ -34,50 +24,19 @@ type PolicyServerCLI struct {
 	Extension map[string]string `help:"Certificate extension for issued certs (name=value, repeatable; default permit-pty, permit-agent-forwarding, permit-user-rc)" name:"extension"`
 
 	DefaultExpiration string `help:"Default certificate expiration when no rule sets a ttl (e.g., 5m)" name:"default-expiration"`
-
-	Check bool `help:"Validate the policy, then exit" name:"check"`
 }
 
-func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	eval, err := c.buildEvaluator(logger)
-	if err != nil {
+type PolicyCLI struct {
+	PolicyConfig `embed:""`
+	Check        bool `help:"Validate the policy, then exit" name:"check"`
+}
+
+func (c *PolicyCLI) Run(logger *slog.Logger) error {
+	if _, err := c.buildEvaluator(logger); err != nil {
 		return err
 	}
-
-	if c.Check {
-		fmt.Println("policy OK")
-		return nil
-	}
-
-	if c.CAPubkey == "" {
-		return fmt.Errorf("policy.ca-pubkey is required")
-	}
-	caPubkey, err := resolveCAPubkey(c.CAPubkey, tlsCfg, logger)
-	if err != nil {
-		return err
-	}
-
-	handler, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: sshcert.RawPublicKey(caPubkey),
-		Evaluator:   eval,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create policy handler: %w", err)
-	}
-
-	// net/http.Server already recovers handler panics per-request (see
-	// listenAndServe), so no Recoverer middleware is needed.
-	r := http.NewServeMux()
-
-	// Certificate evaluation accepts normalized facts from the CA.
-	r.Handle("/", handler)
-
-	logger.Info("starting policy server",
-		"listen", c.Listen,
-		"policy_file", c.PolicyFile,
-		"ca_pubkey_length", len(caPubkey))
-
-	return listenAndServe(c.Listen, r)
+	fmt.Println("policy OK")
+	return nil
 }
 
 // buildEvaluator loads the writ policy and wires
@@ -85,9 +44,9 @@ func (c *PolicyServerCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) erro
 // requirement, flag, or notify target therefore fails here, at
 // startup, naming what is missing. Shared by --check and the server
 // path; reload is a process restart.
-func (c *PolicyServerCLI) buildEvaluator(logger *slog.Logger) (*writpolicy.Evaluator, error) {
+func (c *PolicyConfig) buildEvaluator(logger *slog.Logger) (*writpolicy.Evaluator, error) {
 	if c.PolicyFile == "" {
-		return nil, fmt.Errorf("policy-file is required (via --policy-file flag or policy.policy-file in config)")
+		return nil, fmt.Errorf("policy-file is required (via --policy-file flag or ca.policy-file in config)")
 	}
 	src, err := os.ReadFile(c.PolicyFile)
 	if err != nil {

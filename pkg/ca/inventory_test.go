@@ -3,6 +3,7 @@ package ca_test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/epithet-ssh/epithet/internal/catest"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("domains: [production]\nusers:\n  - id: subject:alice\n    userName: Alice\nhosts:\n  - names: [host]\n    accounts: [ubuntu]\n    principal-mode: %s\n%s", mode, domain)), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
-			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
+			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			for _, tc := range []struct {
 				name       string
 				ttlSeconds int64
@@ -72,7 +73,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					ps := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						var request wire.PolicyRequest
+						var request catest.Request
 						assert.Equal(t, "POST", r.Method)
 						data, err := io.ReadAll(r.Body)
 						if !assert.NoError(t, err) {
@@ -99,7 +100,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 						json.NewEncoder(w).Encode(response)
 					}))
 					defer ps.Close()
-					authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+					authority, err := ca.New(priv, catest.HTTPPolicy{URL: ps.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, is.CAOption())
 					require.NoError(t, err)
 					key := userKey
 					if tc.invalidKey {
@@ -127,7 +128,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 					require.Equal(t, []string{expected}, cert.ValidPrincipals)
 					require.Equal(t, map[string]string{"permit-pty": ""}, cert.Extensions)
 					if tc.name == "policy omits authentication ceiling" || tc.name == "policy extends beyond authentication" {
-						require.Greater(t, cert.ValidBefore, uint64(expiry.Unix()))
+						require.Equal(t, uint64(expiry.Unix()), cert.ValidBefore)
 					}
 					earliest, latest := before.Add(time.Duration(tc.ttlSeconds)*time.Second), after.Add(time.Duration(tc.ttlSeconds)*time.Second)
 					if !tc.notAfter.IsZero() && tc.notAfter.Before(earliest) {
@@ -135,6 +136,12 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 					}
 					if !tc.notAfter.IsZero() && tc.notAfter.Before(latest) {
 						latest = tc.notAfter
+					}
+					if expiry.Before(earliest) {
+						earliest = expiry
+					}
+					if expiry.Before(latest) {
+						latest = expiry
 					}
 					require.GreaterOrEqual(t, cert.ValidBefore, uint64(earliest.Unix()))
 					require.LessOrEqual(t, cert.ValidBefore, uint64(latest.Unix()))
@@ -158,7 +165,7 @@ func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 		{"empty accounts", "    active: true\n", "    accounts: []\n", "ubuntu", true},
 		{"different account", "    active: true\n", "    accounts: [root]\n", "ubuntu", true},
 		{"empty account", "    active: true\n", "    accounts: null\n", "", false},
-		{"inactive user", "    active: false\n", "    accounts: [ubuntu]\n", "ubuntu", true},
+		{"inactive user", "    active: false\n", "    accounts: [ubuntu]\n", "ubuntu", false},
 		{"missing user", "missing", "    accounts: [ubuntu]\n", "ubuntu", false},
 		{"missing host", "    active: true\n", "missing", "ubuntu", false},
 	} {
@@ -174,12 +181,12 @@ func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(src), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
-			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
+			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			ps := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(wire.PolicyResponse{TTLSeconds: 60})
 			}))
 			defer ps.Close()
-			authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+			authority, err := ca.New(priv, catest.HTTPPolicy{URL: ps.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, is.CAOption())
 			require.NoError(t, err)
 			result, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Hour)), wire.Connection{RemoteHost: "host", RemoteUser: tc.account}, userKey)
 			if tc.allowed {

@@ -9,7 +9,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 )
 
-// Authentication contains inventory's verified identity and session bound.
+// Authentication contains CA's verified identity and session bound.
 // It deliberately contains no bearer credentials or provider-specific claims.
 type Authentication struct {
 	ID        string    `json:"id"`
@@ -17,7 +17,7 @@ type Authentication struct {
 }
 
 // User contains the directory attributes used by policy. External directory
-// protocols are translated into these facts at the inventory boundary.
+// protocols are translated into facts by the directory service.
 type User struct {
 	ID           string   `json:"id"`
 	UserName     string   `json:"userName"`
@@ -70,7 +70,7 @@ func (a Authentication) Validate() error {
 // Validate checks identity binding and required user fields. Inactivity is a
 // structural denial evaluated by policy, not a malformed fact.
 func (u *User) Validate(authenticatedID string) error {
-	if u.ID != authenticatedID || u.UserName == "" || u.Active == nil {
+	if u.ID != authenticatedID || u.Active == nil {
 		return fmt.Errorf("invalid inventory user")
 	}
 	for _, group := range u.Groups {

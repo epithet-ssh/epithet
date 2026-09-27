@@ -8,10 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/epithet-ssh/epithet/internal/controltest"
+	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/scim"
 	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
 	"github.com/stretchr/testify/require"
+	"net/http"
 )
 
 // Fixed protocol identifiers keep these black-box tests independent of the adapter.
@@ -32,7 +34,7 @@ func (d document) Text(key string) string {
 type fixture struct {
 	t       *testing.T
 	store   *sqlitestore.Store
-	handler *scim.Handler
+	handler http.Handler
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -40,9 +42,8 @@ func newFixture(t *testing.T) *fixture {
 	s, e := sqlitestore.Open(filepath.Join(t.TempDir(), "directory.db"))
 	require.NoError(t, e)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	h, e := scim.New(s, "provisioning-secret")
-	require.NoError(t, e)
-	return &fixture{t, s, h}
+	f := controltest.New(t, s, s, nil, controlplane.Config{SCIMToken: "provisioning-secret"})
+	return &fixture{t, s, f.Control}
 }
 func (f *fixture) request(method, path, body, match string, status int) document {
 	f.t.Helper()

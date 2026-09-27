@@ -1,4 +1,4 @@
-package inventoryserver
+package controlplane
 
 import (
 	"github.com/epithet-ssh/epithet/pkg/directory"

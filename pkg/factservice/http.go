@@ -1,0 +1,183 @@
+package factservice
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"golang.org/x/crypto/ssh"
+	"io"
+	"net/http"
+	"net/url"
+
+	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
+)
+
+// Handler serves one kind of fact; directory and inventory use separate
+// audiences and transports. Either the CA reader or control key may read.
+func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
+	if (users == nil) == (hosts == nil) {
+		return nil, fmt.Errorf("exactly one fact source is required")
+	}
+	if caKey != "" && controlKey != "" {
+		ca, _, _, _, err := ssh.ParseAuthorizedKey([]byte(caKey))
+		if err != nil {
+			return nil, err
+		}
+		control, _, _, _, err := ssh.ParseAuthorizedKey([]byte(controlKey))
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(ca.Marshal(), control.Marshal()) {
+			return nil, fmt.Errorf("CA and control must use distinct signing keys")
+		}
+	}
+	audience, param := serviceauth.InventoryAudience, "host"
+	if users != nil {
+		audience, param = serviceauth.DirectoryAudience, "id"
+	}
+	var verifiers []*serviceauth.Verifier
+	for _, key := range []sshcert.RawPublicKey{caKey, controlKey} {
+		if key == "" {
+			continue
+		}
+		v, err := serviceauth.NewVerifierFor(key, audience)
+		if err != nil {
+			return nil, err
+		}
+		verifiers = append(verifiers, v)
+	}
+	if len(verifiers) == 0 {
+		return nil, fmt.Errorf("fact readers require a trusted public key")
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		defer r.Body.Close()
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(r.Body, 1))
+		if err != nil || len(data) != 0 {
+			http.Error(w, "lookup must not have a body", 400)
+			return
+		}
+		valid := false
+		for _, v := range verifiers {
+			if v.Verify(r, nil) == nil {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			http.Error(w, "invalid service authentication", 403)
+			return
+		}
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || len(query) != 1 || len(query[param]) != 1 || query.Get(param) == "" {
+			http.Error(w, "one lookup key is required", 400)
+			return
+		}
+		value := query.Get(param)
+		var response any
+		if users != nil {
+			u, revision, e := users.LookupUser(r.Context(), value)
+			err = e
+			if err == nil && u != nil && u.Active {
+				response = &User{ID: u.ID, UserName: u.UserName, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization, Revision: Revision{value: string(revision), present: revision != ""}}
+			}
+		} else {
+			if value != hostpattern.NormalizeName(value) {
+				http.Error(w, "host must be normalized", 400)
+				return
+			}
+			h, revision, e := hosts.LookupHost(r.Context(), value)
+			err = e
+			if err == nil && h != nil {
+				response = &Host{Host: wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}, Revision: Revision{value: string(revision), present: revision != ""}}
+			}
+		}
+		if err != nil {
+			http.Error(w, "fact service unavailable", 503)
+			return
+		}
+		if response == nil {
+			http.NotFound(w, r)
+			return
+		}
+		data, err = json.Marshal(response)
+		if err != nil || len(data) > wire.MaxBodySize {
+			http.Error(w, "invalid or oversized facts", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+	}), nil
+}
+
+type Client struct{ service *serviceauth.Client }
+
+func NewClient(endpoint string, key sshcert.RawPrivateKey, audience string, cfg tlsconfig.Config) (*Client, error) {
+	c, err := serviceauth.NewClient(endpoint, key, audience, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{c}, nil
+}
+func (c *Client) lookup(ctx context.Context, param, value string, result any) (bool, error) {
+	resp, err := c.service.Do(ctx, "GET", "/lookup", url.Values{param: {value}}, nil, "")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return false, nil
+	}
+	if resp.StatusCode != 200 {
+		return false, fmt.Errorf("fact lookup returned HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, wire.MaxBodySize+1))
+	if err != nil {
+		return false, err
+	}
+	if len(data) > wire.MaxBodySize {
+		return false, fmt.Errorf("fact response exceeds size limit")
+	}
+	if err = json.Unmarshal(data, result); err != nil {
+		return false, fmt.Errorf("invalid fact response: %w", err)
+	}
+	return true, nil
+}
+func (c *Client) User(ctx context.Context, id string) (*User, error) {
+	var u User
+	found, err := c.lookup(ctx, "id", id, &u)
+	if err != nil || !found {
+		return nil, err
+	}
+	if u.ID == "" || u.ID != id {
+		return nil, fmt.Errorf("directory user does not match requested id")
+	}
+	for _, g := range u.Groups {
+		if g == "" {
+			return nil, fmt.Errorf("empty group ID")
+		}
+	}
+	return &u, nil
+}
+func (c *Client) Host(ctx context.Context, name string) (*Host, error) {
+	var h Host
+	found, err := c.lookup(ctx, "host", name, &h)
+	if err != nil || !found {
+		return nil, err
+	}
+	if err = h.Host.Validate(name); err != nil {
+		return nil, err
+	}
+	return &h, nil
+}

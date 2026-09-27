@@ -1,42 +1,50 @@
-# Inventory service
+# Directory and inventory services
 
-`epithet inventory` serves the user directory and host inventory used during
-certificate issuance. It also verifies OIDC tokens and maps them to directory IDs. Static YAML can be combined with file-backed dynamic host enrollment and
-administration (enabled by default; select `inventory-source: static` to opt out). See [dynamic inventory](dynamic-inventory.md) for configuration,
-commands, and the first implementation decisions. [SCIM provisioning](scim.md)
-provides an alternative managed user directory; LDAP remains later work.
+`epithet directory` serves user facts from static YAML or SCIM-managed SQLite.
+`epithet inventory` serves host facts from static YAML and optional file-backed
+managed enrollment. CA owns OIDC authentication and evaluates Writ in-process.
+The separate `epithet control` service handles human administration, SCIM, and
+enrollment. Backends own persistence, mutation invariants, and audit.
 
 ## Combined deployment
+
+Provision two distinct signing keys, configured below. Control's key is persistent;
+the launcher never generates credentials automatically.
 
 ```yaml
 server:
   ca-key: /etc/epithet/ca.key
+  control-key: /etc/epithet/control.key
   listen: '127.0.0.1:8080'
-policy:
+ca:
   policy-file: /etc/epithet/policy.writ
-inventory:
   oidc:
-    issuer: https://accounts.google.com
-    client-id: your-client-id
+    issuer: https://identity.example.com
+    client-id: epithet
     identity-mode: stable-id
-  static:
-    - /etc/epithet/inventory.yaml
+directory:
+  source: static
+  static: [/etc/epithet/directory-and-hosts.yaml]
+inventory:
+  static: [/etc/epithet/directory-and-hosts.yaml]
   principal-mode: account-name
+control:
+  directory-admin-group: [directory-operators]
+  inventory-admin-group: [host-operators]
 ```
 
-Run `epithet --config server.yaml server`. It starts and supervises a plain HTTP
-router plus CA, inventory, and policy. All three services listen on separate
-Unix sockets in a private temporary directory; the router owns `server.listen`.
-CA public-key configuration and private socket addresses are supplied
-automatically. OIDC is configured only on inventory; all user IDs
-belong to that configured provider. The inventory service defaults to `principal-mode: epithet-principal-v1`.
-Static entries inheriting this mode must declare a principal domain; managed
-hosts supply it during enrollment. Set `principal-mode: account-name` explicitly
-for deployments or individual hosts using account-name certificates. The example
-above selects that compatibility mode. See [principal modes](principals.md).
+Run `epithet --config server.yaml server`. It supervises a router plus four
+separate processes: CA, control, directory, and inventory. Each service has a
+private Unix socket; the router owns `server.listen`. The launcher supplies public
+keys and socket addresses, and copies CA's OIDC settings to control. Static users
+and hosts can share a file; each fact service reads its own records. The optional
+`server.inventory` override supplies static paths to both services.
 
-Keep TLS termination and ACME in Caddy (or your existing front end). For the
-loopback listener above, a Caddy site can forward all requests unchanged:
+The example explicitly selects account-name compatibility. Inventory defaults to
+`epithet-principal-v1`; static hosts in that mode need domains, and managed hosts
+supply their domain during enrollment. See [principal modes](principals.md).
+
+Keep TLS termination in the existing reverse proxy:
 
 ```caddyfile
 ca.example.com {
@@ -44,35 +52,10 @@ ca.example.com {
 }
 ```
 
-Clients use `https://ca.example.com/`. Caddy forwards HTTP to the router; Epithet
-does not manage HTTPS certificates. Existing Caddy configurations that forward
-to the same `server.listen` address need no routing changes.
-
-The router forwards `/inventory` to inventory's `/manage` endpoint when
-`inventory.inventory-source: managed` (the default), `inventory.directory-source: scim`,
-or an `inventory.admin-user`/`inventory.admin-group` grant is configured.
-SCIM paths also route to inventory. Other paths go to the CA, including `/`
-and `/discovery`. Policy and inventory resolution remain private. The router
-adds no service credentials and makes no authentication or authorization
-decisions. The CA advertises the relative inventory link but does not proxy
-inventory management requests. There is no `ca.inventory-proxy` setting.
-
-`epithet router` can also be run separately with `--ca unix:///path/ca.sock` and
-optional `--inventory unix:///path/inventory.sock`. Standalone `epithet ca` and
-`epithet inventory` retain their TCP and Unix listener options.
-
-Inventory uses the configured URL as its complete RPC endpoint: POST resolves
-`{token, host}`, and GET returns login discovery. No path suffix is appended.
-For example, `https://inventory.example.com/internal/inventory` receives both
-methods at `/internal/inventory`. Reverse proxies must preserve the Host header
-and path because the service JWT binds both. Query parameters are not supported.
-Unix socket endpoints use `/` for both methods. Resolution responses retain
-the `version` field as the protocol-version mechanism.
-
-The existing YAML record format is unchanged: top-level `users`, `hosts`, and
-`domains`, with explicit user `id` and `userName`. Files may contain users, hosts,
-or both. Paths/globs concatenate in order; duplicates and unknown fields are
-errors. See [user and host records](policy-server.md#inventory).
+The router sends `/inventory` to control's `/manage`, and `/scim/v2/…` directly
+to control. Other routes go to CA. The router adds no credentials. CA advertises
+control through `Link: <inventory>; rel="https://epithet.dev/rel/control"`.
+The public management operations and response shapes remain unchanged.
 
 ## Inspect directory users
 
@@ -82,7 +65,7 @@ epithet directory users list --json
 ```
 
 These commands use the existing agent session and require an active user with an
-`inventory.admin-user` or `inventory.admin-group` grant. They list the selected
+`control.directory-admin-user` or `control.directory-admin-group` grant. They list the selected
 user directory, independently of host inventory mode. In SCIM mode, static users
 are not included. Static-only deployments can configure either administrator grant
 to enable inspection without enabling managed host storage.
@@ -127,98 +110,71 @@ top-level `target` remains the actual requested DNS name.
 
 ## Separate deployment
 
-Inventory accepts a literal CA public key, a key file, or an HTTPS key URL:
+Run `epithet ca`, `epithet control`, `epithet directory`, and `epithet inventory`
+under your supervisor. TCP listeners accept HTTP behind TLS termination; each also
+accepts `unix:///path/to/socket`. The combined launcher is optional.
 
-```sh
-epithet inventory --static /etc/epithet/inventory.yaml \
-  --oidc-issuer https://accounts.google.com --oidc-client-id your-client-id \
-  --ca-pubkey /etc/epithet/ca.pub --listen 127.0.0.1:9998
-```
+- CA: configure `key`, `policy-file`, `directory`, `inventory`, `oidc`, and the
+  client-accessible `control-public-url` (normally an HTTPS URL ending `/manage`).
+- Control: configure its distinct `key`, `oidc`, `directory` fact-service root,
+  role grants, and optional `directory-backend` / `inventory-backend` roots.
+  Only built-in providers need these administrative backend URLs.
+- Directory: configure `source`, `static` or `state-dir`, `ca-pubkey`, and
+  `control-pubkey` if control needs access.
+- Inventory: configure `static`, `inventory-source`, `state-dir`, `ca-pubkey`,
+  and `control-pubkey` for administration.
 
-Run policy with its Writ file and CA public key. Configure
-CA with both `--policy https://policy.example.com` and
-`--inventory https://inventory.example.com`. TCP listeners serve HTTP; provide
-TLS at your reverse proxy for remote deployment. Unix socket URLs are supported
-for local deployment. Plain HTTP clients require explicit `--insecure`.
+Use the same issuer, client ID, and identity mapping on CA and control. Public
+keys can be SSH literals, files, or URLs. Fact-service root URLs may include a
+path prefix; the client appends `/lookup` and signs the complete query. Keep
+private services off the public management route. For an optional standalone
+router, use `--ca unix:///path/ca.sock --control unix:///path/control.sock`.
 
-Only the CA can resolve inventory or ask policy for decisions. Both services
-verify request-bound JWTs against its public key, using different service
-audiences. No separate policy-to-inventory credential is needed. Managed host
-inventory is the default and adds the separately authenticated `/manage` endpoint.
-With `inventory-source: static`, that endpoint is still available for a SCIM
-directory or when an administrator grant is configured, but host enrollment and
-host mutations remain unavailable. SCIM also adds `/scim/v2/…`.
+For example, a bespoke directory plus built-in inventory requires only the
+custom directory's lookup API; omit `control.directory-backend`. The control
+service then authorizes inventory administrators through directory facts.
+See the [fact provider contract](fact-services.md).
 
 ## Validation and migration
 
-Move `policy.inventory` to `inventory.static`, and `policy.principal-mode` to
-`inventory.principal-mode`. Move the entire `policy.oidc` block to
-`inventory.oidc`, including issuer, client ID/secret, identity mode, and claim
-override. There is no separate top-level `inventory.issuer`. Standalone CA also
-needs `ca.inventory`. The corresponding environment variables are now
-`EPITHET_INVENTORY_OIDC_IDENTITY_MODE` and `EPITHET_INVENTORY_OIDC_USER_ID_CLAIM`.
+Validate Writ with `epithet policy --check --policy-file policy.writ`, directory
+with `epithet directory --check`, and hosts with `epithet inventory --check`.
+Policy validation is an offline command; policy evaluation runs inside CA.
+Restart the service that owns changed files. Restart the combined server to
+restart all children. Restart agents when changing their discovered login or
+control endpoint.
 
-```sh
-epithet --config server.yaml policy --check
-epithet --config server.yaml inventory --check
-```
+Upgrade the services and clients together for this pre-1.0 refactor:
 
-The checks are independent and offline. Policy checks compilation, plugin
-references, and rule syntax; inventory checks files, principal configuration,
-and identity-mode syntax. Neither needs a CA key or a reachable OIDC provider to check.
+- Move `policy.policy-file`, `default-expiration`, and `extension` to `ca`.
+- Move `inventory.oidc` to `ca.oidc`; separately deployed control needs matching
+  `control.oidc`. Environment names are now `EPITHET_OIDC_IDENTITY_MODE` and
+  `EPITHET_OIDC_USER_ID_CLAIM`.
+- Move `inventory.directory-source` to `directory.source`. Configure directory's
+  static paths and state root separately. Existing SQLite storage stays at
+  `<state-dir>/directory/directory.db`.
+- Move SCIM credentials to `control.scim-token` or `control.scim-token-file`.
+- Replace the old shared admin grants with explicit `control.directory-admin-*`
+  and `control.inventory-admin-*` grants.
+- Configure a persistent distinct control key. Replace `ca.inventory-public-url`
+  with `ca.control-public-url`, and router `inventory` with `control`.
+- Replace the old combined resolution RPC with the two GET lookup APIs. Providers
+  no longer receive OIDC tokens or provide login discovery.
 
-`epithet server --inventory PATH` remains a convenient file override; it now
-forwards to the inventory subprocess. `server --principal-mode` overrides the
-inventory default. `epithet policy --inventory` and `policy --principal-mode`
-are removed.
+Existing host records remain at `<inventory.state-dir>/inventory/records/`.
+New enrollment tokens create empty pending host records. Older token-only records
+are not accepted by the new loader; outstanding token records must be replaced
+when upgrading. There is no automatic storage migration. Active host records and
+SCIM database contents retain their formats.
 
-Restart inventory after editing its files; restart policy after editing Writ.
-Restart inventory when changing OIDC identity mapping. Restart agents if changing
-the login issuer or client settings they discovered at startup. Combined deployments can restart `epithet server`.
-Inventory lookup now uses POST at the configured endpoint instead of appending
-`/v1/resolve`. Update proxy routes to send both GET and POST to inventory at
-that endpoint, preserving the signed host and path, and upgrade CA and inventory
-together.
+## Lookup and audit
 
-Upgrade these services together: older policy requests do not carry the required
-facts. Inventory responses now use top-level `target` instead of `host`;
-CA and inventory must be upgraded together for this rename. The lookup request
-still uses `{token, host}`. Host responses are also flattened: move the old
-`inventory.host.resource` fields (`name`, `labels`, `accounts`) directly into
-`inventory.host`, alongside `principal`. CA still forwards only the policy fields.
+Each lookup returns an active object or 404 and is never cached. Names include
+all aliases; principal domains remain opaque and separate from Writ. Required
+`accounts` is null (unrestricted), empty (none), or a restricting list.
 
-User responses no longer carry SCIM schema URIs: remove `schemas`, replace
-group objects with membership strings, and move `department` and `organization`
-directly into `directory.user`. The same user shape is projected to policy.
-Static user YAML and user matching semantics are unchanged.
-
-Policy API 8 uses projected policy facts and authorization
-limits; see [custom policy migration](policy-server.md#custom-policy-migration-api-8).
-Client and agent identity output are unchanged by the extraction.
-
-## Resolution and audit
-
-The [v2 API](inventory-api.yaml) returns separate directory and inventory
-snapshots with content revisions, the requested connection `target`, the normalized
-authenticated `id`, and an `expiresAt` bound. `target` must match the request
-`host`; `inventory.host.names` lists the equivalent host names and must include
-that requested host, regardless of principal mode or domain. Inventory never
-returns the bearer token. CA validates the
-full resolution, retains both revisions and principal metadata,
-and sends only authentication, requested target, user, and host resource fields to
-policy with the connection. Policy has no OIDC configuration or inventory envelope.
-Inventory also serves authenticated `GET /` login discovery, which the CA exposes
-anonymously to agents. A missing user or host denies access; an
-unavailable or malformed service fails issuance as an infrastructure error.
-`accounts: null` means ungrounded, `accounts: []` permits no accounts, and a list
-limits the available accounts. The wire field cannot be omitted.
-
-Certificate issuance logs include `id`, `userName`, `policyId`,
-`directoryRevision`, and `inventoryRevision`. Certificate Key ID remains
-`userName`. Revisions identify the loaded facts and stay in CA's private audit records;
-policy neither receives nor echoes them. The unused `resolvedAt` field has been
-removed. Managed reads use committed snapshots and content revisions; writes become
-visible to subsequent reads immediately. No resolver cache is used.
-
-The [architecture decision](../adr/inventory-service.md) explains the trust and
-component boundaries.
+Fact revisions are optional opaque logging strings, capped at 256 UTF-8 bytes.
+When supplied they appear in private issuance audit as `directoryRevision` and
+`inventoryRevision`; they do not affect authorization. Certificate Key ID uses
+`userName` when present, otherwise `id`. Control-plane record revisions and the
+transactional directory-rebinding authorization check remain enforced.

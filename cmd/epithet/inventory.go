@@ -1,45 +1,25 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/config"
-	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/scim"
-	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/controlplane"
+	"github.com/epithet-ssh/epithet/pkg/factservice"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
-	"github.com/epithet-ssh/epithet/pkg/wire"
 )
-
-// InventoryOIDCConfig holds OIDC configuration for the inventory server.
-type InventoryOIDCConfig struct {
-	IdentityMode oidc.IdentityMode `help:"Inventory identity mode: stable-id (default) or verified-email" name:"identity-mode" env:"EPITHET_INVENTORY_OIDC_IDENTITY_MODE"`
-	UserIDClaim  string            `help:"JWT claim mapped to inventory id in stable-id mode, including email without verification checks (default: oid for Microsoft Entra, sub otherwise)" name:"user-id-claim" env:"EPITHET_INVENTORY_OIDC_USER_ID_CLAIM"`
-	Issuer       string            `help:"OIDC issuer URL" name:"issuer"`
-	ClientID     string            `help:"OIDC client ID" name:"client-id"`
-	ClientSecret string            `help:"OIDC client secret (for confidential clients)" name:"client-secret"`
-}
 
 type InventoryCLI struct {
 	ManagementCLI `embed:""`
 
-	DirectorySource string              `help:"Authoritative user directory: static or scim" name:"directory-source" default:"static" enum:"static,scim"`
-	SCIMToken       string              `help:"Literal SCIM provisioning bearer token (alternative to scim-token-file)" name:"scim-token"`
-	SCIMTokenFile   string              `help:"File containing the operator-supplied SCIM provisioning bearer token" name:"scim-token-file"`
 	InventorySource string              `help:"Host inventory: static or managed (static files plus enrolled hosts)" name:"inventory-source" default:"managed" enum:"static,managed"`
 	StateDir        string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
-	AdminUsers      []string            `help:"Directory user ID granted inventory-admin (repeatable)" name:"admin-user"`
-	AdminGroups     []string            `help:"Directory group granted inventory-admin (repeatable)" name:"admin-group"`
 	Serve           InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve directory and inventory"`
 	List            InventoryListCLI    `cmd:"list" aliases:"l,li,lis" help:"List static and dynamic host records"`
 	Show            InventoryShowCLI    `cmd:"show" aliases:"s,sh,show" help:"Show one host record"`
@@ -49,12 +29,12 @@ type InventoryCLI struct {
 	Token           InventoryTokenCLI   `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
 	Audit           InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
 
-	Listen        string              `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
-	CAPubkey      string              `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
-	OIDC          InventoryOIDCConfig `embed:"" prefix:"oidc-"`
-	Static        []string            `help:"Static inventory file path or glob (repeatable)" name:"static"`
-	PrincipalMode string              `help:"Default host principal mode" name:"principal-mode" default:"epithet-principal-v1" enum:"account-name,epithet-principal-v1"`
-	Check         bool                `help:"Validate inventory files, then exit" name:"check"`
+	Listen        string   `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
+	ControlPubkey string   `help:"Control service public key for administration" name:"control-pubkey"`
+	CAPubkey      string   `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
+	Static        []string `help:"Static inventory file path or glob (repeatable)" name:"static"`
+	PrincipalMode string   `help:"Default host principal mode" name:"principal-mode" default:"epithet-principal-v1" enum:"account-name,epithet-principal-v1"`
+	Check         bool     `help:"Validate inventory files, then exit" name:"check"`
 }
 
 type InventoryServeCLI struct{}
@@ -66,9 +46,6 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if c.InventorySource != "" && c.InventorySource != "static" && c.InventorySource != "managed" {
 		return fmt.Errorf("unknown inventory-source %q", c.InventorySource)
 	}
-	if _, _, err := oidc.ResolveIdentity(c.OIDC.Issuer, c.OIDC.IdentityMode, c.OIDC.UserIDClaim); err != nil {
-		return fmt.Errorf("invalid OIDC identity configuration: %w", err)
-	}
 	paths, err := config.ExpandGlobs(c.Static)
 	if err != nil {
 		return err
@@ -76,70 +53,27 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if len(paths) == 0 {
 		return fmt.Errorf("no inventory files match %s", strings.Join(c.Static, ", "))
 	}
-	principalMode := inventory.PrincipalMode(c.PrincipalMode)
-	if principalMode == "" {
-		principalMode = inventory.EpithetPrincipalV1
+	mode := inventory.PrincipalMode(c.PrincipalMode)
+	if mode == "" {
+		mode = inventory.EpithetPrincipalV1
 	}
-	options := []inventory.StaticOption{inventory.WithDefaultPrincipalMode(principalMode)}
-	if c.DirectorySource == "scim" {
-		options = append(options, inventory.WithoutUsers())
-	}
-	inv, err := inventory.NewStatic(paths, options...)
+	inv, err := inventory.NewStatic(paths, inventory.WithDefaultPrincipalMode(mode), inventory.WithoutUsers())
 	if err != nil {
 		return err
 	}
-	var users directory.Directory = inv
-	var directoryStore directory.Store
-	var scimHandler http.Handler
-	switch c.DirectorySource {
-	case "", "static": // Static recovery does not even open the managed database or secret.
-	case "scim":
-		dbPath, e := serviceStatePath(c.StateDir, "directory", "directory.db")
-		if e != nil {
-			return e
-		}
-		if c.SCIMToken != "" && c.SCIMTokenFile != "" {
-			return fmt.Errorf("use either scim-token or scim-token-file")
-		}
-		if c.SCIMToken == "" && c.SCIMTokenFile == "" {
-			return fmt.Errorf("SCIM directory requires scim-token or scim-token-file")
-		}
-		secret := c.SCIMToken
-		if c.SCIMTokenFile != "" {
-			tokenPath, e := expandPath(c.SCIMTokenFile)
-			if e != nil {
-				return e
-			}
-			data, e := os.ReadFile(tokenPath)
-			if e != nil {
-				return fmt.Errorf("reading SCIM token file: %w", e)
-			}
-			secret = strings.TrimSpace(string(data))
-		}
-		directoryStore, err = sqlitestore.Open(dbPath)
-		if err != nil {
-			return err
-		}
-		defer directoryStore.Close()
-		scimHandler, err = scim.New(directoryStore, secret)
-		if err != nil {
-			return err
-		}
-		users = directoryStore
-	default:
-		return fmt.Errorf("unknown directory-source %q", c.DirectorySource)
-	}
+	var hosts inventory.Hosts = inv
 	var managed *inventory.Managed
 	if c.InventorySource != "static" {
-		stateDir, err := serviceStatePath(c.StateDir, "inventory")
+		dir, err := serviceStatePath(c.StateDir, "inventory")
 		if err != nil {
 			return err
 		}
-		managed, err = inventory.OpenManaged(stateDir, inv)
+		managed, err = inventory.OpenManaged(dir, inv)
 		if err != nil {
 			return err
 		}
 		defer managed.Close()
+		hosts = managed
 	}
 	if c.Check {
 		fmt.Println("inventory OK")
@@ -152,46 +86,28 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if err != nil {
 		return err
 	}
-	resolver := &inventoryserver.Resolver{Directory: users, Hosts: inv}
-	serverCfg := &inventoryserver.ServerConfig{CAPublicKey: key, OIDC: inventoryserver.OIDCConfig{
-		Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, ClientSecret: c.OIDC.ClientSecret,
-		IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim,
-	}}
-	if err := serverCfg.Validate(); err != nil {
-		return err
-	}
-	validator, err := oidc.NewValidator(context.Background(), oidc.Config{
-		Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg,
-	})
-	if err != nil {
-		return fmt.Errorf("creating inventory OIDC validator: %w", err)
-	}
-	auth := serverCfg.BootstrapAuth()
-	handler, err := inventoryserver.NewHandler(inventoryserver.Config{CAPublicKey: sshcert.RawPublicKey(key), Resolver: resolver, Validator: validator, Discovery: &wire.Discovery{Auth: &auth}})
-	if err != nil {
-		return err
-	}
-	if managed != nil {
-		resolver.Hosts = managed
-	}
-	if c.managementEnabled() {
-		control := &inventoryserver.Control{Store: managed, ManagedDirectory: directoryStore, Directory: users, Validator: validator, Admins: inventoryserver.Admins{Users: c.AdminUsers, Groups: c.AdminGroups}}
-		mux := http.NewServeMux()
-		mux.Handle("/manage", control)
-		if scimHandler != nil {
-			mux.Handle("/scim/v2/", scimHandler)
+	var controlKey string
+	if c.ControlPubkey != "" {
+		controlKey, err = resolveCAPubkey(c.ControlPubkey, tlsCfg, logger)
+		if err != nil {
+			return err
 		}
-		mux.Handle("/", handler)
-		handler = mux
 	}
-	logger.Info("starting inventory server", "listen", c.Listen, "files", len(paths), "directorySource", c.DirectorySource, "inventoryRevision", inv.InventoryRevision())
-	return listenAndServe(c.Listen, handler)
-}
-
-// Static directories expose user inspection when an administrator is configured;
-// management availability does not enable host enrollment or managed storage.
-func (c *InventoryCLI) managementEnabled() bool {
-	return c.InventorySource != "static" || c.DirectorySource == "scim" || len(c.AdminUsers) > 0 || len(c.AdminGroups) > 0
+	handler, err := factservice.Handler(nil, hosts, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
+	if err != nil {
+		return err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/lookup", handler)
+	if controlKey != "" {
+		backend, err := (&controlplane.Backend{Store: managed}).Handler(sshcert.RawPublicKey(controlKey))
+		if err != nil {
+			return err
+		}
+		mux.Handle("/manage", backend)
+	}
+	logger.Info("starting inventory server", "listen", c.Listen)
+	return listenAndServe(c.Listen, mux)
 }
 
 // Resolve paths only for enabled stores; static mode never opens managed state.

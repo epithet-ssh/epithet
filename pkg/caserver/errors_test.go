@@ -72,41 +72,10 @@ func TestPublicPolicyErrorsKeepDiagnosticsPrivate(t *testing.T) {
 	}
 }
 
-func TestPublicDiscoveryErrorsKeepDiagnosticsPrivate(t *testing.T) {
-	for _, status := range []int{200, 401, 403, 500, 503} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(status)
-				fmt.Fprint(w, "private discovery diagnostic at /srv/private/inventory.yaml")
-			}))
-			defer upstream.Close()
-			var logs bytes.Buffer
-			server := caserver.New(newTestCAWithInventoryURL(t, upstream.URL), slog.New(slog.NewTextHandler(&logs, nil)), nil)
-			w := httptest.NewRecorder()
-			server.DiscoveryHandler().ServeHTTP(w, httptest.NewRequest("GET", "/discovery", nil))
-			require.Equal(t, 502, w.Code)
-			require.Equal(t, "CA dependency unavailable", w.Body.String())
-			require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
-			require.Contains(t, logs.String(), "failed to fetch discovery")
-		})
-	}
-	t.Run("transport", func(t *testing.T) {
-		upstream := httptest.NewServer(http.NotFoundHandler())
-		upstream.Close()
-		var logs bytes.Buffer
-		server := caserver.New(newTestCAWithInventoryURL(t, upstream.URL), slog.New(slog.NewTextHandler(&logs, nil)), nil)
-		w := httptest.NewRecorder()
-		server.DiscoveryHandler().ServeHTTP(w, httptest.NewRequest("GET", "/discovery", nil))
-		require.Equal(t, 502, w.Code)
-		require.Equal(t, "CA dependency unavailable", w.Body.String())
-		require.Contains(t, logs.String(), upstream.URL)
-	})
-}
-
 func TestPublicInternalError(t *testing.T) {
 	_, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	c, err := ca.New(priv, "https://private-policy.invalid") // No inventory configured.
+	c, err := ca.New(priv, nil) // No authentication configured.
 	require.NoError(t, err)
 	var logs bytes.Buffer
 	server := caserver.New(c, slog.New(slog.NewTextHandler(&logs, nil)), nil)
@@ -114,7 +83,7 @@ func TestPublicInternalError(t *testing.T) {
 	server.DiscoveryHandler().ServeHTTP(w, httptest.NewRequest("GET", "/discovery", nil))
 	require.Equal(t, 500, w.Code)
 	require.Equal(t, "internal CA error", w.Body.String())
-	require.Contains(t, logs.String(), "inventory service is required")
+	require.Contains(t, logs.String(), "CA authentication is not configured")
 }
 
 func TestPublicRequestErrorsAreFixed(t *testing.T) {

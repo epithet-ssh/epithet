@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
@@ -348,14 +348,25 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 	return e
 }
 func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn wire.Connection) (*wire.PolicyResponse, error) {
-	resolver := inventoryserver.Resolver{Directory: e.inv, Hosts: e.inv}
-	resolution, err := resolver.Resolve(ctx, wire.Authentication{ID: id, ExpiresAt: expiry}, il.HostName(conn.RemoteHost))
+	conn.RemoteHost = hostpattern.NormalizeName(conn.RemoteHost)
+	u, _, err := e.inv.LookupUser(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	input := &wire.PolicyFacts{Authentication: resolution.Authentication, Target: resolution.Target, User: resolution.Directory.User}
-	if resolution.Inventory.Host != nil {
-		input.Host = &resolution.Inventory.Host.HostResource
+	h, _, err := e.inv.LookupHost(ctx, conn.RemoteHost)
+	if err != nil {
+		return nil, err
+	}
+	input := &wire.PolicyFacts{Authentication: wire.Authentication{ID: id, ExpiresAt: expiry}, Target: conn.RemoteHost}
+	if u != nil {
+		input.User = &wire.User{ID: u.ID, UserName: u.UserName, Active: &u.Active, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
+	}
+	if h != nil {
+		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Labels: h.Policy.Labels}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}
+		if err := host.Validate(conn.RemoteHost); err != nil {
+			return nil, err
+		}
+		input.Host = &host.HostResource
 	}
 	encoded, err := json.Marshal(input)
 	if err != nil {

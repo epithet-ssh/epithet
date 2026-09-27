@@ -5,7 +5,7 @@ This example demonstrates how to use epithet with Google Workspace authenticatio
 ## Prerequisites
 
 1. Google Cloud project with OAuth2 credentials
-2. Epithet CA and policy server running (see [Policy server guide](../../docs/policy-server.md))
+2. Epithet CA and CA running (see [Policy server guide](../../docs/policy-server.md))
 3. SSH configured to use epithet
 
 ## Setup
@@ -23,13 +23,13 @@ Follow the [OIDC Setup Guide](../../docs/oidc-setup.md#google-workspace--google-
 - Application type: Desktop app
 - You'll get: **Client ID** and **Client Secret**
 
-### 2. Configure the policy server
+### 2. Configure the CA
 
-OIDC configuration lives on the **policy server**, not the client. Point it
+OIDC configuration lives on the **CA**, not the client. Point it
 at Google in `~/.epithet/policy.yaml`:
 
 ```yaml
-policy:
+ca:
   oidc:
     issuer: "https://accounts.google.com"
     client-id: "YOUR_CLIENT_ID.apps.googleusercontent.com"

@@ -19,14 +19,15 @@ func readItem(t *testing.T, m *Managed, id string) *itemRecord {
 	require.NoError(t, DecodeYAML(data, &r))
 	return &r
 }
-func TestTokenFilenameBecomesHostAndOnlyThatFileChanges(t *testing.T) {
+func TestTokenFillsPendingHostAndOnlyThatFileChanges(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
 	token, err := m.CreateToken("admin", time.Hour)
 	value := token.ID
 	require.NoError(t, err)
 	before := readItem(t, m, value)
-	require.Equal(t, "token", before.Kind)
-	require.Nil(t, before.Host)
+	require.Equal(t, "host", before.Kind)
+	require.Equal(t, "pending", before.Host.Status)
+	require.True(t, before.Host.Proposal.empty())
 	other, err := m.CreateToken("admin", time.Hour)
 	require.NoError(t, err)
 	otherPath := m.files.itemPath(other.ID)
@@ -140,7 +141,7 @@ func TestExclusiveItemCreationDoesNotOverwriteCollision(t *testing.T) {
 	m, _ := managedFixture(t, "users: []\n")
 	occupied := strings.Repeat("a", 64)
 	next := strings.Repeat("b", 64)
-	r := &itemRecord{Version: 2, Kind: "token", Token: &EnrollmentToken{ID: occupied, ExpiresAt: time.Now().Add(time.Hour)}}
+	r := &itemRecord{Version: 2, Kind: "host", Host: &HostRecord{ID: occupied, Status: "pending", Revision: 1}, Token: &EnrollmentToken{ID: occupied, ExpiresAt: time.Now().Add(time.Hour)}}
 	require.NoError(t, m.files.write(r, true)) // simulate a filename collision unknown to the index
 	original, err := os.ReadFile(m.files.itemPath(occupied))
 	require.NoError(t, err)
@@ -163,7 +164,7 @@ func TestExclusiveItemCreationDoesNotOverwriteCollision(t *testing.T) {
 	require.Equal(t, original, after)
 	require.NoError(t, m.Health())
 }
-func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
+func TestRedemptionFailureLeavesPendingOrActiveHost(t *testing.T) {
 	for _, published := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before-replace", true: "after-replace"}[published], func(t *testing.T) {
 			m, _ := managedFixture(t, "users: []\n")
@@ -190,9 +191,9 @@ func TestRedemptionFailureLeavesTokenOrHostNeverBoth(t *testing.T) {
 			defer restarted.Close()
 			r := readItem(t, restarted, value)
 			if published {
-				require.Equal(t, "host", r.Kind)
+				require.Equal(t, "active", r.Host.Status)
 			} else {
-				require.Equal(t, "token", r.Kind)
+				require.Equal(t, "pending", r.Host.Status)
 			}
 			if published {
 				_, err = restarted.Enroll(proposal("retry"), value)

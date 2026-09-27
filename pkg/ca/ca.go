@@ -1,22 +1,19 @@
 package ca
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/factservice"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
-	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
+	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -27,15 +24,13 @@ import (
 
 // CA performs CA operations.
 type CA struct {
-	inventory  *inventoryserver.Client
-	signer     ssh.Signer
-	privateKey sshcert.RawPrivateKey
-	policyURL  string
-	httpClient *http.Client
-	logger     *slog.Logger
-
-	// svcSigner mints the request-bound JWT sent to the policy server.
-	svcSigner *serviceauth.Signer
+	directory, inventory *factservice.Client
+	validator            *oidc.Validator
+	discovery            *wire.Discovery
+	evaluator            policyserver.PolicyEvaluator
+	signer               ssh.Signer
+	privateKey           sshcert.RawPrivateKey
+	logger               *slog.Logger
 }
 
 // certParams are assembled by CA from trusted inventory and policy limits.
@@ -84,56 +79,19 @@ func (c *CA) Issue(ctx context.Context, token string, conn wire.Connection, publ
 	return &IssuedCertificate{Certificate: cert, Audit: auth.audit}, nil
 }
 
-// PolicyURL returns the URL of the policy server.
-func (c *CA) PolicyURL() string {
-	return c.policyURL
-}
-
-// New creates a new CA.
-func New(privateKey sshcert.RawPrivateKey, policyURL string, options ...Option) (*CA, error) {
-	sshSigner, err := ssh.ParsePrivateKey([]byte(privateKey))
+// New creates the issuing authority with its in-process policy evaluator.
+func New(privateKey sshcert.RawPrivateKey, evaluator policyserver.PolicyEvaluator, options ...Option) (*CA, error) {
+	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
 	if err != nil {
 		return nil, err
 	}
-
-	svcSigner, err := serviceauth.NewSigner(privateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create service auth signer: %w", err)
-	}
-
-	ca := &CA{
-		signer:     sshSigner,
-		privateKey: privateKey,
-		policyURL:  policyURL,
-		svcSigner:  svcSigner,
-	}
-
+	c := &CA{signer: signer, privateKey: privateKey, evaluator: evaluator}
 	for _, o := range options {
-		if err := o.apply(ca); err != nil {
+		if err := o.apply(c); err != nil {
 			return nil, err
 		}
 	}
-
-	if ca.httpClient == nil {
-		ca.httpClient = &http.Client{
-			Timeout: tlsconfig.DefaultTimeout,
-		}
-	}
-
-	ca.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-
-	// When the policy URL is a unix socket, configure the HTTP transport to
-	// dial the socket and rewrite the URL to http://localhost.
-	if socketPath, ok := strings.CutPrefix(ca.policyURL, "unix://"); ok {
-		dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-		}
-		ca.httpClient.Transport = &http.Transport{DialContext: dialFunc}
-
-		ca.policyURL = "http://localhost/"
-	}
-
-	return ca, nil
+	return c, nil
 }
 
 // Option configures the CA.
@@ -145,20 +103,6 @@ type optionFunc func(*CA) error
 
 func (f optionFunc) apply(a *CA) error {
 	return f(a)
-}
-
-// WithTLSConfig creates an HTTP client with the specified TLS configuration,
-// using tlsconfig's shared default timeout rather than a locally-duplicated
-// literal.
-func WithTLSConfig(cfg tlsconfig.Config) Option {
-	return optionFunc(func(c *CA) error {
-		httpClient, err := tlsconfig.NewHTTPClient(cfg)
-		if err != nil {
-			return fmt.Errorf("failed to create HTTP client: %w", err)
-		}
-		c.httpClient = httpClient
-		return nil
-	})
 }
 
 // WithLogger configures the CA to use the specified logger.
@@ -175,111 +119,72 @@ func (c *CA) PublicKey() sshcert.RawPublicKey {
 	return sshcert.RawPublicKey(string(ssh.MarshalAuthorizedKey(pk)))
 }
 
-// FetchDiscovery obtains login configuration from inventory.
-func (c *CA) FetchDiscovery(ctx context.Context) (*wire.Discovery, error) {
-	if c.inventory == nil {
-		return nil, fmt.Errorf("inventory service is required")
+// FetchDiscovery returns this CA's configured login information.
+func (c *CA) FetchDiscovery(context.Context) (*wire.Discovery, error) {
+	if c.discovery == nil {
+		return nil, fmt.Errorf("CA authentication is not configured")
 	}
-	discovery, err := c.inventory.FetchDiscovery(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("%w: fetching inventory discovery: %w", ErrDependency, err)
+	d := *c.discovery
+	if d.Auth != nil {
+		a := *d.Auth
+		d.Auth = &a
 	}
-	return discovery, nil
+	return &d, nil
 }
 
-// requestPolicy obtains policy approval and assembles certificate signing inputs.
-// Policy owns eligibility and lifetime restrictions. CA validates construction
-// data and applies the returned limits without re-evaluating inventory policy.
-// The request carries a CA-minted, request-bound JWT (pkg/serviceauth).
+// requestPolicy authenticates, fetches current facts, and evaluates Writ in this
+// process. Neither fact provider receives the end user's bearer credential.
 func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connection) (*authorization, error) {
 	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
 	defer cancel()
-	if c.inventory == nil {
-		return nil, fmt.Errorf("inventory service is required")
+	if c.validator == nil || c.directory == nil || c.inventory == nil || c.evaluator == nil {
+		return nil, fmt.Errorf("CA issuance is not configured")
 	}
-	lookup := wire.ResolveRequest{Token: token, Host: hostpattern.NormalizeName(conn.RemoteHost)}
-	facts, err := c.inventory.Resolve(ctx, lookup)
+	claims, err := c.validator.Validate(ctx, token)
 	if err != nil {
-		var policyErr *wire.PolicyError
-		if errors.As(err, &policyErr) && policyErr.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("%w: resolving inventory: %w", ErrInvalidAuthentication, err)
-		}
-		return nil, fmt.Errorf("%w: resolving inventory: %w", ErrDependency, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidAuthentication, err)
 	}
-	if err := facts.Validate(lookup.Host); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrDependency, err)
-	}
-	policyFacts := &wire.PolicyFacts{Authentication: facts.Authentication, Target: facts.Target, User: facts.Directory.User}
-	if facts.Inventory.Host != nil {
-		policyFacts.Host = &facts.Inventory.Host.HostResource
-	}
-	body, err := json.Marshal(wire.PolicyRequest{Connection: conn, Facts: policyFacts})
+	name := hostpattern.NormalizeName(conn.RemoteHost)
+	user, err := c.directory.User(ctx, claims.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("error marshaling request body: %w", err)
+		return nil, fmt.Errorf("%w: directory lookup: %w", ErrDependency, err)
 	}
-
-	if len(body) > wire.MaxBodySize {
-		return nil, fmt.Errorf("policy request too large")
+	if user == nil {
+		return nil, ErrAccessDenied
+	}
+	host, err := c.inventory.Host(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("%w: inventory lookup: %w", ErrDependency, err)
+	}
+	if host == nil {
+		return nil, ErrAccessDenied
 	}
 	if c.logger != nil {
-		c.logger.Debug("http request", "method", "POST", "url", c.policyURL, "body_size", len(body))
-	}
-
-	req, err := http.NewRequest("POST", c.policyURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-	req.Header.Add("Content-type", "application/json")
-
-	if err := c.svcSigner.Authorize(req, body); err != nil {
-		return nil, fmt.Errorf("error signing request: %w", err)
-	}
-
-	start := time.Now()
-	res, err := c.httpClient.Do(req.WithContext(ctx))
-	duration := time.Since(start)
-	if err != nil {
-		if c.logger != nil {
-			c.logger.Debug("http request failed", "method", "POST", "url", c.policyURL, "duration_ms", duration.Milliseconds(), "error", err)
+		if !user.Revision.IsZero() {
+			c.logger.Info("directory lookup", "id", user.ID, "revision", user.Revision.String())
 		}
-		return nil, fmt.Errorf("%w: executing policy request: %w", ErrDependency, err)
+		if !host.Revision.IsZero() {
+			c.logger.Info("inventory lookup", "host", name, "revision", host.Revision.String())
+		}
 	}
-	defer res.Body.Close()
-
-	if c.logger != nil {
-		c.logger.Debug("http response", "method", "POST", "url", c.policyURL, "status", res.StatusCode, "duration_ms", duration.Milliseconds())
-	}
-
-	buf, err := io.ReadAll(io.LimitReader(res.Body, wire.MaxBodySize+1))
+	active := true
+	facts := &wire.PolicyFacts{Authentication: wire.Authentication{ID: claims.UserID, ExpiresAt: claims.ExpiresAt}, Target: name,
+		User: &wire.User{ID: user.ID, UserName: user.UserName, Active: &active, Groups: user.Groups, UserType: user.UserType, Department: user.Department, Organization: user.Organization}, Host: &host.HostResource}
+	response, err := c.evaluator.Evaluate(ctx, conn, facts)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reading policy response: %w", ErrDependency, err)
-	}
-
-	// Check if policy server response exceeds the limit.
-	if len(buf) > wire.MaxBodySize {
-		return nil, fmt.Errorf("%w: policy server response exceeds %d bytes", ErrDependency, wire.MaxBodySize)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		// Only a policy 403 means denial. In particular, a policy 401 rejects
-		// the CA's service credential; refreshing the user's token cannot fix it.
 		kind := ErrDependency
-		if res.StatusCode == http.StatusForbidden {
-			kind = ErrAccessDenied
-		} else if res.StatusCode == http.StatusAccepted {
-			kind = ErrAuthorizationPending
+		var e *wire.PolicyError
+		if errors.As(err, &e) {
+			if e.StatusCode == http.StatusForbidden {
+				kind = ErrAccessDenied
+			} else if e.StatusCode == http.StatusAccepted {
+				kind = ErrAuthorizationPending
+			}
 		}
-		return nil, fmt.Errorf("%w: policy returned HTTP %d: %s", kind, res.StatusCode, buf)
+		return nil, fmt.Errorf("%w: %w", kind, err)
 	}
-
-	policyResp := &wire.PolicyResponse{}
-	err = json.Unmarshal(buf, policyResp)
-	if err != nil {
-		return nil, fmt.Errorf("%w: parsing response from %s: %w", ErrDependency, c.policyURL, err)
-	}
-	user, host := facts.Directory.User, facts.Inventory.Host
-	if user == nil || host == nil || conn.RemoteUser == "" {
-		return nil, fmt.Errorf("%w: policy approval lacks certificate identity or principal data", ErrDependency)
+	if response == nil || conn.RemoteUser == "" {
+		return nil, fmt.Errorf("%w: policy approval lacks signing data", ErrDependency)
 	}
 	expected := conn.RemoteUser
 	if host.Principal.Mode == "epithet-principal-v1" {
@@ -288,22 +193,21 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 			return nil, err
 		}
 	}
-	if policyResp.TTLSeconds <= 0 || policyResp.TTLSeconds > wire.MaxTTLSeconds {
-		return nil, fmt.Errorf("%w: policy ttlSeconds must be between 1 and %d", ErrDependency, wire.MaxTTLSeconds)
+	if response.TTLSeconds <= 0 || response.TTLSeconds > wire.MaxTTLSeconds {
+		return nil, fmt.Errorf("%w: invalid policy TTL", ErrDependency)
 	}
-	if !policyResp.NotAfter.IsZero() && !policyResp.NotAfter.After(time.Now()) {
-		return nil, fmt.Errorf("%w: certificate authorization has expired", ErrDependency)
+	deadline := claims.ExpiresAt
+	if !response.NotAfter.IsZero() && response.NotAfter.Before(deadline) {
+		deadline = response.NotAfter
 	}
-	return &authorization{
-		audit: AuditMetadata{
-			ID: user.ID, PolicyID: policyResp.PolicyID,
-			DirectoryRevision: facts.Directory.Revision, InventoryRevision: facts.Inventory.Revision,
-		},
-		params: certParams{
-			Identity: user.UserName, Names: []string{expected},
-			Expiration: time.Duration(policyResp.TTLSeconds) * time.Second, Extensions: policyResp.Extensions, NotAfter: policyResp.NotAfter,
-		},
-	}, nil
+	if !deadline.After(time.Now()) {
+		return nil, fmt.Errorf("%w: certificate deadline has expired", ErrDependency)
+	}
+	identity := user.UserName
+	if identity == "" {
+		identity = user.ID
+	}
+	return &authorization{audit: AuditMetadata{ID: user.ID, PolicyID: response.PolicyID, DirectoryRevision: user.Revision.String(), InventoryRevision: host.Revision.String()}, params: certParams{Identity: identity, Names: []string{expected}, Expiration: time.Duration(response.TTLSeconds) * time.Second, Extensions: response.Extensions, NotAfter: deadline}}, nil
 }
 
 // signPublicKey signs a key to generate a certificate.
@@ -362,14 +266,23 @@ func (c *CA) signPublicKey(rawPubKey sshcert.RawPublicKey, params *certParams) (
 	return sshcert.RawCertificate(string(rawCert)), nil
 }
 
-// WithInventory configures the authentication, discovery, and resolution service.
-func WithInventory(endpoint string, cfg tlsconfig.Config) Option {
+// WithFacts configures independent read providers and CA-owned OIDC validation.
+func WithFacts(directoryURL, inventoryURL string, identity oidc.Config, discovery wire.AuthConfig, cfg tlsconfig.Config) Option {
 	return optionFunc(func(c *CA) error {
-		client, err := inventoryserver.NewClient(endpoint, c.privateKey, cfg)
+		var err error
+		c.directory, err = factservice.NewClient(directoryURL, c.privateKey, serviceauth.DirectoryAudience, cfg)
 		if err != nil {
 			return err
 		}
-		c.inventory = client
+		c.inventory, err = factservice.NewClient(inventoryURL, c.privateKey, serviceauth.InventoryAudience, cfg)
+		if err != nil {
+			return err
+		}
+		c.validator, err = oidc.NewValidator(context.Background(), identity)
+		if err != nil {
+			return err
+		}
+		c.discovery = &wire.Discovery{Auth: &discovery, CacheControl: "max-age=300"}
 		return nil
 	})
 }

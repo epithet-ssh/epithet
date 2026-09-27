@@ -103,6 +103,9 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn wire.Connection, facts *w
 		Department: u.Department, Organization: u.Organization,
 	}
 	identity := user.UserName
+	if identity == "" {
+		identity = user.ID
+	}
 	host := facts.Host
 	var policyHost *eval.Host
 	if host != nil {

@@ -1,7 +1,6 @@
 package policy_test
 
 import (
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,11 +10,9 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
@@ -39,7 +36,7 @@ func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(config), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
-			is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
+			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			for _, deny := range []bool{false, true} {
 				src := "allow * -> root@freki.home\n"
 				if deny {
@@ -49,11 +46,8 @@ func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
 				require.NotNil(t, pol, "%v", diags)
 				e, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 				require.NoError(t, err)
-				h, err := policyserver.NewHandler(policyserver.Config{CAPublicKey: pub, Evaluator: e})
-				require.NoError(t, err)
-				ps := httptest.NewServer(h)
-				t.Cleanup(ps.Close)
-				authority, err := ca.New(priv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+
+				authority, err := ca.New(priv, e, is.CAOption())
 				require.NoError(t, err)
 				for _, target := range []string{"Freki.HOME", "freki.tailca597.ts.net"} {
 					userKey, _, err := sshcert.GenerateKeys()

@@ -21,34 +21,32 @@ agent:
   name: default   # profile name; determines the rundir and ssh Tag (epithet-<name>; just "epithet" for the default profile)
   login-method: auto # auto uses device authorization under SSH; browser otherwise
 
-# CA server configuration (epithet ca)
+# For server deployment use docs/inventory.md or inventory-scim.example.yaml.
+# CA owns OIDC authentication and Writ evaluation; fact services own data.
 # ca:
-#   policy: https://policy.example.com
+#   directory: https://directory.example.com
 #   inventory: https://inventory.example.com
+#   control-public-url: https://control.example.com/manage
 #   key: /etc/epithet/ca.key
-#   listen: "0.0.0.0:8080"
-
-# Policy server configuration (epithet policy)
-# All policy config is unified here - no separate policy.yaml needed
-# policy:
-#   listen: "0.0.0.0:9999"
-#   ca-pubkey: ssh-ed25519 AAAAC3...  # or URL like https://ca.example.com/pubkey
-#   default-expiration: "5m"
-#
 #   policy-file: /etc/epithet/policy.writ
-#
-# Inventory service configuration (epithet inventory)
-# inventory:
-#   # OIDC configuration for token validation - client-id is required so
-#   # audience checking can never be silently skipped. Config-file keys
-#   # here are kebab-case (derived from the CLI flag names).
 #   oidc:
-#     issuer: "https://accounts.google.com"
-#     client-id: "your-client-id"
-#
+#     issuer: https://identity.example.com
+#     client-id: epithet
+# control:
+#   key: /etc/epithet/control.key
+#   directory: https://directory.example.com
+#   directory-backend: https://directory.example.com
+#   inventory-backend: https://inventory.example.com
+#   oidc:  # Same issuer, client ID, and identity mapping as CA.
+#     issuer: https://identity.example.com
+#     client-id: epithet
+#   directory-admin-group: [directory-operators]
+#   inventory-admin-group: [host-operators]
+# directory:
 #   ca-pubkey: /etc/epithet/ca.pub
-#   static: [/etc/epithet/inventory.yaml]
-#   principal-mode: account-name
-#
-# Note: Broker socket and agent directories are automatically managed
-# in ~/.epithet/run/<name>/ - no configuration needed!
+#   control-pubkey: /etc/epithet/control.pub
+#   static: [/etc/epithet/directory.yaml]
+# inventory:
+#   ca-pubkey: /etc/epithet/ca.pub
+#   control-pubkey: /etc/epithet/control.pub
+#   static: [/etc/epithet/hosts.yaml]

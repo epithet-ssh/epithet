@@ -56,7 +56,7 @@ a policy-supplied explanation.
 
 This contract does not add approval storage, background job execution, or plugin
 registration to the built-in CLI. Those workflows remain separate work; the
-static CLI policy server currently registers no requirement plugins.
+static CLI CA currently registers no requirement plugins.
 
 Upgrade CA and clients together for pending support: older clients interpret 202
 as a malformed request. Existing clients already classify 401, 403, and 5xx;

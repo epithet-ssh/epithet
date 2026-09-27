@@ -65,7 +65,7 @@ func ascii(length int) ([]byte, error) {
 func TestCA_Sign(t *testing.T) {
 	require := require.New(t)
 
-	c, err := New(caPrivKey, "")
+	c, err := New(caPrivKey, nil)
 	require.NoError(err)
 
 	cert, err := c.signPublicKey(sshcert.RawPublicKey(userPubKey), &certParams{
@@ -86,7 +86,7 @@ func TestCA_Sign(t *testing.T) {
 // server URL since these tests only exercise local signing.
 func newTestCA(t *testing.T) *CA {
 	t.Helper()
-	c, err := New(caPrivKey, "")
+	c, err := New(caPrivKey, nil)
 	require.NoError(t, err)
 	return c
 }
@@ -146,7 +146,7 @@ func TestSignPublicKeyRejectsPastNotAfter(t *testing.T) {
 }
 
 func TestCA_GetPublicKey(t *testing.T) {
-	c, err := New(caPrivKey, "")
+	c, err := New(caPrivKey, nil)
 	require.NoError(t, err)
 
 	t.Logf("%s", c.PublicKey())

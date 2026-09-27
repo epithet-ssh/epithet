@@ -84,6 +84,12 @@ func (p Proposal) MarshalYAML() (any, error) {
 	return &node, nil
 }
 
+// empty identifies a reservation that has not supplied any host attributes yet.
+// It is permitted only on non-active host records with enrollment metadata.
+func (p Proposal) empty() bool {
+	return p.Names == nil && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Domain == ""
+}
+
 func (p *Proposal) Validate() error {
 	if len(p.Names) == 0 || len(p.Names) > 64 {
 		return fmt.Errorf("provide between 1 and 64 exact DNS names")
@@ -167,7 +173,7 @@ type HostRecord struct {
 	ID            string    `yaml:"id"`
 	Revision      uint64    `yaml:"revision"`
 	Status        string    `yaml:"status"`
-	Proposal      Proposal  `yaml:"host"`
+	Proposal      Proposal  `yaml:"host,omitempty"`
 	CreatedAt     time.Time `yaml:"created-at"`
 	UpdatedAt     time.Time `yaml:"updated-at"`
 	Source        string    `yaml:"-"`
@@ -414,13 +420,13 @@ func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
 	status := "pending"
 	var reserved *itemRecord
 	if token != "" {
-		// The literal token is the filename and the reserved host ID. A host file
-		// never grants preapproval, even if its former token has not yet expired.
+		// The token claims one pending host. A pending status alone never grants
+		// preapproval: its unconsumed enrollment credential must also be valid.
 		if !validID(token) {
 			return nil, ErrToken
 		}
 		reserved = m.records[token]
-		if reserved == nil || reserved.Kind != "token" || reserved.Token.Revoked || reserved.Token.UsedBy != "" || !time.Now().Before(reserved.Token.ExpiresAt) {
+		if reserved == nil || reserved.Host == nil || reserved.Host.Status != "pending" || reserved.Token == nil || reserved.Token.Revoked || reserved.Token.UsedBy != "" || !time.Now().Before(reserved.Token.ExpiresAt) {
 			return nil, ErrToken
 		}
 		if err := m.conflict(p, ""); err != nil {
@@ -447,7 +453,8 @@ func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
 		r := &itemRecord{Version: 2, Kind: "host", Host: &h}
 		if reserved != nil {
 			r = cloneItem(reserved)
-			r.Kind = "host"
+			h.CreatedAt = reserved.Host.CreatedAt
+			h.Revision = reserved.Host.Revision + 1
 			r.Host = &h
 			r.Token.UsedBy = id
 		}
@@ -499,6 +506,9 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		if h.Status != "pending" {
 			return nil, fmt.Errorf("only pending records can be approved")
 		}
+		if err := h.Proposal.Validate(); err != nil {
+			return nil, fmt.Errorf("host attributes are required before approval: %w", err)
+		}
 		if err := m.conflict(h.Proposal, id); err != nil {
 			return nil, err
 		}
@@ -520,6 +530,9 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown inventory action")
+	}
+	if r.Token != nil && r.Token.UsedBy == "" && h.Status != "pending" {
+		r.Token.Revoked = true
 	}
 	h.Revision++
 	h.UpdatedAt = time.Now().UTC()
@@ -573,8 +586,10 @@ func (m *Managed) CreateToken(actor string, lifetime time.Duration) (EnrollmentT
 		if m.records[id] != nil {
 			continue
 		}
-		token := EnrollmentToken{ID: id, ExpiresAt: time.Now().UTC().Add(lifetime)}
-		err = m.commit(&itemRecord{Version: 2, Kind: "token", Token: &token}, actor, "token-create", true)
+		now := time.Now().UTC()
+		token := EnrollmentToken{ID: id, ExpiresAt: now.Add(lifetime)}
+		host := &HostRecord{ID: id, Revision: 1, Status: "pending", CreatedAt: now, UpdatedAt: now}
+		err = m.commit(&itemRecord{Version: 2, Kind: "host", Host: host, Token: &token}, actor, "token-create", true)
 		if errors.Is(err, errItemExists) {
 			continue
 		}
@@ -611,6 +626,8 @@ func (m *Managed) RevokeToken(actor, id string) error {
 	}
 	r := cloneItem(old)
 	r.Token.Revoked = true
+	r.Host.Revision++
+	r.Host.UpdatedAt = time.Now().UTC()
 	return m.commit(r, actor, "token-revoke", false)
 }
 func (m *Managed) Audit() ([]AuditEvent, error) {

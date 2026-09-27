@@ -21,7 +21,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// TestServerEndToEnd verifies the combined server starts a router and three
+// TestServerEndToEnd verifies the combined server starts a router and four
 // private services, routes requests, and cleans up the supervised processes.
 func TestServerEndToEnd(t *testing.T) {
 	if testing.Short() {
@@ -68,20 +68,22 @@ func TestServerEndToEnd(t *testing.T) {
 	// Write config YAML. Keys under policy: use the flag names verbatim
 	// (kebab-case), which is how Kong resolves them.
 	configPath := filepath.Join(tmpDir, "config.yaml")
+	controlPath := writeControlKey(t, tmpDir)
 	configContent := fmt.Sprintf(`server:
   ca-key: %s
-policy:
-  ca-pubkey: "%s"
+  control-key: %s
+ca:
   policy-file: %s
-inventory:
-  principal-mode: account-name
-  inventory-source: static
   oidc:
     issuer: "%s"
     client-id: "%s"
-  static:
-    - %s
-`, caKeyPath, strings.TrimSpace(string(caPubkey)), policyPath, mockURL, oidctest.ClientID, inventoryPath)
+directory:
+  static: [%s]
+inventory:
+  principal-mode: account-name
+  inventory-source: static
+  static: [%s]
+`, caKeyPath, controlPath, policyPath, mockURL, oidctest.ClientID, inventoryPath, inventoryPath)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -307,4 +309,17 @@ func waitForTCP(t *testing.T, addr string, timeout time.Duration) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s to accept connections", addr)
+}
+
+func writeControlKey(t *testing.T, dir string) string {
+	t.Helper()
+	_, key, err := sshcert.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "control.key")
+	if err := os.WriteFile(path, []byte(key), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

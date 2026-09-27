@@ -1,87 +1,122 @@
-package inventoryserver
+// Package controlplane separates public authentication from backend mutations.
+package controlplane
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/directory/scim"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
+	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
-type TokenValidator interface {
-	Validate(context.Context, string) (*oidc.Claims, error)
-}
-
-// Admins is intentionally one role. IDs use the same configured claim mapping
-// and active directory records as certificate issuance, never a second identity.
-type Admins struct {
-	Users  []string
-	Groups []string
-}
-
-func (a Admins) Allows(u *directory.User) bool {
-	if u == nil || !u.Active {
-		return false
-	}
-	if slices.Contains(a.Users, u.ID) {
-		return true
-	}
-	for _, g := range u.Groups {
-		if slices.Contains(a.Groups, g) {
-			return true
-		}
-	}
-	return false
-}
-
-type Control struct {
+// Backend owns only storage and invariants. Only the configured control key can
+// invoke it; CA reader credentials never confer mutation authority.
+type Backend struct {
 	Store            *inventory.Managed
 	ManagedDirectory directory.Store
 	Directory        directory.Directory
-	Validator        TokenValidator
-	Admins           Admins
-	// Bound anonymous enrollment to a small global burst and sustained rate.
-	mu        sync.Mutex
-	allowance float64
-	last      time.Time
+}
+type request struct {
+	Request               inventoryapi.ControlRequest `json:"request"`
+	AuthorizationRevision directory.Revision          `json:"authorizationRevision,omitempty"`
+}
+type actorFacts struct {
+	User     *directory.User    `json:"user"`
+	Revision directory.Revision `json:"authorizationRevision"`
+}
+type scimRequest struct {
+	Method      string `json:"method"`
+	Target      string `json:"target"`
+	ContentType string `json:"contentType"`
+	IfMatch     string `json:"ifMatch"`
+	Body        []byte `json:"body"`
 }
 
-func (c *Control) admit() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	if c.last.IsZero() {
-		c.allowance = 20
-	} else {
-		c.allowance = min(20, c.allowance+now.Sub(c.last).Seconds())
+func (c *Backend) Handler(key sshcert.RawPublicKey) (http.Handler, error) {
+	audience := serviceauth.InventoryAudience
+	if c.Directory != nil {
+		audience = serviceauth.DirectoryAudience
 	}
-	c.last = now
-	if c.allowance < 1 {
-		return false
+	verifier, err := serviceauth.NewVerifierFor(key, audience)
+	if err != nil {
+		return nil, err
 	}
-	c.allowance--
-	return true
+	var provision http.Handler
+	if c.ManagedDirectory != nil {
+		provision, err = scim.NewBackend(c.ManagedDirectory)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		defer r.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20+1))
+		if err != nil || len(body) > 8<<20 {
+			http.Error(w, "request too large", 413)
+			return
+		}
+		actor, err := verifier.VerifyActor(r, body)
+		if err != nil {
+			http.Error(w, "invalid control authentication", 403)
+			return
+		}
+		switch r.URL.Path {
+		case "/actor":
+			if r.Method != "GET" || c.Directory == nil || r.URL.Query().Get("id") == "" {
+				http.NotFound(w, r)
+				return
+			}
+			u, rev, err := c.Directory.LookupUser(r.Context(), r.URL.Query().Get("id"))
+			if err != nil {
+				http.Error(w, "directory unavailable", 503)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(actorFacts{u, rev})
+		case "/scim":
+			if r.Method != "POST" || provision == nil || actor != "" {
+				http.NotFound(w, r)
+				return
+			}
+			var q scimRequest
+			if err := json.Unmarshal(body, &q); err != nil || !strings.HasPrefix(q.Target, "/scim/v2/") {
+				http.Error(w, "invalid SCIM request", 400)
+				return
+			}
+			inner, err := http.NewRequestWithContext(r.Context(), q.Method, q.Target, bytes.NewReader(q.Body))
+			if err != nil {
+				http.Error(w, "invalid SCIM request", 400)
+				return
+			}
+			inner.Header.Set("Content-Type", q.ContentType)
+			inner.Header.Set("If-Match", q.IfMatch)
+			provision.ServeHTTP(w, inner)
+		case "/manage":
+			c.manage(w, r, body, actor)
+		default:
+			http.NotFound(w, r)
+		}
+	}), nil
 }
-func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (c *Backend) manage(w http.ResponseWriter, r *http.Request, body []byte, actor string) {
 	users, canListUsers := c.Directory.(directory.UserLister)
-	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	fail := func(code int, msg string) {
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Error: msg})
 	}
-	if r.Method == http.MethodGet {
+	if r.Method == "GET" {
 		capabilities := []string{"admin"}
 		if c.Store != nil {
 			capabilities = append(capabilities, "enroll")
@@ -95,28 +130,16 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: capabilities})
 		return
 	}
-	if r.Method != http.MethodPost {
+	if r.Method != "POST" {
 		fail(405, "method not allowed")
 		return
 	}
-
-	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, wire.MaxBodySize+1))
-	if err != nil || len(body) > wire.MaxBodySize {
-		fail(413, "request too large")
+	var envelope request
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		fail(400, "invalid control request")
 		return
 	}
-	var req inventoryapi.ControlRequest
-	d := json.NewDecoder(strings.NewReader(string(body)))
-	d.DisallowUnknownFields()
-	if err = d.Decode(&req); err != nil {
-		fail(400, "invalid inventory request")
-		return
-	}
-	if d.Decode(new(any)) != io.EOF {
-		fail(400, "invalid inventory request")
-		return
-	}
+	req, authorizationRevision := envelope.Request, envelope.AuthorizationRevision
 	isUserList := req.Action == "directory-users"
 	isManagedDirectory := req.Action == "directory-groups" || req.Action == "directory-bind" || req.Action == "directory-audit"
 	isDirectory := isUserList || isManagedDirectory
@@ -124,35 +147,15 @@ func (c *Control) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(404, "requested inventory capability is not configured")
 		return
 	}
-	var actor string
-	var authorizationRevision directory.Revision
-	if req.Action == "enroll" {
-		if !c.admit() {
-			fail(429, "enrollment rate limit; retry later")
-			return
-		}
-	} else {
-		raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || raw == "" {
-			fail(401, "authentication required")
-			return
-		}
-		claims, e := c.Validator.Validate(r.Context(), raw)
-		if e != nil {
-			fail(401, "invalid or expired authentication")
-			return
-		}
-		u, rev, e := c.Directory.LookupUser(r.Context(), claims.UserID)
-		if e != nil {
-			fail(503, "directory unavailable")
-			return
-		}
-		if !c.Admins.Allows(u) {
-			fail(403, "inventory-admin role required")
-			return
-		}
-		actor, authorizationRevision = u.ID, rev
+	if req.Action != "enroll" && actor == "" {
+		fail(403, "authenticated actor is required")
+		return
 	}
+	if req.Action == "enroll" && actor != "" {
+		fail(400, "enrollment is not a human administrative operation")
+		return
+	}
+	var err error
 	var resp inventoryapi.ControlResponse
 	switch req.Action {
 	case "directory-users":

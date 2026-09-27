@@ -1,58 +1,35 @@
 openapi: 3.0.3
 info:
-  title: Epithet Inventory Resolver API
-  version: 2.0.0
+  title: Epithet Inventory Fact API
+  version: 1.0.0
   description: >-
-    CA-authenticated OIDC validation and host resolution. This document excludes the separate managed administration and
-    enrollment routes. Requests and responses are limited to 64 KiB. Resolution responses
-    are not cached. Directory and host revisions are independent snapshots.
-    GET and POST use the configured endpoint without appending a path suffix.
-    Reverse proxies must preserve the signed Host header and path.
-    Query parameters are not supported. The resolution payload carries the
-    protocol version.
+    A single active-object lookup, independent of control-plane APIs. Responses
+    are limited to 64 KiB and all responses must include Cache-Control no-store.
+    Requests have exactly one query parameter and no body. The client appends
+    /lookup to the configured service root. See fact-services.md.
 paths:
-  /:
+  /lookup:
     get:
-      operationId: inventoryDiscovery
-      summary: Login configuration forwarded by CA to agents
-      security:
-        - ServiceJWT: []
+      operationId: lookupInventory
+      security: [{ServiceJWT: []}]
+      parameters:
+        - in: query
+          name: host
+          required: true
+          schema: {type: string, minLength: 1}
       responses:
         '200':
-          description: Login discovery; Cache-Control max-age=300
+          description: Active Host; never null
+          headers:
+            Cache-Control:
+              schema: {type: string, enum: [no-store]}
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Discovery'
-        '403':
-          description: Invalid or missing CA service token
-    post:
-      operationId: resolveInventory
-      security:
-        - ServiceJWT: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ResolveRequest'
-      responses:
-        '200':
-          description: Resolution; missing entities are explicit null records
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Resolution'
-        '400':
-          description: Invalid request
-        '401':
-          description: Invalid or expired user authentication token
-        '403':
-          description: Invalid or missing CA service token; CA treats this as infrastructure failure
-        '413':
-          description: Request too large
-        '500':
-          description: Lookup or response validation failure; issuance must fail closed
+              schema: {$ref: '#/components/schemas/Host'}
+        '400': {description: Invalid lookup request}
+        '403': {description: Invalid service authentication}
+        '404': {description: Unknown or inactive entity}
+        '503': {description: Provider unavailable}
 components:
   securitySchemes:
     ServiceJWT:
@@ -60,138 +37,44 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: >-
-        Request-bound JWT signed by the CA SSH key. Verify signature, audience
-        epithet-inventory, issued-at/expiry, method, host+path, and SHA-256 body
-        hash using pkg/serviceauth. This grants resolution reads only.
+        Request-bound JWT signed with a configured reader key. Audience is
+        epithet-inventory. Verify the signature, audience, expiry, issued-at
+        freshness, exact HTTP method, authority plus escaped path and raw query,
+        and unpadded base64url SHA256 body digest. See pkg/serviceauth.
   schemas:
-    Authentication:
-      type: object
-      required: [id, expiresAt]
-      properties:
-        id:
-          type: string
-          minLength: 1
-          description: Inventory-mapped, verified user ID
-        expiresAt:
-          type: string
-          format: date-time
-          description: Verified session expiry; must be in the future, and bounds certificate validity
-    AuthConfig:
-      type: object
-      required: [issuer, client_id]
-      properties:
-        issuer:
-          type: string
-        client_id:
-          type: string
-        client_secret:
-          type: string
-          description: Included only if configured; forwarded in public CA login discovery
-    Discovery:
-      type: object
-      properties:
-        auth:
-          $ref: '#/components/schemas/AuthConfig'
-    ResolveRequest:
-      type: object
-      required: [token, host]
-      additionalProperties: false
-      properties:
-        token:
-          type: string
-          description: Original user OIDC ID token; never echoed in the response or sent to policy
-        host:
-          type: string
-          minLength: 1
-          description: Requested host with ASCII case folding
-    Resolution:
-      type: object
-      required: [version, authentication, target, directory, inventory]
-      properties:
-        version:
-          type: integer
-          enum: [2]
-        authentication:
-          $ref: '#/components/schemas/Authentication'
-        target:
-          type: string
-          minLength: 1
-          description: Requested connection target; must match the request host after ASCII case folding
-        directory:
-          type: object
-          required: [revision, user]
-          properties:
-            revision:
-              type: string
-              minLength: 1
-            user:
-              $ref: '#/components/schemas/User'
-        inventory:
-          type: object
-          required: [revision, host]
-          properties:
-            revision:
-              type: string
-              minLength: 1
-            host:
-              $ref: '#/components/schemas/Host'
-    User:
-      type: object
-      nullable: true
-      required: [id, userName, active]
-      properties:
-        id:
-          type: string
-          minLength: 1
-        userName:
-          type: string
-          minLength: 1
-        active:
-          type: boolean
-        userType:
-          type: string
-        groups:
-          type: array
-          nullable: true
-          items:
-            type: string
-            minLength: 1
-          description: Group membership identifiers matched byte-for-byte
-        department:
-          type: string
-        organization:
-          type: string
+    Revision:
+      type: string
+      description: Optional opaque logging metadata, at most 256 UTF-8 bytes; never used for authorization or caching
     Host:
       type: object
-      nullable: true
       required: [names, accounts, principal]
       properties:
         names:
           type: array
           minItems: 1
           uniqueItems: true
-          items:
-            type: string
-            minLength: 1
-          description: Normalized equivalent host names, independent of the principal domain
-        labels:
-          type: object
-          nullable: true
-          additionalProperties:
-            type: string
+          items: {type: string, minLength: 1}
+          description: All equivalent normalized names, including the requested host; independent of principal domain
         accounts:
           type: array
           nullable: true
-          items:
-            type: string
-          description: Must be present; null means ungrounded and [] permits no accounts
-        principal:
+          items: {type: string}
+          description: Required; null is unrestricted, empty permits none, a list restricts accounts
+        labels:
           type: object
-          required: [mode]
-          properties:
-            mode:
-              type: string
-              enum: [account-name, epithet-principal-v1]
-            domain:
-              type: string
-              description: Canonical domain, required for epithet-principal-v1
+          additionalProperties: {type: string}
+        principal:
+          oneOf:
+            - type: object
+              required: [mode]
+              properties:
+                mode: {type: string, enum: [account-name]}
+            - type: object
+              required: [mode, domain]
+              properties:
+                mode: {type: string, enum: [epithet-principal-v1]}
+                domain:
+                  type: string
+                  minLength: 1
+                  description: Opaque principal domain, not a hostname
+        revision: {$ref: '#/components/schemas/Revision'}

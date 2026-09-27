@@ -3,7 +3,6 @@ package wire_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
@@ -60,15 +59,8 @@ func TestPrincipalBindingWithMultipleNames(t *testing.T) {
 		{"invalid domain", "epithet-principal-v1", "not a domain", []string{"second"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := wire.Resolution{
-				Version: wire.ResolveVersion, Target: "second",
-				Authentication: wire.Authentication{ID: "id", ExpiresAt: time.Now().Add(time.Hour)},
-				Directory:      wire.DirectorySnapshot{Revision: "directory"},
-				Inventory: wire.HostSnapshot{Revision: "inventory", Host: &wire.Host{
-					HostResource: wire.HostResource{Names: tc.names, Accounts: nil},
-					Principal:    wire.Principal{Mode: tc.mode, Domain: tc.domain},
-				}},
-			}
+			r := wire.Host{HostResource: wire.HostResource{Names: tc.names, Accounts: nil}, Principal: wire.Principal{Mode: tc.mode, Domain: tc.domain}}
+
 			if tc.valid {
 				require.NoError(t, r.Validate("second"))
 			} else {

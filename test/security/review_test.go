@@ -7,13 +7,11 @@ package security_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -57,32 +55,4 @@ func TestReviewHTTPSRedirectLeaksBearerAndTrustsPlaintextRoot(t *testing.T) {
 	require.Equal(t, pub, root.PublicKey)
 	require.Equal(t, plain.URL, root.FinalURL)
 	t.Log("TLS verification enabled: bearer reached HTTP and bootstrap accepted a key returned over HTTP")
-}
-
-func TestReviewPolicyRedirectLeaksOIDCBody(t *testing.T) {
-	seen := make(chan string, 1)
-	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body wire.PolicyRequest
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		seen <- body.Token
-		http.Error(w, "fixture", http.StatusForbidden)
-	}))
-	t.Cleanup(plain.Close)
-	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, plain.URL, http.StatusTemporaryRedirect)
-	}))
-	t.Cleanup(secure.Close)
-	_, priv, err := sshcert.GenerateKeys()
-	require.NoError(t, err)
-	authority, err := ca.New(priv, secure.URL, ca.WithTLSConfig(tlsconfigFor(t, secure)))
-	require.NoError(t, err)
-	_, err = authority.Issue(context.Background(), "review-only-oidc-token", wire.Connection{}, "")
-	require.Error(t, err)
-	select {
-	case token := <-seen:
-		require.Equal(t, "review-only-oidc-token", token)
-	default:
-		t.Fatal("probe did not observe the OIDC token on the plaintext destination")
-	}
-	t.Log("CA forwarded the OIDC token in the POST body across an HTTPS-to-HTTP redirect")
 }

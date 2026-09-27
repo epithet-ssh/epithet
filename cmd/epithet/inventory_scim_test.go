@@ -1,86 +1,44 @@
 package main
 
 import (
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/config"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
-func TestStaticDirectoryRecoveryIgnoresDatabaseAndToken(t *testing.T) {
+func TestStaticDirectoryRecoveryIgnoresDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "static.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("users:\n - id: admin-sub\n   userName: admin\n"), 0600))
-	c := InventoryCLI{Check: true, InventorySource: "static", DirectorySource: "static", StateDir: "/unavailable/state", SCIMTokenFile: "/missing/secret", Static: []string{path}, OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
-	require.NoError(t, c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{}))
-	c.DirectorySource = "scim"
-	require.ErrorContains(t, c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{}), "reading SCIM token file")
-	inv, e := inventory.NewStatic([]string{path}, inventory.WithoutUsers())
-	require.NoError(t, e)
-	u, _, e := inv.LookupUser(t.Context(), "admin-sub")
-	require.NoError(t, e)
-	require.Nil(t, u)
-}
-func TestSCIMAloneEnablesInventoryAdministration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  directory-source: scim\n  inventory-source: static\n  state-dir: /tmp/state\n  scim-token-file: /tmp/scim.token\n"), 0600))
-	managed, e := inventoryChildManagementEnabled([]string{"--config", path, "inventory"})
-	require.NoError(t, e)
-	require.True(t, managed)
+	require.NoError(t, os.WriteFile(path, []byte("users:\n - id: admin-sub\n   userName: admin\nhosts:\n - names: [host]\n"), 0600))
+	c := DirectoryCLI{Check: true, Source: "static", StateDir: "/unavailable/state", Static: []string{path}}
+	require.NoError(t, (&DirectoryServeCLI{}).Run(&c, slog.New(slog.DiscardHandler), tlsconfig.Config{}))
 }
 
-func TestSCIMServerTokenConfiguration(t *testing.T) {
-	for _, tc := range []struct{ name, literal, file, source, wantError string }{
-		{name: "literal", literal: "literal-provisioning-token"},
-		{name: "file", file: "file-provisioning-token\n"},
-		{name: "both", literal: "literal-provisioning-token", file: "file-provisioning-token", wantError: "use either scim-token or scim-token-file"},
-		{name: "missing", wantError: "requires scim-token or scim-token-file"},
-		{name: "invalid literal", literal: "not a token", wantError: "without whitespace"},
+func TestControlTokenConfiguration(t *testing.T) {
+	for _, tc := range []struct{ name, literal, file, wantError string }{
+		{name: "literal", literal: "secret"}, {name: "file", file: "secret\n"},
+		{name: "disabled"}, {name: "both", literal: "secret", file: "secret", wantError: "use either"},
 		{name: "empty file", file: "\n", wantError: "nonempty bearer token"},
-		{name: "static ignores credentials", source: "static", literal: "unused", file: "unused"},
+		{name: "invalid", literal: "not a token", wantError: "without whitespace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			static := filepath.Join(dir, "hosts.yaml")
-			require.NoError(t, os.WriteFile(static, []byte("hosts: []\n"), 0600))
-			source := tc.source
-			if source == "" {
-				source = "scim"
-			}
-			config := map[string]any{"inventory": map[string]any{"directory-source": source, "state-dir": filepath.Join(dir, "state"), "scim-token": tc.literal, "static": []string{static}, "oidc": map[string]any{"issuer": "https://issuer.example"}}}
+			c := ControlCLI{SCIMToken: tc.literal}
 			if tc.file != "" {
-				tokenPath := filepath.Join(dir, "token")
-				require.NoError(t, os.WriteFile(tokenPath, []byte(tc.file), 0600))
-				config["inventory"].(map[string]any)["scim-token-file"] = tokenPath
+				c.SCIMTokenFile = filepath.Join(t.TempDir(), "token")
+				require.NoError(t, os.WriteFile(c.SCIMTokenFile, []byte(tc.file), 0600))
 			}
-			data, err := yaml.Marshal(config)
-			require.NoError(t, err)
-			path := filepath.Join(dir, "config.yaml")
-			require.NoError(t, os.WriteFile(path, data, 0600))
-			var root struct {
-				Inventory InventoryCLI `cmd:"inventory"`
-			}
-			parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
-			require.NoError(t, err)
-			_, err = parser.Parse([]string{"inventory", "--check"})
-			require.NoError(t, err)
-			err = root.Inventory.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
+			token, err := c.provisioningToken()
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 			} else {
 				require.NoError(t, err)
-			}
-			if source == "static" {
-				require.NoDirExists(t, filepath.Join(root.Inventory.StateDir, "directory"))
-				require.DirExists(t, filepath.Join(root.Inventory.StateDir, "inventory", "records"))
+				if tc.name != "disabled" {
+					require.Equal(t, "secret", token)
+				}
 			}
 		})
 	}
@@ -104,10 +62,12 @@ func TestServiceStatePathsAndSourceSelection(t *testing.T) {
 				hosts := filepath.Join(dir, "hosts.yaml")
 				state := filepath.Join(dir, "state")
 				require.NoError(t, os.WriteFile(hosts, []byte("hosts: []\n"), 0600))
-				c := InventoryCLI{Check: true, Static: []string{hosts}, StateDir: state, InventorySource: source, DirectorySource: directorySource, SCIMToken: "provisioning-token", OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
+				c := InventoryCLI{Check: true, Static: []string{hosts}, StateDir: state, InventorySource: source}
 				// Service startup must not consult client profile/socket configuration.
 				c.ManagementCLI = ManagementCLI{Name: "invalid/profile", Broker: "/missing/agent.sock"}
 				require.NoError(t, c.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{}))
+				d := DirectoryCLI{Check: true, Source: directorySource, StateDir: state, Static: []string{hosts}}
+				require.NoError(t, (&DirectoryServeCLI{}).Run(&d, slog.New(slog.DiscardHandler), tlsconfig.Config{}))
 				if source != "static" {
 					require.DirExists(t, filepath.Join(state, "inventory", "records"))
 				} else {
@@ -126,29 +86,6 @@ func TestServiceStatePathsAndSourceSelection(t *testing.T) {
 	}
 }
 
-func TestServiceManagementDefaultsAndStaticOptOut(t *testing.T) {
-	for _, settings := range []struct {
-		yaml    string
-		managed bool
-	}{
-		{"", true},
-		{"  state-dir: /unavailable/host-state\n", true},
-		{"  inventory-source: static\n", false},
-		{"  inventory-source: static\n  state-dir: /unavailable/host-state\n", false},
-		{"  inventory-source: managed\n", true},
-		{"  inventory-source: static\n  directory-source: scim\n", true},
-		{"  inventory-source: static\n  admin-user: [admin]\n", true},
-		{"  inventory-source: static\n  admin-group: [operators]\n", true},
-	} {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		// An invalid agent profile must not affect server configuration parsing.
-		require.NoError(t, os.WriteFile(path, []byte("agent:\n  name: invalid/profile\ninventory:\n  listen: 127.0.0.1:9998\n"+settings.yaml), 0600))
-		enabled, err := inventoryChildManagementEnabled([]string{"--config", path, "inventory"})
-		require.NoError(t, err)
-		require.Equal(t, settings.managed, enabled)
-	}
-}
-
 func TestInventoryPrincipalModeDefaultAndOverrides(t *testing.T) {
 	for _, tc := range []struct {
 		name, configMode, hostFields string
@@ -162,7 +99,7 @@ func TestInventoryPrincipalModeDefaultAndOverrides(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "static.yaml")
 			require.NoError(t, os.WriteFile(path, []byte("domains: [fleet]\nhosts:\n  - names: [host.example]\n"+tc.hostFields), 0600))
-			c := InventoryCLI{Check: true, InventorySource: "static", PrincipalMode: tc.configMode, Static: []string{path}, OIDC: InventoryOIDCConfig{Issuer: "https://issuer.example"}}
+			c := InventoryCLI{Check: true, InventorySource: "static", PrincipalMode: tc.configMode, Static: []string{path}}
 			err := c.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
 			if tc.wantError {
 				require.ErrorContains(t, err, "uses epithet-principal-v1 but has no domain")

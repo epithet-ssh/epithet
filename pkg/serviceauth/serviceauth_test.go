@@ -111,3 +111,28 @@ func TestVerifyRejectsTargetMismatch(t *testing.T) {
 
 	require.Error(t, v.Verify(reqB, nil))
 }
+
+func TestSignedQueryAndActor(t *testing.T) {
+	pub, key := keyPair(t)
+	signer, err := NewSignerFor(key, DirectoryAudience)
+	require.NoError(t, err)
+	verifier, err := NewVerifierFor(pub, DirectoryAudience)
+	require.NoError(t, err)
+	req, err := http.NewRequest("GET", "http://directory/lookup?id=a%2Bb%26c%3Dd", nil)
+	require.NoError(t, err)
+	require.NoError(t, signer.AuthorizeActor(req, nil, "admin-id"))
+	actor, err := verifier.VerifyActor(req, nil)
+	require.NoError(t, err)
+	require.Equal(t, "admin-id", actor)
+	for _, query := range []string{"id=other", "id=a+b%26c%3Dd", "id=a%2Bb%26c%3Dd&extra=1", ""} {
+		clone := req.Clone(t.Context())
+		clone.URL.RawQuery = query
+		actor, err := verifier.VerifyActor(clone, nil)
+		require.Error(t, err)
+		require.Empty(t, actor)
+	}
+	wrongAudience, err := NewVerifierFor(pub, InventoryAudience)
+	require.NoError(t, err)
+	_, err = wrongAudience.VerifyActor(req, nil)
+	require.Error(t, err)
+}

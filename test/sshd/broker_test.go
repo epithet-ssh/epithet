@@ -28,7 +28,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -49,7 +48,7 @@ type fullStack struct {
 	agentDir     string
 }
 
-// startFullStack wires a real ca.CA, a real policyserver.NewHandler (a real
+// startFullStack wires a real ca.CA, in-process Writ (a real
 // oidc.Validator against idp + a real evaluator - not a stub that approves
 // everything), and a real broker, then starts an sshd fixture. The policy
 // authorizes the current OS user - the account ssh will actually connect as
@@ -83,17 +82,10 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 
 	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 	require.NoError(t, err)
-	is := inventorytest.Serve(t, inv, idp.Issuer(), caPublicKey)
-	policyHandler, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: caPublicKey,
-		Evaluator:   evaluator,
-	})
-	require.NoError(t, err)
-	policyServer := httptest.NewServer(policyHandler)
-	t.Cleanup(policyServer.Close)
+	is := inventorytest.ServeFacts(t, inv, idp.Issuer(), caPublicKey)
 
 	// Create CA.
-	caInstance, err := ca.New(caPrivateKey, policyServer.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+	caInstance, err := ca.New(caPrivateKey, evaluator, is.CAOption())
 	require.NoError(t, err)
 
 	casrv := caserver.New(caInstance, logger, nil)

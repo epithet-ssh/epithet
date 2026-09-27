@@ -82,7 +82,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			requests := make(chan inventoryapi.ControlRequest, 2)
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/inventory"`)
+				w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/control"`)
 				fmt.Fprint(w, pub)
 			})
 			mux.HandleFunc("/manage", func(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +170,7 @@ func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 			json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
 			return
 		}
-		w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/inventory"`)
+		w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/control"`)
 		fmt.Fprint(w, pub)
 	}))
 	defer server.Close()
@@ -244,7 +244,7 @@ func TestDirectoryOnlyManagementDoesNotEnableHostEnrollment(t *testing.T) {
 			}))
 			defer server.Close()
 			cmd := HostEnrollCLI{}
-			enrollment := &hostEnrollment{CAFinalURL: server.URL + "/", AdvertisedLinkFields: []string{`<manage>; rel="https://epithet.dev/rel/inventory"`}}
+			enrollment := &hostEnrollment{CAFinalURL: server.URL + "/", AdvertisedLinkFields: []string{`<manage>; rel="https://epithet.dev/rel/control"`}}
 			registration, e := cmd.prepareRegistration(t.Context(), enrollment, nil, tlsconfig.Config{Insecure: true})
 			require.Nil(t, registration)
 			if tc.fail {

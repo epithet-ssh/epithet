@@ -36,7 +36,8 @@ func TestClientPackagesDoNotLinkServers(t *testing.T) {
 	forbidden := []string{
 		module + "pkg/ca",
 		module + "pkg/caserver",
-		module + "pkg/inventoryserver",
+		module + "pkg/controlplane",
+		module + "pkg/factservice",
 		module + "pkg/policyserver",
 		module + "pkg/inventory",
 		module + "pkg/directory",

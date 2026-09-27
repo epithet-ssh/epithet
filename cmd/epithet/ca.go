@@ -11,26 +11,26 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 type CACLI struct {
-	InventoryPublicURL string `help:"Client-accessible managed inventory URL advertised at bootstrap" name:"inventory-public-url"`
+	ControlPublicURL string `help:"Client-accessible control URL advertised at bootstrap" name:"control-public-url"`
 
-	Inventory string `help:"URL for inventory service" name:"inventory" required:"true"`
-	Policy    string `help:"URL for policy service" short:"p" env:"POLICY_URL" required:"true"`
-	Key       string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
-	Listen    string `help:"Address to listen on" short:"l" env:"PORT" default:"0.0.0.0:8080"`
+	Inventory    string            `help:"URL for inventory service" name:"inventory" required:"true"`
+	Directory    string            `help:"Directory service URL" name:"directory" required:"true"`
+	OIDC         ServiceOIDCConfig `embed:"" prefix:"oidc-"`
+	PolicyConfig `embed:""`
+
+	Key    string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
+	Listen string `help:"Address to listen on" short:"l" env:"PORT" default:"0.0.0.0:8080"`
 }
 
 func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	logger.Debug("ca command called", "ca", c)
-
-	// Validate policy URL requires TLS (unless --insecure).
-	if err := tlsCfg.ValidateURL(c.Policy); err != nil {
-		return err
-	}
+	logger.Debug("ca command called")
 
 	// Read CA private key.
 	privKey, err := os.ReadFile(c.Key)
@@ -38,10 +38,14 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 		return fmt.Errorf("unable to load ca key: %w", err)
 	}
 	logger.Info("ca_key", "path", c.Key)
-	logger.Info("policy_url", "url", c.Policy)
 
-	// Create CA.
-	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), c.Policy, ca.WithTLSConfig(tlsCfg), ca.WithLogger(logger), ca.WithInventory(c.Inventory, tlsCfg))
+	evaluator, err := c.buildEvaluator(logger)
+	if err != nil {
+		return err
+	}
+	identity := oidc.Config{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg}
+	discovery := wire.AuthConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, ClientSecret: c.OIDC.ClientSecret}
+	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), evaluator, ca.WithLogger(logger), ca.WithFacts(c.Directory, c.Inventory, identity, discovery, tlsCfg))
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
 	}
@@ -58,10 +62,10 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	certLogger := caserver.NewSlogCertLogger(certAuditLogger(logger))
 
 	server := caserver.New(caInstance, logger, certLogger)
-	if err := validatePublicInventoryURL(c.InventoryPublicURL, tlsCfg); err != nil {
+	if err := validatePublicInventoryURL(c.ControlPublicURL, tlsCfg); err != nil {
 		return err
 	}
-	server.PublicInventoryURL = c.InventoryPublicURL
+	server.PublicControlURL = c.ControlPublicURL
 	r.Handle("/", server.Handler())
 	r.Handle("/discovery", server.DiscoveryHandler())
 
@@ -109,21 +113,21 @@ func validatePublicInventoryURL(value string, cfg tlsconfig.Config) error {
 	// The URL is emitted inside Link's angle brackets. Delimiters and line
 	// breaks must not be inserted literally into that header value.
 	if strings.ContainsAny(value, "<>\r\n\"") {
-		return fmt.Errorf("inventory-public-url must percent-encode Link header delimiters and cannot contain line breaks")
+		return fmt.Errorf("control-public-url must percent-encode Link header delimiters and cannot contain line breaks")
 	}
 	u, err := url.Parse(value)
 	if err != nil {
-		return fmt.Errorf("invalid inventory-public-url: %w", err)
+		return fmt.Errorf("invalid control-public-url: %w", err)
 	}
 	if u.User != nil {
-		return fmt.Errorf("inventory-public-url cannot contain embedded credentials; inventory authenticates requests separately")
+		return fmt.Errorf("control-public-url cannot contain embedded credentials; inventory authenticates requests separately")
 	}
 	if u.Fragment != "" {
-		return fmt.Errorf("inventory-public-url cannot contain a fragment; fragments are not sent to the HTTP endpoint")
+		return fmt.Errorf("control-public-url cannot contain a fragment; fragments are not sent to the HTTP endpoint")
 	}
 	if u.IsAbs() {
 		if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("inventory-public-url must be an HTTP(S) endpoint or a relative URL")
+			return fmt.Errorf("control-public-url must be an HTTP(S) endpoint or a relative URL")
 		}
 		return cfg.ValidateURL(value)
 	}

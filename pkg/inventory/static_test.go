@@ -502,9 +502,16 @@ func TestUnknownFieldIsError(t *testing.T) {
 	require.ErrorContains(t, err, "grops")
 }
 
-func TestUserWithoutUserNameIsError(t *testing.T) {
-	_, err := NewStatic([]string{writeInv(t, "inv.yaml", "users:\n  - groups: [SRE]\n")})
-	require.ErrorContains(t, err, "userName")
+func TestUsersWithoutUserNames(t *testing.T) {
+	path := writeInv(t, "inv.yaml", "users:\n - id: first\n - id: second\n")
+	inv, err := NewStatic([]string{path})
+	require.NoError(t, err)
+	for _, id := range []string{"first", "second"} {
+		user, _, err := inv.LookupUser(t.Context(), id)
+		require.NoError(t, err)
+		require.Equal(t, id, user.ID)
+		require.Empty(t, user.UserName)
+	}
 }
 
 func TestHostWithNamesAndPatternIsError(t *testing.T) {

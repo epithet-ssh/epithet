@@ -44,19 +44,25 @@ func TestManagedCombinedEnrollmentAdminCLIAndIssuance(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.key"), []byte(private), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: admin\n   groups: [operators]\nhosts:\n - pattern: '*'\n   accounts: [root]\n"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow userName:admin -> root@*\n"), 0600))
+	controlPath := writeControlKey(t, dir)
 	config := fmt.Sprintf(`server:
   ca-key: %s/ca.key
-policy:
+  control-key: %s
+ca:
   policy-file: %s/policy.writ
+  oidc:
+    issuer: %s
+    client-id: %s
+directory:
+  static: [%s/static.yaml]
+control:
+  inventory-admin-group: [operators]
 inventory:
   principal-mode: account-name
   static: [%s/static.yaml]
   state-dir: %s/state
-  admin-group: [operators]
-  oidc:
-    issuer: %s
-    client-id: %s
-`, dir, dir, dir, dir, idp.Issuer(), oidctest.ClientID)
+`, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, dir, dir, dir)
+
 	configPath := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0600))
 	port := availablePort(t)
@@ -75,7 +81,7 @@ inventory:
 	for _, socket := range sockets {
 		names = append(names, filepath.Base(socket))
 	}
-	require.ElementsMatch(t, []string{"ca.sock", "inventory.sock", "policy.sock"}, names)
+	require.ElementsMatch(t, []string{"ca.sock", "control.sock", "directory.sock", "inventory.sock"}, names)
 	// Exercise the Caddy-style topology: external HTTPS termination forwards
 	// plain HTTP to the router. Clients trust only the external TLS certificate.
 	upstream, err := url.Parse(base)

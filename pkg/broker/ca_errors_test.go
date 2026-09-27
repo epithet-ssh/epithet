@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"github.com/epithet-ssh/epithet/internal/catest"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,7 +38,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 	}{
 		{name: "policy service credential", policyStatus: 401, primaryCalls: 1, backupCalls: 1},
 		{name: "inventory service credential", inventoryStatus: 403, primaryCalls: 1, backupCalls: 1},
-		{name: "user authentication", inventoryStatus: 401, primaryCalls: 2, refreshes: 1},
+		{name: "user authentication", primaryCalls: 2, refreshes: 1},
 		{name: "denied", policyStatus: 403, primaryCalls: 1},
 		{name: "pending", policyStatus: 202, primaryCalls: 1, pending: true},
 	} {
@@ -49,7 +50,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:user\n    userName: user\nhosts:\n  - names: [host]\n"), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
-			realInventory := inventorytest.Serve(t, inv, idp.Issuer(), pub)
+			realInventory := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			inventoryHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.inventoryStatus != 0 {
 					w.WriteHeader(tc.inventoryStatus)
@@ -64,7 +65,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 				fmt.Fprint(w, "private policy diagnostic")
 			}))
 			defer policyHTTP.Close()
-			c, err := ca.New(priv, policyHTTP.URL, ca.WithInventory(inventoryHTTP.URL, tlsconfig.Config{Insecure: true}))
+			c, err := ca.New(priv, catest.HTTPPolicy{URL: policyHTTP.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, ca.WithFacts(inventoryHTTP.URL+"/directory", inventoryHTTP.URL+"/inventory", realInventory.Identity, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
 			logger := slog.New(slog.DiscardHandler)
 			handler := caserver.New(c, logger, nil).Handler()
@@ -83,6 +84,9 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			require.NoError(t, err)
 			var refreshes atomic.Int32
 			token := idp.MintIDToken("user", time.Now().Add(time.Hour))
+			if tc.name == "user authentication" {
+				token = idp.MintIDTokenWithAudience("user", "wrong-client", time.Now().Add(time.Hour))
+			}
 			tokenFn := func(_ context.Context, _ io.Writer, force bool) (string, error) {
 				if force {
 					refreshes.Add(1)

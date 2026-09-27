@@ -1,224 +1,55 @@
-# Policy server example deployment
+# Writ deployment example
 
-This example shows how to deploy epithet with the built-in inventory and policy services for a small team.
+Copy `policy.example.writ` to `policy.writ` and `inventory.example.yaml` to
+`inventory.yaml`. Edit the users, hosts, and access rules for your deployment.
 
-## Quick start
+Create distinct persistent CA and control keys:
 
-### 1. Generate CA key
-
-```bash
-ssh-keygen -t ed25519 -f ca_key -N "" -C "epithet-ca"
+```sh
+ssh-keygen -t ed25519 -f ca_key -N '' -C epithet-ca
+ssh-keygen -t ed25519 -f control_key -N '' -C epithet-control
 ```
 
-This creates:
-- `ca_key` - Private key (keep secret!)
-- `ca_key.pub` - Public key (distribute to target hosts)
-
-### 2. Create policy and inventory files
-
-Copy the examples and edit:
-
-```bash
-cp policy.example.writ policy.writ
-cp inventory.example.yaml inventory.yaml
-editor policy.writ inventory.yaml
-```
-
-Update:
-- `policy.writ`: the access rules (who reaches which account on which hosts)
-- `inventory.yaml`: your team members (directory records) and your hosts (names/patterns + labels)
-
-Then validate the pair:
-
-```bash
-./epithet policy --check --policy-file policy.writ
-./epithet inventory --check --inventory-source static --principal-mode account-name --static inventory.yaml
-```
-
-You also need a small config file (`policy.yaml`) for the server settings:
+Configure the combined launcher in `server.yaml`:
 
 ```yaml
-policy:
+server:
+  ca-key: ./ca_key
+  control-key: ./control_key
+  listen: 127.0.0.1:8080
+ca:
   policy-file: ./policy.writ
-inventory:
   oidc:
-    issuer: "https://accounts.google.com"
-    client-id: "your-client-id"
-  static:
-    - ./inventory.yaml
-  # Explicit compatibility mode for this example. See "Destination-bound mode" below.
+    issuer: https://accounts.google.com
+    client-id: your-client-id
+directory:
+  static: [./inventory.yaml]
+inventory:
+  static: [./inventory.yaml]
   principal-mode: account-name
+control:
+  directory-admin-group: [directory-operators]
+  inventory-admin-group: [host-operators]
 ```
 
-### 3. Start the services
+This example explicitly uses account-name principals. For destination binding,
+use `epithet-principal-v1` and configure host domains as described in the
+[principal guide](../../docs/principals.md).
 
-```bash
-# Terminal 1: Start CA server
-./epithet ca \
-  --key ./ca_key \
-  --policy http://localhost:9999 \
-  --inventory http://localhost:9998 \
-  --insecure \
-  --listen :8080
+Validate and run:
 
-# Terminal 2: Start inventory server
-./epithet inventory --config policy.yaml --ca-pubkey "$(cat ca_key.pub)" \
-  --listen 127.0.0.1:9998
-
-# Terminal 3: Start policy server
-./epithet policy \
-  --config policy.yaml \
-  --ca-pubkey "$(cat ca_key.pub)" \
-  --listen 0.0.0.0:9999
+```sh
+epithet policy --check --policy-file policy.writ
+epithet --config server.yaml directory --check
+epithet --config server.yaml inventory --check
+epithet --config server.yaml server
 ```
 
-### 4. Configure epithet agent
+The launcher supervises separate CA, control, directory, inventory, and router
+processes. Writ evaluates inside CA. Put TLS termination in front of the public
+router and give agents the HTTPS CA URL. Control's public management route is
+advertised by CA; private backend sockets are never exposed to clients.
 
-Create `~/.epithet/config.yaml`. OIDC issuer/client-id are discovered from the
-CA's Link header at startup — the client needs no auth config of its own:
-
-```yaml
-agent:
-  ca-url: http://localhost:8080
-  name: default
-```
-
-Start the agent:
-
-```bash
-epithet agent
-```
-
-### 5. Add SSH configuration
-
-Tag the hosts this profile should handle, then include epithet's
-auto-generated config *after* those Tag lines (requires **OpenSSH 9.4+**
-for `Tag`/`Match tagged`):
-
-```
-Host *.example.com
-    Tag epithet
-Include ~/.epithet/run/*/ssh-config.conf
-```
-
-### 6. Test SSH connection
-
-With the example policy and inventory, alice (group `Admins`) may reach
-`root` on any inventoried host:
-
-```bash
-ssh root@prod-web-1.example.com
-```
-
-The first time:
-1. Browser opens for OIDC authentication
-2. You authenticate with your identity provider
-3. Policy server validates your token and issues a certificate
-4. SSH connection proceeds with the certificate
-
-Subsequent connections within the refresh token lifetime (~hours) will be fast (~100-200ms).
-
-## Files in this example
-
-- **`policy.example.writ`**: Template writ policy (the access rules)
-- **`inventory.example.yaml`**: Template static inventory (users and hosts)
-- **`README.md`**: This file
-
-See the [policy server guide](../../docs/policy-server.md) for detailed configuration and authorization documentation.
-
-## Production deployment
-
-`epithet` is a single static binary that runs in the foreground and logs to
-stderr, so it drops into whatever supervisor you already use — systemd,
-runit, rc.d, a container runtime. Install the binary and its config, then
-supervise it:
-
-```bash
-# Install the binary
-sudo cp epithet /usr/local/bin/
-
-# Install configuration
-sudo mkdir -p /etc/epithet
-sudo cp ca_key /etc/epithet/
-sudo cp policy.yaml policy.writ inventory.yaml /etc/epithet/
-sudo chmod 600 /etc/epithet/ca_key
-sudo chmod 640 /etc/epithet/policy.yaml /etc/epithet/policy.writ /etc/epithet/inventory.yaml
-```
-
-Three processes need supervising; the CA depends on inventory and policy:
-
-```bash
-epithet inventory --config /etc/epithet/policy.yaml
-epithet policy --config /etc/epithet/policy.yaml
-epithet ca --key /etc/epithet/ca_key --policy http://localhost:9999 --inventory http://localhost:9998 --insecure --listen :8080
-```
-
-Put `ca-pubkey` in both the policy and inventory config sections rather than passing it as a flag —
-most supervisors run `ExecStart`-style command lines without a shell, so a
-`$(cat ca_key.pub)` substitution would be passed through literally.
-
-For one command that supervises all three processes, see `epithet
-server` in the [architecture guide](../../docs/architecture.md#epithet-server).
-On FreeBSD, the package installs disabled-by-default `epithet_server`,
-`epithet_ca`, `epithet_inventory`, and `epithet_policy` rc.d services. They share
-`/usr/local/etc/epithet/server.yaml`; enable `epithet_server` for combined mode,
-or enable `epithet_inventory`, `epithet_policy`, and `epithet_ca` for split mode.
-
-## Configuring target hosts
-
-Install the Epithet binary on each target SSH server, then enroll it. The local
-example uses plain HTTP, so it also needs the explicit global `--insecure`
-opt-in:
-
-```console
-$ sudo epithet --insecure host enroll --ca-url http://ca-server:8080/
-epithet-host-id-v1:...
-```
-
-Enrollment downloads the CA key, creates a stable generated domain, installs and
-validates a managed sshd fragment, and reloads sshd. It defaults to
-destination-bound principals.
-
-### Destination-bound inventory
-
-Copy the domain printed by enrollment into the exact host's static inventory
-entry and select the same principal mode:
-
-```yaml
-hosts:
-  - names: [prod-web-1.example.com]
-    labels: {env: prod, role: web}
-    principal-mode: epithet-principal-v1
-    domain: "epithet-host-id-v1:..."
-```
-
-`inventory.principal-mode` defaults to `epithet-principal-v1`. Entries that inherit that default still need a `domain`. Static
-ephemeral patterns may share a declared human-readable domain:
-
-```yaml
-domains: [dev-fleet]
-hosts:
-  - pattern: "dev-*.example.com"
-    domain: dev-fleet
-```
-
-Provision `dev-fleet` as the only line of `/var/lib/epithet/domain` in the
-fleet image before running `epithet host enroll`. The local/static enrollment
-path preserves that existing canonical value.
-
-The helper is offline and derives the accepted principal from the local domain
-and `%u`; it does not contact the policy server. See the
-[policy server guide](../../docs/policy-server.md#target-host-configuration)
-for permissions and principal-domain details.
-
-For an `account-name` compatibility host, enroll with
-`--principal-mode account-name` and configure the matching inventory override.
-That mode accepts a certificate for an account on any host in the CA trust
-domain with the same account name; use it only where that broader boundary is
-intentional.
-
-## See also
-
-- [Policy server guide](../../docs/policy-server.md) - Configuration and authorization details
-- [OIDC setup](../../docs/oidc-setup.md) - Provider configuration
-- [epithet-aws](https://github.com/epithet-ssh/epithet-aws) - AWS Lambda deployment
+See the [deployment guide](../../docs/inventory.md) for independent supervision,
+[Writ guide](../../docs/policy-server.md) for rules, and
+[fact provider API](../../docs/fact-services.md) for bespoke integrations.

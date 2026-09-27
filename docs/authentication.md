@@ -101,7 +101,7 @@ issuer does not advertise it, Epithet reports the incompatibility and suggests
 `--login-method browser`; it does not try to open a browser remotely.
 
 Scopes are not configurable: the client always requests `openid profile email`.
-The inventory service resolves `id` using `inventory.oidc.identity-mode`.
+The CA resolves `id` using `ca.oidc.identity-mode`.
 The default, `stable-id`, uses `sub` for Google, Okta, and generic providers,
 and `oid` for tenant-specific Microsoft Entra issuers. `user-id-claim` can
 select another claim, including `email` without checking verification.
@@ -176,7 +176,7 @@ triggering a second browser flow.
 ## Proactive refresh
 
 The broker parses the `exp` claim out of its cached JWT — an unverified
-local read, advisory only; the policy server still does the real
+local read, advisory only; the CA still does the real
 verification — and refreshes ahead of expiry once fewer than `expiryBuffer`
 remains, the same idiom the rest of epithet uses for expiry buffers. Most
 certificate requests never wait on an auth round trip because the token is
@@ -207,9 +207,9 @@ restarting `epithet agent` also forces full re-authentication.
 
 **"Invalid token" from the CA / connection refused**
 
-The inventory service rejected the JWT — check its logs. Common causes: issuer
+The CA rejected the JWT — check its logs. Common causes: issuer
 mismatch, expired token, or `client_id` not matching the token's audience.
 
 See the [OIDC setup guide](oidc-setup.md) for provider-specific
-configuration and the [policy server guide](policy-server.md) for how
+configuration and the [CA guide](policy-server.md) for how
 tokens are verified.

@@ -1,4 +1,4 @@
-package inventoryserver_test
+package controlplane_test
 
 import (
 	"context"
@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/controltest"
+	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
-	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,8 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 	store, err := inventory.OpenManaged(t.TempDir(), nil)
 	require.NoError(t, err)
 	defer store.Close()
-	control := &inventoryserver.Control{Store: store}
+	fixture := controltest.New(t, nil, nil, store, controlplane.Config{})
+	control := fixture.Control
 	for _, tc := range []struct {
 		field  string
 		want   []string
@@ -41,7 +43,7 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			body := `{"action":"enroll","host":{"names":["host"],"principal-mode":"account-name"` + tc.field + `}}`
-			request := httptest.NewRequest("POST", "/", strings.NewReader(body))
+			request := httptest.NewRequest("POST", "/manage", strings.NewReader(body))
 			response := httptest.NewRecorder()
 			control.ServeHTTP(response, request)
 			require.Equal(t, tc.status, response.Code, response.Body.String())
@@ -81,10 +83,8 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(context.Background(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, UserIDClaim: "oid", TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
-	control := &inventoryserver.Control{Store: m, Directory: inv, Validator: validator, Admins: inventoryserver.Admins{Users: []string{"directory-admin"}, Groups: []string{"ops"}}}
-	server := httptest.NewServer(control)
-	defer server.Close()
-	client, err := inventoryclient.New(server.URL+"?route=inventory", tlsconfig.Config{Insecure: true})
+	server := controltest.New(t, inv, nil, m, controlplane.Config{Validator: validator, InventoryAdmins: controlplane.Admins{Users: []string{"directory-admin"}, Groups: []string{"ops"}}})
+	client, err := inventoryclient.New(server.URL+"/manage?route=inventory", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		id   string
@@ -158,10 +158,8 @@ func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
 			validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 			require.NoError(t, err)
 			// No managed hosts: directory inspection must be independently available.
-			control := &inventoryserver.Control{Directory: selected, ManagedDirectory: managed, Validator: validator, Admins: inventoryserver.Admins{Groups: []string{"wheel"}}}
-			server := httptest.NewServer(control)
-			defer server.Close()
-			client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
+			server := controltest.New(t, selected, managed, nil, controlplane.Config{Validator: validator, DirectoryAdmins: controlplane.Admins{Groups: []string{"wheel"}}})
+			client, err := inventoryclient.New(server.URL+"/manage", tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			for _, tc := range []struct {
 				name   string
@@ -218,10 +216,8 @@ func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
-	control := &inventoryserver.Control{ManagedDirectory: store, Directory: store, Validator: validator, Admins: inventoryserver.Admins{Users: []string{"subject:admin"}}}
-	server := httptest.NewServer(control)
-	defer server.Close()
-	client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
+	server := controltest.New(t, store, store, nil, controlplane.Config{Validator: validator, DirectoryAdmins: controlplane.Admins{Users: []string{"subject:admin"}}})
+	client, err := inventoryclient.New(server.URL+"/manage", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
 	var after uint64

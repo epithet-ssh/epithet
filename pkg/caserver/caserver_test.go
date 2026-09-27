@@ -3,7 +3,8 @@ package caserver_test
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"github.com/epithet-ssh/epithet/internal/catest"
+	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,20 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestCAWithInventoryURL creates a CA instance pointed at the given inventory
-// service URL, generating a fresh CA keypair.
-func newTestCAWithInventoryURL(t *testing.T, inventoryURL string) *ca.CA {
-	t.Helper()
-
-	_, caPrivateKey, err := sshcert.GenerateKeys()
-	require.NoError(t, err)
-
-	caInstance, err := ca.New(caPrivateKey, "https://unused-policy.invalid", ca.WithInventory(inventoryURL, tlsconfig.Config{Insecure: true}))
-	require.NoError(t, err)
-
-	return caInstance
-}
-
 // newTestCAServer creates a CA server backed by a mock policy server for testing.
 func newTestCAServer(t *testing.T, policyHandler http.Handler, loggers ...*slog.Logger) (*httptest.Server, func(), string) {
 	t.Helper()
@@ -49,11 +36,11 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler, loggers ...*slog.
 	require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:test-user\n    userName: test-user\nhosts:\n  - pattern: \"**\"\n"), 0600))
 	inv, err := inventory.NewStatic([]string{path})
 	require.NoError(t, err)
-	is := inventorytest.Serve(t, inv, idp.Issuer(), pub)
+	is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		policyHandler.ServeHTTP(w, r)
 	}))
-	caInstance, err := ca.New(priv, policyServer.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+	caInstance, err := ca.New(priv, catest.HTTPPolicy{URL: policyServer.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, is.CAOption())
 	require.NoError(t, err)
 
 	logger := slog.Default()
@@ -76,56 +63,26 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler, loggers ...*slog.
 	return caHTTPServer, cleanup, idp.MintIDToken("test-user", time.Now().Add(time.Hour))
 }
 
-// TestDiscoveryIsAnonymousPassThrough verifies GET /discovery is a plain,
-// unauthenticated pass-through of the inventory service's auth config — no
-// token parsing, no probe request to policy, no Vary header.
-func TestDiscoveryIsAnonymousPassThrough(t *testing.T) {
-	// Stub inventory service returning a slim discovery doc.
-	inventorySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			w.Header().Set("Cache-Control", "max-age=120")
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"},"identityMapping":{"mode":"stable-id","claim":"email"}}`)
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer inventorySrv.Close()
-
-	c := newTestCAWithInventoryURL(t, inventorySrv.URL)
+// Discovery uses local CA configuration even when both fact services are down.
+func TestDiscoveryIsAnonymousAndIndependentOfFacts(t *testing.T) {
+	idp := oidctest.New(t)
+	_, key, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	upstream.Close()
+	auth := wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}
+	c, err := ca.New(key, nil, ca.WithFacts(upstream.URL, upstream.URL, oidc.Config{Issuer: auth.Issuer, ClientID: auth.ClientID}, auth, tlsconfig.Config{Insecure: true}))
+	require.NoError(t, err)
 	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
-
-	req := httptest.NewRequest("GET", "/discovery", nil) // no Authorization header
 	rec := httptest.NewRecorder()
-	srv.DiscoveryHandler().ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "max-age=120", rec.Header().Get("Cache-Control"))
+	srv.DiscoveryHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/discovery", nil))
+	require.Equal(t, 200, rec.Code)
+	require.Equal(t, "max-age=300", rec.Header().Get("Cache-Control"))
 	var d wire.Discovery
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &d))
-	require.Equal(t, "https://idp.example.com", d.Auth.Issuer)
+	require.Equal(t, auth, *d.Auth)
 	require.NotContains(t, rec.Body.String(), "identityMapping")
 	require.Empty(t, rec.Header().Get("Vary"))
-}
-
-// TestDiscoveryHandler_FallbackCacheControl verifies the 5-minute default is
-// used when the inventory service doesn't set Cache-Control.
-func TestDiscoveryHandler_FallbackCacheControl(t *testing.T) {
-	inventorySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"auth":{"issuer":"https://idp.example.com","client_id":"cid"},"identityMapping":{"mode":"stable-id","claim":"email"}}`)
-	}))
-	defer inventorySrv.Close()
-
-	c := newTestCAWithInventoryURL(t, inventorySrv.URL)
-	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
-
-	req := httptest.NewRequest("GET", "/discovery", nil)
-	rec := httptest.NewRecorder()
-	srv.DiscoveryHandler().ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "max-age=300", rec.Header().Get("Cache-Control"))
 }
 
 // TestGetPubKeyAdvertisesAuthLink verifies the CA points at its auth config

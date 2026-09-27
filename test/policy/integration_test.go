@@ -2,7 +2,6 @@ package policy_test
 
 import (
 	"bytes"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,16 +12,14 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
 )
 
-// newIntegrationHandler wires real inventory authentication, policy evaluation, and CA coordination.
+// newIntegrationHandler wires real CA authentication, policy evaluation, and CA coordination.
 func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	t.Helper()
 
@@ -54,21 +51,13 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	require.NoError(t, err)
 	require.Empty(t, warnings)
 
-	handler, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: caPub,
-		Evaluator:   eval,
-	})
-	require.NoError(t, err)
-
-	ps := httptest.NewServer(handler)
-	t.Cleanup(ps.Close)
-	is := inventorytest.Serve(t, inv, idp.Issuer(), caPub)
-	authority, err := ca.New(caPriv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+	is := inventorytest.ServeFacts(t, inv, idp.Issuer(), caPub)
+	authority, err := ca.New(caPriv, eval, is.CAOption())
 	require.NoError(t, err)
 	return authority, idp
 }
 
-// TestPolicyIntegration_ValidToken_IssuesCertificate exercises inventory OIDC
+// TestPolicyIntegration_ValidToken_IssuesCertificate exercises CA OIDC
 // validation, policy evaluation, and CA construction together. The CA derives
 // the requested principal and applies Writ's token-expiry deadline alongside TTL.
 func TestPolicyIntegration_ValidToken_IssuesCertificate(t *testing.T) {
@@ -143,8 +132,8 @@ func TestPolicyIntegration_UnknownUser_ReturnsDenial(t *testing.T) {
 	require.ErrorIs(t, err, ca.ErrAccessDenied)
 }
 
-// TestPolicyServerCommand validates that the policy command exists and shows help
-func TestPolicyServerCommand(t *testing.T) {
+// TestPolicyValidationCommand validates that the policy command exists and shows help
+func TestPolicyValidationCommand(t *testing.T) {
 	tempDir := t.TempDir()
 	epithetBin := filepath.Join(tempDir, "epithet")
 
@@ -165,11 +154,9 @@ func TestPolicyServerCommand(t *testing.T) {
 
 	// Verify help output contains expected flags
 	expectedStrings := []string{
-		"--ca-pubkey",
-		"--listen",
 		"--policy-file",
 		"--check",
-		"normalized facts",
+		"Validate Writ policy",
 	}
 
 	for _, expected := range expectedStrings {

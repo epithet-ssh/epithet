@@ -15,7 +15,7 @@ import (
 func InventoryURL(root *RootResponse, cfg tlsconfig.Config) (string, error) {
 	headers := http.Header{}
 	headers["Link"] = root.Links
-	ref, ok := findLinkTarget(headers, wire.RelInventory)
+	ref, ok := findLinkTarget(headers, wire.RelControl)
 	if !ok {
 		return "", nil
 	}

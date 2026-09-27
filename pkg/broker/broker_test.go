@@ -277,7 +277,7 @@ func writEvaluator(t *testing.T, policySrc, inventoryYAML string) evaluatorFixtu
 	return evaluatorFixture{e, inv}
 }
 
-// realCAAndPolicy wires a real ca.CA, inventory authentication against idp, a real policy evaluator, and a counting wrapper
+// realCAAndPolicy wires a real ca.CA, CA authentication against idp, a real policy evaluator, and a counting wrapper
 // around the CA's HTTP handler. It returns the CA HTTP server's URL and the
 // hit counter, so callers can assert exactly how many times the CA was
 // actually asked to mint a certificate - not just that the broker's match
@@ -288,16 +288,8 @@ func realCAAndPolicy(t *testing.T, idp *oidctest.IdP, eval evaluatorFixture) (ca
 	caPub, caPriv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 
-	policyHandler, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: caPub,
-		Evaluator:   eval.PolicyEvaluator,
-	})
-	require.NoError(t, err)
-	policySrv := httptest.NewServer(policyHandler)
-	t.Cleanup(policySrv.Close)
-
-	is := inventorytest.Serve(t, eval.inv, idp.Issuer(), caPub)
-	caInstance, err := ca.New(caPriv, policySrv.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+	is := inventorytest.ServeFacts(t, eval.inv, idp.Issuer(), caPub)
+	caInstance, err := ca.New(caPriv, eval.PolicyEvaluator, is.CAOption())
 	require.NoError(t, err)
 
 	casrv := caserver.New(caInstance, testLogger(t), nil)

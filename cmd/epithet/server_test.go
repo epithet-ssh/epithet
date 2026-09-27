@@ -84,12 +84,14 @@ func TestServerRejectsUnknownPrincipalModeBeforeStartingServices(t *testing.T) {
 	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
 }
 
-func TestInventoryChildManagementReadsCommandScopedConfiguration(t *testing.T) {
+func TestCAChildIdentityConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  inventory-source: managed\n  state-dir: /tmp/managed\n  admin-user: [admin]\n"), 0600))
-	managed, err := inventoryChildManagementEnabled([]string{"--config", path, "inventory", "--listen", "unix:///tmp/inventory.sock"})
+	require.NoError(t, os.WriteFile(path, []byte("ca:\n  oidc:\n    issuer: https://issuer.example\n    client-id: app\n    user-id-claim: oid\n"), 0600))
+	auth, err := caChildOIDC([]string{"--config", path, "ca", "--directory", "http://directory", "--inventory", "http://inventory"})
 	require.NoError(t, err)
-	require.True(t, managed)
+	require.Equal(t, "https://issuer.example", auth.Issuer)
+	require.Equal(t, "app", auth.ClientID)
+	require.Equal(t, "oid", auth.UserIDClaim)
 }
 
 func TestServerOwnsChildListenersAndInventoryRouting(t *testing.T) {
@@ -98,11 +100,11 @@ func TestServerOwnsChildListenersAndInventoryRouting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`ca:
   listen: :9999
-  inventory-public-url: https://old.example/manage
+  control-public-url: https://old.example/manage
 router:
   listen: :9998
   ca: unix:///tmp/old-ca.sock
-  inventory: unix:///tmp/old-inventory.sock
+  control: unix:///tmp/old-control.sock
 `), 0600))
 	for _, managed := range []bool{true, false} {
 		var root struct {
@@ -119,22 +121,22 @@ router:
 		}
 		server := ServerCLI{Listen: "127.0.0.1:8080", CAKey: "/tmp/ca.key"}
 		globals := []string{"--config", path}
-		parse(server.caArgs(globals, "/tmp/ca.sock", "/tmp/policy.sock", "/tmp/inventory.sock", managed))
+		parse(server.caArgs(globals, "/tmp/ca.sock", "/tmp/directory.sock", "/tmp/inventory.sock", managed))
 		require.Equal(t, "unix:///tmp/ca.sock", root.CA.Listen)
-		require.Equal(t, "unix:///tmp/policy.sock", root.CA.Policy)
+		require.Equal(t, "unix:///tmp/directory.sock", root.CA.Directory)
 		require.Equal(t, "unix:///tmp/inventory.sock", root.CA.Inventory)
 		if managed {
-			require.Equal(t, "inventory", root.CA.InventoryPublicURL)
+			require.Equal(t, "inventory", root.CA.ControlPublicURL)
 		} else {
-			require.Empty(t, root.CA.InventoryPublicURL)
+			require.Empty(t, root.CA.ControlPublicURL)
 		}
 		parse(server.routerArgs(globals, "/tmp/ca.sock", "/tmp/inventory.sock", managed))
 		require.Equal(t, server.Listen, root.Router.Listen)
 		require.Equal(t, "unix:///tmp/ca.sock", root.Router.CA)
 		if managed {
-			require.Equal(t, "unix:///tmp/inventory.sock", root.Router.Inventory)
+			require.Equal(t, "unix:///tmp/inventory.sock", root.Router.Control)
 		} else {
-			require.Empty(t, root.Router.Inventory)
+			require.Empty(t, root.Router.Control)
 		}
 	}
 }

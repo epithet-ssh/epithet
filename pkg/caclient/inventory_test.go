@@ -11,20 +11,20 @@ import (
 )
 
 func TestInventoryDiscoverySeparateOriginAndTLS(t *testing.T) {
-	root := &RootResponse{FinalURL: "https://ca.example/prefix/", Links: []string{`<https://inventory.example/manage>; rel="https://epithet.dev/rel/inventory"`}}
+	root := &RootResponse{FinalURL: "https://ca.example/prefix/", Links: []string{`<https://inventory.example/manage>; rel="https://epithet.dev/rel/control"`}}
 	target, err := InventoryURL(root, tlsconfig.Config{})
 	require.NoError(t, err)
 	require.Equal(t, "https://inventory.example/manage", target)
-	root.Links = []string{`<inventory>; rel="https://epithet.dev/rel/inventory"`}
+	root.Links = []string{`<inventory>; rel="https://epithet.dev/rel/control"`}
 	target, err = InventoryURL(root, tlsconfig.Config{})
 	require.NoError(t, err)
 	require.Equal(t, "https://ca.example/prefix/inventory", target)
-	root.Links = []string{`<inventory?route=hosts>; rel="https://epithet.dev/rel/inventory"`}
+	root.Links = []string{`<inventory?route=hosts>; rel="https://epithet.dev/rel/control"`}
 	target, err = InventoryURL(root, tlsconfig.Config{})
 	require.NoError(t, err)
 	require.Equal(t, "https://ca.example/prefix/inventory?route=hosts", target)
 	for _, bad := range []string{"http://inventory.example/manage", "https://user:password@example/manage", "file:///tmp/socket"} {
-		root.Links = []string{fmt.Sprintf(`<%s>; rel="https://epithet.dev/rel/inventory"`, bad)}
+		root.Links = []string{fmt.Sprintf(`<%s>; rel="https://epithet.dev/rel/control"`, bad)}
 		_, err = InventoryURL(root, tlsconfig.Config{})
 		require.Error(t, err)
 	}
@@ -42,7 +42,7 @@ func TestDiscoveryUsesOneBootstrapForAuthAndInventory(t *testing.T) {
 		case "/prefix/":
 			roots++
 			w.Header().Add("Link", `<auth>; rel="https://epithet.dev/rel/auth"`)
-			w.Header().Add("Link", `<manage?route=hosts>; rel="https://epithet.dev/rel/inventory"`)
+			w.Header().Add("Link", `<manage?route=hosts>; rel="https://epithet.dev/rel/control"`)
 		case "/prefix/auth":
 			fmt.Fprint(w, `{"auth":{"issuer":"https://issuer.example","client_id":"client"}}`)
 		default:

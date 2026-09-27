@@ -13,6 +13,15 @@ import (
 )
 
 type DirectoryCLI struct {
+	Serve         DirectoryServeCLI `cmd:"" default:"withargs" help:"Serve directory facts and private administration"`
+	Source        string            `help:"Directory source" default:"static" enum:"static,scim"`
+	Static        []string          `help:"Static directory files or globs" name:"static"`
+	StateDir      string            `help:"Root for directory storage" name:"state-dir"`
+	Listen        string            `help:"Private directory listener" default:"127.0.0.1:9997"`
+	CAPubkey      string            `help:"CA public key for fact reads" name:"ca-pubkey"`
+	ControlPubkey string            `help:"Control public key for administration" name:"control-pubkey"`
+	Check         bool              `help:"Validate directory configuration and storage"`
+
 	ManagementCLI `embed:""`
 	Users         DirectoryUsersCLI  `cmd:"users" help:"Inspect users in the selected directory"`
 	Groups        DirectoryGroupsCLI `cmd:"groups" help:"Inspect and manage SCIM group policy bindings"`

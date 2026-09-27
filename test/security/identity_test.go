@@ -23,7 +23,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -116,14 +115,8 @@ hosts:
 	require.NotNil(t, pol, "%v", diags)
 	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 	require.NoError(t, err)
-	is := inventorytest.ServeWithConfig(t, inv, oidc.Config{Issuer: issuer, ClientID: "review-client", IdentityMode: mode, UserIDClaim: userIDClaim, TLSConfig: tlsconfigFor(t, idp)}, pub)
-	ph, err := policyserver.NewHandler(policyserver.Config{
-		CAPublicKey: pub, Evaluator: evaluator,
-	})
-	require.NoError(t, err)
-	ps := httptest.NewTLSServer(ph)
-	t.Cleanup(ps.Close)
-	authority, err := ca.New(priv, ps.URL, ca.WithTLSConfig(tlsconfigFor(t, ps)), ca.WithInventory(is.URL, tlsconfigFor(t, is)))
+	is := inventorytest.ServeFactsWithConfig(t, inv, oidc.Config{Issuer: issuer, ClientID: "review-client", IdentityMode: mode, UserIDClaim: userIDClaim, TLSConfig: tlsconfigFor(t, idp)}, pub)
+	authority, err := ca.New(priv, evaluator, is.CAOption())
 	require.NoError(t, err)
 	var issuanceLog bytes.Buffer
 	certLogger := caserver.NewSlogCertLogger(slog.New(slog.NewJSONHandler(&issuanceLog, nil)))

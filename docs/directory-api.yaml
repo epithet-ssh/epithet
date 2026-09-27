@@ -1,0 +1,60 @@
+openapi: 3.0.3
+info:
+  title: Epithet Directory Fact API
+  version: 1.0.0
+  description: >-
+    A single active-object lookup, independent of control-plane APIs. Responses
+    are limited to 64 KiB and all responses must include Cache-Control no-store.
+    Requests have exactly one query parameter and no body. The client appends
+    /lookup to the configured service root. See fact-services.md.
+paths:
+  /lookup:
+    get:
+      operationId: lookupDirectory
+      security: [{ServiceJWT: []}]
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Active User; never null
+          headers:
+            Cache-Control:
+              schema: {type: string, enum: [no-store]}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400': {description: Invalid lookup request}
+        '403': {description: Invalid service authentication}
+        '404': {description: Unknown or inactive entity}
+        '503': {description: Provider unavailable}
+components:
+  securitySchemes:
+    ServiceJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Request-bound JWT signed with a configured reader key. Audience is
+        epithet-directory. Verify the signature, audience, expiry, issued-at
+        freshness, exact HTTP method, authority plus escaped path and raw query,
+        and unpadded base64url SHA256 body digest. See pkg/serviceauth.
+  schemas:
+    Revision:
+      type: string
+      description: Optional opaque logging metadata, at most 256 UTF-8 bytes; never used for authorization or caching
+    User:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string, minLength: 1, description: Opaque identity matching the request}
+        userName: {type: string}
+        groups:
+          type: array
+          items: {type: string, minLength: 1}
+        userType: {type: string}
+        department: {type: string}
+        organization: {type: string}
+        revision: {$ref: '#/components/schemas/Revision'}

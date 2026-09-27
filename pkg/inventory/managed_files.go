@@ -12,8 +12,8 @@ import (
 
 var errItemExists = errors.New("inventory item already exists")
 
-// An unused token and its eventual host occupy the same file. Token metadata
-// and per-item audit history remain in the host file after redemption.
+// Every item is a host. An enrollment token belongs to a pending host reservation;
+// its metadata and audit history remain on that host after redemption.
 type itemRecord struct {
 	Version int              `yaml:"version"`
 	Kind    string           `yaml:"kind"`
@@ -38,35 +38,28 @@ func (r *itemRecord) validate(id string) error {
 	if !validID(id) || r.id() != id {
 		return fmt.Errorf("record ID must match its filename")
 	}
-	switch r.Kind {
-	case "token":
-		if r.Token == nil || r.Host != nil {
-			return fmt.Errorf("token record requires token metadata and no host")
-		}
-	case "host":
-		if r.Host == nil {
-			return fmt.Errorf("host record is missing its host")
-		}
-	default:
-		return fmt.Errorf("unknown item kind %q", r.Kind)
+	if r.Kind != "host" || r.Host == nil {
+		return fmt.Errorf("inventory item must contain a host record")
 	}
 	if t := r.Token; t != nil {
 		if t.ID != id || t.ExpiresAt.IsZero() {
 			return fmt.Errorf("invalid token metadata")
 		}
-		if r.Host != nil && t.UsedBy != id {
+		if t.UsedBy != "" && t.UsedBy != id {
 			return fmt.Errorf("host token must be consumed by this host")
 		}
-		if r.Host == nil && t.UsedBy != "" {
-			return fmt.Errorf("unused token cannot have a consuming host")
+		if t.UsedBy == "" && !t.Revoked && r.Host.Status != "pending" {
+			return fmt.Errorf("unused enrollment token requires a pending host")
 		}
 	}
 	if h := r.Host; h != nil {
 		if h.Revision == 0 {
 			return fmt.Errorf("invalid host metadata")
 		}
-		if err := h.Proposal.Validate(); err != nil {
-			return err
+		if !(h.Proposal.empty() && r.Token != nil && r.Token.UsedBy == "" && h.Status != "active") {
+			if err := h.Proposal.Validate(); err != nil {
+				return err
+			}
 		}
 		switch h.Status {
 		case "pending", "active", "denied":

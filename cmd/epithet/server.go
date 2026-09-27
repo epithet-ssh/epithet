@@ -22,13 +22,14 @@ import (
 )
 
 // ServerCLI defines the CLI flags for the combined server command.
-// It supervises router, CA, policy, and inventory subprocesses. Only the router
-// owns the public listener; all three services listen on private Unix sockets.
+// It supervises CA, control, directory, and inventory processes. Only the router
+// owns the public listener; each service has its own private Unix socket.
 type ServerCLI struct {
-	Listen string `help:"Public address to listen on" short:"l" default:":8080"`
-	CAKey  string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
+	Listen     string `help:"Public address to listen on" short:"l" default:":8080"`
+	ControlKey string `help:"Path to configured control signing key" name:"control-key" default:"/etc/epithet/control.key"`
+	CAKey      string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
 
-	// Policy flags threaded through to the policy subprocess. The
+	// Policy flags threaded through to the CA subprocess. The
 	// subprocess re-runs Kong against the same --config, so these are
 	// only needed when configuring via flags rather than a config file.
 	PolicyFile string            `help:"Path to the writ policy file" name:"policy-file"`
@@ -45,8 +46,7 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 	caKeyPath := c.CAKey
 
-	// Read CA private key and derive the public key so the policy
-	// server doesn't need separate configuration for it.
+	// Derive the trusted reader key for both fact services.
 	privKeyBytes, err := os.ReadFile(caKeyPath)
 	if err != nil {
 		return fmt.Errorf("unable to load ca key from %s: %w", caKeyPath, err)
@@ -57,6 +57,18 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 	caPubkey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 	logger.Info("derived ca public key", "path", caKeyPath)
+	controlBytes, err := os.ReadFile(c.ControlKey)
+	if err != nil {
+		return fmt.Errorf("reading control key: %w", err)
+	}
+	controlSigner, err := ssh.ParsePrivateKey(controlBytes)
+	if err != nil {
+		return fmt.Errorf("parsing control key: %w", err)
+	}
+	controlPubkey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(controlSigner.PublicKey())))
+	if controlPubkey == caPubkey {
+		return fmt.Errorf("control must use a distinct signing key")
+	}
 
 	// The private socket directory is accessible only to this user.
 	tmpDir, err := os.MkdirTemp("", "epithet-server-")
@@ -65,7 +77,8 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	policySock := filepath.Join(tmpDir, "policy.sock")
+	directorySock := filepath.Join(tmpDir, "directory.sock")
+	controlSock := filepath.Join(tmpDir, "control.sock")
 
 	// Set up signal-aware context for subprocess lifecycle.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -76,10 +89,23 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 
 	inventorySock := filepath.Join(tmpDir, "inventory.sock")
 	caSock := filepath.Join(tmpDir, "ca.sock")
-	inventoryArgs := c.inventoryArgs(globalArgs, inventorySock, caPubkey)
-	management, err := inventoryChildManagementEnabled(inventoryArgs)
+	inventoryArgs := append(c.inventoryArgs(globalArgs, inventorySock, caPubkey), "--control-pubkey", controlPubkey)
+	directoryArgs := append(append([]string{}, globalArgs...), "directory", "--listen", "unix://"+directorySock, "--ca-pubkey", caPubkey, "--control-pubkey", controlPubkey)
+	for _, path := range c.Inventory {
+		directoryArgs = append(directoryArgs, "--static", path)
+	}
+	caArgs := c.caArgs(globalArgs, caSock, directorySock, inventorySock, true)
+	controlArgs := append(append([]string{}, globalArgs...), "control", "--listen", "unix://"+controlSock, "--key", c.ControlKey, "--directory", "unix://"+directorySock, "--directory-backend", "unix://"+directorySock, "--inventory-backend", "unix://"+inventorySock)
+	auth, err := caChildOIDC(caArgs)
 	if err != nil {
 		return err
+	}
+	controlArgs = append(controlArgs, "--oidc-issuer", auth.Issuer, "--oidc-client-id", auth.ClientID)
+	if auth.IdentityMode != "" {
+		controlArgs = append(controlArgs, "--oidc-identity-mode", string(auth.IdentityMode))
+	}
+	if auth.UserIDClaim != "" {
+		controlArgs = append(controlArgs, "--oidc-user-id-claim", auth.UserIDClaim)
 	}
 	type child struct {
 		name   string
@@ -88,9 +114,10 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 	children := []child{
 		{"inventory", inventoryArgs, inventorySock},
-		{"policy", c.policyArgs(globalArgs, policySock, caPubkey), policySock},
-		{"ca", c.caArgs(globalArgs, caSock, policySock, inventorySock, management), caSock},
-		{"router", c.routerArgs(globalArgs, caSock, inventorySock, management), ""},
+		{"directory", directoryArgs, directorySock},
+		{"control", controlArgs, controlSock},
+		{"ca", caArgs, caSock},
+		{"router", c.routerArgs(globalArgs, caSock, controlSock, true), ""},
 	}
 	var wg sync.WaitGroup
 	exited := make(chan error, len(children))
@@ -134,14 +161,19 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 	}
 }
 
-func (c *ServerCLI) caArgs(globalArgs []string, caSock, policySock, inventorySock string, management bool) []string {
+func (c *ServerCLI) caArgs(globalArgs []string, caSock, directorySock, inventorySock string, management bool) []string {
 	publicURL := ""
 	if management {
 		publicURL = "inventory"
 	}
-	return append(append([]string{}, globalArgs...), "ca", "--listen", "unix://"+caSock,
-		"--policy", "unix://"+policySock, "--inventory", "unix://"+inventorySock,
-		"--key", c.CAKey, "--inventory-public-url", publicURL)
+	args := append(append([]string{}, globalArgs...), "ca", "--listen", "unix://"+caSock, "--directory", "unix://"+directorySock, "--inventory", "unix://"+inventorySock, "--key", c.CAKey, "--control-public-url", publicURL)
+	if c.PolicyFile != "" {
+		args = append(args, "--policy-file", c.PolicyFile)
+	}
+	for name, value := range c.Extension {
+		args = append(args, "--extension", name+"="+value)
+	}
+	return args
 }
 
 func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string, management bool) []string {
@@ -150,7 +182,7 @@ func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string
 		endpoint = "unix://" + inventorySock
 	}
 	return append(append([]string{}, globalArgs...), "router", "--listen", c.Listen,
-		"--ca", "unix://"+caSock, "--inventory", endpoint)
+		"--ca", "unix://"+caSock, "--control", endpoint)
 }
 
 func (c *ServerCLI) inventoryArgs(globalArgs []string, socket, key string) []string {
@@ -162,22 +194,6 @@ func (c *ServerCLI) inventoryArgs(globalArgs []string, socket, key string) []str
 		args = append(args, "--principal-mode", c.PrincipalMode)
 	}
 	return args
-}
-
-// policyArgs builds the subprocess command. Only explicit server overrides
-// should be forwarded; the policy subprocess reads its own configuration.
-func (c *ServerCLI) policyArgs(globalArgs []string, policySock, caPubkey string) []string {
-	policyArgs := append(append([]string{}, globalArgs...), "policy",
-		"--listen", "unix://"+policySock,
-		"--ca-pubkey", caPubkey,
-	)
-	if c.PolicyFile != "" {
-		policyArgs = append(policyArgs, "--policy-file", c.PolicyFile)
-	}
-	for name, value := range c.Extension {
-		policyArgs = append(policyArgs, "--extension", name+"="+value)
-	}
-	return policyArgs
 }
 
 // buildGlobalArgs constructs the global CLI flags to pass through to subprocesses.
@@ -223,24 +239,23 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	}
 }
 
-// Kong loads command-scoped configuration for the selected command only. Parse
-// the actual inventory child arguments to make the composition decision using
-// precisely the same files/defaults as that child.
-func inventoryChildManagementEnabled(args []string) (bool, error) {
+// Read the actual CA child configuration so the combined control process uses
+// exactly the same identity mapping; separately managed services configure it explicitly.
+func caChildOIDC(args []string) (ServiceOIDCConfig, error) {
 	var root struct {
 		Config    kong.ConfigFlag `name:"config"`
 		Verbose   int             `short:"v" type:"counter"`
 		LogFile   string          `name:"log-file"`
 		Insecure  bool
-		TLSCACert string       `name:"tls-ca-cert"`
-		Inventory InventoryCLI `cmd:"inventory"`
+		TLSCACert string `name:"tls-ca-cert"`
+		CA        CACLI  `cmd:"ca"`
 	}
 	parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, configFilePaths()...))
 	if err != nil {
-		return false, err
+		return ServiceOIDCConfig{}, err
 	}
 	if _, err = parser.Parse(args); err != nil {
-		return false, err
+		return ServiceOIDCConfig{}, err
 	}
-	return root.Inventory.managementEnabled(), nil
+	return root.CA.OIDC, nil
 }

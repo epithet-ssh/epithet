@@ -20,7 +20,7 @@ type CertEvent struct {
 	InventoryRevision    string
 	Timestamp            time.Time
 	SerialNumber         string
-	ID                   string // Resolved inventory ID; empty if the policy server omitted it.
+	ID                   string // Authenticated directory ID.
 	UserName             string
 	Principals           []string
 	Connection           wire.Connection
@@ -44,13 +44,11 @@ func NewSlogCertLogger(logger *slog.Logger) *SlogCertLogger {
 
 // LogCert emits a structured log event with all certificate details.
 func (l *SlogCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
-	l.logger.InfoContext(ctx, "certificate issued",
+	attrs := []slog.Attr{
 		slog.String("serial", event.SerialNumber),
 		slog.String("userName", event.UserName),
 		slog.String("id", event.ID),
 		slog.String("policyId", event.PolicyID),
-		slog.String("directoryRevision", event.DirectoryRevision),
-		slog.String("inventoryRevision", event.InventoryRevision),
 		slog.Any("principals", event.Principals),
 		slog.String("remote_host", event.Connection.RemoteHost),
 		slog.String("remote_user", event.Connection.RemoteUser),
@@ -61,7 +59,14 @@ func (l *SlogCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
 		slog.Any("extensions", event.Extensions),
 		slog.String("cert_fingerprint", event.CertFingerprint),
 		slog.String("public_key_fingerprint", event.PublicKeyFingerprint),
-	)
+	}
+	if event.DirectoryRevision != "" {
+		attrs = append(attrs, slog.String("directoryRevision", event.DirectoryRevision))
+	}
+	if event.InventoryRevision != "" {
+		attrs = append(attrs, slog.String("inventoryRevision", event.InventoryRevision))
+	}
+	l.logger.LogAttrs(ctx, slog.LevelInfo, "certificate issued", attrs...)
 	return nil
 }
 

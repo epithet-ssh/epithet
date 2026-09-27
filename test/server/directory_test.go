@@ -52,21 +52,27 @@ func TestDirectoryUsersCLIWithStaticHosts(t *testing.T) {
 				require.NoError(t, store.Close())
 				name = "scim-admin"
 			}
+			controlPath := writeControlKey(t, dir)
 			config := fmt.Sprintf(`server:
   ca-key: %s/ca.key
-policy:
+  control-key: %s
+ca:
   policy-file: %s/policy.writ
-inventory:
-  inventory-source: static
-  directory-source: %s
-  scim-token: provisioning-secret
-  state-dir: %s/state
-  static: [%s/static.yaml]
-  admin-group: [wheel]
   oidc:
     issuer: %s
     client-id: %s
-`, dir, dir, source, dir, dir, idp.Issuer(), oidctest.ClientID)
+directory:
+  source: %s
+  state-dir: %s/state
+  static: [%s/static.yaml]
+control:
+  directory-admin-group: [wheel]
+  scim-token: provisioning-secret
+inventory:
+  inventory-source: static
+  static: [%s/static.yaml]
+`, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, source, dir, dir, dir)
+
 			path := filepath.Join(dir, "server.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(config), 0600))
 			address := fmt.Sprintf("127.0.0.1:%d", availablePort(t))

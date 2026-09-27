@@ -2,7 +2,6 @@ package ca_test
 
 import (
 	"fmt"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,11 +11,9 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/stretchr/testify/require"
@@ -61,12 +58,9 @@ func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalDomain(t *testing.T) {
 			require.NotNil(t, pol, "%v", diags)
 			evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 			require.NoError(t, err)
-			handler, err := policyserver.NewHandler(policyserver.Config{CAPublicKey: caPub, Evaluator: evaluator})
-			require.NoError(t, err)
-			ps := httptest.NewServer(handler)
-			t.Cleanup(ps.Close)
-			is := inventorytest.Serve(t, inv, idp.Issuer(), caPub)
-			authority, err := ca.New(caPriv, ps.URL, ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
+
+			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), caPub)
+			authority, err := ca.New(caPriv, evaluator, is.CAOption())
 			require.NoError(t, err)
 			issued, err := authority.Issue(t.Context(), idp.MintIDToken("alice", time.Now().Add(time.Minute)), wire.Connection{RemoteHost: "prod.example.com", RemoteUser: "root", Port: 22}, userPub)
 			if !tc.issue {

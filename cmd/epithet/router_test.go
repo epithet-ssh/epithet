@@ -38,7 +38,7 @@ func TestRouterForwardsThroughUnixSockets(t *testing.T) {
 	backend := func(service string, status int) string {
 		return routerTestSocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
-			w.Header().Add("Link", `<inventory>; rel="https://epithet.dev/rel/inventory"`)
+			w.Header().Add("Link", `<inventory>; rel="https://epithet.dev/rel/control"`)
 			w.Header().Add("Link", `<discovery>; rel="https://epithet.dev/rel/auth"`)
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(status)

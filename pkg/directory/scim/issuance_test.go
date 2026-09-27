@@ -1,20 +1,20 @@
 package scim_test
 
 import (
-	"net/http/httptest"
+	"github.com/epithet-ssh/epithet/internal/controltest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
+	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
-	"github.com/epithet-ssh/epithet/pkg/inventoryserver"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -36,24 +36,15 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	require.NoError(t, e)
 	validator, e := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, e)
-	handler, e := inventoryserver.NewHandler(inventoryserver.Config{CAPublicKey: pub, Resolver: &inventoryserver.Resolver{Directory: f.store, Hosts: inv}, Validator: validator, Discovery: &wire.Discovery{Auth: &wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}}})
-	require.NoError(t, e)
-	is := httptest.NewTLSServer(handler)
-	defer is.Close()
+	is := inventorytest.ServeFactsWithSources(t, f.store, inv, oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, pub)
 	pol, diags := writ.Load("allow group:ops -> root@host\n")
 	require.NotNil(t, pol, "%v", diags)
 	evaluator, _, e := writpolicy.New(pol, nil, writpolicy.Options{})
 	require.NoError(t, e)
-	ph, e := policyserver.NewHandler(policyserver.Config{CAPublicKey: pub, Evaluator: evaluator})
+	authority, e := ca.New(priv, evaluator, is.CAOption())
 	require.NoError(t, e)
-	ps := httptest.NewTLSServer(ph)
-	defer ps.Close()
-	authority, e := ca.New(priv, ps.URL, ca.WithTLSConfig(tlsconfig.Config{Insecure: true}), ca.WithInventory(is.URL, tlsconfig.Config{Insecure: true}))
-	require.NoError(t, e)
-	control := &inventoryserver.Control{ManagedDirectory: f.store, Directory: f.store, Validator: validator, Admins: inventoryserver.Admins{Groups: []string{"ops"}}}
-	cs := httptest.NewTLSServer(control)
-	defer cs.Close()
-	client, e := inventoryclient.New(cs.URL, tlsconfig.Config{Insecure: true})
+	cs := controltest.New(t, f.store, f.store, nil, controlplane.Config{Validator: validator, DirectoryAdmins: controlplane.Admins{Groups: []string{"ops"}}})
+	client, e := inventoryclient.New(cs.URL+"/manage", tlsconfig.Config{Insecure: true})
 	require.NoError(t, e)
 	caps, e := client.Capabilities(t.Context())
 	require.NoError(t, e)

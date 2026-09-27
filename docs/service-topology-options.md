@@ -1,14 +1,8 @@
 # Service topology and administrator authorization
 
-Status: agreed design direction, with open contracts below. Implementation remains
-paused. Consolidated September 23, 2026, from the September 20–21 discussion in
-[Improve collaborative design process](codex://threads/01a0bca9-ccb1-7ec3-8b17-39c9c2cab632).
-
-This replaces the September 19 options paper. It records decisions already made;
-items explicitly marked as recommendations remain proposals.
-The working change is `kvpltsws`, bookmark `codex/service-topology`, based on
-`6f5e52e9`. Tracking task: `8rywbj6z` (separate directory and host administration).
-CA-to-facts decisions below include the discussion through September 27, 2026.
+Status: implemented in the working change, September 27, 2026. Tracking task:
+`8rywbj6z`. This document records the agreed design; see [deployment and migration](inventory.md)
+and the [fact provider contract](fact-services.md) for operator and implementer instructions.
 
 ## Agreed responsibilities
 
@@ -51,18 +45,68 @@ order, or use it for caching or authorization. Omission is normal; Epithet does
 not generate a substitute. A non-string or oversized value makes the provider
 response invalid.
 
-Providers need no global counter or snapshot-version semantics. During
-implementation, remove mandatory source-revision requirements while retaining
-the optional value for logging. This supersedes the earlier proposal to remove
+Providers need no global counter or snapshot-version semantics. Mandatory
+source-revision requirements are removed; the optional value is retained for logging. This supersedes the earlier proposal to remove
 revision metadata entirely.
 
 This does not remove control-plane record revisions or the existing transactional
 directory-rebinding check. Those protect mutations against concurrent changes
 and belong to the separate administration contract.
 
-The complete host response and optional user-field defaults still need to be
-settled. The previously proposed `userName` fallback to `id`, empty default groups,
-and optional user attributes are not promoted to agreed behavior by this decision.
+**Host `accounts` is required.** Providers must explicitly return `null` for no
+inventory account restriction, `[]` for no permitted accounts, or a list of the
+permitted accounts. Omission is invalid, rather than implicitly unrestricted.
+This makes the provider author choose the account-grounding behavior deliberately;
+policy still decides whether to authorize an inventory-permitted account.
+
+**Host `principal` is a required structured object with an explicit `mode`.**
+`{"mode":"account-name"}` instructs the CA to use the requested account name
+as the certificate principal. `{"mode":"epithet-principal-v1","domain":"opaque-value"}`
+instructs the CA to derive the principal from the required opaque domain and
+requested account. The domain is separate from host names and is not supplied
+to Writ. Do not infer a mode from a null or missing domain; the proposed nullable
+`principalDomain` alternative was not selected.
+
+**User `userName` is optional; `id` remains required.** A missing username does
+not match a `userName:` selector. Do not substitute `id` into `userName` for
+policy evaluation. Display and audit output may use `id` when no username is
+available, without inventing a username fact.
+
+**User `groups`, `userType`, `department`, and `organization` are optional.**
+Omitted `groups` means no group memberships. Omitted `userType`, `department`,
+or `organization` means that attribute is absent; no value is inferred.
+The minimal successful directory response is:
+
+```json
+{"id": "opaque-user-id"}
+```
+
+**Host `names` is required:** all equivalent host names, including the requested
+name. Writ evaluates rules against all names. **Host `labels` is optional:**
+omission means no labels. Inventory returns HTTP 404 for an unknown or inactive
+host; a successful response always describes an active host.
+
+**Lookups use GET with one query parameter and no request body.** On the
+respective directory and inventory services:
+
+```http
+GET /lookup?id=opaque-user-id
+GET /lookup?host=db.example.com
+```
+
+Use standard query-parameter encoding to preserve opaque IDs. These are single-key
+lookups, not filtering or compound queries. GET was selected for straightforward
+implementation in third-party frameworks.
+
+**Lookup responses must include `Cache-Control: no-store`, including 404s.**
+The CA performs fresh lookups and does not maintain an application fact cache.
+The request signature must cover the query string as well as the method and
+host/path, so a signed lookup cannot be reused for a different lookup key. The
+current service signer excludes the query string and must be extended.
+
+The directory and host response shapes and lookup encoding are agreed. The
+concrete authentication contract remains to be finalized within the service trust
+boundaries below.
 
 ## Deployment and discovery
 
@@ -164,41 +208,33 @@ The signing identity and the actor are different: control is the trusted signer;
 `sub` identifies the human whose request control authorized. Client-supplied actor
 metadata cannot replace control's authenticated attribution.
 
-The existing implementation uses a 60-second token lifetime and binds host/path,
-method and body. It has no actor claim and no single-use replay enforcement.
-These are source observations, not evidence that the new contract is implemented.
-The agreed refactor preserves existing freshness and replay semantics.
+Service tokens retain their 60-second lifetime and now bind the full query
+as well as host, escaped path, method, and body. Human administration includes
+the signed actor claim. No single-use replay database is introduced.
 
-## Contract decisions and remaining discussion
+## Contract decisions
 
 ### 1. Where do provisioning and enrollment credentials get checked?
 
-We agreed that both flows enter through control and retain their existing kinds
-of authorization, including the existing random SCIM bearer token. We have not
-specified the complete private request contract,
-including audit attribution when there is no authenticated human.
+Both flows enter through control. SCIM's random bearer is validated at control;
+inventory validates and consumes enrollment credentials atomically with the host
+transition. Backend audit retains `scim` and `host` for these machine operations.
 
-The code currently validates the static SCIM bearer token in the SCIM HTTP
-adapter. Inventory validates and consumes an enrollment token together with the
-host transition under its storage lock. SCIM audit uses `scim`; enrollment audit
-uses `host`. Neither label is an authenticated human identity.
 
 **Agreed:** control validates the existing random SCIM bearer token and signs
 its downstream request to directory.
 
-**Remaining recommendation:** inventory continues to own atomic
-enrollment-token validation/consumption and the pending-versus-active transition;
-control admits and signs that enrollment request. Preserve the current audit
-meaning without representing an anonymous host as an authenticated user.
+**Agreed:** inventory owns enrollment credential creation, validation, and
+consumption. Creating a token creates a pending host without attributes;
+redemption fills in the attributes and atomically activates the same host record.
+A pending status alone never authorizes enrollment or certificate issuance.
+Control authorizes administrator requests and forwards enrollment; it does not
+own token state. Existing token API operations remain available.
 
-Forwarding the SCIM bearer token for backend validation was not selected: control
-owns that check. Moving enrollment-token state into control would split token
-consumption from the host write, adding coordination and state ownership we have
-not agreed to introduce.
-
-Confirm enrollment validation ownership and specify how machine or anonymous
-provenance is distinguished from a human `sub` in the private wire format.
-No new credential store or actor namespace is selected here.
+Port the existing control-plane APIs and workflows to the new control service;
+defer API cleanup to the next revision. Preserve the current non-human audit
+attribution (`scim` for provisioning and `host` for enrollment), without treating
+those labels as authenticated human identities.
 
 ### 2. Freshness and replay: preserve existing semantics (agreed)
 
@@ -215,10 +251,8 @@ request single-use. No replay store or new revocation mechanism is proposed.
 The required extensions are control's distinct authority and authenticated actor
 attribution, already agreed above.
 
-The current target binding excludes the query string. If private operations use
-query parameters that change the operation, those parameters must be covered by
-the signed request contract. Exact encoding is an implementation detail once the
-contract is settled; silently treating host/path as the entire request is not.
+Target binding includes the exact escaped path and raw query string. The client
+uses standard query encoding; proxies must preserve that signed target.
 
 ### 3. Enumeration: refactor first, optimize second (agreed)
 
@@ -238,11 +272,9 @@ not expand that task or add it as a dependency.
 
 ## Routine implementation choices and scope boundaries
 
-After the contracts above are settled and implementation is requested, exact CLI
-and configuration names, Link relation naming, package organization, and endpoint
-encoding can be proposed together as the concrete interfaces for this design.
-They do not require reopening the selected topology. Server configuration remains
-separate from management-client agent profiles and sockets.
+CLI names, configuration keys, and migration are documented in inventory.md.
+Server configuration remains separate from management-client agent profiles and
+sockets. Public control-plane operations retain their existing shapes.
 
 This agreement does not add CA proxy modes, in-process control, mTLS, automatic
 key generation, independent outage bootstrap, new OIDC token kinds or application
@@ -269,7 +301,7 @@ introduce option F's client-carried delegation flow. The public router and CA's
 Link preserve the simple client configuration without either hosting control in
 CA or adding an optional CA proxy mode.
 
-## Validation for the eventual implementation
+## Validation
 
 - Exercise issuance and administration through both the combined launcher and
   independently deployed services, keeping control separate in both.
@@ -293,7 +325,7 @@ CA or adding an optional CA proxy mode.
 
 These references anchor the existing behavior described above:
 
-- [Current authorization and management dispatch](../pkg/inventoryserver/control.go)
+- [Current authorization and management dispatch](../pkg/controlplane/server.go)
 - [Service JWT signing and verification](../pkg/serviceauth/serviceauth.go)
 - [SCIM credential validation and adapter](../pkg/directory/scim/http.go)
 - [Directory storage, revisions and audit](../pkg/directory/sqlitestore/store.go)

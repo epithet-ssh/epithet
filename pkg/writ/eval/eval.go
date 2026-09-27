@@ -286,17 +286,17 @@ func userMatcher(u *User) func(il.Matcher) bool {
 		case il.MatchAny:
 			return true
 		case il.MatchUserName:
-			return m.Value == u.UserName
+			return u.UserName != "" && m.Value == u.UserName
 		case il.MatchID:
 			return u.ID != "" && m.Value == u.ID
 		case il.MatchGroup:
 			return slices.Contains(u.Groups, m.Value)
 		case il.MatchUserType:
-			return m.Value == u.UserType
+			return u.UserType != "" && m.Value == u.UserType
 		case il.MatchDepartment:
-			return m.Value == u.Department
+			return u.Department != "" && m.Value == u.Department
 		case il.MatchOrganization:
-			return m.Value == u.Organization
+			return u.Organization != "" && m.Value == u.Organization
 		}
 		return false
 	}

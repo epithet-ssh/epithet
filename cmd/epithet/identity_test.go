@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -208,16 +206,16 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 	}
 }
 
-func TestInventoryUserIDClaimConfigAndCLI(t *testing.T) {
+func TestCAUserIDClaimConfigAndCLI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  oidc:\n    issuer: https://issuer.example\n    user-id-claim: directory_id\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("ca:\n  oidc:\n    issuer: https://issuer.example\n    user-id-claim: directory_id\n"), 0600))
 	for _, override := range []bool{false, true} {
 		var root struct {
-			Inventory InventoryCLI `cmd:"inventory"`
+			CA CACLI `cmd:"ca"`
 		}
 		parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
 		require.NoError(t, err)
-		args := []string{"inventory"}
+		args := []string{"ca", "--directory", "http://directory", "--inventory", "http://inventory"}
 		want := "directory_id"
 		if override {
 			args = append(args, "--oidc-user-id-claim", "oid")
@@ -225,13 +223,13 @@ func TestInventoryUserIDClaimConfigAndCLI(t *testing.T) {
 		}
 		_, err = parser.Parse(args)
 		require.NoError(t, err)
-		require.Equal(t, want, root.Inventory.OIDC.UserIDClaim)
+		require.Equal(t, want, root.CA.OIDC.UserIDClaim)
 	}
 }
 
-func TestInventoryIdentityModeConfigPrecedence(t *testing.T) {
+func TestCAIdentityModeConfigPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("inventory:\n  oidc:\n    identity-mode: verified-email\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("ca:\n  oidc:\n    identity-mode: verified-email\n"), 0600))
 	for _, tc := range []struct {
 		name, env, flag string
 		want            oidc.IdentityMode
@@ -242,9 +240,9 @@ func TestInventoryIdentityModeConfigPrecedence(t *testing.T) {
 		{"flag", "stable-id", "verified-email", oidc.VerifiedEmail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("EPITHET_INVENTORY_OIDC_IDENTITY_MODE", tc.env)
+			t.Setenv("EPITHET_OIDC_IDENTITY_MODE", tc.env)
 			var root struct {
-				Inventory InventoryCLI `cmd:"inventory"`
+				CA CACLI `cmd:"ca"`
 			}
 			var options []kong.Option
 			if tc.name != "env-only" {
@@ -252,44 +250,15 @@ func TestInventoryIdentityModeConfigPrecedence(t *testing.T) {
 			}
 			parser, err := kong.New(&root, options...)
 			require.NoError(t, err)
-			args := []string{"inventory"}
+			args := []string{"ca", "--directory", "http://directory", "--inventory", "http://inventory"}
 			if tc.flag != "" {
 				args = append(args, "--oidc-identity-mode", tc.flag)
 			}
 			_, err = parser.Parse(args)
 			require.NoError(t, err)
-			mode, _, err := oidc.ResolveIdentity("", root.Inventory.OIDC.IdentityMode, "")
+			mode, _, err := oidc.ResolveIdentity("", root.CA.OIDC.IdentityMode, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.want, mode)
 		})
-	}
-}
-
-func TestInventoryCheckIdentityModes(t *testing.T) {
-	dir := t.TempDir()
-	invPath := filepath.Join(dir, "inventory.yaml")
-	require.NoError(t, os.WriteFile(invPath, []byte(`users:
-  - userName: alice
-    id: alice@example.com
-hosts:
-  - names: [host.example]
-    accounts: [root]
-`), 0600))
-	for _, tc := range []struct {
-		mode  oidc.IdentityMode
-		claim string
-		valid bool
-	}{
-		{"", "", true}, {oidc.StableID, "email", true}, {oidc.VerifiedEmail, "", true},
-		{oidc.VerifiedEmail, "email", false}, {"typo", "", false},
-	} {
-		c := InventoryCLI{Check: true, InventorySource: "static", PrincipalMode: "account-name", Static: []string{invPath},
-			OIDC: InventoryOIDCConfig{Issuer: "https://invalid.invalid", IdentityMode: tc.mode, UserIDClaim: tc.claim}}
-		err := c.runServer(slog.New(slog.NewTextHandler(io.Discard, nil)), tlsconfig.Config{})
-		if tc.valid {
-			require.NoError(t, err)
-		} else {
-			require.ErrorContains(t, err, "invalid OIDC identity configuration")
-		}
 	}
 }

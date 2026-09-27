@@ -31,43 +31,31 @@ Add the following to an existing combined-server configuration:
 
 ```yaml
 inventory:
-  static:
-    - /etc/epithet/directory-and-static-hosts.yaml
+  static: [/etc/epithet/directory-and-static-hosts.yaml]
   # inventory-source: managed  # Default; static disables host enrollment.
-  # state-dir: /custom/state  # Optional native-default override.
-  admin-user:
-    - YOUR_EXISTING_DIRECTORY_ID
-  # Alternatively, or additionally:
-  admin-group:
-    - inventory-operators
-  oidc:
-    issuer: https://your-existing-issuer.example
-    client-id: your-existing-client-id
-    # Keep your existing identity-mode and user-id-claim settings.
+  # state-dir: /custom/state
+control:
+  inventory-admin-user: [YOUR_EXISTING_DIRECTORY_ID]
+  # Alternatively: inventory-admin-group: [inventory-operators]
 ```
 
-The ID in `admin-user` is the same `users[].id` used for certificate issuance.
-The user's record must exist and be active. `admin-group` matches memberships
-from that directory record, not arbitrary group claims submitted by the client.
-Both grant the single `inventory-admin` role; there are no custom roles or Writ
-rules for inventory administration. Grants remain configuration-owned; user records come from the selected static
-or [SCIM directory](scim.md).
+The ID is the same directory `id` used for certificate issuance. The user must
+exist and be active; groups come from directory facts, not client JWT claims.
+These grants confer only inventory administration. Directory administration has
+its own `control.directory-admin-user` and `control.directory-admin-group` grants.
 
-Start `epithet --config server.yaml server` as usual. A separate router process
-owns `server.listen`; CA, inventory, and policy each listen on a private Unix
-socket. When the inventory child has managed storage configured, the router
-forwards `/inventory` to that child's `/manage` endpoint. Other paths go to CA.
-The CA advertises this bootstrap header and does not proxy management requests:
+The [combined deployment](inventory.md#combined-deployment) runs separate CA,
+control, directory, inventory, and router processes. Configure distinct persistent
+CA and control keys. The router forwards `/inventory` directly to control and
+`/scim/v2/…` to its provisioning endpoint. CA advertises control without proxying it:
 
 ```http
-Link: <inventory>; rel="https://epithet.dev/rel/inventory"
+Link: <inventory>; rel="https://epithet.dev/rel/control"
 ```
 
-For `https://ca.example/`, that target is `https://ca.example/inventory`. Keep
-Caddy terminating TLS and proxying HTTP to the existing `server.listen` address;
-it does not need separate inventory routing. See the
-[combined deployment example](inventory.md#combined-deployment). Authentication
-and authorization stay in their services, and the router adds no credentials.
+An existing reverse proxy forwarding all traffic to `server.listen` needs no
+routing changes. See the [deployment guide](inventory.md) for OIDC, keys, and
+migration of older settings.
 
 On the admin machine, start or restart the agent with the updated executable and
 the usual CA configuration. At startup, the agent discovers the public inventory
@@ -220,8 +208,11 @@ cannot approve another host.
 ## Identity, retries, and conflicts
 
 Records have random, immutable IDs distinct from names and principal domains.
-Creating a token reserves the future host ID. Redemption transforms its file into
-the host record under that same ID. Enrollment without a token allocates an ID
+Creating a token creates a pending host with no attributes and an enrollment
+credential. Redemption fills in that host and activates it under the same ID,
+preserving its creation time and incrementing its revision. Pending reservations
+appear in administrative host listings but supply no issuance facts. An empty
+reservation cannot be approved until valid host attributes have been supplied. Enrollment without a token allocates an ID
 and creates a pending host file directly. New filename publication is exclusive:
 a collision cannot overwrite an existing record.
 Each submission is a new enrollment. There is no persistent enrollment credential
@@ -273,11 +264,17 @@ inventory/
     <another-id>.yaml
 ```
 
-An unused token file contains its expiry and audit history:
+A pending host reservation contains the enrollment credential expiry and audit history:
 
 ```yaml
 version: 2
-kind: token
+kind: host
+host:
+  id: TOKEN_VALUE
+  revision: 1
+  status: pending
+  created-at: 2026-09-12T11:00:00Z
+  updated-at: 2026-09-12T11:00:00Z
 token:
   id: TOKEN_VALUE
   expires-at: 2026-09-12T12:00:00Z
@@ -289,8 +286,8 @@ audit:
     resource: TOKEN_VALUE
 ```
 
-After redemption, the same file has `kind: host`, a `host` record, and token
-metadata with `used-by` equal to that host ID. The `host.host` mapping contains
+After redemption, the same host becomes active and its token metadata has
+`used-by` equal to that host ID. The previously absent `host.host` mapping contains
 the editable names, labels, accounts, and principal settings. `host.status`
 records admission. Its `audit` list includes token creation and enrollment events.
 Approval, editing, and token revocation replace only the affected item file.
@@ -302,7 +299,7 @@ histories in timestamp order.
 One inventory process owns the directory through an OS file lock. Directories
 are created with mode 0700 and files with mode 0600. A new item is fully written
 and synced in a temporary file, then published through an exclusive hard link.
-Replacing a token with its host uses atomic rename of a synced temporary file,
+Activating a pending reservation uses atomic rename of a synced temporary file,
 followed by directory sync on Unix. The admission, consumption, and audit event
 are all in that one file: there is no transaction journal or multi-file commit
 for redemption. Interrupted temporary writes are ignored at startup.

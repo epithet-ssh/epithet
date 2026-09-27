@@ -27,21 +27,23 @@ import (
 // Audience is the aud claim on every service token.
 const Audience = "epithet-policy"
 const InventoryAudience = "epithet-inventory"
+const DirectoryAudience = "epithet-directory"
 
 // TokenTTL bounds how long a minted request token is accepted.
 const TokenTTL = 60 * time.Second
 
 // clockSkewGrace extends how far in the past iat may be beyond TokenTTL,
-// absorbing clock drift between the CA and policy-server hosts.
+// absorbing clock drift between service hosts.
 const clockSkewGrace = 30 * time.Second
 
 // requestClaims is the JWT payload minted per request. bh binds the token to
 // a specific request body; htm/htu additionally bind it to the specific
-// method and target (host+path) it was minted for, so a captured token
+// method and target (host, escaped path, and query) it was minted for, so a captured token
 // can't be replayed against a different request that happens to carry the
 // same (or empty) body — e.g. a GET / token replayed against a POST / with
 // no body.
 type requestClaims struct {
+	Subject  string `json:"sub,omitempty"`
 	Issuer   string `json:"iss"`
 	Audience string `json:"aud"`
 	IssuedAt int64  `json:"iat"`
@@ -52,7 +54,7 @@ type requestClaims struct {
 	Target   string `json:"htu"`
 }
 
-// Signer mints request-bound JWTs signed with a CA SSH private key.
+// Signer mints request-bound JWTs signed with a service SSH private key.
 type Signer struct {
 	signer      jose.Signer
 	fingerprint string
@@ -98,9 +100,18 @@ func (s *Signer) Authorize(req *http.Request, body []byte) error {
 	return s.authorizeAt(req, body, time.Now())
 }
 
-// authorizeAt is Authorize with an injectable clock, so tests can mint an
-// already-expired token without sleeping past TokenTTL.
+// AuthorizeActor binds an authenticated human actor to this backend request.
+// An empty actor is used for service operations such as enrollment and SCIM.
+func (s *Signer) AuthorizeActor(req *http.Request, body []byte, actor string) error {
+	return s.authorizeActorAt(req, body, actor, time.Now())
+}
+
+// authorizeAt injects the clock for expiry tests.
 func (s *Signer) authorizeAt(req *http.Request, body []byte, now time.Time) error {
+	return s.authorizeActorAt(req, body, "", now)
+}
+
+func (s *Signer) authorizeActorAt(req *http.Request, body []byte, actor string, now time.Time) error {
 	jti := make([]byte, 16)
 	if _, err := rand.Read(jti); err != nil {
 		return fmt.Errorf("failed to generate jti: %w", err)
@@ -109,6 +120,7 @@ func (s *Signer) authorizeAt(req *http.Request, body []byte, now time.Time) erro
 	sum := sha256.Sum256(body)
 
 	claims := requestClaims{
+		Subject:  actor,
 		Issuer:   s.fingerprint,
 		Audience: s.audience,
 		IssuedAt: now.Unix(),
@@ -116,7 +128,7 @@ func (s *Signer) authorizeAt(req *http.Request, body []byte, now time.Time) erro
 		ID:       hex.EncodeToString(jti),
 		BodyHash: base64.RawURLEncoding.EncodeToString(sum[:]),
 		Method:   req.Method,
-		Target:   requestTarget(req.URL.Host, req.Host, req.URL.Path),
+		Target:   requestTarget(req.Host, req.URL.Host, req.URL.RequestURI()),
 	}
 
 	raw, err := jwt.Signed(s.signer).Claims(claims).Serialize()
@@ -164,35 +176,41 @@ func NewVerifierFor(publicKey sshcert.RawPublicKey, audience string) (*Verifier,
 // exp/iat freshness, that htm/htu match the request actually received, and
 // that bh matches sha256(body). It takes the request (rather than just the
 // header) because method/target binding needs req.Method, req.Host, and
-// req.URL.Path.
+// req.URL.RequestURI().
 func (v *Verifier) Verify(req *http.Request, body []byte) error {
+	_, err := v.VerifyActor(req, body)
+	return err
+}
+
+// VerifyActor returns only the subject covered by a valid request signature.
+func (v *Verifier) VerifyActor(req *http.Request, body []byte) (string, error) {
 	raw, ok := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
 	if !ok || raw == "" {
-		return fmt.Errorf("missing or malformed Authorization header")
+		return "", fmt.Errorf("missing or malformed Authorization header")
 	}
 
 	// Restrict parsing to the single expected algorithm so a token signed
 	// with a weaker or unexpected alg can't be smuggled through.
 	token, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{v.alg})
 	if err != nil {
-		return fmt.Errorf("failed to parse request token: %w", err)
+		return "", fmt.Errorf("failed to parse request token: %w", err)
 	}
 
 	var claims requestClaims
 	if err := token.Claims(v.key, &claims); err != nil {
-		return fmt.Errorf("failed to verify request token: %w", err)
+		return "", fmt.Errorf("failed to verify request token: %w", err)
 	}
 
 	if claims.Audience != v.audience {
-		return fmt.Errorf("unexpected audience %q", claims.Audience)
+		return "", fmt.Errorf("unexpected audience %q", claims.Audience)
 	}
 
 	now := time.Now()
 	if !time.Unix(claims.Expiry, 0).After(now) {
-		return fmt.Errorf("request token expired")
+		return "", fmt.Errorf("request token expired")
 	}
 	if time.Unix(claims.IssuedAt, 0).Before(now.Add(-(TokenTTL + clockSkewGrace))) {
-		return fmt.Errorf("request token issued too long ago")
+		return "", fmt.Errorf("request token issued too long ago")
 	}
 
 	// A captured token is only valid for the exact request it was minted
@@ -200,27 +218,27 @@ func (v *Verifier) Verify(req *http.Request, body []byte) error {
 	// a bodyless GET could be replayed against any other bodyless request
 	// within its 60s window, regardless of method or path.
 	if claims.Method != req.Method {
-		return fmt.Errorf("method mismatch")
+		return "", fmt.Errorf("method mismatch")
 	}
 	// req.Host is authoritative for server-received requests (populated
 	// from the Host header/request line by net/http); req.URL.Host is the
 	// fallback so this also works against client-side *http.Request values
 	// built with http.NewRequest, as our own tests do.
-	if claims.Target != requestTarget(req.Host, req.URL.Host, req.URL.Path) {
-		return fmt.Errorf("target mismatch")
+	if claims.Target != requestTarget(req.Host, req.URL.Host, req.URL.RequestURI()) {
+		return "", fmt.Errorf("target mismatch")
 	}
 
 	sum := sha256.Sum256(body)
 	expectedHash := base64.RawURLEncoding.EncodeToString(sum[:])
 	if subtle.ConstantTimeCompare([]byte(claims.BodyHash), []byte(expectedHash)) != 1 {
-		return fmt.Errorf("body hash mismatch")
+		return "", fmt.Errorf("body hash mismatch")
 	}
 
-	return nil
+	return claims.Subject, nil
 }
 
-// requestTarget normalizes a request's binding target as "host+path",
-// preferring primary (req.URL.Host when signing, req.Host when verifying)
+// requestTarget normalizes a request's binding target as "host+escaped-path+query",
+// preferring primary (req.Host)
 // and falling back to secondary when primary is empty. Mirrors how the old
 // httpsig code derived @authority from whichever of req.Host/req.URL.Host
 // was populated for a given *http.Request.

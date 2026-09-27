@@ -1,10 +1,5 @@
-// Package wire holds every type that crosses a process boundary on the
-// certificate issuance path: the client's cert request to the CA, the CA's
-// resolve request to inventory, the CA's evaluation request to the policy
-// server, the discovery document, and the Link relations that advertise it.
-// Consolidating these shapes here means later changes to the wire format only
-// need to happen in one place. The administrative control API (host and
-// directory management) is a separate contract and lives in pkg/inventoryapi.
+// Package wire contains shared certificate, discovery, host, and evaluation
+// types. Public administration has a separate contract in pkg/inventoryapi.
 package wire
 
 import (
@@ -19,28 +14,17 @@ import (
 // of magnitude of headroom before truncation.
 const MaxBodySize = 64 * 1024
 
-// PolicyRequest is the CA→policy-server cert evaluation request body.
-type PolicyRequest struct {
-	Facts      *PolicyFacts `json:"facts"`
-	Connection Connection   `json:"connection"`
-}
-
 // MaxTTLSeconds is the largest whole-second lifetime representable by Go's
 // time.Duration. CA validates before converting policy-controlled seconds.
 const MaxTTLSeconds int64 = (1<<63 - 1) / int64(time.Second)
 
-// PolicyResponse grants this one connection with policy-owned limits. HTTP
-// 200 means authorized; other outcomes use PolicyError. CA constructs the
-// certificate identity and principal from its original inventory facts.
-// Policy owns active-user and account restrictions and whether certificate
-// lifetime is bounded by authentication expiry; CA does not impose them.
+// PolicyResponse authorizes one connection with evaluator-owned limits.
+// CA constructs identity and principal from facts and enforces login expiry.
 type PolicyResponse struct {
 	// TTLSeconds is a positive whole-second lifetime, measured from CA signing.
 	TTLSeconds int64             `json:"ttlSeconds"`
 	Extensions map[string]string `json:"extensions"`
-	// NotAfter is an optional absolute policy deadline. Zero means TTL alone
-	// determines expiry. Policies that bound certificates to authentication
-	// expiry must return that bound here.
+	// NotAfter optionally tightens the TTL and authentication-expiry bounds.
 	NotAfter time.Time `json:"notAfter,omitzero"`
 	PolicyID string    `json:"policyId,omitempty"`
 }
@@ -60,7 +44,7 @@ type AuthConfig struct {
 type Discovery struct {
 	Auth *AuthConfig `json:"auth,omitempty"`
 
-	// CacheControl carries the upstream Cache-Control header; never serialized.
+	// CacheControl controls login discovery caching; never serialized.
 	CacheControl string `json:"-"`
 }
 
@@ -74,13 +58,13 @@ func (e *PolicyError) Error() string {
 	return fmt.Sprintf("policy error %d: %s", e.StatusCode, e.Message)
 }
 
-// RelAuth and RelInventory are the extension relation types the CA advertises
+// RelAuth and RelControl are the extension relation types the CA advertises
 // in Link headers on GET /. RFC 8288 requires extension relation types to be
 // URIs. They carry no version segment: a relation names the relationship, not
 // the payload schema.
 const (
-	RelAuth      = "https://epithet.dev/rel/auth"
-	RelInventory = "https://epithet.dev/rel/inventory"
+	RelAuth    = "https://epithet.dev/rel/auth"
+	RelControl = "https://epithet.dev/rel/control"
 )
 
 // CreateCertRequest asks the CA for a signed cert. Both fields are required.

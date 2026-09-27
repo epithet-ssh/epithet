@@ -32,6 +32,7 @@ import (
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
 	ignoreUsers          bool
+	ignoreHosts          bool
 	sourceFiles          map[*ResolvedHost]string
 	directoryHash        hash.Hash
 	inventoryHash        hash.Hash
@@ -68,14 +69,19 @@ type domainPolicy struct {
 	hostIndex int
 }
 
-// WithoutUsers selects only host configuration from static files when a managed
-// directory is authoritative. Static user records cannot become a fallback.
+// WithoutHosts loads only directory facts, independently of host configuration.
+func WithoutHosts() StaticOption {
+	return func(opts *staticOptions) error { opts.ignoreHosts = true; return nil }
+}
+
+// WithoutUsers loads only host facts; user records cannot become a fallback.
 func WithoutUsers() StaticOption {
 	return func(opts *staticOptions) error { opts.ignoreUsers = true; return nil }
 }
 
 type staticOptions struct {
 	ignoreUsers          bool
+	ignoreHosts          bool
 	defaultPrincipalMode PrincipalMode
 }
 
@@ -138,6 +144,7 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	}
 	s := &Static{
 		ignoreUsers:   opts.ignoreUsers,
+		ignoreHosts:   opts.ignoreHosts,
 		sourceFiles:   map[*ResolvedHost]string{},
 		directoryHash: sha256.New(), inventoryHash: sha256.New(),
 		users:                map[string]*directory.User{},
@@ -168,6 +175,10 @@ func (s *Static) loadFile(path string) error {
 	if err := strictUnmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parsing inventory %s: %w", path, err)
 	}
+	if s.ignoreHosts {
+		doc.Hosts = nil
+		doc.Domains = nil
+	}
 	if s.ignoreUsers {
 		doc.Users = nil
 	}
@@ -189,10 +200,7 @@ func (s *Static) loadFile(path string) error {
 		s.domains[domain] = struct{}{}
 	}
 	for i, u := range doc.Users {
-		if u.UserName == "" {
-			return fmt.Errorf("%s: users[%d] has no userName", path, i)
-		}
-		if _, ok := s.users[u.UserName]; ok {
+		if _, ok := s.users[u.UserName]; u.UserName != "" && ok {
 			return fmt.Errorf("%s: duplicate user %q", path, u.UserName)
 		}
 		if u.ID == "" {
@@ -201,7 +209,7 @@ func (s *Static) loadFile(path string) error {
 		if previous, ok := s.ids[u.ID]; ok {
 			return fmt.Errorf("%s: duplicate id %q for users %q and %q", path, u.ID, previous.UserName, u.UserName)
 		}
-		s.users[u.UserName] = &directory.User{
+		s.ids[u.ID] = &directory.User{
 			UserName:     u.UserName,
 			ID:           u.ID,
 			Active:       u.Active == nil || *u.Active,
@@ -210,7 +218,9 @@ func (s *Static) loadFile(path string) error {
 			Department:   u.Department,
 			Organization: u.Organization,
 		}
-		s.ids[u.ID] = s.users[u.UserName]
+		if u.UserName != "" {
+			s.users[u.UserName] = s.ids[u.ID]
+		}
 	}
 	for i, h := range doc.Hosts {
 		mode, err := s.resolvePrincipalMode(h.PrincipalMode)

@@ -39,15 +39,16 @@ var cli struct {
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
 	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
-	Agent     AgentCLI        `cmd:"agent" aliases:"a,ag" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
-	Match     MatchCLI        `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
-	CA        CACLI           `cmd:"ca" help:"Run the epithet CA server"`
-	Host      HostCLI         `cmd:"host" help:"Manage and authorize Epithet hosts"`
-	Inventory InventoryCLI    `cmd:"inventory" aliases:"i,inv" help:"Serve inventory services or administer host inventory"`
-	Directory DirectoryCLI    `cmd:"directory" help:"Inspect directory users and manage group policy bindings"`
-	Policy    PolicyServerCLI `cmd:"policy" help:"Run the policy server evaluating normalized facts"`
-	Router    RouterCLI       `cmd:"router" help:"Proxy HTTP to private CA and inventory Unix sockets"`
-	Server    ServerCLI       `cmd:"server" help:"Supervise an HTTP router with private CA, policy, and inventory services"`
+	Agent     AgentCLI     `cmd:"agent" aliases:"a,ag" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
+	Match     MatchCLI     `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
+	Control   ControlCLI   `cmd:"control" help:"Run public administration, SCIM, and enrollment"`
+	CA        CACLI        `cmd:"ca" help:"Run the epithet CA server"`
+	Host      HostCLI      `cmd:"host" help:"Manage and authorize Epithet hosts"`
+	Inventory InventoryCLI `cmd:"inventory" aliases:"i,inv" help:"Serve inventory services or administer host inventory"`
+	Directory DirectoryCLI `cmd:"directory" help:"Inspect directory users and manage group policy bindings"`
+	Policy    PolicyCLI    `cmd:"policy" help:"Validate Writ policy"`
+	Router    RouterCLI    `cmd:"router" help:"Proxy HTTP to private CA and control Unix sockets"`
+	Server    ServerCLI    `cmd:"server" help:"Supervise router, CA, control, directory, and inventory services"`
 }
 
 func main() {

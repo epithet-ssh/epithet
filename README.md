@@ -56,15 +56,17 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 **Components:**
 
 - **Agent** (`epithet agent`): Daemon managing OIDC authentication state and certificate lifecycle. Creates per-connection SSH agents.
-- **CA Server** (`epithet ca`): Coordinates inventory authentication and policy evaluation, and signs SSH certificates after policy authorization.
-- **Inventory Server** (`epithet inventory`): Validates OIDC tokens, maps directory IDs, and supplies user and host facts from static inventory, managed hosts, or a SCIM user directory. See the [inventory guide](docs/inventory.md).
-- **Policy Server** (`epithet policy`): Evaluates normalized facts and makes authorization decisions - who can access what hosts as which users.
+- **CA** (`epithet ca`): Authenticates users, reads facts, evaluates Writ locally, and signs SSH certificates.
+- **Control** (`epithet control`): Handles administration, SCIM provisioning, and host enrollment using its own signing key.
+- **Directory / Inventory** (`epithet directory`, `epithet inventory`): Independently replaceable user and host fact services. Backends own storage, mutation invariants, and audit.
+- **Combined launcher** (`epithet server`): Supervises these four separate services and the public router. See [deployment](docs/inventory.md).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md) - How epithet works under the hood
 - [SCIM Provisioning](docs/scim.md) - Pocket ID setup, directory lifecycle, and group bindings
-- [Policy Server Guide](docs/policy-server.md) - Setup and configuration for the policy server
+- [Writ Policy Guide](docs/policy-server.md) - Authorization rules and configuration
+- [Fact Provider API](docs/fact-services.md) - Implement a custom directory or inventory
 - [Destination-bound Principals](docs/principals.md) - Interoperable principal derivation protocol
 - [Authentication](docs/authentication.md) - The OIDC token contract and in-process auth flow
 - [OIDC Setup](docs/oidc-setup.md) - Provider-specific OIDC configuration (Google, Okta, Azure AD)
