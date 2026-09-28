@@ -14,7 +14,7 @@ import (
 
 // AgentKillCLI evicts one per-connection agent from the running broker.
 type AgentKillCLI struct {
-	Broker  string              `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	Broker  string              `help:"Broker socket path (overrides config-based discovery)" short:"b" name:"broker-socket"`
 	AgentID wire.ConnectionHash `arg:"" name:"agent-id" help:"Agent ID or unique prefix shown by epithet agent inspect" required:""`
 }
 

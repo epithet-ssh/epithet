@@ -53,27 +53,21 @@ func TestDirectoryUsersCLIWithStaticHosts(t *testing.T) {
 				name = "scim-admin"
 			}
 			controlPath := writeControlKey(t, dir)
-			config := fmt.Sprintf(`server:
-  ca-key: %s/ca.key
-  control-key: %s
-ca:
-  policy-file: %s/policy.writ
-  oidc:
-    issuer: %s
-    client-id: %s
-directory:
-  source: %s
-  state-dir: %s/state
-  static: [%s/static.yaml]
-control:
-  directory-admin-group: [wheel]
-  scim-token: provisioning-secret
-inventory:
-  inventory-source: static
-  static: [%s/static.yaml]
+			config := fmt.Sprintf(`ca-key-file = "%s/ca.key"
+control-key-file = %q
+policy-file = "%s/policy.writ"
+oidc-issuer = %q
+oidc-client-id = %q
+directory-mode = %q
+state-dir = "%s/state"
+directory-static-file = ["%s/static.yaml"]
+directory-admin-group = ["wheel"]
+scim-token = "provisioning-secret"
+inventory-mode = "static"
+inventory-static-file = ["%s/static.yaml"]
 `, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, source, dir, dir, dir)
 
-			path := filepath.Join(dir, "server.yaml")
+			path := filepath.Join(dir, "server.toml")
 			require.NoError(t, os.WriteFile(path, []byte(config), 0600))
 			address := fmt.Sprintf("127.0.0.1:%d", availablePort(t))
 			process := exec.Command(binary, "--config", path, "--insecure", "server", "--listen", address)
@@ -106,7 +100,7 @@ inventory:
 			<-b.Ready()
 			defer b.Close()
 			for _, asJSON := range []bool{false, true} {
-				args := []string{"directory", "--broker", socket, "users", "list"}
+				args := []string{"directory", "--broker-socket", socket, "users", "list"}
 				if asJSON {
 					args = append(args, "--json")
 				}

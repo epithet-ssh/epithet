@@ -127,7 +127,7 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName 
 			migrationFlag = " --accept-account-name"
 		}
 		s.AuthorizedPrincipalsCommand = fmt.Sprintf(
-			"%s %s host authorized-principals --domain-file %s/domain%s %%u",
+			"%s %s host authorized-principals --principal-domain-file %s/domain%s %%u",
 			envPath, epithetPath, s.Path, migrationFlag)
 	}
 

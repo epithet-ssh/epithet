@@ -4,11 +4,10 @@ This directory contains a launchd plist for running `epithet agent` as a backgro
 
 ## Prerequisites
 
-1. Create your epithet config file at `~/.epithet/config.yaml`:
-   ```yaml
-   agent:
-     ca-url: https://ca.example.com
-     name: default
+1. Create your epithet config file at `~/.epithet/config.toml`:
+   ```toml
+   ca = ["https://ca.example.com"]
+   agent-name = "default"
    ```
 
    The agent discovers its OIDC issuer/client ID from the CA's Link header

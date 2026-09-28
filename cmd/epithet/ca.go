@@ -18,14 +18,14 @@ import (
 )
 
 type CACLI struct {
-	ControlPublicURL string `help:"Client-accessible control URL advertised at bootstrap" name:"control-public-url"`
+	ControlPublicURL string `placeholder:"URL" help:"Client-accessible control URL advertised at bootstrap" name:"control-public"`
 
-	Inventory    string            `help:"URL for inventory service" name:"inventory" required:"true"`
-	Directory    string            `help:"Directory service URL" name:"directory" required:"true"`
+	Inventory    string            `placeholder:"URL" help:"URL for inventory service" name:"inventory" required:"true"`
+	Directory    string            `placeholder:"URL" help:"Directory service URL" name:"directory" required:"true"`
 	OIDC         ServiceOIDCConfig `embed:"" prefix:"oidc-"`
 	PolicyConfig `embed:""`
 
-	Key    string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key"`
+	Key    string `help:"Path to ca private key" short:"k" default:"/etc/epithet/ca.key" name:"ca-key-file"`
 	Listen string `help:"Address to listen on" short:"l" env:"PORT" default:"0.0.0.0:8080"`
 }
 
@@ -113,21 +113,21 @@ func validatePublicInventoryURL(value string, cfg tlsconfig.Config) error {
 	// The URL is emitted inside Link's angle brackets. Delimiters and line
 	// breaks must not be inserted literally into that header value.
 	if strings.ContainsAny(value, "<>\r\n\"") {
-		return fmt.Errorf("control-public-url must percent-encode Link header delimiters and cannot contain line breaks")
+		return fmt.Errorf("control-public must percent-encode Link header delimiters and cannot contain line breaks")
 	}
 	u, err := url.Parse(value)
 	if err != nil {
-		return fmt.Errorf("invalid control-public-url: %w", err)
+		return fmt.Errorf("invalid control-public: %w", err)
 	}
 	if u.User != nil {
-		return fmt.Errorf("control-public-url cannot contain embedded credentials; inventory authenticates requests separately")
+		return fmt.Errorf("control-public cannot contain embedded credentials; inventory authenticates requests separately")
 	}
 	if u.Fragment != "" {
-		return fmt.Errorf("control-public-url cannot contain a fragment; fragments are not sent to the HTTP endpoint")
+		return fmt.Errorf("control-public cannot contain a fragment; fragments are not sent to the HTTP endpoint")
 	}
 	if u.IsAbs() {
 		if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("control-public-url must be an HTTP(S) endpoint or a relative URL")
+			return fmt.Errorf("control-public must be an HTTP(S) endpoint or a relative URL")
 		}
 		return cfg.ValidateURL(value)
 	}

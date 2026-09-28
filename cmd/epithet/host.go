@@ -17,7 +17,7 @@ type HostCLI struct {
 // HostAuthorizedPrincipalsCLI implements the offline
 // AuthorizedPrincipalsCommand hook for sshd.
 type HostAuthorizedPrincipalsCLI struct {
-	DomainFile        string `name:"domain-file" help:"Principal-domain file" required:""`
+	DomainFile        string `name:"principal-domain-file" help:"Principal-domain file" required:""`
 	AcceptAccountName bool   `name:"accept-account-name" help:"Also accept the literal account name during a bounded migration"`
 	Account           string `arg:"" name:"account" help:"Target account name supplied by sshd as %u" required:""`
 }

@@ -13,7 +13,7 @@ make
 
 **2. Start the agent:**
 ```bash
-epithet agent --ca-url https://your-ca.example.com/
+epithet agent --ca https://your-ca.example.com/
 ```
 
 The agent discovers its OIDC issuer and client ID from the CA's Link header

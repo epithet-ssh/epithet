@@ -1,7 +1,7 @@
 # Writ deployment example
 
 Copy `policy.example.writ` to `policy.writ` and `inventory.example.yaml` to
-`inventory.yaml`. Edit the users, hosts, and access rules for your deployment.
+`yaml`. Edit the users, hosts, and access rules for your deployment.
 
 Create distinct persistent CA and control keys:
 
@@ -10,26 +10,20 @@ ssh-keygen -t ed25519 -f ca_key -N '' -C epithet-ca
 ssh-keygen -t ed25519 -f control_key -N '' -C epithet-control
 ```
 
-Configure the combined launcher in `server.yaml`:
+Configure the combined launcher in `toml`:
 
-```yaml
-server:
-  ca-key: ./ca_key
-  control-key: ./control_key
-  listen: 127.0.0.1:8080
-ca:
-  policy-file: ./policy.writ
-  oidc:
-    issuer: https://accounts.google.com
-    client-id: your-client-id
-directory:
-  static: [./inventory.yaml]
-inventory:
-  static: [./inventory.yaml]
-  principal-mode: account-name
-control:
-  directory-admin-group: [directory-operators]
-  inventory-admin-group: [host-operators]
+```toml
+ca-key-file = "./ca_key"
+control-key-file = "./control_key"
+directory-admin-group = ["directory-operators"]
+directory-static-file = ["./inventory.yaml"]
+inventory-admin-group = ["host-operators"]
+inventory-static-file = ["./inventory.yaml"]
+listen = "127.0.0.1:8080"
+oidc-client-id = "your-client-id"
+oidc-issuer = "https://accounts.google.com"
+policy-file = "./policy.writ"
+principal-mode = "account-name"
 ```
 
 This example explicitly uses account-name principals. For destination binding,
@@ -40,9 +34,9 @@ Validate and run:
 
 ```sh
 epithet policy --check --policy-file policy.writ
-epithet --config server.yaml directory --check
-epithet --config server.yaml inventory --check
-epithet --config server.yaml server
+epithet --config server.toml directory --check
+epithet --config server.toml inventory --check
+epithet --config server.toml server
 ```
 
 The launcher supervises separate CA, control, directory, inventory, and router

@@ -2,7 +2,7 @@
 
 This implements the enrollment and administration workflow discussed on September
 11–12, 2026. Managed hosts are enabled by default, alongside static host records.
-Select `inventory.inventory-source: static` to disable managed host storage and
+Select `inventory-mode = "static"` to disable managed host storage and
 enrollment. Local-only `host enroll` still works when the CA advertises no
 inventory link or the advertised endpoint has no enrollment capability.
 The [follow-up audit](dynamic-inventory-audit.md) distinguishes corrected workflow
@@ -29,20 +29,15 @@ errors from implementation assumptions that still need design review.
 
 Add the following to an existing combined-server configuration:
 
-```yaml
-inventory:
-  static: [/etc/epithet/directory-and-static-hosts.yaml]
-  # inventory-source: managed  # Default; static disables host enrollment.
-  # state-dir: /custom/state
-control:
-  inventory-admin-user: [YOUR_EXISTING_DIRECTORY_ID]
-  # Alternatively: inventory-admin-group: [inventory-operators]
+```toml
+inventory-admin-user = ["YOUR_EXISTING_DIRECTORY_ID"]
+inventory-static-file = ["/etc/epithet/directory-and-static-hosts.yaml"]
 ```
 
 The ID is the same directory `id` used for certificate issuance. The user must
 exist and be active; groups come from directory facts, not client JWT claims.
 These grants confer only inventory administration. Directory administration has
-its own `control.directory-admin-user` and `control.directory-admin-group` grants.
+its own `directory-admin-user` and `directory-admin-group` grants.
 
 The [combined deployment](inventory.md#combined-deployment) runs separate CA,
 control, directory, inventory, and router processes. Configure distinct persistent
@@ -53,7 +48,7 @@ CA and control keys. The router forwards `/inventory` directly to control and
 Link: <inventory>; rel="https://epithet.dev/rel/control"
 ```
 
-An existing reverse proxy forwarding all traffic to `server.listen` needs no
+An existing reverse proxy forwarding all traffic to `listen` needs no
 routing changes. See the [deployment guide](inventory.md) for OIDC, keys, and
 migration of older settings.
 
@@ -71,8 +66,8 @@ epithet inventory remove HOST_ID
 epithet inventory audit
 ```
 
-Commands inherit the configured `agent.name` (otherwise `default`). Use
-`--name PROFILE` or `--broker SOCKET` to override the selection. A full
+Commands inherit the configured `agent-name` (otherwise `default`). Use
+`--agent-name PROFILE` or `--broker-socket SOCKET` to override the selection. A full
 record ID always works; unique ID prefixes and unambiguous exact host names also
 work. If multiple proposals share a name, use the record ID.
 
@@ -86,7 +81,7 @@ for the full record, including accounts, labels, principal domain, and audit met
 On the machine being enrolled, run as root:
 
 ```sh
-epithet host enroll --ca-url https://ca.example/
+epithet host enroll --ca https://ca.example/
 ```
 
 The command fetches the CA key and prepares local configuration without installing
@@ -95,7 +90,7 @@ Use `--principal-domain fleet` to propose a specific domain. It
 proposes the local hostname, appending the configured search-domain suffix when
 it is missing. This reads local configuration and sends no
 DNS queries. Use
-repeatable `--name` flags to override that guess. It proposes accounts with shells
+repeatable `--host-name` flags to override that guess. It proposes accounts with shells
 that appear to permit login, using local passwd data and macOS Directory Services.
 These are guesses, not a determination of effective PAM/sshd access. Windows
 currently starts with an empty account proposal, which the operator must edit.
@@ -187,8 +182,8 @@ Normal creation prints metadata and a shell-quoted, ready-to-copy enrollment
 command with the agent's CA URL. The token value is the secret:
 
 ```sh
-epithet host enroll --ca-url https://ca.example/ --token TOKEN_VALUE
-epithet host enroll --ca-url https://ca.example/ --token-file ./token.txt
+epithet host enroll --ca https://ca.example/ --token TOKEN_VALUE
+epithet host enroll --ca https://ca.example/ --token-file ./token.txt
 ```
 
 The two inputs are mutually exclusive. Tokens are random 256-bit values. The
@@ -254,7 +249,7 @@ enumeration. Pending proposals cannot change existing static or dynamic admissio
 
 ## Files, durability, and recovery
 
-The host storage layout beneath `inventory.state-dir` is:
+The host storage layout beneath `state-dir` is:
 
 ```text
 inventory/
@@ -313,9 +308,9 @@ only that record's index entries before allowing another reader or writer.
 Content revisions are calculated from in-memory per-item hashes; no index file
 is persisted. Unchanged restarts produce the same revision.
 
-When `inventory.inventory-source: managed` is selected, unreadable or invalid dynamic storage
+When `inventory-mode = "enrollment"` is selected, unreadable or invalid dynamic storage
 fails startup. Duplicate active names are validation errors, never a reason to
-choose an arbitrary winner. To run static-only, select `inventory-source: static`.
+choose an arbitrary winner. To run static-only, select `inventory-mode = "static"`.
 `state-dir` is the shared storage root, defaulting to Epithet's native system
 state directory. Managed host storage lives in its `inventory/` subdirectory;
 SCIM directory storage lives in `directory/`. The path only overrides storage
@@ -355,14 +350,13 @@ no audit compaction, pagination, SCIM, database backend, or configurable RBAC ye
 
 ## Separate deployment and protocol
 
-Standalone inventory serves the existing CA-authenticated resolution endpoint,
-plus a separate `/manage` endpoint when managed storage is enabled. Configure the
-CA with both its private resolver URL and the client-reachable URL:
+Standalone inventory serves the CA-authenticated resolution endpoint; control
+serves public management at `/manage`. Configure the CA with the private inventory
+resolver URL and the client-reachable control URL:
 
-```yaml
-ca:
-  inventory: https://inventory.internal.example/
-  inventory-public-url: https://inventory.example/manage
+```toml
+control-public = "https://control.example/manage"
+inventory = "https://inventory.internal.example/"
 ```
 
 The CA advertises configured capability independently of backend health. Clients

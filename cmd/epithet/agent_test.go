@@ -50,7 +50,7 @@ func TestGenerateSSHConfigIsTagGated(t *testing.T) {
 	s := string(out)
 	require.Contains(t, s, "Match tagged epithet-work\n    IdentityAgent /run/agent/%C")
 	require.Contains(t, s, `Match final tagged epithet-work exec`)
-	require.Contains(t, s, "--broker '/run/broker.sock'")
+	require.Contains(t, s, "--broker-socket '/run/broker.sock'")
 	require.Less(t, strings.Index(s, "Match tagged epithet-work\n"), strings.Index(s, "Match final tagged epithet-work exec"),
 		"IdentityAgent selection must precede the final broker invocation")
 }
@@ -108,7 +108,7 @@ func TestAgentControlCommandsResolveBrokerFromProfileWithoutCAURL(t *testing.T) 
 // TestAcquireProfileLockPreventsConcurrentAgents exercises the flock guard
 // the same way AgentStartCLI.Run does: acquire once (as the first agent
 // process would), then attempt a second acquisition against the same rundir
-// (as a concurrent second process for the same --name would) and confirm it
+// (as a concurrent second process for the same --agent-name would) and confirm it
 // fails with a clear, actionable error instead of silently succeeding and
 // stealing the socket out from under the first process.
 func TestAcquireProfileLockPreventsConcurrentAgents(t *testing.T) {
@@ -120,7 +120,7 @@ func TestAcquireProfileLockPreventsConcurrentAgents(t *testing.T) {
 
 	_, err = acquireProfileLock(dir, "work")
 	require.Error(t, err)
-	require.EqualError(t, err, `profile "work" is already running (use --name to run a second profile)`)
+	require.EqualError(t, err, `profile "work" is already running (use --agent-name to run a second profile)`)
 }
 
 func TestCheckSSHConfigIncludeOrdering(t *testing.T) {

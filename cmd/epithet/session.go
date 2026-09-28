@@ -14,7 +14,7 @@ import (
 )
 
 type AgentLoginCLI struct {
-	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b"`
+	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b" name:"broker-socket"`
 }
 
 func (c *AgentLoginCLI) Run(parent *AgentCLI) error {
@@ -38,7 +38,7 @@ func (c *AgentLoginCLI) run(ctx context.Context, socket string, out, progress io
 }
 
 type AgentLogoutCLI struct {
-	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b"`
+	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b" name:"broker-socket"`
 }
 
 func (c *AgentLogoutCLI) Run(parent *AgentCLI) error {

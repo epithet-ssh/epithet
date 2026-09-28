@@ -11,36 +11,31 @@ enrollment. Backends own persistence, mutation invariants, and audit.
 Provision two distinct signing keys, configured below. Control's key is persistent;
 the launcher never generates credentials automatically.
 
-```yaml
-server:
-  ca-key: /etc/epithet/ca.key
-  control-key: /etc/epithet/control.key
-  listen: '127.0.0.1:8080'
-ca:
-  policy-file: /etc/epithet/policy.writ
-  oidc:
-    issuer: https://identity.example.com
-    client-id: epithet
-    identity-mode: stable-id
-directory:
-  source: static
-  static: [/etc/epithet/directory-and-hosts.yaml]
-inventory:
-  static: [/etc/epithet/directory-and-hosts.yaml]
-  principal-mode: account-name
-control:
-  directory-admin-group: [directory-operators]
-  inventory-admin-group: [host-operators]
+```toml
+ca-key-file = "/etc/epithet/ca.key"
+control-key-file = "/etc/epithet/control.key"
+directory-admin-group = ["directory-operators"]
+directory-mode = "static"
+directory-static-file = ["/etc/epithet/directory-and-hosts.yaml"]
+inventory-admin-group = ["host-operators"]
+inventory-static-file = ["/etc/epithet/directory-and-hosts.yaml"]
+listen = "127.0.0.1:8080"
+oidc-client-id = "epithet"
+oidc-identity-mode = "stable-id"
+oidc-issuer = "https://identity.example.com"
+policy-file = "/etc/epithet/policy.writ"
+principal-mode = "account-name"
 ```
 
-Run `epithet --config server.yaml server`. It supervises a router plus four
+Run `epithet --config server.toml server`. It supervises a router plus four
 separate processes: CA, control, directory, and inventory. Each service has a
-private Unix socket; the router owns `server.listen`. The launcher supplies public
+private Unix socket; the router owns `listen`. The launcher supplies public
 keys and socket addresses, and copies CA's OIDC settings to control. Static users
 and hosts can share a file; each fact service reads its own records. The optional
-`server.inventory` override supplies static paths to both services.
+`directory-static-file` and `inventory-static-file` overrides supply
+paths to their respective services. To share a file, supply it to both options.
 
-With `inventory-source: managed` (the default), `inventory.static` is optional;
+With `inventory-mode = "enrollment"` (the default), `inventory-static-file` is optional;
 omit it when all hosts are managed. Static mode still requires inventory files,
 and configured static paths must match files.
 
@@ -69,7 +64,7 @@ epithet directory users list --json
 ```
 
 These commands use the existing agent session and require an active user with an
-`control.directory-admin-user` or `control.directory-admin-group` grant. They list the selected
+`directory-admin-user` or `directory-admin-group` grant. They list the selected
 user directory, independently of host inventory mode. In SCIM mode, static users
 are not included. Static-only deployments can configure either administrator grant
 to enable inspection without enabling managed host storage.
@@ -118,24 +113,25 @@ Run `epithet ca`, `epithet control`, `epithet directory`, and `epithet inventory
 under your supervisor. TCP listeners accept HTTP behind TLS termination; each also
 accepts `unix:///path/to/socket`. The combined launcher is optional.
 
-- CA: configure `key`, `policy-file`, `directory`, `inventory`, `oidc`, and the
-  client-accessible `control-public-url` (normally an HTTPS URL ending `/manage`).
-- Control: configure its distinct `key`, `oidc`, `directory` fact-service root,
+- CA: configure `ca-key-file`, `policy-file`, `directory`, `inventory`, `oidc-*`, and the
+  client-accessible `control-public` (normally an HTTPS URL ending `/manage`).
+- Control: configure its distinct `control-key-file`, `oidc-*`, `directory` fact-service root,
   role grants, and optional `directory-backend` / `inventory-backend` roots.
   Only built-in providers need these administrative backend URLs.
-- Directory: configure `source`, `static` or `state-dir`, `ca-pubkey`, and
-  `control-pubkey` if control needs access.
-- Inventory: configure `static`, `inventory-source`, `state-dir`, `ca-pubkey`,
-  and `control-pubkey` for administration.
+- Directory: configure `directory-mode`, `directory-static-file` or `state-dir`,
+  `ca-public-key`, and `control-public-key` if control needs access.
+- Inventory: configure `inventory-static-file`, `inventory-mode`, `state-dir`,
+  `ca-public-key`, and `control-public-key` for administration.
 
 Use the same issuer, client ID, and identity mapping on CA and control. Public
 keys can be SSH literals, files, or URLs. Fact-service root URLs may include a
 path prefix; the client appends `/lookup` and signs the complete query. Keep
-private services off the public management route. For an optional standalone
-router, use `--ca unix:///path/ca.sock --control unix:///path/control.sock`.
+private services off the public management route. The combined `server` launcher
+supplies private router endpoints internally; separately deployed services use
+the deployment's reverse proxy.
 
 For example, a bespoke directory plus built-in inventory requires only the
-custom directory's lookup API; omit `control.directory-backend`. The control
+custom directory's lookup API; omit `directory-backend`. The control
 service then authorizes inventory administrators through directory facts.
 See the [fact provider contract](fact-services.md).
 
@@ -150,22 +146,22 @@ control endpoint.
 
 Upgrade the services and clients together for this pre-1.0 refactor:
 
-- Move `policy.policy-file`, `default-expiration`, and `extension` to `ca`.
-- Move `inventory.oidc` to `ca.oidc`; separately deployed control needs matching
-  `control.oidc`. Environment names are now `EPITHET_OIDC_IDENTITY_MODE` and
-  `EPITHET_OIDC_USER_ID_CLAIM`.
-- Move `inventory.directory-source` to `directory.source`. Configure directory's
-  static paths and state root separately. Existing SQLite storage stays at
-  `<state-dir>/directory/directory.db`.
-- Move SCIM credentials to `control.scim-token` or `control.scim-token-file`.
-- Replace the old shared admin grants with explicit `control.directory-admin-*`
-  and `control.inventory-admin-*` grants.
-- Configure a persistent distinct control key. Replace `ca.inventory-public-url`
-  with `ca.control-public-url`, and router `inventory` with `control`.
-- Replace the old combined resolution RPC with the two GET lookup APIs. Providers
-  no longer receive OIDC tokens or provide login discovery.
+- Service configuration is flat TOML, using exact long flag names as keys.
+  Lists use arrays. Static user and host data remain YAML.
+- CA uses `policy-file`, `certificate-default-ttl`, and `certificate-extension`.
+- Configure `oidc-issuer`, `oidc-client-id`, and the identity settings on CA and
+  separately deployed control. Existing environment names remain
+  `EPITHET_OIDC_IDENTITY_MODE` and `EPITHET_OIDC_USER_ID_CLAIM`.
+- Select `directory-mode` and `inventory-mode` independently. SQLite storage
+  stays at `<state-dir>/directory/directory.db`.
+- Control uses `scim-token` or `scim-token-file`, plus explicit
+  `directory-admin-*` and `inventory-admin-*` grants.
+- Configure distinct persistent `ca-key-file` and `control-key-file` values.
+  CA advertises management through `control-public`.
+- Fact providers expose the two GET lookup APIs; they receive neither OIDC
+  tokens nor responsibility for login discovery.
 
-Existing host records remain at `<inventory.state-dir>/inventory/records/`.
+Existing host records remain at `<state-dir>/inventory/records/`.
 New enrollment tokens create empty pending host records. Older token-only records
 are not accepted by the new loader; outstanding token records must be replaced
 when upgrading. There is no automatic storage migration. Active host records and

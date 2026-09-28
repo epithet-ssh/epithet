@@ -13,12 +13,14 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
-// RouterCLI is a plain HTTP reverse proxy. TLS termination belongs to the
-// deployment's front end (for example Caddy); authentication stays in services.
+// RouterCLI is an internal subprocess interface used by ServerCLI to run a
+// plain HTTP reverse proxy. Its command and flags are hidden from help.
+// TLS termination belongs to the deployment's front end (for example Caddy);
+// authentication stays in services.
 type RouterCLI struct {
-	Listen  string `help:"HTTP address to listen on" short:"l" default:"127.0.0.1:8080"`
-	CA      string `help:"Private CA Unix socket URL" name:"ca" required:"true"`
-	Control string `help:"Private control Unix socket URL (enables /inventory and SCIM)" name:"control"`
+	Listen  string `hidden:"" help:"HTTP address to listen on" short:"l" default:"127.0.0.1:8080"`
+	CA      string `hidden:"" placeholder:"URL" help:"Private CA Unix socket URL" name:"ca-backend" required:"true"`
+	Control string `hidden:"" placeholder:"URL" help:"Private control Unix socket URL (enables /inventory and SCIM)" name:"control-backend"`
 }
 
 func (c *RouterCLI) Run(logger *slog.Logger) error {

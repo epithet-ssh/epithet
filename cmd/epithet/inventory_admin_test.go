@@ -55,27 +55,27 @@ func TestInventoryCheckValidatesConfiguredManagedFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(records, 0700))
 	item := filepath.Join(records, strings.Repeat("a", 64)+".yaml")
 	require.NoError(t, os.WriteFile(item, []byte("version: 99\n"), 0600))
-	command := InventoryCLI{Check: true, StateDir: state, InventorySource: "managed"}
+	command := InventoryCLI{Check: true, StateDir: state, InventoryMode: "enrollment"}
 	err := command.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{})
 	require.ErrorContains(t, err, "unsupported item version")
 	require.NoError(t, os.Remove(item))
 	require.NoError(t, command.runServer(slog.New(slog.DiscardHandler), tlsconfig.Config{}))
 }
 
-func TestInventoryStaticFilesOptionalOnlyInManagedMode(t *testing.T) {
+func TestInventoryStaticFilesOptionalOnlyInEnrollmentMode(t *testing.T) {
 	for _, tc := range []struct {
-		name, source, pattern string
-		wantError             bool
+		name, mode, pattern string
+		wantError           bool
 	}{
-		{name: "managed without static", source: "managed"},
+		{name: "enrollment without static", mode: "enrollment"},
 		{name: "default without static"},
-		{name: "static requires files", source: "static", wantError: true},
-		{name: "managed missing file", source: "managed", pattern: "missing.yaml", wantError: true},
-		{name: "managed unmatched glob", source: "managed", pattern: "*.yaml", wantError: true},
+		{name: "static requires files", mode: "static", wantError: true},
+		{name: "enrollment missing file", mode: "enrollment", pattern: "missing.yaml", wantError: true},
+		{name: "enrollment unmatched glob", mode: "enrollment", pattern: "*.yaml", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := t.TempDir()
-			command := InventoryCLI{Check: true, StateDir: state, InventorySource: tc.source}
+			command := InventoryCLI{Check: true, StateDir: state, InventoryMode: tc.mode}
 			if tc.pattern != "" {
 				command.Static = []string{filepath.Join(state, tc.pattern)}
 			}

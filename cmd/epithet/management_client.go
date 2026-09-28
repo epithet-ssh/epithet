@@ -12,8 +12,6 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
@@ -23,8 +21,8 @@ import (
 // host inventory and directory administration.
 type ManagementCLI struct {
 	logger *slog.Logger
-	Name   string `help:"Agent profile for administrative commands (defaults to configured agent.name)"`
-	Broker string `help:"Agent broker socket override for administrative commands"`
+	Name   string `help:"Agent profile for administrative commands" name:"agent-name" default:"default"`
+	Broker string `help:"Agent broker socket override for administrative commands" name:"broker-socket"`
 }
 
 func (c *ManagementCLI) request(req inventoryapi.ControlRequest) (*broker.InventoryResponse, error) {
@@ -36,7 +34,7 @@ func (c *ManagementCLI) request(req inventoryapi.ControlRequest) (*broker.Invent
 	started := time.Now()
 	defer func() { logger.Debug("inventory agent request ended", "elapsed", time.Since(started)) }()
 	logger.Debug("resolving inventory agent socket")
-	socket, err := c.resolveSocket(configFilePaths())
+	socket, err := resolveAgentBrokerSocket(&AgentCLI{Name: c.Name}, c.Broker)
 	if err != nil {
 		return nil, err
 	}
@@ -85,25 +83,4 @@ func (c *ManagementCLI) request(req inventoryapi.ControlRequest) (*broker.Invent
 		return nil, scanner.Err()
 	}
 	return nil, fmt.Errorf("agent closed without an inventory response")
-}
-
-// resolveSocket applies management overrides first, then the configured agent
-// profile. Kong loads only the selected command's configuration, so agent.name
-// must be read through the agent command model rather than the management model.
-// Parsing never starts an agent or performs authentication.
-func (c *ManagementCLI) resolveSocket(configPaths []string) (string, error) {
-	if c.Broker != "" || c.Name != "" {
-		return resolveAgentBrokerSocket(&AgentCLI{Name: c.Name}, c.Broker)
-	}
-	var root struct {
-		Agent AgentCLI `cmd:"agent"`
-	}
-	parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, configPaths...))
-	if err != nil {
-		return "", err
-	}
-	if _, err = parser.Parse([]string{"agent"}); err != nil {
-		return "", fmt.Errorf("loading agent profile configuration: %w", err)
-	}
-	return resolveAgentBrokerSocket(&root.Agent, "")
 }

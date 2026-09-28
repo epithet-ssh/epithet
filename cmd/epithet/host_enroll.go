@@ -21,12 +21,12 @@ import (
 type HostEnrollCLI struct {
 	Token     string   `name:"token" help:"Single-use enrollment token"`
 	TokenFile string   `name:"token-file" help:"File containing a single-use enrollment token"`
-	Names     []string `name:"name" help:"Proposed DNS name (repeatable; overrides detection)"`
+	Names     []string `name:"host-name" help:"Proposed DNS name (repeatable; overrides detection)"`
 
-	CAURL                           string   `name:"ca-url" help:"CA bootstrap URL" required:""`
+	CAURL                           string   `name:"ca" placeholder:"URL" help:"CA bootstrap URL" required:""`
 	PrincipalDomain                 string   `name:"principal-domain" help:"Proposed principal domain (default: reuse the local domain file's value or generate one)"`
-	DomainFile                      string   `name:"domain-file" help:"Principal-domain file (default: native system state directory)"`
-	CAPubkeyFile                    string   `name:"ca-pubkey-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
+	DomainFile                      string   `name:"principal-domain-file" help:"Principal-domain file (default: native system state directory)"`
+	CAPubkeyFile                    string   `name:"ca-public-key-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
 	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
 	SSHDConfigFile                  string   `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
 	SSHDFragmentFile                string   `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
@@ -126,7 +126,7 @@ func (c *HostEnrollCLI) prepareEnrollment(ctx context.Context, logger *slog.Logg
 func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config) (*hostEnrollment, error) {
 	endpoint, err := caclient.ParseCAURL(c.CAURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ca-url: %w", err)
+		return nil, fmt.Errorf("invalid --ca URL: %w", err)
 	}
 	if err := tlsCfg.ValidateURL(endpoint.URL); err != nil {
 		return nil, err

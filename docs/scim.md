@@ -17,30 +17,23 @@ implements the SCIM storage contract in `pkg/directory/sqlitestore`.
 
 Add these settings to a combined-server configuration:
 
-```yaml
-directory:
-  source: scim
-  # state-dir: /custom/state
-control:
-  scim-token: REPLACE_WITH_YOUR_PROVISIONING_TOKEN
-  # Alternatively: scim-token-file: /etc/epithet/scim.token
-  directory-admin-user: [YOUR_POCKET_ID_USER_ID]
-inventory:
-  static: [/etc/epithet/hosts.yaml]
-ca:
-  policy-file: /etc/epithet/policy.writ
-  oidc:
-    issuer: https://identity.example.com
-    client-id: YOUR_EPITHET_OIDC_CLIENT_ID
-    identity-mode: stable-id
+```toml
+directory-admin-user = ["YOUR_POCKET_ID_USER_ID"]
+directory-mode = "scim"
+inventory-static-file = ["/etc/epithet/hosts.yaml"]
+oidc-client-id = "YOUR_EPITHET_OIDC_CLIENT_ID"
+oidc-identity-mode = "stable-id"
+oidc-issuer = "https://identity.example.com"
+policy-file = "/etc/epithet/policy.writ"
+scim-token = "REPLACE_WITH_YOUR_PROVISIONING_TOKEN"
 ```
 
-Keep `server.ca-key` and configure a distinct persistent `server.control-key`.
-Supply the random provisioning bearer literally as `control.scim-token` or in
-`control.scim-token-file`; using both is an error. Control reads it at startup;
+Keep `ca-key-file` and configure a distinct persistent `control-key-file`.
+Supply the random provisioning bearer literally as `scim-token` or in
+`scim-token-file`; using both is an error. Control reads it at startup;
 change it and restart control to rotate it, then update Pocket ID. Omit both to
 disable the public SCIM endpoint. Human directory administration remains separate.
-See the [annotated configuration](../examples/inventory-scim.example.yaml).
+See the [annotated configuration](../examples/inventory-scim.example.toml).
 
 Configure Pocket ID's SCIM provider for the Epithet OIDC client with endpoint
 `https://ca.example.com/scim/v2` and that bearer secret. The combined router forwards
@@ -48,20 +41,20 @@ Configure Pocket ID's SCIM provider for the Epithet OIDC client with endpoint
 Control validates the random bearer and signs requests to the private directory
 backend. Backend audit continues to attribute provisioning to `scim`. Its human
 management endpoint is `/manage`, advertised by standalone CA using
-`ca.control-public-url`.
+`control-public`.
 
-At least one static inventory file is still required for host/domain configuration;
-it may contain `hosts: []`. In SCIM mode, static user records are ignored. Configure
+Static inventory files are optional in enrollment mode. In SCIM mode, static
+user records are ignored. Configure
 an administrator's provider ID, let Pocket ID provision that user, and authenticate
 normally with the Epithet agent before running management commands. Alternatively,
-`control.directory-admin-group` grants administration through a bound policy group name.
+`directory-admin-group` grants administration through a bound policy group name.
 The administrator must exist and be active in the selected directory.
 
-The service does not use an agent profile or socket. The `agent.name` setting
+The service does not use an agent profile or socket. The `agent-name` setting
 below concerns commands run on an administrator's client machine only.
 
-`directory.state-dir` selects the SCIM storage root, with `directory/directory.db`
-underneath it. `inventory.state-dir` independently selects the host storage root.
+`state-dir` selects a shared root: SCIM uses `directory/directory.db` and host
+inventory uses `inventory/`. Separate service config files can select different roots.
 The root defaults to Epithet's native system state directory:
 
 | Platform | System state directory |
@@ -72,8 +65,8 @@ The root defaults to Epithet's native system state directory:
 | Solaris, illumos, AIX | `/var/opt/epithet` |
 | Windows | `%ProgramData%\Epithet` |
 
-Managed host enrollment is enabled by default (`inventory.inventory-source: managed`),
-alongside static host records. Select `inventory-source: static` for static hosts
+Managed host enrollment is enabled by default (`inventory-mode = "enrollment"`),
+alongside static host records. Select `inventory-mode = "static"` for static hosts
 only; SCIM user provisioning remains independent. Storage path settings only
 override locations. The service user needs write access to the enabled stores
 under their respective state roots; static sources do not open their managed stores.
@@ -82,7 +75,7 @@ For configurations from before the shared storage root, change a state path such
 as `/var/db/epithet/inventory` to `/var/db/epithet` so existing host records stay in
 the `inventory/` subdirectory. No files are moved automatically.
 
-`epithet --config server.yaml directory --check` validates configuration and opens
+`epithet --config server.toml directory --check` validates configuration and opens
 (or initializes) the managed directory. The database's parent directory is created
 with mode 0700 and a new database with mode 0600. Keep it on local storage. Back up
 with a SQLite-aware snapshot, or stop directory before copying the database;
@@ -119,12 +112,11 @@ Its synchronization compares modification timestamps; provisioning is asynchrono
 
 Directory administration uses `epithet directory`; `epithet inventory` management
 commands operate on hosts. Both use the same service and agent authentication. Management commands inherit
-`agent.name` from the loaded configuration, falling back to `default`. For example,
-`agent: {name: work}` selects `~/.epithet/run/work/broker.sock` for both commands.
-An explicit management `--name` (or command-scoped `name` setting) overrides that
-profile; `--broker` overrides the socket path. Configuration comes from the usual
-`/etc/epithet/*.{yaml,yml,json}` and `~/.epithet/*.{yaml,yml,json}` files, or the
-explicit `--config` path.
+`agent-name` from the loaded configuration, falling back to `default`. For example,
+`agent-name = "work"` selects `~/.epithet/run/work/broker.sock` for both commands.
+An explicit management `--agent-name` overrides that profile; `--broker-socket` overrides the socket path. Configuration comes from the usual
+`/etc/epithet/*.toml` and `~/.epithet/*.toml` files, with an explicit `--config`
+file layered last.
 
 ## Inspect provisioned users
 
@@ -214,12 +206,12 @@ Writ never accesses SQLite or a provisioning API.
 
 ## Explicit static recovery
 
-To recover through a configuration-owned account, set `directory.source`
+To recover through a configuration-owned account, set `directory-mode`
 to `static`, provide that account in static YAML with its verified provider identity,
 and restart directory. Static mode does not open the managed database and
 disables directory-binding management. Remove control SCIM credentials to disable
 its public provisioning endpoint. Host management still
-operates if `inventory.inventory-source: managed` is selected. OIDC remains required; this does
+operates if `inventory-mode = "enrollment"` is selected. OIDC remains required; this does
 not provide access during an identity-provider outage.
 
 Return to `scim` and restart to use managed identities again. There is never an

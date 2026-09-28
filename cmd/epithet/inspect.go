@@ -23,7 +23,7 @@ import (
 // AgentInspectCLI is a subcommand of AgentCLI that inspects broker state.
 // It inherits Name from the parent AgentCLI.
 type AgentInspectCLI struct {
-	Broker   string              `help:"Broker socket path (overrides config-based discovery)" short:"b"`
+	Broker   string              `help:"Broker socket path (overrides config-based discovery)" short:"b" name:"broker-socket"`
 	JSON     bool                `help:"Output in JSON format" short:"j" xor:"format"`
 	Compact  bool                `help:"Show one line per agent (default without an ID)" xor:"format"`
 	Expanded bool                `help:"Show full details (default with an ID)" xor:"format"`

@@ -21,7 +21,7 @@ func TestHostEnrollCLIModelAllowsPlatformDependentPrincipalModeDefault(t *testin
 	var cmd HostEnrollCLI
 	parser, err := kong.New(&cmd)
 	require.NoError(t, err)
-	_, err = parser.Parse([]string{"--ca-url", "https://ca.example/", "--principal-domain", "fleet"})
+	_, err = parser.Parse([]string{"--ca", "https://ca.example/", "--principal-domain", "fleet"})
 	require.NoError(t, err)
 	require.Equal(t, "fleet", cmd.PrincipalDomain)
 }

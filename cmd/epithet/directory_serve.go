@@ -20,7 +20,7 @@ type DirectoryServeCLI struct{}
 func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	var users directory.Directory
 	var store directory.Store
-	switch c.Source {
+	switch c.Mode {
 	case "", "static":
 		paths, err := config.ExpandGlobs(c.Static)
 		if err != nil {
@@ -47,14 +47,14 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 		defer store.Close()
 		users = store
 	default:
-		return fmt.Errorf("unknown directory source %q", c.Source)
+		return fmt.Errorf("unknown directory-mode %q", c.Mode)
 	}
 	if c.Check {
 		fmt.Println("directory OK")
 		return nil
 	}
 	if c.CAPubkey == "" {
-		return fmt.Errorf("directory.ca-pubkey is required")
+		return fmt.Errorf("--ca-public-key is required")
 	}
 	key, err := resolveCAPubkey(c.CAPubkey, tlsCfg, logger)
 	if err != nil {

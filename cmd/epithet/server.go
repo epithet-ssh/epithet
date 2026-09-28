@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
@@ -26,15 +25,16 @@ import (
 // owns the public listener; each service has its own private Unix socket.
 type ServerCLI struct {
 	Listen     string `help:"Public address to listen on" short:"l" default:":8080"`
-	ControlKey string `help:"Path to configured control signing key" name:"control-key" default:"/etc/epithet/control.key"`
-	CAKey      string `help:"Path to CA private key" name:"ca-key" default:"/etc/epithet/ca.key"`
+	ControlKey string `help:"Path to configured control signing key" name:"control-key-file" default:"/etc/epithet/control.key"`
+	CAKey      string `help:"Path to CA private key" name:"ca-key-file" default:"/etc/epithet/ca.key"`
 
 	// Policy flags threaded through to the CA subprocess. The
 	// subprocess re-runs Kong against the same --config, so these are
 	// only needed when configuring via flags rather than a config file.
-	PolicyFile string            `help:"Path to the writ policy file" name:"policy-file"`
-	Inventory  []string          `help:"Inventory file path or glob (repeatable)" name:"inventory"`
-	Extension  map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"extension"`
+	PolicyFile      string            `help:"Path to the writ policy file" name:"policy-file"`
+	DirectoryStatic []string          `help:"Static directory file path or glob (repeatable)" name:"directory-static-file"`
+	InventoryStatic []string          `help:"Static inventory file path or glob (repeatable)" name:"inventory-static-file"`
+	Extension       map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"certificate-extension"`
 	// Leave unset to inherit inventory configuration (including its default).
 	// Validate in Run so Kong does not require an enum default here.
 	PrincipalMode string `help:"Override inventory principal mode: account-name or epithet-principal-v1 (default: inherit inventory configuration)" name:"principal-mode"`
@@ -89,13 +89,13 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 
 	inventorySock := filepath.Join(tmpDir, "inventory.sock")
 	caSock := filepath.Join(tmpDir, "ca.sock")
-	inventoryArgs := append(c.inventoryArgs(globalArgs, inventorySock, caPubkey), "--control-pubkey", controlPubkey)
-	directoryArgs := append(append([]string{}, globalArgs...), "directory", "--listen", "unix://"+directorySock, "--ca-pubkey", caPubkey, "--control-pubkey", controlPubkey)
-	for _, path := range c.Inventory {
-		directoryArgs = append(directoryArgs, "--static", path)
+	inventoryArgs := append(c.inventoryArgs(globalArgs, inventorySock, caPubkey), "--control-public-key", controlPubkey)
+	directoryArgs := append(append([]string{}, globalArgs...), "directory", "--listen", "unix://"+directorySock, "--ca-public-key", caPubkey, "--control-public-key", controlPubkey)
+	for _, path := range c.DirectoryStatic {
+		directoryArgs = append(directoryArgs, "--directory-static-file", path)
 	}
 	caArgs := c.caArgs(globalArgs, caSock, directorySock, inventorySock, true)
-	controlArgs := append(append([]string{}, globalArgs...), "control", "--listen", "unix://"+controlSock, "--key", c.ControlKey, "--directory", "unix://"+directorySock, "--directory-backend", "unix://"+directorySock, "--inventory-backend", "unix://"+inventorySock)
+	controlArgs := append(append([]string{}, globalArgs...), "control", "--listen", "unix://"+controlSock, "--control-key-file", c.ControlKey, "--directory", "unix://"+directorySock, "--directory-backend", "unix://"+directorySock, "--inventory-backend", "unix://"+inventorySock)
 	auth, err := caChildOIDC(caArgs)
 	if err != nil {
 		return err
@@ -166,12 +166,12 @@ func (c *ServerCLI) caArgs(globalArgs []string, caSock, directorySock, inventory
 	if management {
 		publicURL = "inventory"
 	}
-	args := append(append([]string{}, globalArgs...), "ca", "--listen", "unix://"+caSock, "--directory", "unix://"+directorySock, "--inventory", "unix://"+inventorySock, "--key", c.CAKey, "--control-public-url", publicURL)
+	args := append(append([]string{}, globalArgs...), "ca", "--listen", "unix://"+caSock, "--directory", "unix://"+directorySock, "--inventory", "unix://"+inventorySock, "--ca-key-file", c.CAKey, "--control-public", publicURL)
 	if c.PolicyFile != "" {
 		args = append(args, "--policy-file", c.PolicyFile)
 	}
 	for name, value := range c.Extension {
-		args = append(args, "--extension", name+"="+value)
+		args = append(args, "--certificate-extension", name+"="+value)
 	}
 	return args
 }
@@ -182,13 +182,13 @@ func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string
 		endpoint = "unix://" + inventorySock
 	}
 	return append(append([]string{}, globalArgs...), "router", "--listen", c.Listen,
-		"--ca", "unix://"+caSock, "--control", endpoint)
+		"--ca-backend", "unix://"+caSock, "--control-backend", endpoint)
 }
 
 func (c *ServerCLI) inventoryArgs(globalArgs []string, socket, key string) []string {
-	args := append(append([]string{}, globalArgs...), "inventory", "--listen", "unix://"+socket, "--ca-pubkey", key)
-	for _, path := range c.Inventory {
-		args = append(args, "--static", path)
+	args := append(append([]string{}, globalArgs...), "inventory", "--listen", "unix://"+socket, "--ca-public-key", key)
+	for _, path := range c.InventoryStatic {
+		args = append(args, "--inventory-static-file", path)
 	}
 	if c.PrincipalMode != "" {
 		args = append(args, "--principal-mode", c.PrincipalMode)
@@ -209,7 +209,7 @@ func buildGlobalArgs() []string {
 		args = append(args, "--insecure")
 	}
 	if cli.TLSCACert != "" {
-		args = append(args, "--tls-ca-cert", cli.TLSCACert)
+		args = append(args, "--tls-ca-cert-file", cli.TLSCACert)
 	}
 	if cli.LogFile != "" {
 		args = append(args, "--log-file", cli.LogFile)
@@ -247,10 +247,10 @@ func caChildOIDC(args []string) (ServiceOIDCConfig, error) {
 		Verbose   int             `short:"v" type:"counter"`
 		LogFile   string          `name:"log-file"`
 		Insecure  bool
-		TLSCACert string `name:"tls-ca-cert"`
+		TLSCACert string `name:"tls-ca-cert-file"`
 		CA        CACLI  `cmd:"ca"`
 	}
-	parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, configFilePaths()...))
+	parser, err := kong.New(&root, kong.Configuration(loadCLIConfig, defaultConfigFiles()...))
 	if err != nil {
 		return ServiceOIDCConfig{}, err
 	}

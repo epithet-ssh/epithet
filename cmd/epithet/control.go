@@ -15,10 +15,10 @@ import (
 
 type ControlCLI struct {
 	Listen               string            `help:"Control listener" default:"127.0.0.1:9996"`
-	Key                  string            `help:"Configured control signing key" default:"/etc/epithet/control.key"`
-	Directory            string            `help:"Directory fact service URL" required:"true"`
-	DirectoryBackend     string            `help:"Built-in directory administration service URL" name:"directory-backend"`
-	InventoryBackend     string            `help:"Built-in inventory administration service URL" name:"inventory-backend"`
+	Key                  string            `help:"Configured control signing key" default:"/etc/epithet/control.key" name:"control-key-file"`
+	Directory            string            `placeholder:"URL" help:"Directory fact service URL" required:"true" name:"directory"`
+	DirectoryBackend     string            `placeholder:"URL" help:"Built-in directory administration service URL" name:"directory-backend"`
+	InventoryBackend     string            `placeholder:"URL" help:"Built-in inventory administration service URL" name:"inventory-backend"`
 	OIDC                 ServiceOIDCConfig `embed:"" prefix:"oidc-"`
 	DirectoryAdminUsers  []string          `help:"Directory administrator user IDs" name:"directory-admin-user"`
 	DirectoryAdminGroups []string          `help:"Directory administrator groups" name:"directory-admin-group"`

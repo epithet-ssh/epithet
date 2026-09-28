@@ -26,24 +26,20 @@ Follow the [OIDC Setup Guide](../../docs/oidc-setup.md#google-workspace--google-
 ### 2. Configure the CA
 
 OIDC configuration lives on the **CA**, not the client. Point it
-at Google in `~/.epithet/policy.yaml`:
+at Google in `~/.epithet/server.toml`:
 
-```yaml
-ca:
-  oidc:
-    issuer: "https://accounts.google.com"
-    client-id: "YOUR_CLIENT_ID.apps.googleusercontent.com"
-    # client-secret: "YOUR_CLIENT_SECRET"   # only for Desktop apps
+```toml
+oidc-client-id = "YOUR_CLIENT_ID.apps.googleusercontent.com"
+oidc-issuer = "https://accounts.google.com"
 ```
 
 ### 3. Configure the client
 
-Create `~/.epithet/config.yaml` on each client:
+Create `~/.epithet/config.toml` on each client:
 
-```yaml
-agent:
-  ca-url: https://ca.corp.example.com
-  name: default
+```toml
+agent-name = "default"
+ca = ["https://ca.corp.example.com"]
 ```
 
 The agent discovers the issuer and client ID from the CA's Link header at
@@ -87,8 +83,8 @@ Run separate named profiles for different purposes (work vs personal,
 different CAs). Each profile gets its own rundir, socket, and ssh Tag:
 
 ```bash
-epithet agent --name work --ca-url https://work-ca.example.com
-epithet agent --name personal --ca-url https://personal-ca.example.com
+epithet agent --agent-name work --ca https://work-ca.example.com
+epithet agent --agent-name personal --ca https://personal-ca.example.com
 ```
 
 Tag hosts for each profile in `~/.ssh/config`:

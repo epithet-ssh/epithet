@@ -1,13 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 
+	"github.com/BurntSushi/toml"
 	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/lmittmann/tint"
@@ -21,12 +23,8 @@ var (
 
 // defaultConfigPatterns defines where to look for config files.
 var defaultConfigPatterns = []string{
-	"/etc/epithet/*.yaml",
-	"/etc/epithet/*.yml",
-	"/etc/epithet/*.json",
-	"~/.epithet/*.yaml",
-	"~/.epithet/*.yml",
-	"~/.epithet/*.json",
+	"/etc/epithet/*.toml",
+	"~/.epithet/*.toml",
 }
 
 var cli struct {
@@ -37,7 +35,7 @@ var cli struct {
 
 	// TLS configuration flags (global)
 	Insecure  bool   `help:"Disable TLS certificate verification (NOT RECOMMENDED)" env:"EPITHET_INSECURE"`
-	TLSCACert string `name:"tls-ca-cert" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
+	TLSCACert string `name:"tls-ca-cert-file" help:"Path to PEM file with trusted CA certificates" env:"EPITHET_TLS_CA_CERT"`
 
 	Agent     AgentCLI     `cmd:"agent" aliases:"a,ag" help:"Start the epithet agent (or use 'agent inspect' to inspect state)"`
 	Match     MatchCLI     `cmd:"match" help:"Invoked during ssh invocation in a 'Match final tagged ... exec ...'"`
@@ -47,18 +45,18 @@ var cli struct {
 	Inventory InventoryCLI `cmd:"inventory" aliases:"i,inv" help:"Serve inventory services or administer host inventory"`
 	Directory DirectoryCLI `cmd:"directory" help:"Inspect directory users and manage group policy bindings"`
 	Policy    PolicyCLI    `cmd:"policy" help:"Validate Writ policy"`
-	Router    RouterCLI    `cmd:"router" help:"Proxy HTTP to private CA and control Unix sockets"`
+	Router    RouterCLI    `cmd:"router" hidden:"" help:"Internal HTTP router for server"`
 	Server    ServerCLI    `cmd:"server" help:"Supervise router, CA, control, directory, and inventory services"`
 }
 
 func main() {
 	// Expand config globs to find existing config files.
-	configPaths, _ := config.ExpandGlobs(defaultConfigPatterns)
+	configPaths := defaultConfigFiles()
 
 	ktx := kong.Parse(&cli,
 		kong.Vars{"version": version + " (" + commit + ", " + date + ")"},
 		kong.ShortUsageOnError(),
-		kong.Configuration(kongyaml.Loader, configPaths...),
+		kong.Configuration(loadCLIConfig, configPaths...),
 	)
 	logger := setupLogger()
 	cli.Inventory.logger = logger
@@ -76,13 +74,39 @@ func main() {
 	ktx.FatalIfErrorf(err)
 }
 
-// configFilePaths returns the config file paths to search.
-// If --config was specified, returns just that path.
-// Otherwise expands the default glob patterns.
-func configFilePaths() []string {
-	if cli.Config != "" {
-		return []string{string(cli.Config)}
+// loadCLIConfig decodes flat TOML defaults keyed by exact long flag name.
+// Kong owns flag types and command selection; this loader has no command schema.
+// SSH's match inputs are CLI-only, while its global flags remain configurable.
+func loadCLIConfig(r io.Reader) (kong.Resolver, error) {
+	values := map[string]any{}
+	if _, err := toml.NewDecoder(r).Decode(&values); err != nil {
+		return nil, err
 	}
+	return kong.ResolverFunc(func(_ *kong.Context, parent *kong.Path, flag *kong.Flag) (any, error) {
+		if parent.Command != nil && parent.Command.Name == "match" {
+			return nil, nil
+		}
+		value, ok := values[flag.Name]
+		if !ok {
+			return nil, nil
+		}
+		if flag.IsSlice() {
+			if _, ok := value.([]any); !ok {
+				return nil, fmt.Errorf("config key %q requires an array", flag.Name)
+			}
+		}
+		// TOML integers are int64; Kong's counter mapper expects textual input
+		// or a native int. Preserve the full value and let Kong check its range.
+		if n, ok := value.(int64); ok {
+			return strconv.FormatInt(n, 10), nil
+		}
+		return value, nil
+	}), nil
+}
+
+// defaultConfigFiles keeps normal parsing and the launcher's child reparse on
+// the same file order. Kong adds an explicit --config file as the last resolver.
+func defaultConfigFiles() []string {
 	paths, _ := config.ExpandGlobs(defaultConfigPatterns)
 	return paths
 }

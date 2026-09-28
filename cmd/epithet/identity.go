@@ -21,7 +21,7 @@ import (
 
 // AgentIdentityCLI authenticates the running agent and reports its identity.
 type AgentIdentityCLI struct {
-	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b"`
+	Broker string `help:"Broker socket path (overrides profile discovery)" short:"b" name:"broker-socket"`
 	JSON   bool   `help:"Output in JSON format instead of tab-delimited fields" short:"j"`
 }
 

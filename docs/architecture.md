@@ -88,28 +88,29 @@ Certificates are never cached or reused across connections — every mint past t
 
 ## Command structure
 
-The `epithet` binary uses `alecthomas/kong` for command-line parsing with YAML config file support via `kong-yaml`. Config files use YAML or JSON format under `/etc/epithet/` or `~/.epithet/`.
+The `epithet` binary uses `alecthomas/kong` for command-line parsing. A flat TOML loader supplies defaults by exact long flag name. Default files are `/etc/epithet/*.toml` and `~/.epithet/*.toml`.
 
 ### epithet match
 
 ```
-epithet match --host %h --port %p --user %r --hash %C [--jump %j] --broker <path>
+epithet match --host %h --port %p --user %r --hash %C [--jump %j] --broker-socket <path>
 ```
 
 - Invoked by OpenSSH `Match final tagged <tag> exec` during connection establishment (the generated per-profile config supplies the tag and broker path). The final pass ensures `%h` and `%C` reflect OpenSSH hostname canonicalization before Epithet requests a certificate.
+- Its six connection flags are CLI-only: configuration files are ignored for these values and no environment bindings are provided. Required flags must be supplied explicitly; omitted `--jump` stays empty. Global settings such as logging remain configurable.
 - Sends one JSON request line to the broker's unix socket and reads streamed events back
 - Returns success/failure to OpenSSH to control whether connection proceeds
 
 ### epithet agent
 
 ```
-epithet agent --ca-url <url> [--name <profile>] [--config <file>]
+epithet agent --ca <url> [--agent-name <profile>] [--config <file>]
 ```
 
 - Starts the broker daemon, listening on `~/.epithet/run/<name>/broker.sock`
-- `--ca-url`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
-- `--name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
-- `agent identity`, `agent login`, `agent logout`, `agent inspect`, and `agent kill` locate the running broker from this profile name; `--broker` overrides the derived socket path.
+- `--ca`: CA URL(s), repeatable for multi-CA failover. Optionally prefix with `priority=N:`; plain URLs default to priority 100. Higher-priority CAs are tried first; circuit breakers skip failed CAs.
+- `--agent-name`: profile name (default `default`); names the rundir and the ssh `Tag epithet-<name>` (the default profile uses the bare `Tag epithet`). A flock on the rundir prevents two agent processes from sharing the same profile.
+- `agent identity`, `agent login`, `agent logout`, `agent inspect`, and `agent kill` locate the running broker from this profile name; `--broker-socket` overrides the derived socket path.
 - Fetches OIDC issuer/client ID from the CA's auth config once at startup (discovered via Link header on `GET /`) — no local auth configuration
 - Auto-generates the SSH config file at `~/.epithet/run/<name>/ssh-config.conf`. A plain `Match tagged` block selects the per-connection `IdentityAgent` on whichever pass first supplies the tag; a separate `Match final tagged` block invokes Epithet after hostname canonicalization. `%C` is expanded from the final connection in both places.
 - Maintains, under a mutex: the map of connection hash → per-connection agent instance, and one in-memory OIDC refresh token
@@ -120,7 +121,7 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 
 ### Server commands
 
-- `epithet ca --directory URL --inventory URL --policy-file policy.writ --key KEY`
+- `epithet ca --directory URL --inventory URL --policy-file policy.writ --ca-key-file KEY`
   authenticates users, fetches facts, evaluates Writ locally, and signs certificates.
   `GET /` advertises auth discovery and control; `GET /discovery` serves local
   login configuration; `POST /` issues a certificate.
@@ -129,9 +130,11 @@ epithet agent --ca-url <url> [--name <profile>] [--config <file>]
 - `epithet directory` serves user facts from static files or SCIM storage.
 - `epithet inventory` serves host facts and owns enrollment storage.
 - `epithet policy --check --policy-file policy.writ` validates policy offline.
-- `epithet server --ca-key KEY --control-key KEY` supervises CA, control,
+- `epithet server --ca-key-file KEY --control-key-file KEY` supervises CA, control,
   directory, inventory, and a public router. All four services use private Unix
   sockets. Shared lifecycle is a deployment choice, not a shared process.
+  The `router` command and its flags are hidden implementation details of
+  `server`, which supplies their values when launching the subprocess.
 
 See [deployment configuration](inventory.md) and [fact provider APIs](fact-services.md).
 
@@ -289,4 +292,66 @@ Include ~/.epithet/run/*/ssh-config.conf
 
 `Tag`/`Match tagged` requires OpenSSH 9.4+ (macOS Sequoia and Ubuntu 24.04 both qualify).
 
-Config files use YAML or JSON in `~/.epithet/`. Use `kebab-case` in config keys to match CLI flag names (e.g., `ca-pubkey` maps to `--ca-pubkey`). See `examples/` for complete examples.
+Config files use flat TOML with exact long flag names as top-level keys, without
+command sections. Kong selects the command, looks up each flag's default, and
+converts it to the flag's declared type. Keys that the selected command does not
+look up have no effect. The loader does not maintain a separate config schema.
+
+Precedence is explicit CLI, config, declared environment binding, then built-in
+default. Default files load from `/etc/epithet/*.toml` and then `~/.epithet/*.toml`
+in filename order within each directory. Later files replace earlier values for
+the same key; explicit `--config FILE` adds the last file. Lists replace the whole
+list rather than accumulating across files. Duplicate keys within a file are
+TOML errors. YAML/JSON service configuration is no longer loaded; static directory
+and inventory data files remain YAML.
+
+List-valued flags use arrays even for one item. Maps use inline tables:
+
+```toml
+ca = ["https://ca.example.com/"]
+agent-name = "work"
+ca-timeout = "30s"
+certificate-extension = { permit-pty = "", permit-port-forwarding = "" }
+```
+
+`match`'s connection inputs are CLI-only and bypass config lookup. Its global
+logging settings remain configurable. See `examples/` for deployment examples.
+
+Flags with the same meaning use the same name across commands. Every service uses
+`--listen`; separate configuration files can supply different listener addresses.
+For `server`, `--listen` selects the public router address, while the launcher
+supplies private Unix socket listeners to its children. Names are qualified where
+an invocation needs to distinguish settings, such as CA and control signing keys.
+Repeatable flags are singular, and `-file` denotes a file path. Endpoint flags
+name the service or role without a `-url` suffix; help displays a `URL` placeholder
+(including Unix socket URLs where supported). Public-key inputs omit
+`-file` because they accept a literal SSH key, a file, or a URL.
+
+The naming cleanup replaces these flags without compatibility aliases:
+
+| Previous flag | Canonical flag |
+| --- | --- |
+| `ca --key`, `server --ca-key` | `--ca-key-file` |
+| `control --key`, `server --control-key` | `--control-key-file` |
+| `agent/host enroll --ca-url` | `--ca` |
+| `ca/control --directory-url` | `--directory` |
+| `ca --inventory-url` | `--inventory` |
+| `ca --control-public-url` | `--control-public` |
+| `control --directory-backend-url`, `--inventory-backend-url` | `--directory-backend`, `--inventory-backend` |
+| `router --ca`, `--control` | `--ca-backend`, `--control-backend` |
+| `directory --source`, `--directory-source` | `--directory-mode` (`static` or `scim`) |
+| `inventory --inventory-source` | `--inventory-mode` (`static` or `enrollment`; replaces `managed`) |
+| `directory/inventory --static` | `--directory-static-file`, `--inventory-static-file` respectively |
+| `server --inventory` | Supply `--directory-static-file` and `--inventory-static-file` separately |
+| `--ca-pubkey`, `--control-pubkey` | `--ca-public-key`, `--control-public-key` |
+| `--extension`, `--default-expiration` | `--certificate-extension`, `--certificate-default-ttl` |
+| Agent or management `--name` | `--agent-name` |
+| `host enroll --name` | `--host-name` |
+| `--broker` | `--broker-socket` |
+| `--domain-file`, `--ca-pubkey-file` | `--principal-domain-file`, `--ca-public-key-file` |
+| `--tls-ca-cert` | `--tls-ca-cert-file` |
+
+Replace command-scoped YAML configuration with flat TOML keys using these spellings. Restart agents to regenerate
+their SSH configuration. On enrolled hosts, rerun enrollment with the new binary to
+regenerate the `AuthorizedPrincipalsCommand` flag spelling; existing state paths
+and SSHD fragment metadata are unchanged.

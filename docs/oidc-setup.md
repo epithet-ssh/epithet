@@ -4,7 +4,7 @@ This guide walks through setting up OAuth2/OIDC authentication with popular iden
 
 ## Overview
 
-Epithet's OIDC config lives on the **CA**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the CA with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA advertises this configuration to clients via a `Link` header on its root response, so `epithet agent` needs no OIDC configuration of its own — just `--ca-url`.
+Epithet's OIDC config lives on the **CA**, not on individual clients. You create an OAuth2 application in your identity provider's console, then configure the CA with the resulting **issuer URL** and **client ID** (and, for some providers, a **client secret**). The CA advertises this configuration to clients via a `Link` header on its root response, so `epithet agent` needs no OIDC configuration of its own — just `--ca`.
 
 **Important**: Epithet uses PKCE (Proof Key for Code Exchange), so the client secret is optional for most providers. Where a provider requires one anyway, it goes in the CA's config, not on the client — the secret never appears in a broker or ssh config.
 
@@ -50,29 +50,26 @@ You'll see a dialog with:
 
 ### Step 4: configure the CA
 
-In `~/.epithet/server.yaml` (or wherever your server config lives):
+In `~/.epithet/server.toml` (or wherever your server config lives):
 
-```yaml
-ca:
-  oidc:
-    issuer: "https://accounts.google.com"
-    client-id: "YOUR_CLIENT_ID.apps.googleusercontent.com"
-    # client-secret: "YOUR_CLIENT_SECRET"   # only for Desktop apps
+```toml
+oidc-client-id = "YOUR_CLIENT_ID.apps.googleusercontent.com"
+oidc-issuer = "https://accounts.google.com"
 ```
 
 Config-file keys for these CLI-backed scalars are kebab-case (derived from
-the flag names — `client-id`, not `client_id`); see the casing note in the
+the flag names, such as `oidc-client-id`); see the configuration section in the
 [CA guide](./policy-server.md#configuration).
 
 Or via flags:
 
 ```bash
-epithet --config /etc/epithet/server.yaml ca \
+epithet --config /etc/epithet/server.toml ca \
   --oidc-issuer https://accounts.google.com \
   --oidc-client-id YOUR_CLIENT_ID.apps.googleusercontent.com
 ```
 
-Clients need nothing beyond `--ca-url` — the broker discovers the issuer and client ID from the CA's root response at startup.
+Clients need nothing beyond `--ca` — the broker discovers the issuer and client ID from the CA's root response at startup.
 
 ### Step 5: first authentication
 
@@ -146,7 +143,7 @@ To verify:
 ### Step 5: configure the CA
 
 ```bash
-epithet --config /etc/epithet/server.yaml ca \
+epithet --config /etc/epithet/server.toml ca \
   --oidc-issuer https://your-domain.okta.com/oauth2/default \
   --oidc-client-id YOUR_CLIENT_ID
 ```
@@ -184,7 +181,7 @@ Okta supports `openid`, `profile`, `email`, and `offline_access` (refresh tokens
 ### Step 4: configure the CA
 
 ```bash
-epithet --config /etc/epithet/server.yaml ca \
+epithet --config /etc/epithet/server.toml ca \
   --oidc-issuer https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0 \
   --oidc-client-id YOUR_CLIENT_ID
 ```
@@ -230,7 +227,7 @@ The issuer URL is usually the base URL (without `/.well-known/...`).
 ### Step 3: configure the CA
 
 ```bash
-epithet --config /etc/epithet/server.yaml ca \
+epithet --config /etc/epithet/server.toml ca \
   --oidc-issuer https://your-provider.com \
   --oidc-client-id YOUR_CLIENT_ID
 ```
@@ -242,7 +239,7 @@ epithet --config /etc/epithet/server.yaml ca \
 Once the CA is configured, clients need only the CA URL:
 
 ```bash
-epithet agent --ca-url https://ca.example.com --name work
+epithet agent --ca https://ca.example.com --agent-name work
 ```
 
 Then tag the hosts this profile should handle and include the generated config, in `~/.ssh/config`:

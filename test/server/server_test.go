@@ -54,36 +54,33 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("failed to write CA key: %v", err)
 	}
 
-	// Write the writ policy and inventory files.
+	// Keep user and host files separate so this exercises independent static-file
+	// options all the way through the supervisor and the fact services.
 	policyPath := filepath.Join(tmpDir, "policy.writ")
 	if err := os.WriteFile(policyPath, []byte("allow userName:\"test@example.com\" -> root@*\n"), 0644); err != nil {
 		t.Fatalf("failed to write policy: %v", err)
 	}
 	inventoryPath := filepath.Join(tmpDir, "inventory.yaml")
-	inventoryContent := "users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n"
+	inventoryContent := "hosts:\n  - pattern: \"*\"\n"
 	if err := os.WriteFile(inventoryPath, []byte(inventoryContent), 0644); err != nil {
 		t.Fatalf("failed to write inventory: %v", err)
 	}
+	directoryPath := filepath.Join(tmpDir, "directory.yaml")
+	if err := os.WriteFile(directoryPath, []byte("users:\n  - userName: test@example.com\n    id: subject:test@example.com\n"), 0644); err != nil {
+		t.Fatalf("failed to write directory: %v", err)
+	}
 
-	// Write config YAML. Keys under policy: use the flag names verbatim
-	// (kebab-case), which is how Kong resolves them.
-	configPath := filepath.Join(tmpDir, "config.yaml")
+	// Flat TOML keys use the long flag names verbatim.
+	configPath := filepath.Join(tmpDir, "config.toml")
 	controlPath := writeControlKey(t, tmpDir)
-	configContent := fmt.Sprintf(`server:
-  ca-key: %s
-  control-key: %s
-ca:
-  policy-file: %s
-  oidc:
-    issuer: "%s"
-    client-id: "%s"
-directory:
-  static: [%s]
-inventory:
-  principal-mode: account-name
-  inventory-source: static
-  static: [%s]
-`, caKeyPath, controlPath, policyPath, mockURL, oidctest.ClientID, inventoryPath, inventoryPath)
+	configContent := fmt.Sprintf(`ca-key-file = %q
+control-key-file = %q
+policy-file = %q
+oidc-issuer = %q
+oidc-client-id = %q
+principal-mode = "account-name"
+inventory-mode = "static"
+`, caKeyPath, controlPath, policyPath, mockURL, oidctest.ClientID)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -98,6 +95,8 @@ inventory:
 		"--config", configPath,
 		"server",
 		"--listen", fmt.Sprintf(":%d", port),
+		"--directory-static-file", directoryPath,
+		"--inventory-static-file", inventoryPath,
 		"-v",
 	)
 	runtimeDir := filepath.Join(tmpDir, "run")
@@ -253,7 +252,9 @@ inventory:
 		defer occupied.Close()
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		failed := exec.CommandContext(ctx, epithetBin, "--config", configPath, "server", "--listen", occupied.Addr().String())
+		failed := exec.CommandContext(ctx, epithetBin, "--config", configPath, "server",
+			"--listen", occupied.Addr().String(),
+			"--directory-static-file", directoryPath, "--inventory-static-file", inventoryPath)
 		failed.Env = serverCmd.Env
 		output, err := failed.CombinedOutput()
 		if ctx.Err() != nil {

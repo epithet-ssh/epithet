@@ -17,13 +17,16 @@ import (
 // several agents' worth of certificate data and so need the same headroom.
 const scannerBufferSize = 1024 * 1024 // 1MiB.
 
+// MatchCLI receives connection inputs from SSH's generated command line.
+// These flags must have no environment bindings; loadCLIConfig excludes them
+// from file configuration. Global flags retain their normal configuration.
 type MatchCLI struct {
 	Host   string `help:"Remote host (%h)" short:"H" required:"true"`
 	Port   uint   `help:"Remote port (%p)" short:"p" required:"true"`
 	User   string `help:"Remote user (%r)" short:"r" required:"true"`
 	Hash   string `help:"Connection hash (%C)" short:"C" required:"true"`
 	Jump   string `help:"ProxyJump configuration (%j)" short:"j" optional:"true"`
-	Broker string `help:"Broker socket path" short:"b" required:"true"`
+	Broker string `help:"Broker socket path" short:"b" required:"true" name:"broker-socket"`
 }
 
 func (m *MatchCLI) Run(logger *slog.Logger) error {

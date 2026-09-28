@@ -21,9 +21,9 @@ type PolicyConfig struct {
 	// Outside scope of this change, but do we want to allow multiple policy files?
 	// </review>
 
-	Extension map[string]string `help:"Certificate extension for issued certs (name=value, repeatable; default permit-pty, permit-agent-forwarding, permit-user-rc)" name:"extension"`
+	Extension map[string]string `help:"Certificate extension for issued certs (name=value, repeatable; default permit-pty, permit-agent-forwarding, permit-user-rc)" name:"certificate-extension"`
 
-	DefaultExpiration string `help:"Default certificate expiration when no rule sets a ttl (e.g., 5m)" name:"default-expiration"`
+	DefaultExpiration string `help:"Default certificate expiration when no rule sets a ttl (e.g., 5m)" name:"certificate-default-ttl"`
 }
 
 type PolicyCLI struct {
@@ -72,7 +72,7 @@ func (c *PolicyConfig) buildEvaluator(logger *slog.Logger) (*writpolicy.Evaluato
 	if c.DefaultExpiration != "" {
 		d, err := time.ParseDuration(c.DefaultExpiration)
 		if err != nil {
-			return nil, fmt.Errorf("invalid default-expiration: %w", err)
+			return nil, fmt.Errorf("invalid certificate-default-ttl: %w", err)
 		}
 		opts.DefaultTTL = d
 	}

@@ -174,7 +174,7 @@ func TestRenderSSHDFragmentDestinationBound(t *testing.T) {
 # domain-file: "/var/lib/epithet/domain"
 # ca-pubkey-file: "/var/lib/epithet/epithet-ca.pub"
 TrustedUserCAKeys "/var/lib/epithet/epithet-ca.pub"
-AuthorizedPrincipalsCommand /opt/Epithet\ Bin/epithet host authorized-principals --domain-file "/var/lib/epithet/domain" %u
+AuthorizedPrincipalsCommand /opt/Epithet\ Bin/epithet host authorized-principals --principal-domain-file "/var/lib/epithet/domain" %u
 AuthorizedPrincipalsCommandUser nobody
 `, string(got))
 	commandLine := strings.Split(string(got), "\n")[5]

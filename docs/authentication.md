@@ -46,7 +46,7 @@ external URL and works unchanged behind any proxy or path prefix. The broker
 resolves it against the CA URL it used:
 
 ```
-ca-url  https://whee.example.com/epithet/ca
+ca  https://whee.example.com/epithet/ca
         → https://whee.example.com/epithet/ca/discovery
 ```
 
@@ -66,7 +66,7 @@ host-match patterns in this document;
 which hosts epithet handles is decided entirely by the user's own ssh config
 (see [architecture.md](architecture.md)).
 
-A trailing slash on `ca-url` is not required and makes no difference: the
+A trailing slash on `ca` is not required and makes no difference: the
 broker normalizes internally for reference resolution and never rewrites the
 configured value.
 
@@ -78,7 +78,7 @@ discovery. Upgrade the CA; there is no fallback.
 `epithet agent` calls `pkg/auth/oidc.Authenticate(ctx, cfg, prev, out)`,
 which drives one of two OIDC login flows when full authentication is needed.
 `--login-method` controls the choice and is also available as
-`agent.login-method` in configuration:
+`login-method` in configuration:
 
 - `auto` (the default) selects device authorization when `SSH_CONNECTION` or
   `SSH_TTY` is set, and browser authorization otherwise.
@@ -101,7 +101,7 @@ issuer does not advertise it, Epithet reports the incompatibility and suggests
 `--login-method browser`; it does not try to open a browser remotely.
 
 Scopes are not configurable: the client always requests `openid profile email`.
-The CA resolves `id` using `ca.oidc.identity-mode`.
+The CA resolves `id` using `oidc-identity-mode`.
 The default, `stable-id`, uses `sub` for Google, Okta, and generic providers,
 and `oid` for tenant-specific Microsoft Entra issuers. `user-id-claim` can
 select another claim, including `email` without checking verification.
@@ -118,8 +118,8 @@ field/value rows. Use `epithet agent identity --json` for JSON output. It does
 not map an inventory ID or decide policy acceptance. Missing or unverified
 email does not prevent this diagnostic command from reporting identity.
 Browser-login progress goes to stderr. It works before an inventory record
-exists and does not request a certificate. Use `agent --name work identity`
-for a named profile or `--broker` to select an explicit socket. Start the
+exists and does not request a certificate. Use `agent --agent-name work identity`
+for a named profile or `--broker-socket` to select an explicit socket. Start the
 agent first. Inventory mapping changes require restarting inventory. Changing login issuer
 or client settings also requires restarting agents to refresh their discovery. The standalone `epithet identity` command has been removed.
 
@@ -138,8 +138,8 @@ request can authenticate again. Other profiles and established SSH sessions
 are unaffected. This does not sign out the identity provider's browser session;
 to switch users, you may also need to sign out there.
 
-Both commands use `agent.name` and accept `--broker`, like `agent identity`.
-For example, use `epithet agent --name work logout` for the `work` profile.
+Both commands use `agent-name` and accept `--broker-socket`, like `agent identity`.
+For example, use `epithet agent --agent-name work logout` for the `work` profile.
 Start the broker first, and restart an older broker with the updated binary
 before using `logout`.
 

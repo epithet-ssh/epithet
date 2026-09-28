@@ -91,7 +91,7 @@ hosts:
 
 These example hosts use account-name compatibility. The inventory service now
 defaults to destination-bound `epithet-principal-v1`; either set
-`inventory.principal-mode: account-name` explicitly for this example, or enroll
+`principal-mode = "account-name"` explicitly for this example, or enroll
 the hosts and record their domains. The check below selects static-only mode so
 it validates the YAML without opening managed host storage.
 
@@ -99,12 +99,12 @@ it validates the YAML without opening managed host storage.
 
 ```sh
 epithet policy --check --policy-file ~/.epithet/policy.writ
-epithet directory --check --static ~/.epithet/inventory.yaml
-epithet inventory --check --inventory-source static --principal-mode account-name --static ~/.epithet/inventory.yaml
-epithet --config server.yaml server
+epithet directory --check --directory-static-file ~/.epithet/inventory.yaml
+epithet inventory --check --inventory-mode static --principal-mode account-name --inventory-static-file ~/.epithet/inventory.yaml
+epithet --config server.toml server
 ```
 
-Configure `ca.policy-file` in `server.yaml`. Writ runs inside CA; there is no policy
+Configure `policy-file` in `toml`. Writ runs inside CA; there is no policy
 service to start. Every certificate carries exactly one principal for the requested
 connection, never the union of accounts the user could access. Destination binding
 requires `epithet-principal-v1` and a target configured to validate that principal.
@@ -169,11 +169,11 @@ deny !$infra -> *@{env=prod}, label "only-infra-in-prod"
 
 `require`, `when`, and `notify` name **registered plugins**. The CA evaluator currently registers none, so a policy using any of them fails at startup with an error naming the unknown reference — the seams exist and the plugin mechanism (subprocess handlers) is planned. `ttl`, `until`, and `label` are fully supported.
 
-Cert **extensions** are deliberately not in the language: they are deployment configuration, set with the repeatable `--extension name=value` flag (default: `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`).
+Cert **extensions** are deliberately not in the language: they are deployment configuration, set with the repeatable `--certificate-extension name=value` flag (default: `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`).
 
 ## The inventory
 
-The inventory answers two questions at evaluation time: who is this identity, and what is this host? Users can come from [SCIM provisioning](scim.md) or static YAML, independently of host storage. The static implementation is one or more YAML files served by `epithet inventory --static` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
+The inventory answers two questions at evaluation time: who is this identity, and what is this host? Users can come from [SCIM provisioning](scim.md) or static YAML, independently of host storage. The static implementation is one or more YAML files served by `epithet inventory --inventory-static-file` (repeatable, globs allowed). Files concatenate; duplicate users or hosts across files are a load error, and unknown fields are an error rather than a silently ignored typo.
 
 ### Users
 
@@ -190,28 +190,24 @@ users:
     organization: Acme            # matched by organization:
 ```
 
-The inventory service verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then resolves the identity using `ca.oidc.identity-mode` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
+The CA verifies signature, issuer, audience, expiration, and a nonempty OIDC `sub`. It then resolves the identity using `oidc-identity-mode` and compares that value **byte-for-byte** against inventory `id`. The selected claim must be a nonempty string; missing, null, numeric, object, and array values fail authentication. There is no fallback to another claim, email, or `userName`. Unknown IDs and users with `active: false` are denied structurally. Missing or duplicate IDs, and duplicate `userName` values across files, fail startup and `--check`.
 
-Configure the identity mode once on the inventory service. `stable-id` is the default; explicitly setting it makes the choice visible:
+Configure the identity mode on CA and control. `stable-id` is the default; explicitly setting it makes the choice visible:
 
-```yaml
-inventory:
-  oidc:
-    identity-mode: stable-id
+```toml
+oidc-identity-mode = "stable-id"
 ```
 
 In `stable-id` mode, `user-id-claim` overrides the provider default. For example:
 
-```yaml
-inventory:
-  oidc:
-    issuer: "https://login.microsoftonline.com/YOUR-TENANT-ID/v2.0"
-    client-id: "your-client-id"
-    identity-mode: stable-id
-    user-id-claim: oid
+```toml
+oidc-client-id = "your-client-id"
+oidc-identity-mode = "stable-id"
+oidc-issuer = "https://login.microsoftonline.com/YOUR-TENANT-ID/v2.0"
+oidc-user-id-claim = "oid"
 ```
 
-The CLI equivalent is `epithet inventory --oidc-user-id-claim oid`. An explicit value overrides the provider default:
+The CLI equivalent is `epithet ca --oidc-user-id-claim oid`. An explicit value overrides the provider default:
 
 | Configured provider | Default claim |
 |---|---|
@@ -226,10 +222,8 @@ Overrides name a literal top-level claim (including namespaced claim names), not
 
 For address-based inventory with enforced email verification, select `verified-email`:
 
-```yaml
-inventory:
-  oidc:
-    identity-mode: verified-email
+```toml
+oidc-identity-mode = "verified-email"
 ```
 
 ```yaml
@@ -296,10 +290,10 @@ epithet agent                         # runs in the foreground
 # In another terminal:
 epithet agent identity
 # Or, for a named running profile:
-epithet agent --name work identity
+epithet agent --agent-name work identity
 ```
 
-`agent identity` inherits the normal `agent.name` profile selection; `--broker /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the inventory service. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout defaults to tab-delimited field/value rows:
+`agent identity` inherits the normal `agent-name` profile selection; `--broker-socket /path/to/broker.sock` selects an explicit socket. It uses the running agent's issuer and audience configuration. Inventory identity mapping stays on the inventory service. It reuses valid authentication, refreshes when necessary, or prompts for browser login through the same authentication flow as SSH. Login progress goes to stderr; stdout defaults to tab-delimited field/value rows:
 
 ```text
 issuer	https://issuer.example
@@ -324,7 +318,7 @@ Prepare the inventory separately, then validate it with the new binary and exist
 
 ```sh
 epithet policy --check --policy-file /path/to/policy.writ
-epithet inventory --check --static /path/to/updated-inventory.yaml
+epithet inventory --check --inventory-static-file /path/to/updated-inventory.yaml
 ```
 
 Include your configured `--principal-mode` if hosts inherit a nondefault mode. Install the new binary and updated inventory together, restart the policy service (or combined server), and verify a fresh issuance. Older binaries reject the new inventory field; newer binaries reject the old unbound user records. Keep a working administrative SSH session during the switch. A cached certificate does not test the new binding: use a fresh agent profile or evict the relevant certificate before checking issuance.
@@ -385,28 +379,25 @@ to Writ and never substitutes for a hostname.
 
 ## Configuration
 
-Writ settings live under `ca:` alongside authentication:
+The flat TOML file supplies Writ and authentication settings to CA:
 
-```yaml
-ca:
-  policy-file: /etc/epithet/policy.writ
-  default-expiration: 5m
-  oidc:
-    issuer: https://identity.example.com
-    client-id: epithet
-    identity-mode: stable-id
-    # user-id-claim: sub
+```toml
+certificate-default-ttl = "5m"
+oidc-client-id = "epithet"
+oidc-identity-mode = "stable-id"
+oidc-issuer = "https://identity.example.com"
+policy-file = "/etc/epithet/policy.writ"
 ```
 
-`policy-file` is required. `default-expiration` defaults to five minutes and is
-further bounded by login expiry. `extension` configures certificate extensions.
-OIDC audience checking requires `client-id`. `identity-mode` and `user-id-claim`
+`policy-file` is required. `certificate-default-ttl` defaults to five minutes and is
+further bounded by login expiry. `certificate-extension` configures certificate extensions.
+OIDC audience checking requires `oidc-client-id`. `oidc-identity-mode` and `oidc-user-id-claim`
 can also be supplied by `EPITHET_OIDC_IDENTITY_MODE` and
 `EPITHET_OIDC_USER_ID_CLAIM`; flags override files, which override environment.
 
 Directory owns user source selection; inventory owns host source selection and
 `principal-mode`. Static inventory defaults to `epithet-principal-v1`; individual
-hosts can override it. `server.principal-mode` overrides the combined inventory
+hosts can override it. `principal-mode` overrides the combined inventory
 child setting. See [deployment configuration and migration](inventory.md).
 
 Policy and static facts are loaded at startup. Restart their owning processes to
@@ -434,7 +425,7 @@ Install the same Epithet binary on the target, then bootstrap its domain and
 CA trust anchor from the CA URL:
 
 ```console
-$ sudo epithet host enroll --ca-url https://epithet.example.com/
+$ sudo epithet host enroll --ca https://epithet.example.com/
 epithet-host-id-v1:...
 ```
 
@@ -458,7 +449,7 @@ On Linux the default state files are `/var/lib/epithet/domain` and
 `/var/lib/epithet/epithet-ca.pub`; the native state directory is
 `/var/db/epithet` on the BSDs, `/var/opt/epithet` on Solaris, illumos, and AIX,
 `/Library/Application Support/Epithet` on macOS, and `%ProgramData%\Epithet`
-on Windows. Use `--domain-file` and `--ca-pubkey-file` during enrollment to
+on Windows. Use `--principal-domain-file` and `--ca-public-key-file` during enrollment to
 select another layout or to support an otherwise unknown platform.
 
 The sshd defaults use `/etc/ssh/sshd_config` and
@@ -502,7 +493,7 @@ principal sshd should accept.
 
 ```ssh_config
 TrustedUserCAKeys /var/lib/epithet/epithet-ca.pub
-AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --domain-file /var/lib/epithet/domain %u
+AuthorizedPrincipalsCommand /usr/local/bin/epithet host authorized-principals --principal-domain-file /var/lib/epithet/domain %u
 AuthorizedPrincipalsCommandUser nobody
 ```
 
@@ -540,7 +531,7 @@ therefore enough, and no `AuthorizedPrincipalsFile` mapping is required.
 Enroll the host in compatibility mode:
 
 ```console
-$ sudo epithet host enroll --ca-url https://epithet.example.com/ --principal-mode account-name
+$ sudo epithet host enroll --ca https://epithet.example.com/ --principal-mode account-name
 epithet-host-id-v1:...
 ```
 
@@ -609,7 +600,7 @@ logs. Public CA denials say only `access denied`; pending decisions say
 
 **"request verification failed" (private policy 401; public CA 502)**
 - The CA's service JWT failed verification: expired (>60s old), wrong `aud`, body-hash mismatch, method/target mismatch, or the wrong signing key
-- Check that `ca-pubkey` in the config matches the CA's actual public key
+- Check that `ca-public-key` in the config matches the CA's actual public key
 
 ### Debugging
 

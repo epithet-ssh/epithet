@@ -14,12 +14,12 @@ import (
 
 type DirectoryCLI struct {
 	Serve         DirectoryServeCLI `cmd:"" default:"withargs" help:"Serve directory facts and private administration"`
-	Source        string            `help:"Directory source" default:"static" enum:"static,scim"`
-	Static        []string          `help:"Static directory files or globs" name:"static"`
+	Mode          string            `help:"Directory mode: static files or SCIM provisioning" default:"static" enum:"static,scim" name:"directory-mode"`
+	Static        []string          `help:"Static directory files or globs" name:"directory-static-file"`
 	StateDir      string            `help:"Root for directory storage" name:"state-dir"`
 	Listen        string            `help:"Private directory listener" default:"127.0.0.1:9997"`
-	CAPubkey      string            `help:"CA public key for fact reads" name:"ca-pubkey"`
-	ControlPubkey string            `help:"Control public key for administration" name:"control-pubkey"`
+	CAPubkey      string            `help:"CA public key for fact reads" name:"ca-public-key"`
+	ControlPubkey string            `help:"Control public key for administration" name:"control-public-key"`
 	Check         bool              `help:"Validate directory configuration and storage"`
 
 	ManagementCLI `embed:""`

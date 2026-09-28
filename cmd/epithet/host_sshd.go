@@ -453,7 +453,7 @@ func renderSSHDFragment(settings *sshdSettings, domainPath, caKeyPath, goos stri
 		if err != nil {
 			return nil, fmt.Errorf("rendering principal-domain path: %w", err)
 		}
-		fmt.Fprintf(&b, "AuthorizedPrincipalsCommand %s host authorized-principals --domain-file %s %%u\n", binaryToken, domainToken)
+		fmt.Fprintf(&b, "AuthorizedPrincipalsCommand %s host authorized-principals --principal-domain-file %s %%u\n", binaryToken, domainToken)
 		fmt.Fprintf(&b, "AuthorizedPrincipalsCommandUser %s\n", settings.commandUser)
 	}
 	return []byte(b.String()), nil

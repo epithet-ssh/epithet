@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
@@ -21,14 +20,14 @@ import (
 )
 
 func TestAgentSessionUsesProfileAndSocketOverride(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("agent:\n  name: work\n  ca-url: https://ca.example\n"), 0600))
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("agent-name = \"work\"\nca = [\"https://ca.example\"]\n"), 0600))
 	for _, command := range []string{"identity", "login", "logout"} {
-		for _, args := range [][]string{{"agent", command}, {"agent", "--name", "personal", command, "--broker", "/tmp/identity.sock"}} {
+		for _, args := range [][]string{{"agent", command}, {"agent", "--agent-name", "personal", command, "--broker-socket", "/tmp/identity.sock"}} {
 			var root struct {
 				Agent AgentCLI `cmd:"agent"`
 			}
-			parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
+			parser, err := kong.New(&root, kong.Configuration(loadCLIConfig, path))
 			require.NoError(t, err)
 			_, err = parser.Parse(args)
 			require.NoError(t, err)
@@ -207,13 +206,13 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 }
 
 func TestCAUserIDClaimConfigAndCLI(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("ca:\n  oidc:\n    issuer: https://issuer.example\n    user-id-claim: directory_id\n"), 0600))
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("oidc-issuer = \"https://issuer.example\"\noidc-user-id-claim = \"directory_id\"\n"), 0600))
 	for _, override := range []bool{false, true} {
 		var root struct {
 			CA CACLI `cmd:"ca"`
 		}
-		parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader, path))
+		parser, err := kong.New(&root, kong.Configuration(loadCLIConfig, path))
 		require.NoError(t, err)
 		args := []string{"ca", "--directory", "http://directory", "--inventory", "http://inventory"}
 		want := "directory_id"
@@ -228,14 +227,14 @@ func TestCAUserIDClaimConfigAndCLI(t *testing.T) {
 }
 
 func TestCAIdentityModeConfigPrecedence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("ca:\n  oidc:\n    identity-mode: verified-email\n"), 0600))
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("oidc-identity-mode = \"verified-email\"\n"), 0600))
 	for _, tc := range []struct {
 		name, env, flag string
 		want            oidc.IdentityMode
 	}{
-		{"yaml", "", "", oidc.VerifiedEmail},
-		{"yaml-over-env", "stable-id", "", oidc.VerifiedEmail},
+		{"toml", "", "", oidc.VerifiedEmail},
+		{"toml-over-env", "stable-id", "", oidc.VerifiedEmail},
 		{"env-only", "stable-id", "", oidc.StableID},
 		{"flag", "stable-id", "verified-email", oidc.VerifiedEmail},
 	} {
@@ -246,7 +245,7 @@ func TestCAIdentityModeConfigPrecedence(t *testing.T) {
 			}
 			var options []kong.Option
 			if tc.name != "env-only" {
-				options = append(options, kong.Configuration(kongyaml.Loader, path))
+				options = append(options, kong.Configuration(loadCLIConfig, path))
 			}
 			parser, err := kong.New(&root, options...)
 			require.NoError(t, err)

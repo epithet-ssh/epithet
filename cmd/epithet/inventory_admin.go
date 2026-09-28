@@ -144,7 +144,7 @@ func (c *InventoryEditCLI) Run(p *InventoryCLI) error {
 }
 func editInventoryHost(p *InventoryCLI, h *inventoryapi.HostRecord, input *bufio.Reader) (*inventoryapi.HostRecord, error) {
 	if h.Source == "static" || strings.HasPrefix(h.ID, "static:") {
-		return nil, fmt.Errorf("static record: edit the inventory.static YAML configuration and restart inventory")
+		return nil, fmt.Errorf("static record: edit the YAML files selected by inventory-static-file and restart inventory")
 	}
 	proposal, err := editProposal(inventory.ProposalFromControl(h.Proposal), input)
 	if err != nil {
@@ -227,7 +227,7 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 	if h.Source == "static" {
-		return fmt.Errorf("static record: edit inventory.static configuration and restart inventory")
+		return fmt.Errorf("static record: edit the YAML files selected by inventory-static-file and restart inventory")
 	}
 	_, err = p.request(inventoryapi.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
 	return err
@@ -265,7 +265,7 @@ func (c *InventoryTokenCreateCLI) Run(p *InventoryCLI) error {
 		fmt.Println(r.Token.ID)
 		return nil
 	}
-	fmt.Printf("Token %s expires %s\n\nepithet host enroll --ca-url %s --token %s\n", r.Token.ID, r.Token.ExpiresAt.Format(time.RFC3339), shellQuote(r.CAURL), shellQuote(r.Token.ID))
+	fmt.Printf("Token %s expires %s\n\nepithet host enroll --ca %s --token %s\n", r.Token.ID, r.Token.ExpiresAt.Format(time.RFC3339), shellQuote(r.CAURL), shellQuote(r.Token.ID))
 	return nil
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }

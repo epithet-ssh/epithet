@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,23 +20,23 @@ func TestManagementAgentProfileConfiguration(t *testing.T) {
 			invalid         bool
 		}{
 			{name: "default", profile: "default"},
-			{name: "configured agent", config: "agent:\n  name: work\n  ca-url: https://ca.example\n", profile: "work"},
-			{name: "management config override", config: "agent:\n  name: work\n" + command + ":\n  name: personal\n", profile: "personal"},
-			{name: "flag override", config: "agent:\n  name: work\n" + command + ":\n  name: personal\n", flags: []string{"--name", "other"}, profile: "other"},
-			{name: "explicit default", config: "agent:\n  name: work\n", flags: []string{"--name", "default"}, profile: "default"},
-			{name: "socket override", config: "agent:\n  name: invalid/name\n", flags: []string{"--broker", "~/override.sock"}, socket: filepath.Join(home, "override.sock")},
-			{name: "configured socket", config: "agent:\n  name: work\n" + command + ":\n  broker: /tmp/configured.sock\n", socket: "/tmp/configured.sock"},
-			{name: "invalid inherited profile", config: "agent:\n  name: invalid/name\n", invalid: true},
+			{name: "configured agent", config: `agent-name = "work"`, profile: "work"},
+			{name: "flag override", config: `agent-name = "personal"`, flags: []string{"--agent-name", "other"}, profile: "other"},
+			{name: "explicit default", config: `agent-name = "work"`, flags: []string{"--agent-name", "default"}, profile: "default"},
+			{name: "socket override", config: `agent-name = "invalid/name"`, flags: []string{"--broker-socket", "~/override.sock"}, socket: filepath.Join(home, "override.sock")},
+			{name: "configured socket", config: `agent-name = "work"
+broker-socket = "/tmp/configured.sock"`, socket: "/tmp/configured.sock"},
+			{name: "invalid profile", config: `agent-name = "invalid/name"`, invalid: true},
 		} {
 			t.Run(command+"/"+tc.name, func(t *testing.T) {
-				path := filepath.Join(t.TempDir(), "config.yaml")
+				path := filepath.Join(t.TempDir(), "config.toml")
 				require.NoError(t, os.WriteFile(path, []byte(tc.config), 0600))
 				var root struct {
 					Config    kong.ConfigFlag `name:"config"`
 					Inventory InventoryCLI    `cmd:"inventory"`
 					Directory DirectoryCLI    `cmd:"directory"`
 				}
-				parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader))
+				parser, err := kong.New(&root, kong.Configuration(loadCLIConfig))
 				require.NoError(t, err)
 				args := []string{"--config", path, command}
 				if command == "directory" {
@@ -51,7 +50,7 @@ func TestManagementAgentProfileConfiguration(t *testing.T) {
 				if command == "directory" {
 					selected = &root.Directory.ManagementCLI
 				}
-				socket, err := selected.resolveSocket([]string{string(root.Config)})
+				socket, err := resolveAgentBrokerSocket(&AgentCLI{Name: selected.Name}, selected.Broker)
 				if tc.invalid {
 					require.ErrorContains(t, err, "invalid profile name")
 					return

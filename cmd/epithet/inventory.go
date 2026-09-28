@@ -18,21 +18,21 @@ import (
 type InventoryCLI struct {
 	ManagementCLI `embed:""`
 
-	InventorySource string              `help:"Host inventory: static or managed (static files plus enrolled hosts)" name:"inventory-source" default:"managed" enum:"static,managed"`
-	StateDir        string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
-	Serve           InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve directory and inventory"`
-	List            InventoryListCLI    `cmd:"list" aliases:"l,li,lis" help:"List static and dynamic host records"`
-	Show            InventoryShowCLI    `cmd:"show" aliases:"s,sh,show" help:"Show one host record"`
-	Edit            InventoryEditCLI    `cmd:"edit" aliases:"e,ed,edi" help:"Edit a dynamic host in EDITOR"`
-	Approve         InventoryApproveCLI `cmd:"approve" aliases:"a,ap,app" help:"Review, edit, approve, or deny enrollment"`
-	Remove          InventoryRemoveCLI  `cmd:"remove" help:"Withdraw a dynamic host from inventory"`
-	Token           InventoryTokenCLI   `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
-	Audit           InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
+	InventoryMode string              `help:"Host inventory mode: static files only, or enrollment with optional static files" name:"inventory-mode" default:"enrollment" enum:"static,enrollment"`
+	StateDir      string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
+	Serve         InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve directory and inventory"`
+	List          InventoryListCLI    `cmd:"list" aliases:"l,li,lis" help:"List static and dynamic host records"`
+	Show          InventoryShowCLI    `cmd:"show" aliases:"s,sh,show" help:"Show one host record"`
+	Edit          InventoryEditCLI    `cmd:"edit" aliases:"e,ed,edi" help:"Edit a dynamic host in EDITOR"`
+	Approve       InventoryApproveCLI `cmd:"approve" aliases:"a,ap,app" help:"Review, edit, approve, or deny enrollment"`
+	Remove        InventoryRemoveCLI  `cmd:"remove" help:"Withdraw a dynamic host from inventory"`
+	Token         InventoryTokenCLI   `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
+	Audit         InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
 
 	Listen        string   `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
-	ControlPubkey string   `help:"Control service public key for administration" name:"control-pubkey"`
-	CAPubkey      string   `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-pubkey"`
-	Static        []string `help:"Static inventory file path or glob (repeatable; optional in managed mode)" name:"static"`
+	ControlPubkey string   `help:"Control service public key for administration" name:"control-public-key"`
+	CAPubkey      string   `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-public-key"`
+	Static        []string `help:"Static inventory file path or glob (repeatable; optional in enrollment mode)" name:"inventory-static-file"`
 	PrincipalMode string   `help:"Default host principal mode" name:"principal-mode" default:"epithet-principal-v1" enum:"account-name,epithet-principal-v1"`
 	Check         bool     `help:"Validate inventory files, then exit" name:"check"`
 }
@@ -43,14 +43,14 @@ func (_ *InventoryServeCLI) Run(c *InventoryCLI, logger *slog.Logger, tlsCfg tls
 	return c.runServer(logger, tlsCfg)
 }
 func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	if c.InventorySource != "" && c.InventorySource != "static" && c.InventorySource != "managed" {
-		return fmt.Errorf("unknown inventory-source %q", c.InventorySource)
+	if c.InventoryMode != "" && c.InventoryMode != "static" && c.InventoryMode != "enrollment" {
+		return fmt.Errorf("unknown inventory-mode %q", c.InventoryMode)
 	}
 	paths, err := config.ExpandGlobs(c.Static)
 	if err != nil {
 		return err
 	}
-	if len(paths) == 0 && (len(c.Static) > 0 || c.InventorySource == "static") {
+	if len(paths) == 0 && (len(c.Static) > 0 || c.InventoryMode == "static") {
 		return fmt.Errorf("no inventory files match %s", strings.Join(c.Static, ", "))
 	}
 	mode := inventory.PrincipalMode(c.PrincipalMode)
@@ -67,7 +67,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	}
 	var hosts inventory.Hosts = inv
 	var managed *inventory.Managed
-	if c.InventorySource != "static" {
+	if c.InventoryMode != "static" {
 		dir, err := serviceStatePath(c.StateDir, "inventory")
 		if err != nil {
 			return err
@@ -84,7 +84,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 		return nil
 	}
 	if c.CAPubkey == "" {
-		return fmt.Errorf("inventory.ca-pubkey is required")
+		return fmt.Errorf("--ca-public-key is required")
 	}
 	key, err := resolveCAPubkey(c.CAPubkey, tlsCfg, logger)
 	if err != nil {

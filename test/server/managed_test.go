@@ -45,25 +45,19 @@ func TestManagedCombinedEnrollmentAdminCLIAndIssuance(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: admin\n   groups: [operators]\nhosts:\n - pattern: '*'\n   accounts: [root]\n"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow userName:admin -> root@*\n"), 0600))
 	controlPath := writeControlKey(t, dir)
-	config := fmt.Sprintf(`server:
-  ca-key: %s/ca.key
-  control-key: %s
-ca:
-  policy-file: %s/policy.writ
-  oidc:
-    issuer: %s
-    client-id: %s
-directory:
-  static: [%s/static.yaml]
-control:
-  inventory-admin-group: [operators]
-inventory:
-  principal-mode: account-name
-  static: [%s/static.yaml]
-  state-dir: %s/state
+	config := fmt.Sprintf(`ca-key-file = "%s/ca.key"
+control-key-file = %q
+policy-file = "%s/policy.writ"
+oidc-issuer = %q
+oidc-client-id = %q
+directory-static-file = ["%s/static.yaml"]
+inventory-admin-group = ["operators"]
+principal-mode = "account-name"
+inventory-static-file = ["%s/static.yaml"]
+state-dir = "%s/state"
 `, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, dir, dir, dir)
 
-	configPath := filepath.Join(dir, "config.yaml")
+	configPath := filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0600))
 	port := availablePort(t)
 	base := fmt.Sprintf("http://127.0.0.1:%d/", port)
@@ -129,7 +123,7 @@ inventory:
 	<-b.Ready()
 	defer b.Close()
 	admin := func(args ...string) []byte {
-		cmd := exec.Command(binary, append([]string{"inventory", "--broker", socket}, args...)...)
+		cmd := exec.Command(binary, append([]string{"inventory", "--broker-socket", socket}, args...)...)
 		cmd.Stdin = strings.NewReader("approve\n")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))

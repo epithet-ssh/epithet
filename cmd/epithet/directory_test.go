@@ -34,7 +34,7 @@ func TestDirectoryUsersCommand(t *testing.T) {
 	}
 	parser, err := kong.New(&root)
 	require.NoError(t, err)
-	_, err = parser.Parse([]string{"directory", "users", "list", "--json", "--name", "work"})
+	_, err = parser.Parse([]string{"directory", "users", "list", "--json", "--agent-name", "work"})
 	require.NoError(t, err)
 	require.True(t, root.Directory.Users.List.JSON)
 	require.Equal(t, "work", root.Directory.Name)

@@ -389,7 +389,7 @@ func writeGeneratedConfig(t *testing.T, path, tag, epithetBin, brokerSock, agent
 	content := fmt.Sprintf(`Match tagged %s
     IdentityAgent %s/%%C
 
-Match final tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
+Match final tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker-socket '%s'"
 `, tag, agentDir, tag, epithetBin, brokerSock)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
 }

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
-	kongyaml "github.com/alecthomas/kong-yaml"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -21,39 +20,39 @@ func TestServerPrincipalModePrecedence(t *testing.T) {
 	}{
 		{
 			name:   "unspecified retains inventory default",
-			config: "{}\n",
+			config: "",
 			want:   inventory.EpithetPrincipalV1,
 		},
 		{
 			name:   "inherits hashed inventory configuration",
-			config: "inventory:\n  principal-mode: epithet-principal-v1\n",
+			config: "principal-mode = \"epithet-principal-v1\"\n",
 			want:   inventory.EpithetPrincipalV1,
 		},
 		{
-			name:   "explicit server compatibility overrides hashed inventory",
-			config: "server:\n  principal-mode: account-name\ninventory:\n  principal-mode: epithet-principal-v1\n",
+			name:   "shared configuration selects account-name",
+			config: "principal-mode = \"account-name\"\n",
 			want:   inventory.AccountNamePrincipals,
 		},
 		{
-			name:   "explicit server hashed overrides compatibility inventory",
-			config: "server:\n  principal-mode: epithet-principal-v1\ninventory:\n  principal-mode: account-name\n",
+			name:   "shared configuration selects destination-bound principals",
+			config: "principal-mode = \"epithet-principal-v1\"\n",
 			want:   inventory.EpithetPrincipalV1,
 		},
 		{
-			name:   "CLI compatibility overrides server and inventory configuration",
-			config: "server:\n  principal-mode: epithet-principal-v1\ninventory:\n  principal-mode: epithet-principal-v1\n",
+			name:   "CLI compatibility overrides shared configuration",
+			config: "principal-mode = \"epithet-principal-v1\"\n",
 			args:   []string{"--principal-mode", "account-name"},
 			want:   inventory.AccountNamePrincipals,
 		},
 		{
-			name:   "CLI hashed overrides server and inventory configuration",
-			config: "server:\n  principal-mode: account-name\ninventory:\n  principal-mode: account-name\n",
+			name:   "CLI hashed overrides shared configuration",
+			config: "principal-mode = \"account-name\"\n",
 			args:   []string{"--principal-mode", "epithet-principal-v1"},
 			want:   inventory.EpithetPrincipalV1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.yaml")
+			path := filepath.Join(t.TempDir(), "config.toml")
 			require.NoError(t, os.WriteFile(path, []byte(tc.config), 0o600))
 			parse := func(args []string) (*ServerCLI, *InventoryCLI) {
 				t.Helper()
@@ -62,7 +61,7 @@ func TestServerPrincipalModePrecedence(t *testing.T) {
 					Server    ServerCLI       `cmd:"server"`
 					Inventory InventoryCLI    `cmd:"inventory"`
 				}
-				parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader))
+				parser, err := kong.New(&root, kong.Configuration(loadCLIConfig))
 				require.NoError(t, err)
 				_, err = parser.Parse(args)
 				require.NoError(t, err)
@@ -85,8 +84,8 @@ func TestServerRejectsUnknownPrincipalModeBeforeStartingServices(t *testing.T) {
 }
 
 func TestCAChildIdentityConfiguration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("ca:\n  oidc:\n    issuer: https://issuer.example\n    client-id: app\n    user-id-claim: oid\n"), 0600))
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("oidc-issuer = \"https://issuer.example\"\noidc-client-id = \"app\"\noidc-user-id-claim = \"oid\"\n"), 0600))
 	auth, err := caChildOIDC([]string{"--config", path, "ca", "--directory", "http://directory", "--inventory", "http://inventory"})
 	require.NoError(t, err)
 	require.Equal(t, "https://issuer.example", auth.Issuer)
@@ -97,14 +96,11 @@ func TestCAChildIdentityConfiguration(t *testing.T) {
 func TestServerOwnsChildListenersAndInventoryRouting(t *testing.T) {
 	// Combined topology must override standalone command configuration, including
 	// disabling a configured inventory route when the child has no management endpoint.
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`ca:
-  listen: :9999
-  control-public-url: https://old.example/manage
-router:
-  listen: :9998
-  ca: unix:///tmp/old-ca.sock
-  control: unix:///tmp/old-control.sock
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`listen = ":9999"
+control-public = "https://old.example/manage"
+ca-backend = "unix:///tmp/old-ca.sock"
+control-backend = "unix:///tmp/old-control.sock"
 `), 0600))
 	for _, managed := range []bool{true, false} {
 		var root struct {
@@ -114,7 +110,7 @@ router:
 		}
 		parse := func(args []string) {
 			t.Helper()
-			parser, err := kong.New(&root, kong.Configuration(kongyaml.Loader))
+			parser, err := kong.New(&root, kong.Configuration(loadCLIConfig))
 			require.NoError(t, err)
 			_, err = parser.Parse(args)
 			require.NoError(t, err)

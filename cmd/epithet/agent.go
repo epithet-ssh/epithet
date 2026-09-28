@@ -80,7 +80,7 @@ func acquireProfileLock(runDir, name string) (*os.File, error) {
 	}
 	if err := lockProfileFile(f); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("profile %q is already running (use --name to run a second profile)", name)
+		return nil, fmt.Errorf("profile %q is already running (use --agent-name to run a second profile)", name)
 	}
 	return f, nil
 }
@@ -88,8 +88,8 @@ func acquireProfileLock(runDir, name string) (*os.File, error) {
 // AgentCLI is the parent command for agent-related subcommands.
 // Shared flags are defined here and inherited by subcommands.
 type AgentCLI struct {
-	Name        string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>, or just epithet for the default profile)" default:"default"`
-	CaURL       []string      `help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca-url" short:"c"`
+	Name        string        `help:"Profile name; names the rundir and the ssh Tag (epithet-<name>, or just epithet for the default profile)" default:"default" name:"agent-name"`
+	CaURL       []string      `placeholder:"URL" help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca" short:"c"`
 	CaTimeout   time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown  time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
 	LoginMethod string        `help:"Interactive login method" name:"login-method" enum:"auto,browser,device" default:"auto"`
@@ -110,7 +110,7 @@ type AgentStartCLI struct {
 func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	// Validate required fields for start
 	if len(parent.CaURL) == 0 {
-		return fmt.Errorf("--ca-url is required (at least one)")
+		return fmt.Errorf("--ca is required (at least one)")
 	}
 
 	if err := validateProfileName(parent.Name); err != nil {
@@ -153,7 +153,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 
 	// Guard against a second agent process silently stealing this profile's
 	// socket: without this, a concurrent `epithet agent` with the same
-	// --name (e.g. two shells both using the "default" profile) would
+	// --agent-name (e.g. two shells both using the "default" profile) would
 	// os.Remove the live socket out from under the first process, orphaning
 	// it with no error. lockFile is deliberately kept alive for the rest of
 	// Run() via the runtime.KeepAlive below (see acquireProfileLock's docs).
@@ -412,7 +412,7 @@ func (a *AgentCLI) generateSSHConfig(path, agentDir, brokerSock, homeDir string)
 Match tagged %s
     IdentityAgent %s/%%C
 
-Match final tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker '%s'"
+Match final tagged %s exec "%s match --host '%%h' --port '%%p' --user '%%r' --jump '%%j' --hash '%%C' --broker-socket '%s'"
 `,
 		a.Name,
 		tag,
