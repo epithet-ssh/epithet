@@ -3,7 +3,7 @@ yatl_version: 1
 title: Prepare FreeBSD SCIM state directory with service ownership
 id: ts3dqavm
 created: 2026-09-19T00:07:02.780773Z
-updated: 2026-09-29T01:38:35.294097Z
+updated: 2026-09-29T02:31:19.411744Z
 author: Brian McCallister
 priority: high
 tags:
@@ -33,3 +33,13 @@ Implemented default-state preparation in the FreeBSD server, directory, and inve
 # Log: 2026-09-29T01:38:35Z Brian McCallister
 
 Deployed the reviewed packaging snapshot to the pkgbuild jail on hati and restored its existing source-tag polling schedule. All 20 packaging regression tests pass on the actual FreeBSD builder, and the ports framework resolves the five updated rc.d services. These tests still simulate startup ownership effects; native package install/upgrade and checks as the epithet service account against the TOML-capable source release remain outstanding.
+
+---
+# Log: 2026-09-29T02:31:19Z Brian McCallister
+
+Completed native validation on hati using disposable Bastille jail epithet-state-test (FreeBSD 15.1) and the actual published epithet-0.39.1 package. Fresh install: both standalone directory/inventory rc.d services and the combined server created /var/db/epithet/directory and inventory as epithet:epithet mode 0700; the fresh parent was root:wheel 0755. Real services ran under epithet, the combined CA endpoint responded, and directory --check plus inventory --check passed via su -m epithet. Upgrade: installed 0.38.1, then used a disposable local pkg repository to upgrade to 0.39.1. SHA256 comparisons preserved the existing SQLite database, directory/inventory fixture data, unrelated root-owned state, and operator-edited TOML configs through the package upgrade and both startup modes. Existing root:wheel parent mode 0751 and unrelated file mode 0600 remained unchanged. Repeated both --check commands as epithet after the upgrade. No production service or repository was changed; published versions remained 0.39.1. Destroyed the test jail and verified its files, running jail, loopback alias, and temporary builder fixture were removed. Local transcripts: /tmp/epithet-state-test-fresh.log and /tmp/epithet-state-test-upgrade.log.
+
+---
+# Log: 2026-09-29T02:31:19Z Brian McCallister
+
+Closed: Implemented and deployed previously; native fresh-install, package-upgrade, state-preservation, actual ownership, combined/standalone startup, and service-account checks now pass. Disposable jail cleaned up.
