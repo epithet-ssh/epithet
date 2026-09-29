@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,43 +12,11 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/stretchr/testify/require"
 )
-
-func TestAgentSessionUsesProfileAndSocketOverride(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(path, []byte("agent-name = \"work\"\nca = [\"https://ca.example\"]\n"), 0600))
-	for _, command := range []string{"identity", "login", "logout"} {
-		for _, args := range [][]string{{"agent", command}, {"agent", "--agent-name", "personal", command, "--broker-socket", "/tmp/identity.sock"}} {
-			var root struct {
-				Agent AgentCLI `cmd:"agent"`
-			}
-			parser, err := kong.New(&root, kong.Configuration(loadCLIConfig, path))
-			require.NoError(t, err)
-			_, err = parser.Parse(args)
-			require.NoError(t, err)
-			override := root.Agent.Identity.Broker
-			if command == "login" {
-				override = root.Agent.Login.Broker
-			}
-			if command == "logout" {
-				override = root.Agent.Logout.Broker
-			}
-			socket, err := resolveAgentBrokerSocket(&root.Agent, override)
-			require.NoError(t, err)
-			if len(args) == 2 {
-				home, err := os.UserHomeDir()
-				require.NoError(t, err)
-				require.Equal(t, filepath.Join(home, ".epithet/run/work/broker.sock"), socket)
-			} else {
-				require.Equal(t, "/tmp/identity.sock", socket)
-			}
-		}
-	}
-}
 
 func TestAgentIdentityVerifier(t *testing.T) {
 	idp := oidctest.New(t)
@@ -201,63 +168,6 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 				}
 				require.Equal(t, want, out.String())
 			}
-		})
-	}
-}
-
-func TestCAUserIDClaimConfigAndCLI(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(path, []byte("oidc-issuer = \"https://issuer.example\"\noidc-user-id-claim = \"directory_id\"\n"), 0600))
-	for _, override := range []bool{false, true} {
-		var root struct {
-			CA CACLI `cmd:"ca"`
-		}
-		parser, err := kong.New(&root, kong.Configuration(loadCLIConfig, path))
-		require.NoError(t, err)
-		args := []string{"ca", "--directory", "http://directory", "--inventory", "http://inventory"}
-		want := "directory_id"
-		if override {
-			args = append(args, "--oidc-user-id-claim", "oid")
-			want = "oid"
-		}
-		_, err = parser.Parse(args)
-		require.NoError(t, err)
-		require.Equal(t, want, root.CA.OIDC.UserIDClaim)
-	}
-}
-
-func TestCAIdentityModeConfigPrecedence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(path, []byte("oidc-identity-mode = \"verified-email\"\n"), 0600))
-	for _, tc := range []struct {
-		name, env, flag string
-		want            oidc.IdentityMode
-	}{
-		{"toml", "", "", oidc.VerifiedEmail},
-		{"toml-over-env", "stable-id", "", oidc.VerifiedEmail},
-		{"env-only", "stable-id", "", oidc.StableID},
-		{"flag", "stable-id", "verified-email", oidc.VerifiedEmail},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("EPITHET_OIDC_IDENTITY_MODE", tc.env)
-			var root struct {
-				CA CACLI `cmd:"ca"`
-			}
-			var options []kong.Option
-			if tc.name != "env-only" {
-				options = append(options, kong.Configuration(loadCLIConfig, path))
-			}
-			parser, err := kong.New(&root, options...)
-			require.NoError(t, err)
-			args := []string{"ca", "--directory", "http://directory", "--inventory", "http://inventory"}
-			if tc.flag != "" {
-				args = append(args, "--oidc-identity-mode", tc.flag)
-			}
-			_, err = parser.Parse(args)
-			require.NoError(t, err)
-			mode, _, err := oidc.ResolveIdentity("", root.CA.OIDC.IdentityMode, "")
-			require.NoError(t, err)
-			require.Equal(t, tc.want, mode)
 		})
 	}
 }

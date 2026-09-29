@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/inventory"
@@ -21,22 +19,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestEditorCancelAndValidationRetry(t *testing.T) {
-	t.Setenv("EDITOR", `sh -c ': > "$1"' editor`)
-	initial := inventory.Proposal{Names: []string{"one"}, Labels: map[string]string{}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
-	_, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
-	require.ErrorIs(t, err, errCanceled)
-	t.Setenv("EDITOR", "true")
-	p, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
-	require.NoError(t, err)
-	require.Equal(t, initial, p)
-	script := filepath.Join(t.TempDir(), "editor")
-	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nif [ ! -f \"$1.once\" ]; then\n touch \"$1.once\"\n printf 'invalid: yaml\\n' > \"$1\"\nelse\n rm \"$1.once\"\n printf 'names: [fixed]\\naccounts: []\\nprincipal-mode: account-name\\n' > \"$1\"\nfi\n"), 0700))
-	t.Setenv("EDITOR", script)
-	p, err = editProposal(initial, bufio.NewReader(strings.NewReader("edit\n")))
-	require.NoError(t, err)
-	require.Equal(t, []string{"fixed"}, p.Names)
-}
 func TestManagedEnrollmentLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		name, token, status    string
@@ -161,6 +143,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 		})
 	}
 }
+
 func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 	t.Setenv("EDITOR", `sh -c ': > "$1"' editor`)
 	cmd, enrollment, env, runner, main, fragment := newSSHDConfigurationTest(t)
@@ -215,15 +198,6 @@ func TestProposedHostNamesUseConfiguredSearchSuffix(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, resolvSearchDomain(tc.config))
 	}
-}
-
-// Saving unchanged YAML must preserve null account semantics.
-func TestEditorPreservesUnrestrictedAccounts(t *testing.T) {
-	t.Setenv("EDITOR", "true")
-	initial := inventory.Proposal{Names: []string{"host"}, PrincipalMode: inventory.AccountNamePrincipals}
-	edited, err := editProposal(initial, bufio.NewReader(strings.NewReader("")))
-	require.NoError(t, err)
-	require.Nil(t, edited.Accounts)
 }
 
 func TestDirectoryOnlyManagementDoesNotEnableHostEnrollment(t *testing.T) {

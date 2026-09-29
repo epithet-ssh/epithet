@@ -1039,11 +1039,11 @@ Each row lists every accepted non-global long flag, including inherited flags. A
 
 ## Source pointers
 
-- [CLI root and logging](../cmd/epithet/main.go)
+- [CLI root and logging](../cmd/epithet/main.go), [config lookup](../cmd/epithet/config.go)
 - [Combined launcher and child overrides](../cmd/epithet/server.go)
 - [CA](../cmd/epithet/ca.go), [control](../cmd/epithet/control.go), [shared OIDC flags](../cmd/epithet/service_oidc.go), [router](../cmd/epithet/router.go)
 - [Directory declarations](../cmd/epithet/directory.go), [directory serving](../cmd/epithet/directory_serve.go)
-- [Inventory declarations and serving](../cmd/epithet/inventory.go), [inventory administration](../cmd/epithet/inventory_admin.go), [management transport](../cmd/epithet/management_client.go)
-- [Agent](../cmd/epithet/agent.go), [session commands](../cmd/epithet/session.go), [identity](../cmd/epithet/identity.go), [inspect](../cmd/epithet/inspect.go), [kill](../cmd/epithet/kill.go), [SSH match](../cmd/epithet/match.go)
-- [Host enrollment](../cmd/epithet/host_enroll.go), [host SSHD setup](../cmd/epithet/host_sshd.go), [offline principals helper](../cmd/epithet/host.go)
+- [Inventory declarations and administration](../cmd/epithet/inventory.go), [inventory serving](../cmd/epithet/inventory_serve.go), [enrollment tokens](../cmd/epithet/inventory_token.go), [shared administration transport](../cmd/epithet/admin_client.go)
+- [Agent](../cmd/epithet/agent.go), [login](../cmd/epithet/agent_login.go), [logout](../cmd/epithet/agent_logout.go), [identity](../cmd/epithet/agent_identity.go), [inspect](../cmd/epithet/agent_inspect.go), [kill](../cmd/epithet/agent_kill.go), [SSH match](../cmd/epithet/match.go)
+- [Host enrollment](../cmd/epithet/host_enroll.go), [host SSHD setup](../cmd/epithet/host_enroll_sshd.go), [offline principals helper](../cmd/epithet/host.go)
 - [Policy flags](../cmd/epithet/policy.go), [certificate defaults](../pkg/policyserver/policy_config.go), [native state paths](../pkg/config/state.go)

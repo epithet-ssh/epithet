@@ -1,18 +1,18 @@
 package main
 
 import (
+	"bufio"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
-	"path/filepath"
+	"os"
+	"slices"
 	"strings"
 
-	"github.com/epithet-ssh/epithet/pkg/config"
-	"github.com/epithet-ssh/epithet/pkg/controlplane"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"gopkg.in/yaml.v3"
 )
 
 type InventoryCLI struct {
@@ -37,93 +37,228 @@ type InventoryCLI struct {
 	Check         bool     `help:"Validate inventory files, then exit" name:"check"`
 }
 
-type InventoryServeCLI struct{}
-
-func (_ *InventoryServeCLI) Run(c *InventoryCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	return c.runServer(logger, tlsCfg)
-}
-func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
-	if c.InventoryMode != "" && c.InventoryMode != "static" && c.InventoryMode != "enrollment" {
-		return fmt.Errorf("unknown inventory-mode %q", c.InventoryMode)
-	}
-	paths, err := config.ExpandGlobs(c.Static)
+func printInventory(v any) error {
+	// Preserve the API field names and source metadata when presenting records as YAML.
+	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	if len(paths) == 0 && (len(c.Static) > 0 || c.InventoryMode == "static") {
-		return fmt.Errorf("no inventory files match %s", strings.Join(c.Static, ", "))
+	var public any
+	if err = yaml.Unmarshal(data, &public); err != nil {
+		return err
 	}
-	mode := inventory.PrincipalMode(c.PrincipalMode)
-	if mode == "" {
-		mode = inventory.EpithetPrincipalV1
+	data, err = yaml.Marshal(public)
+	if err != nil {
+		return err
 	}
-	// Managed inventory can run without a static fallback.
-	var inv *inventory.Static
-	if len(paths) > 0 {
-		inv, err = inventory.NewStatic(paths, inventory.WithDefaultPrincipalMode(mode), inventory.WithoutUsers())
+	_, err = os.Stdout.Write(data)
+	return err
+}
+
+func (c *InventoryCLI) find(id string) (*inventoryapi.HostRecord, error) {
+	// Full IDs use the server's record index rather than downloading every host.
+	_, hexErr := hex.DecodeString(id)
+	if (len(id) == 64 && hexErr == nil) || strings.HasPrefix(id, "static:") {
+		response, err := c.request(inventoryapi.ControlRequest{Action: "get", ID: id})
 		if err != nil {
+			return nil, err
+		}
+		if response.Host == nil {
+			return nil, inventory.ErrNotFound
+		}
+		return response.Host, nil
+	}
+
+	resp, err := c.request(inventoryapi.ControlRequest{Action: "list"})
+	if err != nil {
+		return nil, err
+	}
+	var matches []inventoryapi.HostRecord
+	for _, h := range resp.Hosts {
+		if h.ID == id {
+			return &h, nil
+		}
+		match := strings.HasPrefix(h.ID, id)
+		for _, n := range h.Proposal.Names {
+			match = match || n == id
+		}
+		if match {
+			matches = append(matches, h)
+		}
+	}
+	if len(matches) == 1 {
+		return &matches[0], nil
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("ambiguous host; use the full record ID")
+	}
+	return nil, inventory.ErrNotFound
+}
+
+type InventoryListCLI struct {
+	Pending bool `help:"Show only pending requests"`
+}
+
+func (c *InventoryListCLI) Run(p *InventoryCLI) error {
+	r, err := p.request(inventoryapi.ControlRequest{Action: "list"})
+	if err != nil {
+		return err
+	}
+	displayNames := func(h inventoryapi.HostRecord) string {
+		if h.Pattern != "" {
+			return h.Pattern
+		}
+		return strings.Join(h.Proposal.Names, ", ")
+	}
+	slices.SortStableFunc(r.Hosts, func(a, b inventoryapi.HostRecord) int {
+		return strings.Compare(displayNames(a), displayNames(b))
+	})
+	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
+		return err
+	}
+	for _, h := range r.Hosts {
+		if c.Pending && h.Status != "pending" {
+			continue
+		}
+		id := h.ID
+		if len(id) == 64 && h.Source != "static" {
+			id = id[:12]
+		}
+		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, displayNames(h)); err != nil {
 			return err
 		}
 	}
-	var hosts inventory.Hosts = inv
-	var managed *inventory.Managed
-	if c.InventoryMode != "static" {
-		dir, err := serviceStatePath(c.StateDir, "inventory")
-		if err != nil {
-			return err
-		}
-		managed, err = inventory.OpenManaged(dir, inv)
-		if err != nil {
-			return err
-		}
-		defer managed.Close()
-		hosts = managed
+	return nil
+}
+
+type InventoryShowCLI struct {
+	Host string `arg:"" help:"Host record ID or unambiguous name"`
+}
+
+func (c *InventoryShowCLI) Run(p *InventoryCLI) error {
+	h, err := p.find(c.Host)
+	if err != nil {
+		return err
 	}
-	if c.Check {
-		fmt.Println("inventory OK")
+	return printInventory(h)
+}
+
+type InventoryEditCLI struct {
+	Host string `arg:""`
+}
+
+func (c *InventoryEditCLI) Run(p *InventoryCLI) error {
+	h, err := p.find(c.Host)
+	if err != nil {
+		return err
+	}
+	h, err = editInventoryHost(p, h, bufio.NewReader(os.Stdin))
+	if errors.Is(err, errCanceled) {
 		return nil
 	}
-	if c.CAPubkey == "" {
-		return fmt.Errorf("--ca-public-key is required")
-	}
-	key, err := resolveCAPubkey(c.CAPubkey, tlsCfg, logger)
 	if err != nil {
 		return err
 	}
-	var controlKey string
-	if c.ControlPubkey != "" {
-		controlKey, err = resolveCAPubkey(c.ControlPubkey, tlsCfg, logger)
-		if err != nil {
-			return err
-		}
-	}
-	handler, err := factservice.Handler(nil, hosts, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
-	if err != nil {
-		return err
-	}
-	mux := http.NewServeMux()
-	mux.Handle("/lookup", handler)
-	if controlKey != "" {
-		backend, err := (&controlplane.Backend{Store: managed}).Handler(sshcert.RawPublicKey(controlKey))
-		if err != nil {
-			return err
-		}
-		mux.Handle("/manage", backend)
-	}
-	logger.Info("starting inventory server", "listen", c.Listen)
-	return listenAndServe(c.Listen, mux)
+	return printInventory(h)
 }
 
-// Resolve paths only for enabled stores; static mode never opens managed state.
-func serviceStatePath(root string, elements ...string) (string, error) {
-	var err error
-	if root == "" {
-		root, err = config.SystemStateDir()
-	} else {
-		root, err = expandPath(root)
+func editInventoryHost(p *InventoryCLI, h *inventoryapi.HostRecord, input *bufio.Reader) (*inventoryapi.HostRecord, error) {
+	if h.Source == "static" || strings.HasPrefix(h.ID, "static:") {
+		return nil, fmt.Errorf("static record: edit the YAML files selected by inventory-static-file and restart inventory")
 	}
+	proposal, err := editProposal(inventory.ProposalFromControl(h.Proposal), input)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return filepath.Join(append([]string{root}, elements...)...), nil
+	submitted := proposal.ControlProposal()
+	r, err := p.request(inventoryapi.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &submitted})
+	if err != nil {
+		return nil, err
+	}
+	return r.Host, nil
+}
+
+type InventoryApproveCLI struct {
+	Host string `arg:""`
+}
+
+func (c *InventoryApproveCLI) Run(p *InventoryCLI) error {
+	h, err := p.find(c.Host)
+	if err != nil {
+		return err
+	}
+	if h.Status != "pending" {
+		return fmt.Errorf("only pending requests can be reviewed")
+	}
+	input := bufio.NewReader(os.Stdin)
+	for {
+		if err = printInventory(h); err != nil {
+			return err
+		}
+		choice, err := readChoice(input, "approve / edit / deny / [exit: default on Enter]: ")
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "", "x", "exit":
+			return nil
+		case "e", "edit":
+			updated, e := editInventoryHost(p, h, input)
+			if errors.Is(e, errCanceled) {
+				continue
+			}
+			if e != nil {
+				fmt.Fprintln(os.Stderr, e)
+				continue
+			}
+			h = updated
+		case "a", "approve", "d", "deny":
+			action := "approve"
+			if choice == "d" || choice == "deny" {
+				action = "deny"
+			}
+			r, e := p.request(inventoryapi.ControlRequest{Action: action, ID: h.ID, Revision: h.Revision})
+			if e != nil {
+				fmt.Fprintln(os.Stderr, e)
+				fresh, e2 := p.find(h.ID)
+				if e2 != nil {
+					return e2
+				}
+				h = fresh
+				if h.Status != "pending" {
+					return fmt.Errorf("request is now %s", h.Status)
+				}
+				continue
+			}
+			return printInventory(r.Host)
+		default:
+			fmt.Fprintln(os.Stderr, "Choose approve, edit, deny, or exit.")
+		}
+	}
+}
+
+type InventoryRemoveCLI struct {
+	Host string `arg:""`
+}
+
+func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
+	h, err := p.find(c.Host)
+	if err != nil {
+		return err
+	}
+	if h.Source == "static" {
+		return fmt.Errorf("static record: edit the YAML files selected by inventory-static-file and restart inventory")
+	}
+	_, err = p.request(inventoryapi.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
+	return err
+}
+
+type InventoryAuditCLI struct{}
+
+func (*InventoryAuditCLI) Run(p *InventoryCLI) error {
+	r, err := p.request(inventoryapi.ControlRequest{Action: "audit"})
+	if err != nil {
+		return err
+	}
+	return printInventory(r.Audit)
 }
