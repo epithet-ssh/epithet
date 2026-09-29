@@ -23,18 +23,16 @@ type HostEnrollCLI struct {
 	TokenFile string   `name:"token-file" help:"File containing a single-use enrollment token"`
 	Names     []string `name:"host-name" help:"Proposed DNS name (repeatable; overrides detection)"`
 
-	CAURL                           string   `name:"ca" placeholder:"URL" help:"CA bootstrap URL" required:""`
-	PrincipalDomain                 string   `name:"principal-domain" help:"Proposed principal domain (default: reuse the local domain file's value or generate one)"`
-	DomainFile                      string   `name:"principal-domain-file" help:"Principal-domain file (default: native system state directory)"`
-	CAPubkeyFile                    string   `name:"ca-public-key-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
-	PrincipalMode                   string   `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
-	SSHDConfigFile                  string   `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
-	SSHDFragmentFile                string   `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
-	SSHDBinary                      string   `name:"sshd-binary" help:"sshd executable used to validate configuration"`
-	EpithetBinary                   string   `name:"epithet-binary" help:"Epithet executable written into AuthorizedPrincipalsCommand"`
-	AuthorizedPrincipalsCommandUser string   `name:"authorized-principals-command-user" help:"Unprivileged account used for AuthorizedPrincipalsCommand" default:"nobody"`
-	ReloadCommand                   string   `name:"reload-command" help:"Service reload executable (default: platform native)"`
-	ReloadArgs                      []string `name:"reload-arg" help:"Argument for --reload-command (repeatable)"`
+	CAURL                           string `name:"ca" placeholder:"URL" help:"CA bootstrap URL" required:""`
+	PrincipalDomain                 string `name:"principal-domain" help:"Proposed principal domain (default: reuse the local domain file's value or generate one)"`
+	DomainFile                      string `name:"principal-domain-file" help:"Principal-domain file (default: native system state directory)"`
+	CAPubkeyFile                    string `name:"ca-public-key-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
+	PrincipalMode                   string `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
+	SSHDConfigFile                  string `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
+	SSHDFragmentFile                string `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
+	SSHDBinary                      string `name:"sshd-binary" help:"sshd executable used to validate configuration"`
+	EpithetBinary                   string `name:"epithet-binary" help:"Epithet executable written into AuthorizedPrincipalsCommand"`
+	AuthorizedPrincipalsCommandUser string `name:"authorized-principals-command-user" help:"Unprivileged account used for AuthorizedPrincipalsCommand" default:"nobody"`
 
 	sshdEnv *sshdEnvironment
 }

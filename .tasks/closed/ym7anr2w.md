@@ -3,7 +3,7 @@ yatl_version: 1
 title: Remove arbitrary sshd reload command overrides from host enrollment
 id: ym7anr2w
 created: 2026-09-28T21:30:22.127751Z
-updated: 2026-09-28T21:30:36.074002Z
+updated: 2026-09-29T02:15:32.357077Z
 author: Brian McCallister
 priority: high
 ---
@@ -26,3 +26,18 @@ This is deferred work. Other enrollment path/executable overrides and the separa
 # Log: 2026-09-28T21:30:22Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-29T02:12:39Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-29T02:15:27Z Brian McCallister
+
+Removed reload-command and reload-arg, their CLI fields, and custom reload resolution. Native platform commands and fallback sequences remain; unsupported platforms report no native reload command without suggesting removed flags. Tests now use native command names through the existing injected runner, including failure of all four Linux candidates followed by rollback and reload of the restored configuration. Existing invalid-configuration, conflict, real OpenSSH validation, and unchanged-configuration coverage passes. Removed documentation/audit entries; the combined cleanup leaves 71 distinct flags. Validation: make -B build, make test, removed-flag CLI rejection checks, and diff --check all pass.
+
+---
+# Log: 2026-09-29T02:15:32Z Brian McCallister
+
+Closed: Removed the requested flags and implementation paths, updated documentation and tests, and passed the full build/test suite.

@@ -235,8 +235,6 @@ func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
 		SSHDBinary:                      "/test/sshd",
 		EpithetBinary:                   "/test/epithet",
 		AuthorizedPrincipalsCommandUser: "nobody",
-		ReloadCommand:                   "/test/reload",
-		ReloadArgs:                      []string{"reload", "sshd"},
 		sshdEnv:                         env,
 	}
 
@@ -284,7 +282,6 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 		SSHDBinary:                      "/test/sshd",
 		EpithetBinary:                   "/test/epithet",
 		AuthorizedPrincipalsCommandUser: "nobody",
-		ReloadCommand:                   "/test/reload",
 		sshdEnv:                         env,
 	}
 	first, err := firstCommand.enroll(context.Background(), nil, tlsconfig.Config{Insecure: true})

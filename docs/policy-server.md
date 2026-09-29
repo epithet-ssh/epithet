@@ -466,8 +466,7 @@ previous configuration.
 
 The command reloads through the native service manager (`systemctl`/`service`,
 BSD rc, `launchctl`, SMF, AIX SRC, or PowerShell). Use `--sshd-config-file`, `--sshd-fragment-file`,
-`--sshd-binary`, `--epithet-binary`, or `--reload-command` with repeated
-`--reload-arg` options for a nonstandard installation.
+`--sshd-binary`, or `--epithet-binary` to select nonstandard installation paths.
 
 The printed domain is the value to put in this host's static-inventory entry.
 Enrollment defaults to `epithet-principal-v1` on Unix-like hosts; pass
@@ -506,10 +505,8 @@ matching inventory entry's `domain`.
 
 The domain is independent of SSH transport keys, so routine host-key rotation
 does not change principals. Changing the domain changes the SSH authorization
-boundary. The temporary `--accept-account-name` option
-also emits `%u` for a bounded migration from account-name certificates; while enabled, it restores the
-broader `account@CA-trust-domain` acceptance boundary and should not become
-permanent.
+boundary. The helper emits only the principal derived from that domain and
+account.
 
 The v1 derivation is public in `pkg/principal`: SHA-256 over three RFC 4251 SSH
 strings — `epithet-principal-v1`, the canonical domain text, and the byte-exact

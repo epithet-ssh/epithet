@@ -116,7 +116,7 @@ func TestConfigureSSHDConflictRollsBackBeforeReload(t *testing.T) {
 				require.ErrorIs(t, err, os.ErrNotExist)
 			}
 			for _, call := range runner.calls {
-				require.NotEqual(t, "/test/reload", call.name)
+				require.NotEqual(t, "systemctl", call.name)
 			}
 		})
 	}
@@ -150,7 +150,7 @@ func TestSSHDEnrollmentWithOpenSSH(t *testing.T) {
 			require.NoError(t, os.WriteFile(mainPath, []byte(original), 0o600))
 			reloads := 0
 			runner.run = func(_ int, name string, args []string) ([]byte, error) {
-				if name == "/test/reload" {
+				if name == "systemctl" {
 					reloads++
 					return nil, nil
 				}

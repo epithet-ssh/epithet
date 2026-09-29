@@ -61,19 +61,18 @@ type Server struct {
 //
 // It will only process a single ssh connection before terminating.
 func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
-	return start(caPubKey, "", false, "")
+	return start(caPubKey, "", "")
 }
 
 // StartWithEpithetAuthorizedPrincipals starts an sshd whose principal lookup
 // runs the supplied epithet binary against the server's generated domain.
-// acceptAccountName enables the helper's bounded migration overlap.
-func StartWithEpithetAuthorizedPrincipals(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool) (*Server, error) {
-	return StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey, epithetPath, acceptAccountName, "")
+func StartWithEpithetAuthorizedPrincipals(caPubKey sshcert.RawPublicKey, epithetPath string) (*Server, error) {
+	return StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey, epithetPath, "")
 }
 
 // StartWithEpithetAuthorizedPrincipalsInDomain starts an sshd in domain. An
 // empty domain generates the ordinary isolated per-host default.
-func StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool, domain principal.Domain) (*Server, error) {
+func StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey sshcert.RawPublicKey, epithetPath string, domain principal.Domain) (*Server, error) {
 	if !filepath.IsAbs(epithetPath) {
 		return nil, fmt.Errorf("epithet binary path must be absolute")
 	}
@@ -85,10 +84,10 @@ func StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey sshcert.RawPublicKey,
 			return nil, fmt.Errorf("invalid principal domain: %w", err)
 		}
 	}
-	return start(caPubKey, epithetPath, acceptAccountName, domain)
+	return start(caPubKey, epithetPath, domain)
 }
 
-func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName bool, domain principal.Domain) (*Server, error) {
+func start(caPubKey sshcert.RawPublicKey, epithetPath string, domain principal.Domain) (*Server, error) {
 	user, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("could not get current user: %w", err)
@@ -122,13 +121,9 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, acceptAccountName 
 		if err != nil {
 			return nil, fmt.Errorf("could not find env for AuthorizedPrincipalsCommand: %w", err)
 		}
-		migrationFlag := ""
-		if acceptAccountName {
-			migrationFlag = " --accept-account-name"
-		}
 		s.AuthorizedPrincipalsCommand = fmt.Sprintf(
-			"%s %s host authorized-principals --principal-domain-file %s/domain%s %%u",
-			envPath, epithetPath, s.Path, migrationFlag)
+			"%s %s host authorized-principals --principal-domain-file %s/domain %%u",
+			envPath, epithetPath, s.Path)
 	}
 
 	log.Printf("Starting sshd in %s", tmp_dir)

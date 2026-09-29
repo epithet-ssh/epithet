@@ -200,17 +200,8 @@ func (c *HostEnrollCLI) resolveSSHDSettings(env *sshdEnvironment) (*sshdSettings
 		}
 	}
 
-	reloads := defaults.reloads
-	if c.ReloadCommand != "" {
-		reloads = []sshdCommandSequence{{{
-			name: c.ReloadCommand,
-			args: append([]string(nil), c.ReloadArgs...),
-		}}}
-	} else if len(c.ReloadArgs) != 0 {
-		return nil, fmt.Errorf("reload-arg requires reload-command")
-	}
-	if len(reloads) == 0 {
-		return nil, fmt.Errorf("no default sshd reload command for %s; use --reload-command and repeat --reload-arg for its arguments", env.goos)
+	if len(defaults.reloads) == 0 {
+		return nil, fmt.Errorf("no native sshd reload command for %s", env.goos)
 	}
 
 	return &sshdSettings{
@@ -220,7 +211,7 @@ func (c *HostEnrollCLI) resolveSSHDSettings(env *sshdEnvironment) (*sshdSettings
 		epithetBinary:    epithetBinary,
 		principalMode:    mode,
 		commandUser:      c.AuthorizedPrincipalsCommandUser,
-		reloadCandidates: reloads,
+		reloadCandidates: defaults.reloads,
 	}, nil
 }
 

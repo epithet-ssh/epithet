@@ -2,7 +2,7 @@
 
 Snapshot: 2026-09-28, current working copy after the naming cleanup and flat TOML config lookup implementation.
 
-**74 distinct long flags; 29 runnable command paths.** Extracted from the actual Kong model without loading user configuration or starting services. Meanings and runtime notes were checked against the command implementations.
+**71 distinct long flags; 29 runnable command paths.** Extracted from the actual Kong model without loading user configuration or starting services. Meanings and runtime notes were checked against the command implementations.
 
 This describes implemented behavior. Proposed shared `--key-file`, `--source`, and `--static-file` names are **not implemented**. Neither `--directory-public-url` nor the proposed `--directory-lookup-url` / `--directory-admin-url` exists. The public management advertisement is `--control-public`.
 
@@ -29,16 +29,6 @@ This describes implemented behavior. Proposed shared `--key-file`, `--source`, a
 8. Main parsing and child reparsing layer explicit `--config` over default-file resolvers. See the `--config` entry.
 
 ## Flag catalog
-
-### --accept-account-name
-
-Also accept the literal account name during a bounded migration.
-
-**Accepted by:** `host authorized-principals`.
-
-| Declared scope | Value | Parser default | Parser-required | Short | Environment |
-| --- | --- | --- | --- | --- | --- |
-| `host authorized-principals` | bool | `false` | no | — | — |
 
 ### --after
 
@@ -838,30 +828,6 @@ Print only the token value.
 
 **Runtime / audit note:** On token creation, prints only the token value instead of the explanatory text and enrollment command.
 
-### --reload-arg
-
-Argument for --reload-command (repeatable).
-
-**Accepted by:** `host enroll`.
-
-| Declared scope | Value | Parser default | Parser-required | Short | Environment |
-| --- | --- | --- | --- | --- | --- |
-| `host enroll` | string (repeatable) | empty collection | no | — | — |
-
-**Runtime / audit note:** Repeatable argument to `--reload-command`. Each occurrence supplies an argument. Supplying reload arguments without an explicit reload command is a runtime error.
-
-### --reload-command
-
-Service reload executable (default: platform native).
-
-**Accepted by:** `host enroll`.
-
-| Declared scope | Value | Parser default | Parser-required | Short | Environment |
-| --- | --- | --- | --- | --- | --- |
-| `host enroll` | string | unset | no | — | — |
-
-**Runtime / audit note:** Executable invoked to reload sshd after enrollment changes. Defaults are platform-specific; this is not a shell command string.
-
 ### --revision
 
 Directory revision shown by groups list.
@@ -1050,8 +1016,8 @@ Each row lists every accepted non-global long flag, including inherited flags. A
 | `match` | — | `--host`, `--port`, `--user`, `--hash`, `--jump`, `--broker-socket` |
 | `control` | — | `--listen`, `--control-key-file`, `--directory`, `--directory-backend`, `--inventory-backend`, `--oidc-identity-mode`, `--oidc-user-id-claim`, `--oidc-issuer`, `--oidc-client-id`, `--oidc-client-secret`, `--directory-admin-user`, `--directory-admin-group`, `--inventory-admin-user`, `--inventory-admin-group`, `--scim-token`, `--scim-token-file` |
 | `ca` | — | `--control-public`, `--inventory`, `--directory`, `--oidc-identity-mode`, `--oidc-user-id-claim`, `--oidc-issuer`, `--oidc-client-id`, `--oidc-client-secret`, `--policy-file`, `--certificate-extension`, `--certificate-default-ttl`, `--ca-key-file`, `--listen` |
-| `host enroll` | — | `--token`, `--token-file`, `--host-name`, `--ca`, `--principal-domain`, `--principal-domain-file`, `--ca-public-key-file`, `--principal-mode`, `--sshd-config-file`, `--sshd-fragment-file`, `--sshd-binary`, `--epithet-binary`, `--authorized-principals-command-user`, `--reload-command`, `--reload-arg` |
-| `host authorized-principals` | `<account>` | `--principal-domain-file`, `--accept-account-name` |
+| `host enroll` | — | `--token`, `--token-file`, `--host-name`, `--ca`, `--principal-domain`, `--principal-domain-file`, `--ca-public-key-file`, `--principal-mode`, `--sshd-config-file`, `--sshd-fragment-file`, `--sshd-binary`, `--epithet-binary`, `--authorized-principals-command-user` |
+| `host authorized-principals` | `<account>` | `--principal-domain-file` |
 | `inventory serve` | — | `--agent-name`, `--broker-socket`, `--inventory-mode`, `--state-dir`, `--listen`, `--control-public-key`, `--ca-public-key`, `--inventory-static-file`, `--principal-mode`, `--check` |
 | `inventory list` | — | `--agent-name`, `--broker-socket`, `--inventory-mode`, `--state-dir`, `--listen`, `--control-public-key`, `--ca-public-key`, `--inventory-static-file`, `--principal-mode`, `--check`, `--pending` |
 | `inventory show` | `<host>` | `--agent-name`, `--broker-socket`, `--inventory-mode`, `--state-dir`, `--listen`, `--control-public-key`, `--ca-public-key`, `--inventory-static-file`, `--principal-mode`, `--check` |

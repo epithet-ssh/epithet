@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,41 +22,12 @@ func TestHostAuthorizedPrincipalsNormativeVector(t *testing.T) {
 		out.String())
 }
 
-func TestHostAuthorizedPrincipalsSupportsMigration(t *testing.T) {
-	path := writeDomain(t, "domain", vectorDomain)
-	cmd := HostAuthorizedPrincipalsCLI{
-		DomainFile:        path,
-		AcceptAccountName: true,
-		Account:           "ubuntu",
-	}
-
-	var out bytes.Buffer
-	require.NoError(t, cmd.writeAuthorizedPrincipals(&out))
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	require.Equal(t, []string{
-		"epithet-principal-v1-MTgFaDsSaL2IM0v4UljbMjiyxMUQiOK9KymVavQ2Y14",
-		"ubuntu",
-	}, lines)
-}
-
 func TestHostAuthorizedPrincipalsRejectsMultipleDomainsInOneFile(t *testing.T) {
 	path := writeDomain(t, "domain", vectorDomain+vectorDomain)
 	cmd := HostAuthorizedPrincipalsCLI{DomainFile: path, Account: "ubuntu"}
 
 	err := cmd.writeAuthorizedPrincipals(&bytes.Buffer{})
 	require.ErrorContains(t, err, "must contain exactly one line")
-}
-
-func TestHostAuthorizedPrincipalsRejectsLiteralAccountWithWhitespace(t *testing.T) {
-	path := writeDomain(t, "domain", vectorDomain)
-	cmd := HostAuthorizedPrincipalsCLI{
-		DomainFile:        path,
-		AcceptAccountName: true,
-		Account:           "not\na-principal",
-	}
-
-	err := cmd.writeAuthorizedPrincipals(&bytes.Buffer{})
-	require.ErrorContains(t, err, "cannot be emitted")
 }
 
 func TestHostAuthorizedPrincipalsRejectsMalformedDomain(t *testing.T) {

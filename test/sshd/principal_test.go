@@ -20,10 +20,10 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	testCA, caPublicKey := newPrincipalTestCA(t)
 	epithetBin := buildEpithet(t)
 
-	hostA, err := sshd.StartWithEpithetAuthorizedPrincipals(caPublicKey, epithetBin, false)
+	hostA, err := sshd.StartWithEpithetAuthorizedPrincipals(caPublicKey, epithetBin)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostA.Close() })
-	hostB, err := sshd.StartWithEpithetAuthorizedPrincipals(caPublicKey, epithetBin, false)
+	hostB, err := sshd.StartWithEpithetAuthorizedPrincipals(caPublicKey, epithetBin)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostB.Close() })
 
@@ -53,15 +53,36 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	require.Contains(t, out, "Permission denied")
 }
 
+func TestDestinationBoundHostRejectsLiteralAccountPrincipal(t *testing.T) {
+	testCA, caPublicKey := newPrincipalTestCA(t)
+	host, err := sshd.StartWithEpithetAuthorizedPrincipals(caPublicKey, buildEpithet(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	certificate := signPrincipalTestCertificate(t, testCA, userPublicKey, "literal-account-test", host.User)
+	a, err := agent.Start(testLogger(t), "", agent.Credential{
+		PrivateKey:  userPrivateKey,
+		Certificate: certificate,
+	})
+	require.NoError(t, err)
+	t.Cleanup(a.Close)
+
+	out, err := host.Ssh(a)
+	require.Error(t, err, "a literal account principal must not authorize a destination-bound host")
+	require.Contains(t, out, "Permission denied")
+}
+
 func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
 	testCA, caPublicKey := newPrincipalTestCA(t)
 	epithetBin := buildEpithet(t)
 	domain := principal.Domain("ai-worker-pool-1")
 
-	hostA, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, false, domain)
+	hostA, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, domain)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostA.Close() })
-	hostB, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, false, domain)
+	hostB, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, domain)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostB.Close() })
 

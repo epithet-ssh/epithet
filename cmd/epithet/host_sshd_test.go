@@ -141,7 +141,7 @@ func TestWindowsDefaultsToAccountNameAndRejectsHashedPrincipals(t *testing.T) {
 	require.ErrorContains(t, err, "not supported by Windows OpenSSH")
 }
 
-func TestUnknownPlatformAcceptsCompleteOverrides(t *testing.T) {
+func TestUnknownPlatformRejectsEnrollmentWithoutNativeReload(t *testing.T) {
 	env := &sshdEnvironment{
 		goos:       "unsupported-os",
 		getenv:     func(string) string { return "" },
@@ -153,12 +153,9 @@ func TestUnknownPlatformAcceptsCompleteOverrides(t *testing.T) {
 		SSHDBinary:                      "/opt/ssh/sbin/sshd",
 		EpithetBinary:                   "/opt/epithet",
 		AuthorizedPrincipalsCommandUser: "nobody",
-		ReloadCommand:                   "/opt/ssh/reload",
 	}
-	settings, err := cmd.resolveSSHDSettings(env)
-	require.NoError(t, err)
-	require.Equal(t, "/opt/ssh/sshd_config", settings.configFile)
-	require.Equal(t, "/opt/ssh/reload", settings.reloadCandidates[0][0].name)
+	_, err := cmd.resolveSSHDSettings(env)
+	require.ErrorContains(t, err, "no native sshd reload command for unsupported-os")
 }
 
 func TestRenderSSHDFragmentDestinationBound(t *testing.T) {
@@ -275,7 +272,7 @@ func TestConfigureSSHDInstallsValidCandidateAndIsIdempotent(t *testing.T) {
 	resolvedMainPath, err := filepath.EvalSymlinks(mainPath)
 	require.NoError(t, err)
 	require.Equal(t, []string{"-t", "-f", resolvedMainPath}, runner.calls[0].args)
-	require.Equal(t, "/test/reload", runner.calls[4].name)
+	require.Equal(t, "systemctl", runner.calls[4].name)
 	require.Equal(t, []string{"reload", "sshd"}, runner.calls[4].args)
 
 	main, err := os.ReadFile(mainPath)
@@ -331,9 +328,9 @@ func TestConfigureSSHDRollsBackAndReloadsAfterReloadFailure(t *testing.T) {
 	cmd, enrollment, env, runner, mainPath, fragmentPath := newSSHDConfigurationTest(t)
 	reloadCalls := 0
 	runner.run = func(_ int, name string, _ []string) ([]byte, error) {
-		if name == "/test/reload" {
+		if name == "systemctl" || name == "service" {
 			reloadCalls++
-			if reloadCalls == 1 {
+			if reloadCalls <= 4 {
 				return []byte("reload failed"), errors.New("exit status 1")
 			}
 		}
@@ -342,7 +339,7 @@ func TestConfigureSSHDRollsBackAndReloadsAfterReloadFailure(t *testing.T) {
 
 	err := configureSSHD(context.Background(), enrollment, mustSSHDSettings(t, cmd, env), env)
 	require.ErrorContains(t, err, "reloading sshd with enrolled configuration")
-	require.Equal(t, 2, reloadCalls, "the restored configuration must be reloaded")
+	require.Equal(t, 5, reloadCalls, "after all four Linux candidates fail, the restored configuration must be reloaded")
 	requireFileContents(t, mainPath, "Port 22\n")
 	_, statErr := os.Stat(fragmentPath)
 	require.ErrorIs(t, statErr, os.ErrNotExist)
@@ -382,8 +379,6 @@ func newSSHDConfigurationTest(t *testing.T) (*HostEnrollCLI, *hostEnrollment, *s
 		SSHDBinary:                      "/test/sshd",
 		EpithetBinary:                   "/test/epithet",
 		AuthorizedPrincipalsCommandUser: "nobody",
-		ReloadCommand:                   "/test/reload",
-		ReloadArgs:                      []string{"reload", "sshd"},
 	}
 	enrollment := &hostEnrollment{
 		DomainFile:   filepath.Join(dir, "state", "domain"),

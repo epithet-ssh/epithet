@@ -3,7 +3,7 @@ yatl_version: 1
 title: Investigate and likely remove accept-account-name migration support
 id: vf1pbpc0
 created: 2026-09-28T21:14:13.479015Z
-updated: 2026-09-28T21:14:27.484334Z
+updated: 2026-09-29T02:15:32.371431Z
 author: Brian McCallister
 priority: high
 ---
@@ -29,3 +29,18 @@ This task is deferred follow-up; the current request is to record the investigat
 # Log: 2026-09-28T21:14:13Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-29T02:12:39Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-09-29T02:15:27Z Brian McCallister
+
+Traced the option to ca25e503402e51a32b5c97a418d5c5e25fd86c2e (feat: add the host authorized-principals command), following the explicit temporary literal-account overlap item in zs6v5tt8 / design commit 4a91466. Subsequent host-key, host-ID, and principal-domain refactors retained it. Historical discussion did include trying the rollout without losing access to untouched hosts, but does not establish approval for this specific flag; the assistant later acknowledged that its proposed enrollment overlap option was not yet approved. No current requirement unrelated to migration was found. Removed the flag, literal output/validation code, migration tests, fixture parameter, and documentation. The helper now emits exactly one derived principal. Added a real SSH rejection test for a signed bare-account certificate; existing destination isolation and shared-domain tests pass. Updated the CLI audit. Validation: make -B build, make test, removed-flag CLI rejection checks, and diff --check all pass.
+
+---
+# Log: 2026-09-29T02:15:32Z Brian McCallister
+
+Closed: Removed the requested flags and implementation paths, updated documentation and tests, and passed the full build/test suite.
