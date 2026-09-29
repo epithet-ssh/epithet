@@ -3,7 +3,7 @@ yatl_version: 1
 title: Integrate host enrollment with managed registration
 id: pmnvcb0h
 created: 2026-09-03T15:34:59.839315Z
-updated: 2026-09-12T04:17:41.493731Z
+updated: 2026-09-29T02:18:09.787221Z
 author: Brian McCallister
 priority: high
 tags:
@@ -50,3 +50,8 @@ Added blocker: 930f5gpq
 # Log: 2026-09-12T04:17:41Z Brian McCallister
 
 Initial CA-discovered managed enrollment integration shipped in zf00zcgj, including editor proposals, local sshd preparation, durable credential retries, and explicit pending record IDs. Named/shared domains and endpoint failover remain outside this milestone.
+
+---
+# Log: 2026-09-29T02:18:09Z Brian McCallister
+
+Closed: Superseded / alternate chosen, per user decision. Retire the historical inventory-owned host-control chain in favor of the implemented enrollment and separate control-service approach. This closure records a design decision, not completion of every original acceptance criterion; deferred features in this chain are not carried forward as requirements.

@@ -23,12 +23,12 @@ type DirectoryCLI struct {
 	Check         bool              `help:"Validate directory configuration and storage"`
 
 	ManagementCLI `embed:""`
-	Users         DirectoryUsersCLI  `cmd:"users" help:"Inspect users in the selected directory"`
-	Groups        DirectoryGroupsCLI `cmd:"groups" help:"Inspect and manage SCIM group policy bindings"`
+	Users         DirectoryUsersCLI  `cmd:"users" aliases:"u" help:"Inspect users in the selected directory"`
+	Groups        DirectoryGroupsCLI `cmd:"groups" aliases:"g" help:"Inspect and manage SCIM group policy bindings"`
 }
 
 type DirectoryUsersCLI struct {
-	List DirectoryUsersListCLI `cmd:"list" default:"withargs" help:"List user identities, active status, and policy groups"`
+	List DirectoryUsersListCLI `cmd:"list" aliases:"l" default:"withargs" help:"List user identities, active status, and policy groups"`
 }
 
 type DirectoryUsersListCLI struct {

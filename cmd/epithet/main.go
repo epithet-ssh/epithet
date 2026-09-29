@@ -43,7 +43,7 @@ var cli struct {
 	CA        CACLI        `cmd:"ca" help:"Run the epithet CA server"`
 	Host      HostCLI      `cmd:"host" help:"Manage and authorize Epithet hosts"`
 	Inventory InventoryCLI `cmd:"inventory" aliases:"i,inv" help:"Serve inventory services or administer host inventory"`
-	Directory DirectoryCLI `cmd:"directory" help:"Inspect directory users and manage group policy bindings"`
+	Directory DirectoryCLI `cmd:"directory" aliases:"d,di,dir" help:"Inspect directory users and manage group policy bindings"`
 	Policy    PolicyCLI    `cmd:"policy" help:"Validate Writ policy"`
 	Router    RouterCLI    `cmd:"router" hidden:"" help:"Internal HTTP router for server"`
 	Server    ServerCLI    `cmd:"server" help:"Supervise router, CA, control, directory, and inventory services"`

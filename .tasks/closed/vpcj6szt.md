@@ -3,7 +3,7 @@ yatl_version: 1
 title: Register hosts and principal-domain membership
 id: vpcj6szt
 created: 2026-09-03T03:25:28.969057Z
-updated: 2026-09-12T04:17:41.481271Z
+updated: 2026-09-29T02:18:09.767593Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -63,3 +63,8 @@ prose to distinguish the domain field from a DNS domain.
 # Log: 2026-09-12T04:17:41Z Brian McCallister
 
 File-backed generated-domain host registry shipped in zf00zcgj, including stable IDs, independent host credentials, source precedence, and conflicting pending review. Named/shared-domain enrollment remains deferred; see docs/dynamic-inventory.md.
+
+---
+# Log: 2026-09-29T02:18:09Z Brian McCallister
+
+Closed: Superseded / alternate chosen, per user decision. Retire the historical inventory-owned host-control chain in favor of the implemented enrollment and separate control-service approach. This closure records a design decision, not completion of every original acceptance criterion; deferred features in this chain are not carried forward as requirements.

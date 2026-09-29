@@ -3,7 +3,7 @@ yatl_version: 1
 title: Enforce client trust in enrolled host keys
 id: b7pbqbss
 created: 2026-09-03T03:26:05.067815Z
-updated: 2026-09-03T03:26:10.291447Z
+updated: 2026-09-29T02:18:09.804821Z
 author: Brian McCallister
 priority: critical
 tags:
@@ -20,3 +20,8 @@ Publish enrolled host keys in known_hosts form and integrate an authenticated lo
 # Log: 2026-09-03T03:26:05Z Brian McCallister
 
 Created task.
+
+---
+# Log: 2026-09-29T02:18:09Z Brian McCallister
+
+Closed: Superseded / alternate chosen, per user decision. Retire the historical inventory-owned host-control chain in favor of the implemented enrollment and separate control-service approach. This closure records a design decision, not completion of every original acceptance criterion; deferred features in this chain are not carried forward as requirements.
