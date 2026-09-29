@@ -21,11 +21,11 @@ type InventoryCLI struct {
 	InventoryMode string              `help:"Host inventory mode: static files only, or enrollment with optional static files" name:"inventory-mode" default:"enrollment" enum:"static,enrollment"`
 	StateDir      string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
 	Serve         InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve directory and inventory"`
-	List          InventoryListCLI    `cmd:"list" aliases:"l,li,lis" help:"List static and dynamic host records"`
-	Show          InventoryShowCLI    `cmd:"show" aliases:"s,sh,show" help:"Show one host record"`
-	Edit          InventoryEditCLI    `cmd:"edit" aliases:"e,ed,edi" help:"Edit a dynamic host in EDITOR"`
-	Approve       InventoryApproveCLI `cmd:"approve" aliases:"a,ap,app" help:"Review, edit, approve, or deny enrollment"`
-	Remove        InventoryRemoveCLI  `cmd:"remove" help:"Withdraw a dynamic host from inventory"`
+	List          InventoryListCLI    `cmd:"list" aliases:"l,ls" help:"List static and dynamic host records"`
+	Show          InventoryShowCLI    `cmd:"show" aliases:"s,sh" help:"Show one host record"`
+	Edit          InventoryEditCLI    `cmd:"edit" aliases:"e,ed" help:"Edit a dynamic host in EDITOR"`
+	Approve       InventoryApproveCLI `cmd:"approve" aliases:"a,app" help:"Review, edit, approve, or deny enrollment"`
+	Remove        InventoryRemoveCLI  `cmd:"remove" aliases:"rm" help:"Withdraw a dynamic host from inventory"`
 	Token         InventoryTokenCLI   `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
 	Audit         InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
 
