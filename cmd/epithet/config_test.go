@@ -46,6 +46,27 @@ after = 9007199254740993
 	require.EqualValues(t, 9007199254740993, root.Directory.Groups.Audit.After)
 }
 
+func TestFlatConfigMultilineInlineTable(t *testing.T) {
+	root := cli
+	resolver, err := loadCLIConfig(strings.NewReader(`
+certificate-extension = {
+  permit-pty = "",
+  permit-user-rc = "",
+  permit-port-forwarding = ""
+}
+certificate-default-ttl = "5m"
+`))
+	require.NoError(t, err)
+	parser, err := kong.New(&root, kong.Vars{"version": "test"}, kong.Resolvers(resolver))
+	require.NoError(t, err)
+	_, err = parser.Parse([]string{"ca", "--directory", "https://directory.example/", "--inventory", "https://inventory.example/"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"permit-pty": "", "permit-user-rc": "", "permit-port-forwarding": "",
+	}, root.CA.Extension)
+	require.Equal(t, "5m", root.CA.DefaultExpiration)
+}
+
 func TestFlatConfigPrecedence(t *testing.T) {
 	for _, tc := range []struct {
 		name, config, env string

@@ -292,7 +292,7 @@ Include ~/.epithet/run/*/ssh-config.conf
 
 `Tag`/`Match tagged` requires OpenSSH 9.4+ (macOS Sequoia and Ubuntu 24.04 both qualify).
 
-Config files use flat TOML with exact long flag names as top-level keys, without
+Config files use flat TOML 1.1 with exact long flag names as top-level keys, without
 command sections. Kong selects the command, looks up each flag's default, and
 converts it to the flag's declared type. Keys that the selected command does not
 look up have no effect. The loader does not maintain a separate config schema.
@@ -305,13 +305,17 @@ list rather than accumulating across files. Duplicate keys within a file are
 TOML errors. YAML/JSON service configuration is no longer loaded; static directory
 and inventory data files remain YAML.
 
-List-valued flags use arrays even for one item. Maps use inline tables:
+List-valued flags use arrays even for one item. Maps use inline tables, which can
+span multiple lines and allow trailing commas:
 
 ```toml
 ca = ["https://ca.example.com/"]
 agent-name = "work"
 ca-timeout = "30s"
-certificate-extension = { permit-pty = "", permit-port-forwarding = "" }
+certificate-extension = {
+  permit-pty = "",
+  permit-port-forwarding = "",
+}
 ```
 
 `match`'s connection inputs are CLI-only and bypass config lookup. Its global
