@@ -67,9 +67,9 @@ type AgentCLI struct {
 
 	Login    AgentLoginCLI    `cmd:"login" help:"Authenticate the running agent without requesting a certificate"`
 	Logout   AgentLogoutCLI   `cmd:"logout" help:"Clear this profile's certificate agents and login state"`
-	Identity AgentIdentityCLI `cmd:"identity" aliases:"id,ide,iden,ident" help:"Authenticate the running agent and print its OIDC identity"`
+	Identity AgentIdentityCLI `cmd:"identity" aliases:"id,ident" help:"Authenticate the running agent and print its OIDC identity"`
 	Start    AgentStartCLI    `cmd:"" default:"withargs" help:"Start the epithet agent"`
-	Inspect  AgentInspectCLI  `cmd:"inspect" aliases:"in,ins,insp" help:"Inspect broker state (certificates, agents)"`
+	Inspect  AgentInspectCLI  `cmd:"inspect" aliases:"i, in,ins,list,ls" help:"Inspect broker state (certificates, agents)"`
 	Kill     AgentKillCLI     `cmd:"kill" help:"Kill one agent and discard its certificate"`
 }
 

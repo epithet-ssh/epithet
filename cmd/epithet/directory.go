@@ -28,7 +28,7 @@ type DirectoryCLI struct {
 }
 
 type DirectoryUsersCLI struct {
-	List DirectoryUsersListCLI `cmd:"list" aliases:"l" default:"withargs" help:"List user identities, active status, and policy groups"`
+	List DirectoryUsersListCLI `cmd:"list" aliases:"l,ls" default:"withargs" help:"List user identities, active status, and policy groups"`
 }
 
 type DirectoryUsersListCLI struct {
@@ -64,7 +64,7 @@ func (c *DirectoryUsersListCLI) writeOutput(w io.Writer, snapshot *inventoryapi.
 // Minimal management uses the existing agent-authenticated inventory transport.
 // Rebinding explicitly names the target ID and the revision previously reviewed.
 type DirectoryGroupsCLI struct {
-	List  DirectoryGroupsListCLI  `cmd:"list" default:"withargs" help:"List directory groups, policy aliases, and conflicts"`
+	List  DirectoryGroupsListCLI  `cmd:"list" aliases:"l,ls" default:"withargs" help:"List directory groups, policy aliases, and conflicts"`
 	Bind  DirectoryGroupsBindCLI  `cmd:"bind" help:"Assign or explicitly rebind a policy alias to a SCIM group"`
 	Audit DirectoryGroupsAuditCLI `cmd:"audit" help:"Show a page of directory mutation and binding audit"`
 }

@@ -20,7 +20,7 @@ endif
 all: clean test build		## run tests and build binaries
 
 epithet:
-	go build ./cmd/epithet
+	go build -trimpath ./cmd/epithet
 
 .PHONY: build
 build: epithet
