@@ -11,13 +11,13 @@ import (
 	"syscall"
 )
 
-func validateAuthorizedPrincipalsAccess(binary, domainPath, caKeyPath, commandUser string, destinationBound bool) error {
-	resolvedDomain, err := filepath.EvalSymlinks(domainPath)
+func validateAuthorizedPrincipalsAccess(binary, realmPath, caKeyPath, commandUser string, destinationBound bool) error {
+	resolvedRealm, err := filepath.EvalSymlinks(realmPath)
 	if err != nil {
-		return fmt.Errorf("resolving principal-domain file %s: %w", domainPath, err)
+		return fmt.Errorf("resolving principal-realm file %s: %w", realmPath, err)
 	}
-	if err := requireRootControlledPath(resolvedDomain); err != nil {
-		return fmt.Errorf("principal-domain file: %w", err)
+	if err := requireRootControlledPath(resolvedRealm); err != nil {
+		return fmt.Errorf("principal-realm file: %w", err)
 	}
 	resolvedCAKey, err := filepath.EvalSymlinks(caKeyPath)
 	if err != nil {
@@ -83,8 +83,8 @@ func validateAuthorizedPrincipalsAccess(binary, domainPath, caKeyPath, commandUs
 		return fmt.Errorf("AuthorizedPrincipalsCommand: %w", err)
 	}
 
-	if err := requirePathAccess(resolvedDomain, uint32(uid), groups, 0o4, commandUser); err != nil {
-		return fmt.Errorf("principal-domain file: %w", err)
+	if err := requirePathAccess(resolvedRealm, uint32(uid), groups, 0o4, commandUser); err != nil {
+		return fmt.Errorf("principal-realm file: %w", err)
 	}
 	return nil
 }

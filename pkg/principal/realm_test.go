@@ -8,29 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenerateHostReturnsCanonicalDomain(t *testing.T) {
-	domain, err := GenerateHostDomain()
+func TestGenerateHostReturnsCanonicalRealm(t *testing.T) {
+	realm, err := GenerateHostRealm()
 	require.NoError(t, err)
-	require.NoError(t, domain.Validate())
-	require.True(t, domain.IsGeneratedHost())
-	require.Len(t, domain.String(), len(generatedHostPrefixV1)+encodedSize)
+	require.NoError(t, realm.Validate())
+	require.True(t, realm.IsGeneratedHost())
+	require.Len(t, realm.String(), len(generatedHostPrefixV1)+encodedSize)
 }
 
-func TestParseNamedDomain(t *testing.T) {
-	for _, value := range []string{"floop", "ai-worker-pool-1", "prod.ssh_workers"} {
+func TestParseNamedRealm(t *testing.T) {
+	for _, value := range []string{"floop", "Floop", "AI-worker-Pool-1", "prod.ssh_workers"} {
 		t.Run(value, func(t *testing.T) {
-			domain, err := ParseNamedDomain(value)
+			realm, err := ParseNamedRealm(value)
 			require.NoError(t, err)
-			require.Equal(t, Domain(value), domain)
-			require.False(t, domain.IsGeneratedHost())
+			require.Equal(t, Realm(value), realm)
+			require.False(t, realm.IsGeneratedHost())
 		})
 	}
 }
 
-func TestParseRejectsMalformedNamedDomain(t *testing.T) {
+func TestParseRejectsMalformedNamedRealm(t *testing.T) {
 	for name, value := range map[string]string{
 		"empty":             "",
-		"uppercase":         "Floop",
 		"leading hyphen":    "-floop",
 		"trailing hyphen":   "floop-",
 		"space":             "ai worker",
@@ -40,43 +39,43 @@ func TestParseRejectsMalformedNamedDomain(t *testing.T) {
 		"too long":          strings.Repeat("a", maxNamedLength+1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := ParseDomain(value)
+			_, err := ParseRealm(value)
 			require.Error(t, err)
 		})
 	}
 }
 
-func TestParseGeneratedHostDomain(t *testing.T) {
+func TestParseGeneratedHostRealm(t *testing.T) {
 	payload := base64.RawURLEncoding.EncodeToString(make([]byte, entropySize))
 	want := generatedHostPrefixV1 + payload
 
-	got, err := ParseDomain(want)
+	got, err := ParseRealm(want)
 	require.NoError(t, err)
-	require.Equal(t, Domain(want), got)
+	require.Equal(t, Realm(want), got)
 	require.True(t, got.IsGeneratedHost())
-	_, err = ParseNamedDomain(want)
+	_, err = ParseNamedRealm(want)
 	require.ErrorContains(t, err, "reserved")
 }
 
-func TestParseRejectsMalformedGeneratedDomain(t *testing.T) {
+func TestParseRejectsMalformedGeneratedRealm(t *testing.T) {
 	for _, value := range []string{
 		GeneratedHostSchemeV1,
 		generatedHostPrefixV1 + "short",
 		generatedHostPrefixV1 + strings.Repeat("!", encodedSize),
 	} {
-		_, err := ParseDomain(value)
+		_, err := ParseRealm(value)
 		require.Error(t, err)
 	}
 }
 
 func TestTextRoundTrip(t *testing.T) {
-	want, err := GenerateHostDomain()
+	want, err := GenerateHostRealm()
 	require.NoError(t, err)
 
 	text, err := want.MarshalText()
 	require.NoError(t, err)
 
-	var got Domain
+	var got Realm
 	require.NoError(t, got.UnmarshalText(text))
 	require.Equal(t, want, got)
 }

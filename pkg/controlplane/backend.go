@@ -181,6 +181,14 @@ func (c *Backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		var h *inventory.HostRecord
 		h, err = c.Store.Enroll(inventory.ProposalFromControl(*req.Host), req.Token)
 		resp.Host = controlRecord(h)
+	case "add-pattern":
+		if req.Host == nil {
+			err = fmt.Errorf("pattern proposal is required")
+			break
+		}
+		var h *inventory.HostRecord
+		h, err = c.Store.AddPattern(actor, inventory.ProposalFromControl(*req.Host))
+		resp.Host = controlRecord(h)
 	case "list":
 		var hosts []inventory.HostRecord
 		hosts, err = c.Store.List()

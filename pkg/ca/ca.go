@@ -188,7 +188,7 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 	}
 	expected := conn.RemoteUser
 	if host.Principal.Mode == "epithet-principal-v1" {
-		expected, err = principal.DeriveV1(principal.Domain(host.Principal.Domain), conn.RemoteUser)
+		expected, err = principal.DeriveV1(principal.Realm(host.Principal.Realm), conn.RemoteUser)
 		if err != nil {
 			return nil, err
 		}

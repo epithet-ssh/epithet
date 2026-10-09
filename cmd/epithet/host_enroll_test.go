@@ -21,12 +21,12 @@ func TestHostEnrollCLIModelAllowsPlatformDependentPrincipalModeDefault(t *testin
 	var cmd HostEnrollCLI
 	parser, err := kong.New(&cmd)
 	require.NoError(t, err)
-	_, err = parser.Parse([]string{"--ca", "https://ca.example/", "--principal-domain", "fleet"})
+	_, err = parser.Parse([]string{"--ca", "https://ca.example/", "--principal-realm", "fleet"})
 	require.NoError(t, err)
-	require.Equal(t, "fleet", cmd.PrincipalDomain)
+	require.Equal(t, "fleet", cmd.PrincipalRealm)
 }
 
-func TestHostEnrollExplicitDomainPreservesExistingState(t *testing.T) {
+func TestHostEnrollExplicitRealmPreservesExistingState(t *testing.T) {
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, pub)
@@ -34,21 +34,21 @@ func TestHostEnrollExplicitDomainPreservesExistingState(t *testing.T) {
 	t.Cleanup(server.Close)
 	for _, tc := range []struct{ name, requested, failure string }{
 		{"matching", "fleet", ""},
-		{"conflicting", "other", "conflicts with the installed domain"},
-		{"invalid", "not a domain", "invalid principal-domain"},
+		{"conflicting", "other", "conflicts with the installed realm"},
+		{"invalid", "not a realm", "invalid principal-realm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			cmd := HostEnrollCLI{CAURL: server.URL, PrincipalDomain: tc.requested, DomainFile: filepath.Join(dir, "domain"), CAPubkeyFile: filepath.Join(dir, "ca.pub")}
-			require.NoError(t, os.WriteFile(cmd.DomainFile, []byte("fleet\n"), 0644))
+			cmd := HostEnrollCLI{CAURL: server.URL, PrincipalRealm: tc.requested, RealmFile: filepath.Join(dir, "realm"), CAPubkeyFile: filepath.Join(dir, "ca.pub")}
+			require.NoError(t, os.WriteFile(cmd.RealmFile, []byte("fleet\n"), 0644))
 			state, err := cmd.prepareState(t.Context(), nil, tlsconfig.Config{Insecure: true})
 			if tc.failure != "" {
 				require.ErrorContains(t, err, tc.failure)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, principal.Domain("fleet"), state.Domain)
+				require.Equal(t, principal.Realm("fleet"), state.Realm)
 			}
-			requireFileContents(t, cmd.DomainFile, "fleet\n")
+			requireFileContents(t, cmd.RealmFile, "fleet\n")
 			require.NoFileExists(t, cmd.CAPubkeyFile)
 		})
 	}
@@ -61,7 +61,7 @@ func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) 
 	require.NoError(t, os.WriteFile(sshdConfig, nil, 0o600))
 	cmd := HostEnrollCLI{
 		CAURL:          "https://ca.example.com/",
-		DomainFile:     filepath.Join(dir, "domain"),
+		RealmFile:      filepath.Join(dir, "realm"),
 		CAPubkeyFile:   filepath.Join(dir, "epithet-ca.pub"),
 		PrincipalMode:  "mystery",
 		SSHDConfigFile: sshdConfig,
@@ -78,7 +78,7 @@ func TestHostEnrollRejectsUnknownPrincipalModeBeforeCreatingState(t *testing.T) 
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestHostEnrollCreatesDomainAndCAPublicKey(t *testing.T) {
+func TestHostEnrollCreatesRealmAndCAPublicKey(t *testing.T) {
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Link", `<enroll>; rel="https://epithet.dev/rel/enroll"`)
@@ -89,28 +89,28 @@ func TestHostEnrollCreatesDomainAndCAPublicKey(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        server.URL,
-		DomainFile:   filepath.Join(dir, "domain"),
+		RealmFile:    filepath.Join(dir, "realm"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
 	result, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	require.NoDirExists(t, dir, "preparation must not install state")
-	reviewedDomain := result.Domain
+	reviewedRealm := result.Realm
 	require.NoError(t, result.install(nil))
-	require.Equal(t, reviewedDomain, result.Domain)
-	require.True(t, result.DomainCreated)
+	require.Equal(t, reviewedRealm, result.Realm)
+	require.True(t, result.RealmCreated)
 	require.True(t, result.CAPublicKeyCreated)
 	require.Equal(t, pub, result.CAPublicKey)
 	require.Equal(t, server.URL, result.CAFinalURL)
 	require.Equal(t, []string{`<enroll>; rel="https://epithet.dev/rel/enroll"`}, result.AdvertisedLinkFields)
 
-	storedDomain, err := principal.ReadDomainFile(cmd.DomainFile)
+	storedRealm, err := principal.ReadRealmFile(cmd.RealmFile)
 	require.NoError(t, err)
-	require.Equal(t, result.Domain, storedDomain)
+	require.Equal(t, result.Realm, storedRealm)
 	storedKey, err := os.ReadFile(cmd.CAPubkeyFile)
 	require.NoError(t, err)
 	require.Equal(t, string(pub), string(storedKey))
-	requireFileMode(t, cmd.DomainFile, 0o644)
+	requireFileMode(t, cmd.RealmFile, 0o644)
 	requireFileMode(t, cmd.CAPubkeyFile, 0o644)
 }
 
@@ -124,7 +124,7 @@ func TestHostEnrollRerunIsIdempotent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        server.URL,
-		DomainFile:   filepath.Join(dir, "domain"),
+		RealmFile:    filepath.Join(dir, "realm"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
 	first, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
@@ -133,12 +133,12 @@ func TestHostEnrollRerunIsIdempotent(t *testing.T) {
 	second, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	require.NoError(t, second.install(nil))
-	require.Equal(t, first.Domain, second.Domain)
-	require.False(t, second.DomainCreated)
+	require.Equal(t, first.Realm, second.Realm)
+	require.False(t, second.RealmCreated)
 	require.False(t, second.CAPublicKeyCreated)
 }
 
-func TestHostEnrollRejectsConflictingCAWithoutCreatingDomain(t *testing.T) {
+func TestHostEnrollRejectsConflictingCAWithoutCreatingRealm(t *testing.T) {
 	fetched := newTestCAPublicKey(t)
 	existing := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,14 +147,14 @@ func TestHostEnrollRejectsConflictingCAWithoutCreatingDomain(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dir := t.TempDir()
-	domainPath := filepath.Join(dir, "domain")
+	realmPath := filepath.Join(dir, "realm")
 	caKeyPath := filepath.Join(dir, "ca.pub")
 	require.NoError(t, os.WriteFile(caKeyPath, []byte(existing), 0o644))
-	cmd := HostEnrollCLI{CAURL: server.URL, DomainFile: domainPath, CAPubkeyFile: caKeyPath}
+	cmd := HostEnrollCLI{CAURL: server.URL, RealmFile: realmPath, CAPubkeyFile: caKeyPath}
 
 	_, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.ErrorContains(t, err, "conflicts with the key returned by the CA")
-	_, err = os.Stat(domainPath)
+	_, err = os.Stat(realmPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	data, err := os.ReadFile(caKeyPath)
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestHostEnrollInvalidResponseLeavesHostStateAbsent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        server.URL,
-		DomainFile:   filepath.Join(dir, "domain"),
+		RealmFile:    filepath.Join(dir, "realm"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 	}
 	_, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
@@ -187,7 +187,7 @@ func TestHostEnrollFailedRequestLeavesHostStateAbsent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	cmd := HostEnrollCLI{
 		CAURL:        url,
-		DomainFile:   filepath.Join(dir, "domain"),
+		RealmFile:    filepath.Join(dir, "realm"),
 		CAPubkeyFile: filepath.Join(dir, "epithet-ca.pub"),
 	}
 	_, err := cmd.prepareState(context.Background(), nil, tlsconfig.Config{Insecure: true})
@@ -196,14 +196,14 @@ func TestHostEnrollFailedRequestLeavesHostStateAbsent(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestHostEnrollDefaultsCAKeyBesideOverriddenDomain(t *testing.T) {
-	domainPath := filepath.Join(t.TempDir(), "custom", "domain")
-	cmd := HostEnrollCLI{DomainFile: domainPath}
+func TestHostEnrollDefaultsCAKeyBesideOverriddenRealm(t *testing.T) {
+	realmPath := filepath.Join(t.TempDir(), "custom", "realm")
+	cmd := HostEnrollCLI{RealmFile: realmPath}
 
-	gotDomain, gotCAKey, err := cmd.paths()
+	gotRealm, gotCAKey, err := cmd.paths()
 	require.NoError(t, err)
-	require.Equal(t, domainPath, gotDomain)
-	require.Equal(t, filepath.Join(filepath.Dir(domainPath), "epithet-ca.pub"), gotCAKey)
+	require.Equal(t, realmPath, gotRealm)
+	require.Equal(t, filepath.Join(filepath.Dir(realmPath), "epithet-ca.pub"), gotCAKey)
 }
 
 func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
@@ -227,7 +227,7 @@ func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
 	}
 	cmd := HostEnrollCLI{
 		CAURL:                           server.URL,
-		DomainFile:                      filepath.Join(dir, "state", "domain"),
+		RealmFile:                       filepath.Join(dir, "state", "realm"),
 		CAPubkeyFile:                    filepath.Join(dir, "state", "epithet-ca.pub"),
 		PrincipalMode:                   principal.SchemeV1,
 		SSHDConfigFile:                  mainPath,
@@ -240,8 +240,8 @@ func TestHostEnrollCompletesLocalSSHDEnrollment(t *testing.T) {
 
 	result, err := cmd.enroll(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	require.NotEmpty(t, result.Domain)
-	requireFileMode(t, cmd.DomainFile, 0o644)
+	require.NotEmpty(t, result.Realm)
+	requireFileMode(t, cmd.RealmFile, 0o644)
 	requireFileMode(t, cmd.CAPubkeyFile, 0o644)
 	requireFileContents(t, mainPath, sshdMainBegin+"\nInclude \""+fragmentPath+"\"\n"+sshdMainEnd+"\n\nPort 22\n")
 	fragment, err := os.ReadFile(fragmentPath)
@@ -260,7 +260,7 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "ssh", "sshd_config")
 	fragmentPath := filepath.Join(dir, "custom-ssh", "epithet.conf")
-	domainPath := filepath.Join(dir, "custom-state", "principal-domain")
+	realmPath := filepath.Join(dir, "custom-state", "principal-realm")
 	caKeyPath := filepath.Join(dir, "custom-trust", "epithet-ca.pub")
 	require.NoError(t, os.MkdirAll(filepath.Dir(mainPath), 0o755))
 	require.NoError(t, os.WriteFile(mainPath, []byte("Port 22\n"), 0o600))
@@ -274,7 +274,7 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	}
 	firstCommand := HostEnrollCLI{
 		CAURL:                           server.URL,
-		DomainFile:                      domainPath,
+		RealmFile:                       realmPath,
 		CAPubkeyFile:                    caKeyPath,
 		PrincipalMode:                   principal.SchemeV1,
 		SSHDConfigFile:                  mainPath,
@@ -297,12 +297,12 @@ func TestHostEnrollRerunRecoversCustomStateFromSSHDConfiguration(t *testing.T) {
 	}
 	second, err := secondCommand.enroll(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	require.Equal(t, first.Domain, second.Domain)
-	require.False(t, second.DomainCreated)
+	require.Equal(t, first.Realm, second.Realm)
+	require.False(t, second.RealmCreated)
 	require.False(t, second.CAPublicKeyCreated)
-	require.Equal(t, domainPath, second.DomainFile)
+	require.Equal(t, realmPath, second.RealmFile)
 	require.Equal(t, caKeyPath, second.CAPubkeyFile)
-	require.Empty(t, secondCommand.DomainFile, "resolving existing state must not mutate CLI options")
+	require.Empty(t, secondCommand.RealmFile, "resolving existing state must not mutate CLI options")
 	require.Empty(t, secondCommand.CAPubkeyFile)
 	require.Empty(t, secondCommand.SSHDFragmentFile)
 	require.Len(t, secondRunner.calls, 2, "an unchanged rerun validates but does not reload sshd")
@@ -322,16 +322,16 @@ func requireFileMode(t *testing.T, path string, mode os.FileMode) {
 	require.Equal(t, mode, info.Mode().Perm())
 }
 
-func TestEnrollmentInstallRejectsDomainChangedDuringReview(t *testing.T) {
+func TestEnrollmentInstallRejectsRealmChangedDuringReview(t *testing.T) {
 	dir := t.TempDir()
 	state := &hostEnrollment{
-		Domain:       "reviewed-domain",
-		DomainFile:   filepath.Join(dir, "domain"),
+		Realm:        "reviewed-realm",
+		RealmFile:    filepath.Join(dir, "realm"),
 		CAPubkeyFile: filepath.Join(dir, "ca.pub"),
 		CAPublicKey:  newTestCAPublicKey(t),
 	}
-	require.NoError(t, os.WriteFile(state.DomainFile, []byte("another-domain\n"), 0o644))
+	require.NoError(t, os.WriteFile(state.RealmFile, []byte("another-realm\n"), 0o644))
 	require.ErrorContains(t, state.install(nil), "changed since preparation")
-	requireFileContents(t, state.DomainFile, "another-domain\n")
+	requireFileContents(t, state.RealmFile, "another-realm\n")
 	require.NoFileExists(t, state.CAPubkeyFile)
 }

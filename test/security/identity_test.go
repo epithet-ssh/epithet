@@ -89,7 +89,7 @@ func testMappedIDIssuance(t *testing.T, userIDClaim string, mode oidc.IdentityMo
 	pub, priv, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
-	inventoryYAML := `domains: [prod.example.com]
+	inventoryYAML := `realms: [prod.example.com]
 users:
   - userName: victim@example.com
     id: victim-subject
@@ -98,7 +98,7 @@ users:
     active: false
 hosts:
   - names: [prod.example.com]
-    domain: prod.example.com
+    realm: prod.example.com
     principal-mode: epithet-principal-v1
     accounts: [root]
 `
@@ -207,7 +207,7 @@ hosts:
 			require.NoError(t, err)
 			cert, ok := parsed.(*ssh.Certificate)
 			require.True(t, ok)
-			expected, err := principal.DeriveV1(principal.Domain("prod.example.com"), "root")
+			expected, err := principal.DeriveV1(principal.Realm("prod.example.com"), "root")
 			require.NoError(t, err)
 			require.Equal(t, []string{expected}, cert.ValidPrincipals)
 			require.Equal(t, "victim@example.com", cert.KeyId)

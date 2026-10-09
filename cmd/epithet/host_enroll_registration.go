@@ -71,7 +71,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		Accounts:      guessLoginAccounts(),
 		Labels:        map[string]string{},
 		PrincipalMode: inventory.PrincipalMode(settings.principalMode),
-		Domain:        string(result.Domain),
+		Realm:         string(result.Realm),
 	}
 	if len(proposal.Names) == 0 {
 		proposal.Names = guessHostNames(ctx)
@@ -80,15 +80,15 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		if string(p.PrincipalMode) != settings.principalMode {
 			return fmt.Errorf("principal-mode must match this host's local enrollment settings; use --principal-mode to select the mode")
 		}
-		if _, err := principal.ParseDomain(p.Domain); err != nil {
+		if _, err := principal.ParseRealm(p.Realm); err != nil {
 			return err
 		}
-		installed, err := readDomainIfPresent(result.DomainFile)
+		installed, err := readRealmIfPresent(result.RealmFile)
 		if err != nil {
 			return err
 		}
-		if installed != "" && p.Domain != string(installed) {
-			return fmt.Errorf("domain conflicts with the installed domain in %s", result.DomainFile)
+		if installed != "" && p.Realm != string(installed) {
+			return fmt.Errorf("realm conflicts with the installed realm in %s", result.RealmFile)
 		}
 		return nil
 	}
@@ -97,8 +97,8 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		return nil, err
 	}
 	// The reviewed proposal chooses the identity installed locally and submitted
-	// to inventory. No domain has been written before review completes.
-	result.Domain = principal.Domain(proposal.Domain)
+	// to inventory. No realm has been written before review completes.
+	result.Realm = principal.Realm(proposal.Realm)
 	return &hostRegistration{endpoint: endpoint, token: token, proposal: proposal}, nil
 }
 
@@ -133,22 +133,22 @@ func guessHostNames(ctx context.Context) []string {
 	if err != nil {
 		return []string{}
 	}
-	return proposedHostNames(name, configuredSearchDomain(ctx))
+	return proposedHostNames(name, configuredSearchRealm(ctx))
 }
 
-func proposedHostNames(name, domain string) []string {
+func proposedHostNames(name, realm string) []string {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
-	domain = strings.ToLower(strings.Trim(domain, "."))
+	realm = strings.ToLower(strings.Trim(realm, "."))
 	if name == "" {
 		return []string{}
 	}
-	if domain != "" && name != domain && !strings.HasSuffix(name, "."+domain) {
-		name += "." + domain
+	if realm != "" && name != realm && !strings.HasSuffix(name, "."+realm) {
+		name += "." + realm
 	}
 	return []string{name}
 }
 
-func configuredSearchDomain(ctx context.Context) string {
+func configuredSearchRealm(ctx context.Context) string {
 	if runtime.GOOS == "darwin" {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
@@ -156,27 +156,27 @@ func configuredSearchDomain(ctx context.Context) string {
 		if data, err := exec.CommandContext(ctx, "scutil", "--dns").Output(); err == nil {
 			for _, line := range strings.Split(string(data), "\n") {
 				key, value, ok := strings.Cut(line, ":")
-				if ok && strings.TrimSpace(key) == "search domain[0]" {
+				if ok && strings.TrimSpace(key) == "search realm[0]" {
 					return strings.TrimSpace(value)
 				}
 			}
 		}
 	}
 	data, _ := os.ReadFile("/etc/resolv.conf")
-	return resolvSearchDomain(string(data))
+	return resolvSearchRealm(string(data))
 }
 
-func resolvSearchDomain(config string) string {
-	domain := ""
+func resolvSearchRealm(config string) string {
+	realm := ""
 	for _, line := range strings.Split(config, "\n") {
 		line, _, _ = strings.Cut(line, "#")
 		line, _, _ = strings.Cut(line, ";")
 		fields := strings.Fields(line)
-		if len(fields) > 1 && (fields[0] == "search" || fields[0] == "domain") {
-			domain = fields[1]
+		if len(fields) > 1 && (fields[0] == "search" || fields[0] == "realm") {
+			realm = fields[1]
 		}
 	}
-	return domain
+	return realm
 }
 
 func guessLoginAccounts() []string {

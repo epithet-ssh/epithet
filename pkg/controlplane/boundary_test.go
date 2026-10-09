@@ -33,7 +33,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		_, err = users.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:" + id, UserName: id, Active: true})
 		require.NoError(t, err)
 	}
-	hosts, err := inventory.OpenManaged(t.TempDir(), nil)
+	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
 	idp := oidctest.New(t)
@@ -123,7 +123,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
-	hosts, err := inventory.OpenManaged(t.TempDir(), nil)
+	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
 	pub, key, err := sshcert.GenerateKeys()

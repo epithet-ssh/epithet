@@ -82,7 +82,7 @@ func TestConfigureSSHDReusesIncludeAndRecoversEnrollment(t *testing.T) {
 	rerun := &HostEnrollCLI{SSHDConfigFile: mainPath}
 	require.NoError(t, rerun.adoptExistingSSHDEnrollment(env))
 	require.Equal(t, fragmentPath, rerun.SSHDFragmentFile)
-	require.Equal(t, enrollment.DomainFile, rerun.DomainFile)
+	require.Equal(t, enrollment.RealmFile, rerun.RealmFile)
 	require.Equal(t, enrollment.CAPubkeyFile, rerun.CAPubkeyFile)
 	require.Equal(t, principal.SchemeV1, rerun.PrincipalMode)
 
@@ -101,7 +101,7 @@ func TestConfigureSSHDConflictRollsBackBeforeReload(t *testing.T) {
 			var oldFragment []byte
 			if existing {
 				var err error
-				oldFragment, err = renderSSHDFragment(mustSSHDSettings(t, cmd, env), "/old/domain", "/old/ca.pub", "linux")
+				oldFragment, err = renderSSHDFragment(mustSSHDSettings(t, cmd, env), "/old/realm", "/old/ca.pub", "linux")
 				require.NoError(t, err)
 				require.NoError(t, os.MkdirAll(filepath.Dir(fragmentPath), 0o755))
 				require.NoError(t, os.WriteFile(fragmentPath, oldFragment, 0o644))
@@ -141,7 +141,7 @@ func TestSSHDEnrollmentWithOpenSSH(t *testing.T) {
 			// Real paths with spaces exercise quoting in both Include and -T output.
 			cmd.SSHDFragmentFile = filepath.Join(filepath.Dir(fragmentPath), "drop ins", "60-epithet.conf")
 			cmd.EpithetBinary = "/opt/Epithet Bin/epithet"
-			enrollment.DomainFile = filepath.Join(filepath.Dir(mainPath), "state dir", "domain")
+			enrollment.RealmFile = filepath.Join(filepath.Dir(mainPath), "state dir", "realm")
 			enrollment.CAPubkeyFile = filepath.Join(filepath.Dir(mainPath), "state dir", "ca.pub")
 			dropins := filepath.Dir(cmd.SSHDFragmentFile)
 			require.NoError(t, os.MkdirAll(dropins, 0o755))

@@ -40,7 +40,7 @@ hosts:
     labels: {env: ci, ephemeral: "true"}
 `
 
-const inventoryGeneratedDomain = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+const inventoryGeneratedRealm = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
 func TestStaticLookupReturnsRevisionIncludingMissingHosts(t *testing.T) {
 	s, err := NewStatic([]string{writeInv(t, "inventory.yaml", basicInventory)})
@@ -61,9 +61,9 @@ func TestStaticLookupReturnsRevisionIncludingMissingHosts(t *testing.T) {
 }
 
 func TestMultipleNamesResolveOneHost(t *testing.T) {
-	for _, domain := range []string{inventoryGeneratedDomain, "fleet"} {
-		t.Run(domain, func(t *testing.T) {
-			src := "domains: [fleet]\nhosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    domain: " + domain + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
+	for _, realm := range []string{inventoryGeneratedRealm, "fleet"} {
+		t.Run(realm, func(t *testing.T) {
+			src := "realms: [fleet]\nhosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    realm: " + realm + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
 			s, err := NewStatic([]string{writeInv(t, "names.yaml", src)})
 			require.NoError(t, err)
 			var first *ResolvedHost
@@ -72,7 +72,7 @@ func TestMultipleNamesResolveOneHost(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, host)
 				require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Policy.Names)
-				require.Equal(t, domain, host.Domain.String())
+				require.Equal(t, realm, host.Realm.String())
 				require.Equal(t, []string{"brianm"}, host.Policy.Accounts)
 				require.Equal(t, "server", host.Policy.Labels["role"])
 				if first == nil {
@@ -231,8 +231,8 @@ func TestInvalidPatternSyntaxIsLoadError(t *testing.T) {
 	}
 }
 
-func TestHashedDefaultRequiresAndLoadsExactDomain(t *testing.T) {
-	src := "hosts:\n  - names: [prod-1]\n    domain: " + inventoryGeneratedDomain + "\n"
+func TestHashedDefaultRequiresAndLoadsExactRealm(t *testing.T) {
+	src := "hosts:\n  - names: [prod-1]\n    realm: " + inventoryGeneratedRealm + "\n"
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
@@ -241,7 +241,7 @@ func TestHashedDefaultRequiresAndLoadsExactDomain(t *testing.T) {
 	h, _, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, h.PrincipalMode)
-	require.Equal(t, inventoryGeneratedDomain, h.Domain.String())
+	require.Equal(t, inventoryGeneratedRealm, h.Realm.String())
 }
 
 func TestPatternCanFallBackFromHashedDefault(t *testing.T) {
@@ -260,7 +260,7 @@ hosts:
 	require.NoError(t, err)
 	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
 	require.Equal(t, []string{"ubuntu"}, h.Policy.Accounts)
-	require.Empty(t, h.Domain)
+	require.Empty(t, h.Realm)
 }
 
 func TestExactHostCanFallBackFromHashedDefault(t *testing.T) {
@@ -279,16 +279,16 @@ hosts:
 	require.Equal(t, AccountNamePrincipals, h.PrincipalMode)
 }
 
-func TestHashedExactHostWithoutDomainIsError(t *testing.T) {
+func TestHashedExactHostWithoutRealmIsError(t *testing.T) {
 	src := "hosts:\n  - names: [prod-1]\n"
 	_, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
-	require.ErrorContains(t, err, "has no domain")
+	require.ErrorContains(t, err, "has no realm")
 }
 
-func TestHashedPatternLoadsDeclaredNamedDomain(t *testing.T) {
-	src := "domains: [production]\nhosts:\n  - pattern: 'prod-*'\n    domain: production\n"
+func TestHashedPatternLoadsDeclaredNamedRealm(t *testing.T) {
+	src := "realms: [production]\nhosts:\n  - pattern: 'prod-*'\n    realm: production\n"
 	s, err := NewStatic(
 		[]string{writeInv(t, "inv.yaml", src)},
 		WithDefaultPrincipalMode(EpithetPrincipalV1))
@@ -297,58 +297,58 @@ func TestHashedPatternLoadsDeclaredNamedDomain(t *testing.T) {
 	host, _, err := s.LookupHost(context.Background(), "prod-worker-1")
 	require.NoError(t, err)
 	require.Equal(t, EpithetPrincipalV1, host.PrincipalMode)
-	require.Equal(t, "production", host.Domain.String())
+	require.Equal(t, "production", host.Realm.String())
 	require.Equal(t, []string{"prod-worker-1"}, host.Policy.Names)
 }
 
-func TestPatternWithGeneratedHostDomainIsError(t *testing.T) {
-	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name\n    domain: " + inventoryGeneratedDomain + "\n"
+func TestPatternWithGeneratedHostRealmIsError(t *testing.T) {
+	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name\n    realm: " + inventoryGeneratedRealm + "\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "cannot use generated host domain")
+	require.ErrorContains(t, err, "cannot use generated host realm")
 }
 
-func TestMalformedDomainIsError(t *testing.T) {
-	src := "hosts:\n  - names: [prod-1]\n    domain: 'not a domain'\n"
+func TestMalformedRealmIsError(t *testing.T) {
+	src := "hosts:\n  - names: [prod-1]\n    realm: 'not a realm'\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "domain")
+	require.ErrorContains(t, err, "realm")
 }
 
-func TestUndeclaredNamedDomainIsError(t *testing.T) {
-	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: epithet-principal-v1\n    domain: prodution\n"
+func TestUndeclaredNamedRealmIsError(t *testing.T) {
+	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: epithet-principal-v1\n    realm: prodution\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, `references undeclared domain "prodution"`)
+	require.ErrorContains(t, err, `references undeclared realm "prodution"`)
 }
 
-func TestNamedDomainMayBeDeclaredInLaterFile(t *testing.T) {
-	hosts := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: epithet-principal-v1\n    domain: production\n"
-	domains := "domains: [production]\n"
-	_, err := NewStatic([]string{writeInv(t, "hosts.yaml", hosts), writeInv(t, "domains.yaml", domains)})
+func TestNamedRealmMayBeDeclaredInLaterFile(t *testing.T) {
+	hosts := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: epithet-principal-v1\n    realm: production\n"
+	realms := "realms: [production]\n"
+	_, err := NewStatic([]string{writeInv(t, "hosts.yaml", hosts), writeInv(t, "realms.yaml", realms)})
 	require.NoError(t, err)
 }
 
-func TestDuplicateNamedDomainIsError(t *testing.T) {
-	one := "domains: [production]\n"
+func TestDuplicateNamedRealmIsError(t *testing.T) {
+	one := "realms: [production]\n"
 	_, err := NewStatic([]string{writeInv(t, "a.yaml", one), writeInv(t, "b.yaml", one)})
-	require.ErrorContains(t, err, `duplicate domain "production"`)
+	require.ErrorContains(t, err, `duplicate realm "production"`)
 }
 
-func TestNamedDomainRequiresHashedPrincipalMode(t *testing.T) {
-	src := "domains: [production]\nhosts:\n  - pattern: 'prod-*'\n    domain: production\n"
+func TestNamedRealmRequiresHashedPrincipalMode(t *testing.T) {
+	src := "realms: [production]\nhosts:\n  - pattern: 'prod-*'\n    realm: production\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "named domain")
+	require.ErrorContains(t, err, "named realm")
 	require.ErrorContains(t, err, string(EpithetPrincipalV1))
 }
 
-func TestNamedDomainEntriesMustShareAuthorizationAttributes(t *testing.T) {
+func TestNamedRealmEntriesMustShareAuthorizationAttributes(t *testing.T) {
 	src := `
-domains: [production]
+realms: [production]
 hosts:
   - names: [prod-1]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     labels: {role: web}
   - names: [prod-2]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     labels: {role: database}
 `
@@ -356,16 +356,16 @@ hosts:
 	require.ErrorContains(t, err, "different authorization attributes")
 }
 
-func TestNamedDomainEntriesPreserveHostNames(t *testing.T) {
+func TestNamedRealmEntriesPreserveHostNames(t *testing.T) {
 	src := `
-domains: [production]
+realms: [production]
 hosts:
   - names: [prod-1]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     labels: {env: prod}
   - names: [prod-2]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     labels: {env: prod}
 `
@@ -380,19 +380,19 @@ hosts:
 	require.Equal(t, []string{"prod-2"}, two.Policy.Names)
 	require.Equal(t, one.Policy.Labels, two.Policy.Labels)
 	require.Equal(t, one.Policy.Accounts, two.Policy.Accounts)
-	require.Equal(t, one.Domain, two.Domain)
+	require.Equal(t, one.Realm, two.Realm)
 }
 
-func TestNamedDomainAccountOrderDoesNotChangeAuthorizationAttributes(t *testing.T) {
+func TestNamedRealmAccountOrderDoesNotChangeAuthorizationAttributes(t *testing.T) {
 	src := `
-domains: [production]
+realms: [production]
 hosts:
   - names: [prod-1]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     accounts: [root, ubuntu]
   - names: [prod-2]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     accounts: [ubuntu, root]
 `
@@ -400,15 +400,15 @@ hosts:
 	require.NoError(t, err)
 }
 
-func TestNamedDomainDistinguishesAbsentAndEmptyAccountGrounding(t *testing.T) {
+func TestNamedRealmDistinguishesAbsentAndEmptyAccountGrounding(t *testing.T) {
 	src := `
-domains: [production]
+realms: [production]
 hosts:
   - names: [prod-1]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
   - names: [prod-2]
-    domain: production
+    realm: production
     principal-mode: epithet-principal-v1
     accounts: []
 `

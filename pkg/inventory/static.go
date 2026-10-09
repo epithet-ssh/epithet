@@ -12,7 +12,6 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
@@ -26,43 +25,40 @@ import (
 // Host entries come in two forms. An exact entry (`names:`) is one
 // registered host. A pattern entry (`pattern:`) uses the same DNS-label-aware
 // hostname patterns as Writ host selectors. Exact entries expose all their names;
-// pattern entries adopt the requested name. Principal domains are separate
+// pattern entries adopt the requested name. Principal realms are separate
 // issuance metadata and never replace host names. Patterns are the
 // escape hatch for fleets of short-lived hosts (VM pools, CI runners) that
 // follow a naming pattern but cannot be enumerated in a file.
 type Static struct {
 	ignoreUsers          bool
 	ignoreHosts          bool
-	sourceFiles          map[*ResolvedHost]string
 	directoryHash        hash.Hash
 	inventoryHash        hash.Hash
 	users                map[string]*directory.User
 	ids                  map[string]*directory.User
 	hosts                map[string]*ResolvedHost
 	patterns             []patternHost // file order; first match wins
-	domains              map[principal.Domain]struct{}
-	domainReferences     []domainReference
-	domainPolicies       map[principal.Domain]domainPolicy
+	realms               map[principal.Realm]struct{}
+	realmReferences      []realmReference
+	realmPolicies        map[principal.Realm]realmPolicy
 	defaultPrincipalMode PrincipalMode
 }
 
 type patternHost struct {
-	sourceFile    string
-	rawPattern    string
 	pattern       hostpattern.Pattern
 	labels        map[string]string
 	accounts      []string
 	principalMode PrincipalMode
-	domain        principal.Domain
+	realm         principal.Realm
 }
 
-type domainReference struct {
-	domain    principal.Domain
+type realmReference struct {
+	realm     principal.Realm
 	path      string
 	hostIndex int
 }
 
-type domainPolicy struct {
+type realmPolicy struct {
 	labels    map[string]string
 	accounts  []string
 	path      string
@@ -103,9 +99,9 @@ func WithDefaultPrincipalMode(mode PrincipalMode) StaticOption {
 // The file format. Users use RFC 7643 field names (userName, userType,
 // enterprise department/organization); hosts mirror writ's host model.
 type staticDoc struct {
-	Domains []string    `yaml:"domains"`
-	Users   []userEntry `yaml:"users"`
-	Hosts   []hostEntry `yaml:"hosts"`
+	Realms []string    `yaml:"realms"`
+	Users  []userEntry `yaml:"users"`
+	Hosts  []hostEntry `yaml:"hosts"`
 }
 
 type userEntry struct {
@@ -124,7 +120,7 @@ type hostEntry struct {
 	Labels        map[string]string `yaml:"labels"`
 	Accounts      []string          `yaml:"accounts"`
 	PrincipalMode PrincipalMode     `yaml:"principal-mode"`
-	Domain        string            `yaml:"domain"`
+	Realm         string            `yaml:"realm"`
 }
 
 // NewStatic loads an inventory from one or more YAML files. Files
@@ -145,13 +141,12 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 	s := &Static{
 		ignoreUsers:   opts.ignoreUsers,
 		ignoreHosts:   opts.ignoreHosts,
-		sourceFiles:   map[*ResolvedHost]string{},
 		directoryHash: sha256.New(), inventoryHash: sha256.New(),
 		users:                map[string]*directory.User{},
 		ids:                  map[string]*directory.User{},
 		hosts:                map[string]*ResolvedHost{},
-		domains:              map[principal.Domain]struct{}{},
-		domainPolicies:       map[principal.Domain]domainPolicy{},
+		realms:               map[principal.Realm]struct{}{},
+		realmPolicies:        map[principal.Realm]realmPolicy{},
 		defaultPrincipalMode: opts.defaultPrincipalMode,
 	}
 	s.inventoryHash.Write([]byte(opts.defaultPrincipalMode))
@@ -160,7 +155,7 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 			return nil, err
 		}
 	}
-	if err := s.validateDomainReferences(); err != nil {
+	if err := s.validateRealmReferences(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -177,7 +172,7 @@ func (s *Static) loadFile(path string) error {
 	}
 	if s.ignoreHosts {
 		doc.Hosts = nil
-		doc.Domains = nil
+		doc.Realms = nil
 	}
 	if s.ignoreUsers {
 		doc.Users = nil
@@ -185,19 +180,19 @@ func (s *Static) loadFile(path string) error {
 	usersJSON, _ := json.Marshal(doc.Users)
 	s.directoryHash.Write(usersJSON)
 	hostsJSON, _ := json.Marshal(struct {
-		Domains []string
-		Hosts   []hostEntry
-	}{doc.Domains, doc.Hosts})
+		Realms []string
+		Hosts  []hostEntry
+	}{doc.Realms, doc.Hosts})
 	s.inventoryHash.Write(hostsJSON)
-	for i, raw := range doc.Domains {
-		domain, err := principal.ParseNamedDomain(raw)
+	for i, raw := range doc.Realms {
+		realm, err := principal.ParseNamedRealm(raw)
 		if err != nil {
-			return fmt.Errorf("%s: domains[%d]: %w", path, i, err)
+			return fmt.Errorf("%s: realms[%d]: %w", path, i, err)
 		}
-		if _, exists := s.domains[domain]; exists {
-			return fmt.Errorf("%s: duplicate domain %q", path, domain)
+		if _, exists := s.realms[realm]; exists {
+			return fmt.Errorf("%s: duplicate realm %q", path, realm)
 		}
-		s.domains[domain] = struct{}{}
+		s.realms[realm] = struct{}{}
 	}
 	for i, u := range doc.Users {
 		if _, ok := s.users[u.UserName]; u.UserName != "" && ok {
@@ -227,21 +222,21 @@ func (s *Static) loadFile(path string) error {
 		if err != nil {
 			return fmt.Errorf("%s: hosts[%d]: %w", path, i, err)
 		}
-		domain, err := parseDomain(h.Domain)
+		realm, err := parseRealm(h.Realm)
 		if err != nil {
-			return fmt.Errorf("%s: hosts[%d] domain: %w", path, i, err)
+			return fmt.Errorf("%s: hosts[%d] realm: %w", path, i, err)
 		}
-		if mode == EpithetPrincipalV1 && domain == "" {
-			return fmt.Errorf("%s: hosts[%d] uses %s but has no domain", path, i, EpithetPrincipalV1)
+		if mode == EpithetPrincipalV1 && realm == "" {
+			return fmt.Errorf("%s: hosts[%d] uses %s but has no realm", path, i, EpithetPrincipalV1)
 		}
-		if domain != "" && !domain.IsGeneratedHost() {
+		if realm != "" && !realm.IsGeneratedHost() {
 			if mode != EpithetPrincipalV1 {
-				return fmt.Errorf("%s: hosts[%d] named domain %q requires %s", path, i, domain, EpithetPrincipalV1)
+				return fmt.Errorf("%s: hosts[%d] named realm %q requires %s", path, i, realm, EpithetPrincipalV1)
 			}
-			s.domainReferences = append(s.domainReferences, domainReference{
-				domain: domain, path: path, hostIndex: i,
+			s.realmReferences = append(s.realmReferences, realmReference{
+				realm: realm, path: path, hostIndex: i,
 			})
-			if err := s.recordDomainPolicy(domain, h.Labels, h.Accounts, path, i); err != nil {
+			if err := s.recordRealmPolicy(realm, h.Labels, h.Accounts, path, i); err != nil {
 				return err
 			}
 		}
@@ -263,9 +258,8 @@ func (s *Static) loadFile(path string) error {
 			host := &ResolvedHost{
 				Policy:        Host{Names: names, Labels: h.Labels, Accounts: h.Accounts},
 				PrincipalMode: mode,
-				Domain:        domain,
+				Realm:         realm,
 			}
-			s.sourceFiles[host] = path
 			for _, name := range names {
 				if _, ok := s.hosts[name]; ok {
 					return fmt.Errorf("%s: hosts[%d] duplicate host name %q", path, i, name)
@@ -273,20 +267,19 @@ func (s *Static) loadFile(path string) error {
 				s.hosts[name] = host
 			}
 		case h.Pattern != "":
-			if domain.IsGeneratedHost() {
-				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use generated host domain %q", path, i, h.Pattern, domain)
+			if realm.IsGeneratedHost() {
+				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use generated host realm %q", path, i, h.Pattern, realm)
 			}
 			pattern, err := hostpattern.Parse(hostpattern.NormalizeName(h.Pattern))
 			if err != nil {
 				return fmt.Errorf("%s: hosts[%d] pattern %q: %w", path, i, h.Pattern, err)
 			}
 			s.patterns = append(s.patterns, patternHost{
-				sourceFile: path, rawPattern: h.Pattern,
 				pattern:       pattern,
 				labels:        h.Labels,
 				accounts:      h.Accounts,
 				principalMode: mode,
-				domain:        domain,
+				realm:         realm,
 			})
 		default:
 			return fmt.Errorf("%s: hosts[%d] has neither names nor pattern", path, i)
@@ -325,7 +318,7 @@ func (s *Static) LookupHost(_ context.Context, name string) (*ResolvedHost, stri
 			return &ResolvedHost{
 				Policy:        Host{Names: []string{name}, Labels: p.labels, Accounts: p.accounts},
 				PrincipalMode: p.principalMode,
-				Domain:        p.domain,
+				Realm:         p.realm,
 			}, s.InventoryRevision(), nil
 		}
 	}
@@ -342,48 +335,36 @@ func (s *Static) resolvePrincipalMode(override PrincipalMode) (PrincipalMode, er
 	return override, nil
 }
 
-func parseDomain(raw string) (principal.Domain, error) {
+func parseRealm(raw string) (principal.Realm, error) {
 	if raw == "" {
 		return "", nil
 	}
-	return principal.ParseDomain(raw)
+	return principal.ParseRealm(raw)
 }
 
-func (s *Static) validateDomainReferences() error {
-	for _, ref := range s.domainReferences {
-		if _, ok := s.domains[ref.domain]; !ok {
-			return fmt.Errorf("%s: hosts[%d] references undeclared domain %q", ref.path, ref.hostIndex, ref.domain)
+func (s *Static) validateRealmReferences() error {
+	for _, ref := range s.realmReferences {
+		if _, ok := s.realms[ref.realm]; !ok {
+			return fmt.Errorf("%s: hosts[%d] references undeclared realm %q", ref.path, ref.hostIndex, ref.realm)
 		}
 	}
 	return nil
 }
 
-func (s *Static) recordDomainPolicy(domain principal.Domain, labels map[string]string, accounts []string, path string, hostIndex int) error {
-	previous, exists := s.domainPolicies[domain]
+func (s *Static) recordRealmPolicy(realm principal.Realm, labels map[string]string, accounts []string, path string, hostIndex int) error {
+	previous, exists := s.realmPolicies[realm]
 	if !exists {
-		s.domainPolicies[domain] = domainPolicy{
+		s.realmPolicies[realm] = realmPolicy{
 			labels: maps.Clone(labels), accounts: slices.Clone(accounts), path: path, hostIndex: hostIndex,
 		}
 		return nil
 	}
-	if previous.matches(labels, accounts) {
+	if sameAuthorization(previous.labels, previous.accounts, labels, accounts) {
 		return nil
 	}
 	return fmt.Errorf(
-		"%s: hosts[%d] domain %q has different authorization attributes from %s: hosts[%d]",
-		path, hostIndex, domain, previous.path, previous.hostIndex)
-}
-
-// matches compares the authorization attributes shared by all domain members.
-// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
-func (p domainPolicy) matches(labels map[string]string, accounts []string) bool {
-	if !maps.Equal(p.labels, labels) || (p.accounts == nil) != (accounts == nil) {
-		return false
-	}
-	previous, proposed := slices.Clone(p.accounts), slices.Clone(accounts)
-	slices.Sort(previous)
-	slices.Sort(proposed)
-	return slices.Equal(previous, proposed)
+		"%s: hosts[%d] realm %q has different authorization attributes from %s: hosts[%d]",
+		path, hostIndex, realm, previous.path, previous.hostIndex)
 }
 
 // strictUnmarshal decodes with KnownFields so an unknown field is an
@@ -403,29 +384,4 @@ func (s *Static) DirectoryRevision() string {
 }
 func (s *Static) InventoryRevision() string {
 	return fmt.Sprintf("sha256:%x", s.inventoryHash.Sum(nil))
-}
-
-// Records provides read-only source information for inventory administration.
-func (s *Static) Records() []HostRecord {
-	records := []HostRecord{}
-	seen := map[*ResolvedHost]bool{}
-	for _, h := range s.hosts {
-		if seen[h] {
-			continue
-		}
-		seen[h] = true
-		names := []string{}
-		for n, other := range s.hosts {
-			if other == h {
-				names = append(names, n)
-			}
-		}
-		slices.Sort(names)
-		records = append(records, HostRecord{SourceFile: s.sourceFiles[h], ID: "static:" + names[0], Status: "active", Source: "static", Proposal: Proposal{Names: names, Labels: maps.Clone(h.Policy.Labels), Accounts: slices.Clone(h.Policy.Accounts), PrincipalMode: h.PrincipalMode, Domain: string(h.Domain)}})
-	}
-	for _, p := range s.patterns {
-		records = append(records, HostRecord{ID: "static-pattern:" + p.rawPattern, Status: "active", Source: "static", SourceFile: p.sourceFile, Pattern: p.rawPattern, Proposal: Proposal{Labels: maps.Clone(p.labels), Accounts: slices.Clone(p.accounts), PrincipalMode: p.principalMode, Domain: string(p.domain)}})
-	}
-	slices.SortFunc(records, func(a, b HostRecord) int { return strings.Compare(a.ID, b.ID) })
-	return records
 }

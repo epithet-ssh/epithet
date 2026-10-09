@@ -50,7 +50,7 @@ type Server struct {
 	AuthorizedPrincipalsCommand string
 	caPubKey                    sshcert.RawPublicKey
 	hostPubKey                  sshcert.RawPublicKey
-	domain                      principal.Domain
+	realm                       principal.Realm
 	cmd                         *exec.Cmd
 	Output                      safeBuffer
 }
@@ -65,29 +65,29 @@ func Start(caPubKey sshcert.RawPublicKey) (*Server, error) {
 }
 
 // StartWithEpithetAuthorizedPrincipals starts an sshd whose principal lookup
-// runs the supplied epithet binary against the server's generated domain.
+// runs the supplied epithet binary against the server's generated realm.
 func StartWithEpithetAuthorizedPrincipals(caPubKey sshcert.RawPublicKey, epithetPath string) (*Server, error) {
-	return StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey, epithetPath, "")
+	return StartWithEpithetAuthorizedPrincipalsInRealm(caPubKey, epithetPath, "")
 }
 
-// StartWithEpithetAuthorizedPrincipalsInDomain starts an sshd in domain. An
-// empty domain generates the ordinary isolated per-host default.
-func StartWithEpithetAuthorizedPrincipalsInDomain(caPubKey sshcert.RawPublicKey, epithetPath string, domain principal.Domain) (*Server, error) {
+// StartWithEpithetAuthorizedPrincipalsInRealm starts an sshd in realm. An
+// empty realm generates the ordinary isolated per-host default.
+func StartWithEpithetAuthorizedPrincipalsInRealm(caPubKey sshcert.RawPublicKey, epithetPath string, realm principal.Realm) (*Server, error) {
 	if !filepath.IsAbs(epithetPath) {
 		return nil, fmt.Errorf("epithet binary path must be absolute")
 	}
 	if strings.ContainsAny(epithetPath, " \t\r\n") {
 		return nil, fmt.Errorf("epithet binary path cannot contain whitespace")
 	}
-	if domain != "" {
-		if err := domain.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid principal domain: %w", err)
+	if realm != "" {
+		if err := realm.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid principal realm: %w", err)
 		}
 	}
-	return start(caPubKey, epithetPath, domain)
+	return start(caPubKey, epithetPath, realm)
 }
 
-func start(caPubKey sshcert.RawPublicKey, epithetPath string, domain principal.Domain) (*Server, error) {
+func start(caPubKey sshcert.RawPublicKey, epithetPath string, realm principal.Realm) (*Server, error) {
 	user, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("could not get current user: %w", err)
@@ -110,7 +110,7 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, domain principal.D
 		caPubKey: caPubKey,
 		cmd:      nil,
 		Output:   safeBuffer{},
-		domain:   domain,
+		realm:    realm,
 	}
 	if epithetPath != "" {
 		// OpenSSH requires the configured command executable itself to be
@@ -122,7 +122,7 @@ func start(caPubKey sshcert.RawPublicKey, epithetPath string, domain principal.D
 			return nil, fmt.Errorf("could not find env for AuthorizedPrincipalsCommand: %w", err)
 		}
 		s.AuthorizedPrincipalsCommand = fmt.Sprintf(
-			"%s %s host authorized-principals --principal-domain-file %s/domain %%u",
+			"%s %s host authorized-principals --principal-realm-file %s/realm %%u",
 			envPath, epithetPath, s.Path)
 	}
 
@@ -147,10 +147,10 @@ func (s *Server) HostPublicKey() sshcert.RawPublicKey {
 	return s.hostPubKey
 }
 
-// Domain returns the authorization domain used by this fixture's principal
+// Realm returns the authorization realm used by this fixture's principal
 // authorization helper.
-func (s *Server) Domain() principal.Domain {
-	return s.domain
+func (s *Server) Realm() principal.Realm {
+	return s.realm
 }
 
 func (s *Server) start() error {
@@ -313,15 +313,15 @@ func generateConfigs(s *Server) error {
 		return fmt.Errorf("could not create ca.pub file: %w", err)
 	}
 
-	if s.domain == "" {
-		domain, err := principal.GenerateHostDomain()
+	if s.realm == "" {
+		realm, err := principal.GenerateHostRealm()
 		if err != nil {
-			return fmt.Errorf("could not generate principal domain: %w", err)
+			return fmt.Errorf("could not generate principal realm: %w", err)
 		}
-		s.domain = domain
+		s.realm = realm
 	}
-	if err := os.WriteFile(s.Path+"/domain", []byte(s.domain.String()+"\n"), 0600); err != nil {
-		return fmt.Errorf("could not create principal-domain file: %w", err)
+	if err := os.WriteFile(s.Path+"/realm", []byte(s.realm.String()+"\n"), 0600); err != nil {
+		return fmt.Errorf("could not create principal-realm file: %w", err)
 	}
 
 	hostPubKey, hostPrivKey, err := sshcert.GenerateKeys()

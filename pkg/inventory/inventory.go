@@ -5,6 +5,8 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
@@ -20,7 +22,7 @@ const (
 	AccountNamePrincipals PrincipalMode = "account-name"
 
 	// EpithetPrincipalV1 derives a destination-bound v1 principal from the
-	// principal domain and requested account name.
+	// principal realm and requested account name.
 	EpithetPrincipalV1 PrincipalMode = principal.SchemeV1
 )
 
@@ -46,11 +48,11 @@ func (m PrincipalMode) Effective() PrincipalMode {
 
 // ResolvedHost carries both the authorization resource consumed by Writ and
 // issuance metadata that must remain outside the pure policy model. Policy.Names
-// always contains the host's names, independent of its principal mode or domain.
+// always contains the host's names, independent of its principal mode or realm.
 type ResolvedHost struct {
 	Policy        Host
 	PrincipalMode PrincipalMode
-	Domain        principal.Domain
+	Realm         principal.Realm
 }
 
 // Host contains authorization attributes, separate from principal metadata.
@@ -66,4 +68,16 @@ type Host struct {
 // lookup failures return an error.
 type Hosts interface {
 	LookupHost(context.Context, string) (*ResolvedHost, string, error)
+}
+
+// sameAuthorization compares the authorization attributes shared by all realm members.
+// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
+func sameAuthorization(previousLabels map[string]string, previousAccounts []string, labels map[string]string, accounts []string) bool {
+	if !maps.Equal(previousLabels, labels) || (previousAccounts == nil) != (accounts == nil) {
+		return false
+	}
+	previous, proposed := slices.Clone(previousAccounts), slices.Clone(accounts)
+	slices.Sort(previous)
+	slices.Sort(proposed)
+	return slices.Equal(previous, proposed)
 }

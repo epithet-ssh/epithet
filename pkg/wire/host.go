@@ -11,8 +11,8 @@ import (
 // Principal tells the CA how the resolved host expects its certificate
 // principal to be constructed.
 type Principal struct {
-	Mode   string `json:"mode"`
-	Domain string `json:"domain,omitempty"`
+	Mode  string `json:"mode"`
+	Realm string `json:"realm,omitempty"`
 }
 
 // Host is one resolved inventory host: the policy-facing resource plus the
@@ -56,8 +56,8 @@ func (h Host) Validate(target string) error {
 	switch h.Principal.Mode {
 	case "account-name":
 	case "epithet-principal-v1":
-		if _, err := principal.ParseDomain(h.Principal.Domain); err != nil {
-			return fmt.Errorf("invalid principal domain: %w", err)
+		if _, err := principal.ParseRealm(h.Principal.Realm); err != nil {
+			return fmt.Errorf("invalid principal realm: %w", err)
 		}
 	default:
 		return fmt.Errorf("unknown principal mode %q", h.Principal.Mode)

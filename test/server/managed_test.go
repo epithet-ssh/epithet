@@ -42,8 +42,9 @@ func TestManagedCombinedEnrollmentAdminCLIAndIssuance(t *testing.T) {
 	_, private, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.key"), []byte(private), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: admin\n   groups: [operators]\nhosts:\n - pattern: '*'\n   accounts: [root]\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: admin\n   groups: [operators]\n"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow userName:admin -> root@*\n"), 0600))
+	seedManagedPattern(t, filepath.Join(dir, "state"), []string{"root"})
 	controlPath := writeControlKey(t, dir)
 	config := fmt.Sprintf(`ca-key-file = "%s/ca.key"
 control-key-file = %q
@@ -52,10 +53,8 @@ oidc-issuer = %q
 oidc-client-id = %q
 directory-static-file = ["%s/static.yaml"]
 inventory-admin-group = ["operators"]
-principal-mode = "account-name"
-inventory-static-file = ["%s/static.yaml"]
 state-dir = "%s/state"
-`, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, dir, dir, dir)
+`, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, dir, dir)
 
 	configPath := filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0600))
@@ -132,9 +131,9 @@ state-dir = "%s/state"
 	listing := admin("list", "--pending")
 	lines := strings.Split(strings.TrimSpace(string(listing)), "\n")
 	require.Len(t, lines, 2, "a header and one line per pending host")
-	require.Equal(t, []string{"ID", "STATUS", "SOURCE", "NAMES"}, strings.Split(lines[0], "\t"))
+	require.Equal(t, []string{"ID", "STATUS", "NAMES"}, strings.Split(lines[0], "\t"))
 	fields := strings.Split(lines[1], "\t")
-	require.Equal(t, []string{enrolled.Host.ID[:12], "pending", "dynamic", "managed.example"}, fields)
+	require.Equal(t, []string{enrolled.Host.ID[:12], "pending", "managed.example"}, fields)
 	require.NotContains(t, string(listing), token)
 	approved := admin("approve", fields[0])
 	require.Contains(t, string(approved), "active")
@@ -153,10 +152,33 @@ state-dir = "%s/state"
 	var listedNames []string
 	for _, line := range lines[1:] {
 		fields := strings.Split(line, "\t")
-		require.Len(t, fields, 4)
-		listedNames = append(listedNames, fields[3])
+		require.Len(t, fields, 3)
+		listedNames = append(listedNames, fields[2])
 	}
 	require.Equal(t, []string{"*", "managed.example", "second.example"}, listedNames)
+	// Declare a fleet rule through the real CLI and editor, then remove it.
+	patternYAML := filepath.Join(dir, "pattern.yaml")
+	require.NoError(t, os.WriteFile(patternYAML, []byte("pattern: 'ci-*.internal'\naccounts: [root]\nlabels: {role: ci}\nprincipal-mode: epithet-principal-v1\nrealm: CIRunners\n"), 0600))
+	editor := filepath.Join(dir, "editor")
+	require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\ncp \"$PATTERN_YAML\" \"$1\"\n"), 0700))
+	command := exec.Command(binary, "inventory", "--broker-socket", socket, "add-pattern", "ci-*.internal")
+	command.Env = append(os.Environ(), "EDITOR="+editor, "PATTERN_YAML="+patternYAML)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Contains(t, string(output), "ci-*.internal")
+	declared, status, err := inventoryClient.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "list"})
+	require.NoError(t, err)
+	require.Equal(t, 200, status)
+	var patternID string
+	for _, record := range declared.Hosts {
+		if record.Proposal.Pattern == "ci-*.internal" {
+			patternID = record.ID
+			require.Equal(t, "active", record.Status)
+			require.Equal(t, "CIRunners", record.Proposal.Realm)
+		}
+	}
+	require.NotEmpty(t, patternID)
+	admin("remove", patternID)
 	admin("remove", enrolled.Host.ID)
 	_, err = client.GetCert(t.Context(), token, &request)
 	require.NoError(t, err, "removal restores wildcard-based issuance")

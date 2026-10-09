@@ -54,7 +54,7 @@ components:
           minItems: 1
           uniqueItems: true
           items: {type: string, minLength: 1}
-          description: All equivalent normalized names, including the requested host; independent of principal domain
+          description: All equivalent normalized names, including the requested host; independent of principal realm
         accounts:
           type: array
           nullable: true
@@ -70,11 +70,11 @@ components:
               properties:
                 mode: {type: string, enum: [account-name]}
             - type: object
-              required: [mode, domain]
+              required: [mode, realm]
               properties:
                 mode: {type: string, enum: [epithet-principal-v1]}
-                domain:
+                realm:
                   type: string
                   minLength: 1
-                  description: Opaque principal domain, not a hostname
+                  description: Opaque principal realm, not a hostname
         revision: {$ref: '#/components/schemas/Revision'}

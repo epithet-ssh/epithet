@@ -27,9 +27,9 @@ func TestDestinationBoundPrincipalIsRejectedByAnotherHost(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostB.Close() })
 
-	hostAPrincipal, err := principal.DeriveV1(hostA.Domain(), hostA.User)
+	hostAPrincipal, err := principal.DeriveV1(hostA.Realm(), hostA.User)
 	require.NoError(t, err)
-	hostBPrincipal, err := principal.DeriveV1(hostB.Domain(), hostB.User)
+	hostBPrincipal, err := principal.DeriveV1(hostB.Realm(), hostB.User)
 	require.NoError(t, err)
 	require.NotEqual(t, hostAPrincipal, hostBPrincipal)
 
@@ -74,23 +74,23 @@ func TestDestinationBoundHostRejectsLiteralAccountPrincipal(t *testing.T) {
 	require.Contains(t, out, "Permission denied")
 }
 
-func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
+func TestPrincipalRealmIsAcceptedAcrossFleet(t *testing.T) {
 	testCA, caPublicKey := newPrincipalTestCA(t)
 	epithetBin := buildEpithet(t)
-	domain := principal.Domain("ai-worker-pool-1")
+	realm := principal.Realm("ai-worker-pool-1")
 
-	hostA, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, domain)
+	hostA, err := sshd.StartWithEpithetAuthorizedPrincipalsInRealm(caPublicKey, epithetBin, realm)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostA.Close() })
-	hostB, err := sshd.StartWithEpithetAuthorizedPrincipalsInDomain(caPublicKey, epithetBin, domain)
+	hostB, err := sshd.StartWithEpithetAuthorizedPrincipalsInRealm(caPublicKey, epithetBin, realm)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hostB.Close() })
 
-	fleetPrincipal, err := principal.DeriveV1(domain, hostA.User)
+	fleetPrincipal, err := principal.DeriveV1(realm, hostA.User)
 	require.NoError(t, err)
 	userPublicKey, userPrivateKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	certificate := signPrincipalTestCertificate(t, testCA, userPublicKey, "principal-domain-test", fleetPrincipal)
+	certificate := signPrincipalTestCertificate(t, testCA, userPublicKey, "principal-realm-test", fleetPrincipal)
 
 	a, err := agent.Start(testLogger(t), "", agent.Credential{
 		PrivateKey:  userPrivateKey,
@@ -100,9 +100,9 @@ func TestPrincipalDomainIsAcceptedAcrossFleet(t *testing.T) {
 	t.Cleanup(a.Close)
 
 	out, err := hostA.Ssh(a)
-	require.NoError(t, err, "first fleet host should accept its domain principal; ssh output:\n%s\nsshd output:\n%s", out, hostA.Output.String())
+	require.NoError(t, err, "first fleet host should accept its realm principal; ssh output:\n%s\nsshd output:\n%s", out, hostA.Output.String())
 	out, err = hostB.Ssh(a)
-	require.NoError(t, err, "second fleet host should accept the shared domain principal; ssh output:\n%s\nsshd output:\n%s", out, hostB.Output.String())
+	require.NoError(t, err, "second fleet host should accept the shared realm principal; ssh output:\n%s\nsshd output:\n%s", out, hostB.Output.String())
 }
 
 func newPrincipalTestCA(t *testing.T) (ssh.Signer, sshcert.RawPublicKey) {

@@ -6,82 +6,8 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
 )
-
-func TestServerPrincipalModePrecedence(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		config string
-		args   []string
-		want   inventory.PrincipalMode
-	}{
-		{
-			name:   "unspecified retains inventory default",
-			config: "",
-			want:   inventory.EpithetPrincipalV1,
-		},
-		{
-			name:   "inherits hashed inventory configuration",
-			config: "principal-mode = \"epithet-principal-v1\"\n",
-			want:   inventory.EpithetPrincipalV1,
-		},
-		{
-			name:   "shared configuration selects account-name",
-			config: "principal-mode = \"account-name\"\n",
-			want:   inventory.AccountNamePrincipals,
-		},
-		{
-			name:   "shared configuration selects destination-bound principals",
-			config: "principal-mode = \"epithet-principal-v1\"\n",
-			want:   inventory.EpithetPrincipalV1,
-		},
-		{
-			name:   "CLI compatibility overrides shared configuration",
-			config: "principal-mode = \"epithet-principal-v1\"\n",
-			args:   []string{"--principal-mode", "account-name"},
-			want:   inventory.AccountNamePrincipals,
-		},
-		{
-			name:   "CLI hashed overrides shared configuration",
-			config: "principal-mode = \"account-name\"\n",
-			args:   []string{"--principal-mode", "epithet-principal-v1"},
-			want:   inventory.EpithetPrincipalV1,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			require.NoError(t, os.WriteFile(path, []byte(tc.config), 0o600))
-			parse := func(args []string) (*ServerCLI, *InventoryCLI) {
-				t.Helper()
-				var root struct {
-					Config    kong.ConfigFlag `name:"config"`
-					Server    ServerCLI       `cmd:"server"`
-					Inventory InventoryCLI    `cmd:"inventory"`
-				}
-				parser, err := kong.New(&root, kong.Configuration(loadCLIConfig))
-				require.NoError(t, err)
-				_, err = parser.Parse(args)
-				require.NoError(t, err)
-				return &root.Server, &root.Inventory
-			}
-
-			server, _ := parse(append([]string{"--config", path, "server"}, tc.args...))
-			// Reparse the actual subprocess arguments with the same config, as
-			// the combined server does, without starting CA or OIDC services.
-			_, inventory := parse(server.inventoryArgs([]string{"--config", path}, "/tmp/inventory.sock", "unused-key"))
-			require.Equal(t, string(tc.want), inventory.PrincipalMode)
-		})
-	}
-}
-
-func TestServerRejectsUnknownPrincipalModeBeforeStartingServices(t *testing.T) {
-	server := &ServerCLI{PrincipalMode: "mystery"}
-	err := server.Run(nil, tlsconfig.Config{})
-	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
-}
 
 func TestCAChildIdentityConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")

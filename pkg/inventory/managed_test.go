@@ -14,17 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func managedFixture(t *testing.T, staticYAML string) (*Managed, string) {
+func managedFixture(t *testing.T, initialYAML string) (*Managed, string) {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "static.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(staticYAML), 0600))
-	s, err := NewStatic([]string{path})
+	dbPath := filepath.Join(dir, "state", "inventory.db")
+	m, err := OpenManaged(dbPath)
 	require.NoError(t, err)
-	m, err := OpenManaged(filepath.Join(dir, "state"), s)
-	require.NoError(t, err)
+	var initial struct {
+		Hosts []hostEntry `yaml:"hosts"`
+		Users []userEntry `yaml:"users"`
+	}
+	require.NoError(t, strictUnmarshal([]byte(initialYAML), &initial))
+	for _, h := range initial.Hosts {
+		p := Proposal{Names: h.Names, Pattern: h.Pattern, Labels: h.Labels, Accounts: h.Accounts, PrincipalMode: h.PrincipalMode.Effective(), Realm: h.Realm}
+		record, err := m.Enroll(p, "")
+		require.NoError(t, err)
+		_, err = m.Change("admin", "approve", record.ID, record.Revision, nil)
+		require.NoError(t, err)
+	}
 	t.Cleanup(func() { m.Close() })
-	return m, dir
+	return m, dbPath
 }
 func proposal(name string) Proposal {
 	return Proposal{Names: []string{name}, Labels: map[string]string{}, Accounts: []string{"alice"}, PrincipalMode: AccountNamePrincipals}
@@ -61,7 +70,7 @@ func TestManagedAdmissionConflictAndWildcardFallback(t *testing.T) {
 	require.Equal(t, []string{"alice"}, h.Policy.Accounts)
 }
 func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
-	m, _ := managedFixture(t, "users: []\n")
+	m, path := managedFixture(t, "")
 	tok, err := m.CreateToken("admin", time.Hour)
 	secret := tok.ID
 	require.NoError(t, err)
@@ -73,15 +82,10 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.ErrorIs(t, err, ErrToken)
 	_, err = m.Enroll(proposal("two"), secret)
 	require.ErrorIs(t, err, ErrToken)
-	data, err := os.ReadFile(m.files.itemPath(h.ID))
-	require.NoError(t, err)
 	require.Equal(t, secret, h.ID)
 	require.Equal(t, tok.ID, h.ID)
-	require.Contains(t, string(data), secret)
-	require.NotContains(t, string(data), "credential-hash")
-	dir := m.files.root
 	require.NoError(t, m.Close())
-	fresh, err := OpenManaged(dir, m.static)
+	fresh, err := OpenManaged(path)
 	require.NoError(t, err)
 	defer fresh.Close()
 	tokens, err := fresh.Tokens()
@@ -93,9 +97,8 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.NotNil(t, host)
 	_, err = fresh.Change("admin", "remove", h.ID, h.Revision, nil)
 	require.NoError(t, err)
-	require.NoFileExists(t, fresh.files.itemPath(h.ID))
 	require.NoError(t, fresh.Close())
-	fresh, err = OpenManaged(dir, m.static)
+	fresh, err = OpenManaged(path)
 	require.NoError(t, err)
 	defer fresh.Close()
 	_, err = fresh.Get(h.ID)
@@ -114,16 +117,19 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.Equal(t, "pending", again.Status)
 }
 func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
-	m, _ := managedFixture(t, "users: []\n")
+	m, path := managedFixture(t, "")
+	other, err := OpenManaged(path)
+	require.NoError(t, err)
+	defer other.Close()
 	token, err := m.CreateToken("admin", time.Hour)
 	secret := token.ID
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
-	for _, n := range []string{"a", "b"} {
-
+	for i, n := range []string{"a", "b"} {
+		store := []*Managed{m, other}[i]
 		wg.Add(1)
-		go func() { defer wg.Done(); _, e := m.Enroll(proposal(n), secret); results <- e }()
+		go func() { defer wg.Done(); _, e := store.Enroll(proposal(n), secret); results <- e }()
 	}
 	wg.Wait()
 	close(results)
@@ -141,9 +147,10 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 	b, e := m.Enroll(proposal("same"), "")
 	require.NoError(t, e)
 	results = make(chan error, 2)
-	for _, h := range []*HostRecord{a, b} {
+	for i, h := range []*HostRecord{a, b} {
+		store := []*Managed{m, other}[i]
 		wg.Add(1)
-		go func() { defer wg.Done(); _, e := m.Change("admin", "approve", h.ID, h.Revision, nil); results <- e }()
+		go func() { defer wg.Done(); _, e := store.Change("admin", "approve", h.ID, h.Revision, nil); results <- e }()
 	}
 	wg.Wait()
 	close(results)
@@ -157,7 +164,7 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 	}
 	require.Equal(t, 1, successes)
 }
-func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
+func TestManagedExactConflictAndStorageFailure(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [static]\n   accounts: [root]\n - pattern: '*'\n   accounts: [fallback]\n")
 	pending, err := m.Enroll(proposal("static"), "")
 	require.NoError(t, err)
@@ -165,20 +172,29 @@ func TestManagedStaticPrecedenceAndStorageFailure(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 	h, err := m.Enroll(proposal("dynamic"), "")
 	require.NoError(t, err)
-	// Force a failed rename. Uncommitted approval must never become readable.
-	require.NoError(t, os.Remove(m.files.itemPath(h.ID)))
-	require.NoError(t, os.Mkdir(m.files.itemPath(h.ID), 0700))
+	// A failed audit insert must roll back the approval and name changes.
+	_, err = m.db.Exec("CREATE TRIGGER fail_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END")
+	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
-	require.Error(t, err)
-	_, _, err = m.LookupHost(context.Background(), "dynamic")
-	require.Error(t, err)
-	_, _, err = m.LookupHost(context.Background(), "static")
-	require.ErrorIs(t, err, ErrStorage, "a failed managed store must not switch to static-only service")
+	require.ErrorIs(t, err, ErrStorage)
+	current, err := m.Get(h.ID)
+	require.NoError(t, err)
+	require.Equal(t, h, current)
+	_, err = m.db.Exec("DROP TRIGGER fail_audit")
+	require.NoError(t, err)
+	h, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
+	require.NoError(t, err)
+	require.NoError(t, m.Close())
+	for _, name := range []string{"dynamic", "static", "fallback"} {
+		_, _, err = m.LookupHost(context.Background(), name)
+		require.ErrorIs(t, err, ErrStorage, "an unavailable database must not switch to a separate fallback")
+	}
 }
-func TestManagedRevisionLockAndValidation(t *testing.T) {
-	m, _ := managedFixture(t, "users: []\n")
-	_, err := OpenManaged(m.files.root, m.static)
-	require.Error(t, err)
+func TestManagedRevisionAndValidation(t *testing.T) {
+	m, path := managedFixture(t, "")
+	other, err := OpenManaged(path)
+	require.NoError(t, err)
+	defer other.Close()
 	h, err := m.Enroll(proposal("A.example"), "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"a.example"}, h.Proposal.Names)
@@ -221,39 +237,19 @@ func TestManagedTokenConflictDoesNotConsumeAndExpiry(t *testing.T) {
 	require.ErrorIs(t, err, ErrToken)
 }
 func TestManagedRejectCorruptState(t *testing.T) {
-	dir := t.TempDir()
-	records := filepath.Join(dir, "records")
-	require.NoError(t, os.Mkdir(records, 0700))
-	path := filepath.Join(records, strings.Repeat("a", 64)+".yaml")
-	for _, invalid := range []string{"version: 99\n", "version: 2\nunknown: foo\n"} {
-		require.NoError(t, os.WriteFile(path, []byte(invalid), 0600))
-		_, err := OpenManaged(dir, nil)
+	for _, initialYAML := range []string{"", "hosts:\n - names: [recovery]\n   accounts: [root]\n - pattern: '*'\n"} {
+		m, path := managedFixture(t, initialYAML)
+		require.NoError(t, m.Close())
+		require.NoError(t, os.WriteFile(path, []byte("not a database"), 0600))
+		failed, err := OpenManaged(path)
 		require.ErrorContains(t, err, "opening managed inventory")
 		require.False(t, errors.Is(err, ErrNotFound))
+		require.Nil(t, failed)
 	}
 }
 
-func TestManagedCorruptionFailsStartupEvenWithStaticOverrides(t *testing.T) {
-	m, _ := managedFixture(t, "hosts:\n - names: [recovery]\n   accounts: [root]\n - pattern: '*'\n")
-	dir := m.files.root
-	require.NoError(t, m.Close())
-	path := filepath.Join(m.files.dir, strings.Repeat("a", 64)+".yaml")
-	require.NoError(t, os.WriteFile(path, []byte("not valid: ["), 0600))
-	failed, err := OpenManaged(dir, m.static)
-	require.ErrorContains(t, err, "opening managed inventory")
-	require.Nil(t, failed)
-	// Failed startup releases the lock, so repairing the file allows startup.
-	require.NoError(t, os.Remove(path))
-	repaired, err := OpenManaged(dir, m.static)
-	require.NoError(t, err)
-	defer repaired.Close()
-	host, _, err := repaired.LookupHost(t.Context(), "recovery")
-	require.NoError(t, err)
-	require.Equal(t, []string{"root"}, host.Policy.Accounts)
-}
-
 func TestManagedSnapshotsDoNotExposeMutableState(t *testing.T) {
-	m, _ := managedFixture(t, "users: []\n")
+	m, _ := managedFixture(t, "")
 	p := proposal("host")
 	p.Labels = map[string]string{"role": "server"}
 
@@ -277,11 +273,11 @@ func TestManagedSnapshotsDoNotExposeMutableState(t *testing.T) {
 	require.Equal(t, "server", next.Policy.Labels["role"])
 }
 
-func TestManagedApprovalRejectsSharedGeneratedDomains(t *testing.T) {
-	m, _ := managedFixture(t, "users: []\n")
+func TestManagedApprovalRejectsSharedGeneratedRealms(t *testing.T) {
+	m, _ := managedFixture(t, "")
 	p := proposal("first")
 	p.PrincipalMode = EpithetPrincipalV1
-	p.Domain = "epithet-host-id-v1:" + strings.Repeat("A", 43)
+	p.Realm = "epithet-host-id-v1:" + strings.Repeat("A", 43)
 	a, err := m.Enroll(p, "")
 	require.NoError(t, err)
 	p.Names = []string{"second"}
@@ -293,10 +289,10 @@ func TestManagedApprovalRejectsSharedGeneratedDomains(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 }
 
-func TestManagedSharedDomainMembership(t *testing.T) {
-	m, _ := managedFixture(t, "domains: [fleet, other]\n")
+func TestManagedSharedRealmMembership(t *testing.T) {
+	m, path := managedFixture(t, "")
 	p := proposal("first")
-	p.PrincipalMode, p.Domain = EpithetPrincipalV1, "fleet"
+	p.PrincipalMode, p.Realm = EpithetPrincipalV1, "fleet"
 	p.Accounts = []string{"alice", "root"}
 	p.Names = []string{"first", "first.example.com"}
 	a, err := m.Enroll(p, "")
@@ -310,14 +306,14 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "active", b.Status)
 	require.NoError(t, m.Close())
-	fresh, err := OpenManaged(m.files.root, m.static)
+	fresh, err := OpenManaged(path)
 	require.NoError(t, err)
 	defer fresh.Close()
 	for _, names := range [][]string{{"first", "first.example.com"}, {"second"}} {
 		for _, name := range names {
 			h, _, err := fresh.LookupHost(t.Context(), name)
 			require.NoError(t, err)
-			require.Equal(t, "fleet", string(h.Domain))
+			require.Equal(t, "fleet", string(h.Realm))
 			require.Equal(t, names, h.Policy.Names)
 		}
 	}
@@ -326,16 +322,16 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	p.Accounts = []string{"root"}
 	_, err = fresh.Change("admin", "edit", b.ID, b.Revision, &p)
 	require.ErrorIs(t, err, ErrConflict)
-	// Moving that member releases its old domain membership, without losing
+	// Moving that member releases its old realm membership, without losing
 	// the remaining member's constraints.
-	p.Domain = "other"
+	p.Realm = "other"
 	b, err = fresh.Change("admin", "edit", b.ID, b.Revision, &p)
 	require.NoError(t, err)
 	h, _, err := fresh.LookupHost(t.Context(), "second")
 	require.NoError(t, err)
 	require.Equal(t, []string{"second"}, h.Policy.Names)
-	require.Equal(t, "other", string(h.Domain))
-	p.Domain, p.Names = "fleet", []string{"third"}
+	require.Equal(t, "other", string(h.Realm))
+	p.Realm, p.Names = "fleet", []string{"third"}
 	c, err := fresh.Enroll(p, "")
 	require.NoError(t, err)
 	_, err = fresh.Change("admin", "approve", c.ID, c.Revision, nil)
@@ -346,12 +342,12 @@ func TestManagedSharedDomainMembership(t *testing.T) {
 	require.NoError(t, err, "the last member's removal releases its authorization attributes")
 }
 
-func TestManagedSharedDomainMatchesStaticMembers(t *testing.T) {
+func TestManagedSharedRealmMatchesExistingMembers(t *testing.T) {
 	for _, selector := range []string{"names: [static]", "pattern: '*.example'"} {
 		t.Run(selector, func(t *testing.T) {
-			m, _ := managedFixture(t, "domains: [fleet]\nhosts:\n - "+selector+"\n   principal-mode: epithet-principal-v1\n   domain: fleet\n   accounts: []\n   labels: {role: server}\n")
+			m, path := managedFixture(t, "hosts:\n - "+selector+"\n   principal-mode: epithet-principal-v1\n   realm: fleet\n   accounts: []\n   labels: {role: server}\n")
 			p := proposal("dynamic")
-			p.PrincipalMode, p.Domain = EpithetPrincipalV1, "fleet"
+			p.PrincipalMode, p.Realm = EpithetPrincipalV1, "fleet"
 			p.Labels = map[string]string{"role": "server"}
 			p.Accounts = nil
 			h, err := m.Enroll(p, "")
@@ -369,25 +365,25 @@ func TestManagedSharedDomainMatchesStaticMembers(t *testing.T) {
 			_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 			require.NoError(t, err)
 			require.NoError(t, m.Close())
-			fresh, err := OpenManaged(m.files.root, m.static)
+			fresh, err := OpenManaged(path)
 			require.NoError(t, err)
 			require.NoError(t, fresh.Close())
 		})
 	}
 }
 
-func TestManagedSharedDomainValidation(t *testing.T) {
-	m, _ := managedFixture(t, "domains: [fleet]\n")
+func TestManagedSharedRealmValidation(t *testing.T) {
+	m, _ := managedFixture(t, "")
 	p := proposal("host")
-	p.Domain = "fleet"
+	p.Realm = "fleet"
 	_, err := m.Enroll(p, "")
 	require.ErrorContains(t, err, "requires epithet-principal-v1")
-	p.PrincipalMode, p.Domain = EpithetPrincipalV1, "typo"
+	p.PrincipalMode, p.Realm = EpithetPrincipalV1, "NewFleet"
 	h, err := m.Enroll(p, "")
 	require.NoError(t, err)
 	_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
-	require.ErrorContains(t, err, "undeclared domain")
-	p.Domain = "not a domain"
+	require.NoError(t, err, "a named realm needs no separate declaration")
+	p.Realm = "not a realm"
 	_, err = m.Enroll(p, "")
 	require.Error(t, err)
 }
@@ -395,7 +391,7 @@ func TestManagedSharedDomainValidation(t *testing.T) {
 func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
 	for _, accounts := range [][]string{nil, {}, {"alice"}} {
 		t.Run(fmt.Sprintf("%#v", accounts), func(t *testing.T) {
-			m, _ := managedFixture(t, "users: []\n")
+			m, path := managedFixture(t, "")
 			p := proposal("host")
 			p.Accounts = accounts
 			h, err := m.Enroll(p, "")
@@ -403,7 +399,7 @@ func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
 			_, err = m.Change("admin", "approve", h.ID, h.Revision, nil)
 			require.NoError(t, err)
 			require.NoError(t, m.Close())
-			fresh, err := OpenManaged(m.files.root, m.static)
+			fresh, err := OpenManaged(path)
 			require.NoError(t, err)
 			defer fresh.Close()
 			host, _, err := fresh.LookupHost(t.Context(), "host")
@@ -440,7 +436,7 @@ func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, current.Policy.Accounts)
 
-	// Editing the pending request can resolve a conflict with a static record.
+	// Editing the pending request can resolve a conflict with a active record.
 	moved = proposal("free")
 	pending, err = m.Change("admin", "edit", pending.ID, pending.Revision, &moved)
 	require.NoError(t, err)
@@ -451,7 +447,7 @@ func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
 func TestUnapprovedRecordsNeverAffectResolution(t *testing.T) {
 	for _, action := range []string{"pending", "deny", "remove", "deny-then-remove"} {
 		t.Run(action, func(t *testing.T) {
-			m, _ := managedFixture(t, "hosts:\n - pattern: '*.example'\n   accounts: [root]\n")
+			m, path := managedFixture(t, "hosts:\n - pattern: '*.example'\n   accounts: [root]\n")
 			accepted, err := m.Enroll(proposal("accepted.example"), "")
 			require.NoError(t, err)
 			_, err = m.Change("admin", "approve", accepted.ID, accepted.Revision, nil)
@@ -484,7 +480,7 @@ func TestUnapprovedRecordsNeverAffectResolution(t *testing.T) {
 			}
 			check(m)
 			require.NoError(t, m.Close())
-			restarted, err := OpenManaged(m.files.root, m.static)
+			restarted, err := OpenManaged(path)
 			require.NoError(t, err)
 			defer restarted.Close()
 			check(restarted)

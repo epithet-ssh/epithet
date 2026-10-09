@@ -20,22 +20,22 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Principal domains select certificate principals; only host names and labels
+// Principal realms select certificate principals; only host names and labels
 // determine which Writ resources match a connection request.
-func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalDomain(t *testing.T) {
+func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalRealm(t *testing.T) {
 	const generated = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 	cases := []struct {
-		name, domain, policy string
-		issue                bool
+		name, realm, policy string
+		issue               bool
 	}{
-		{"named_domain_honors_exact_hostname_deny", "fleet", "allow * -> root@*\ndeny * -> root@prod.example.com\n", false},
-		{"generated_domain_honors_exact_hostname_deny", generated, "allow * -> root@*\ndeny * -> root@prod.example.com\n", false},
-		{"named_domain_honors_hostname_glob_deny", "fleet", "allow * -> root@*\ndeny * -> root@*.example.com\n", false},
-		{"named_domain_accepts_exact_hostname_allow", "fleet", "allow * -> root@prod.example.com\n", true},
-		{"generated_domain_accepts_exact_hostname_allow", generated, "allow * -> root@prod.example.com\n", true},
-		{"named_domain_does_not_match_unrelated_hostname_allow", "dev.example.com", "allow * -> root@dev.example.com\n", false},
-		{"named_domain_honors_label_deny", "fleet", "allow * -> root@*\ndeny * -> root@{env=prod}\n", false},
-		{"named_domain_does_not_match_domain_named_deny", "fleet", "allow * -> root@*\ndeny * -> root@fleet\n", true},
+		{"named_realm_honors_exact_hostname_deny", "fleet", "allow * -> root@*\ndeny * -> root@prod.example.com\n", false},
+		{"generated_realm_honors_exact_hostname_deny", generated, "allow * -> root@*\ndeny * -> root@prod.example.com\n", false},
+		{"named_realm_honors_hostname_glob_deny", "fleet", "allow * -> root@*\ndeny * -> root@*.example.com\n", false},
+		{"named_realm_accepts_exact_hostname_allow", "fleet", "allow * -> root@prod.example.com\n", true},
+		{"generated_realm_accepts_exact_hostname_allow", generated, "allow * -> root@prod.example.com\n", true},
+		{"named_realm_does_not_match_unrelated_hostname_allow", "dev.example.com", "allow * -> root@dev.example.com\n", false},
+		{"named_realm_honors_label_deny", "fleet", "allow * -> root@*\ndeny * -> root@{env=prod}\n", false},
+		{"named_realm_does_not_match_realm_named_deny", "fleet", "allow * -> root@*\ndeny * -> root@fleet\n", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,11 +45,11 @@ func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalDomain(t *testing.T) {
 			userPub, _, err := sshcert.GenerateKeys()
 			require.NoError(t, err)
 			declared := ""
-			if tc.domain != generated {
-				declared = fmt.Sprintf("domains: [%s]\n", tc.domain)
+			if tc.realm != generated {
+				declared = fmt.Sprintf("realms: [%s]\n", tc.realm)
 			}
-			// Exactly one host: a human-readable domain does not imply actual sharing.
-			yaml := declared + fmt.Sprintf("users:\n - userName: alice\n   id: subject:alice\nhosts:\n - names: [prod.example.com]\n   principal-mode: epithet-principal-v1\n   domain: %s\n   labels: {env: prod}\n   accounts: [root]\n", tc.domain)
+			// Exactly one host: a human-readable realm does not imply actual sharing.
+			yaml := declared + fmt.Sprintf("users:\n - userName: alice\n   id: subject:alice\nhosts:\n - names: [prod.example.com]\n   principal-mode: epithet-principal-v1\n   realm: %s\n   labels: {env: prod}\n   accounts: [root]\n", tc.realm)
 			path := filepath.Join(t.TempDir(), "inventory.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
 			inv, err := inventory.NewStatic([]string{path})
@@ -72,7 +72,7 @@ func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalDomain(t *testing.T) {
 			require.NotNil(t, issued)
 			cert, err := sshcert.Parse(issued.Certificate)
 			require.NoError(t, err)
-			expected, err := principal.DeriveV1(principal.Domain(tc.domain), "root")
+			expected, err := principal.DeriveV1(principal.Realm(tc.realm), "root")
 			require.NoError(t, err)
 			require.Equal(t, []string{expected}, cert.ValidPrincipals)
 			signer, err := ssh.ParsePrivateKey([]byte(caPriv))

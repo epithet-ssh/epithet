@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
@@ -100,10 +102,14 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 			h, revision, e := hosts.LookupHost(r.Context(), value)
 			err = e
 			if err == nil && h != nil {
-				response = &Host{Host: wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}, Revision: Revision{value: string(revision), present: revision != ""}}
+				response = &Host{Host: wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}, Revision: Revision{value: string(revision), present: revision != ""}}
 			}
 		}
 		if err != nil {
+			if errors.Is(err, inventory.ErrConflict) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
 			http.Error(w, "fact service unavailable", 503)
 			return
 		}
@@ -138,6 +144,13 @@ func (c *Client) lookup(ctx context.Context, param, value string, result any) (b
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
 		return false, nil
+	}
+	if resp.StatusCode == http.StatusConflict {
+		data, err := io.ReadAll(io.LimitReader(resp.Body, wire.MaxBodySize))
+		if err != nil {
+			return false, err
+		}
+		return false, fmt.Errorf("fact lookup returned HTTP 409: %s", strings.TrimSpace(string(data)))
 	}
 	if resp.StatusCode != 200 {
 		return false, fmt.Errorf("fact lookup returned HTTP %d", resp.StatusCode)

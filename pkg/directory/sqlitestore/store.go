@@ -8,16 +8,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/sqlitedb"
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
-	_ "modernc.org/sqlite"
 )
 
 type Store struct{ db *sql.DB }
@@ -30,30 +27,10 @@ func Open(path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("directory database path is required")
 	}
-	path, err := filepath.Abs(path)
+	db, err := sqlitedb.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
-	if err == nil {
-		err = f.Close()
-	}
-	if err != nil && !errors.Is(err, os.ErrExist) {
-		return nil, err
-	}
-	u := url.URL{Scheme: "file", Path: path}
-	q := url.Values{"_pragma": {"foreign_keys(1)", "busy_timeout(5000)", "journal_mode(WAL)", "synchronous(FULL)"}, "_txlock": {"immediate"}}
-	u.RawQuery = q.Encode()
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return nil, err
-	}
-	// One connection serializes local mutations without leaking locks to callers.
-	// SQLite transactions also protect against other processes using the same DB.
-	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err = s.initialize(); err != nil {
 		db.Close()

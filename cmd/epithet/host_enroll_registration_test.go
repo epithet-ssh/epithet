@@ -22,23 +22,23 @@ import (
 func TestManagedEnrollmentLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		name, token, status    string
-		domain, editedDomain   string
+		realm, editedRealm     string
 		rejected, localFailure bool
 	}{
 		{name: "pending", status: "pending"},
 		{name: "token admission", token: "one-use-token", status: "active"},
 		{name: "rejection then rerun", status: "pending", rejected: true},
 		{name: "local failure", localFailure: true},
-		{name: "named domain flag", status: "pending", domain: "fleet"},
-		{name: "edited domain", status: "pending", editedDomain: "fleet"},
-		{name: "edited flag domain", status: "pending", domain: "initial", editedDomain: "fleet"},
+		{name: "named realm flag", status: "pending", realm: "fleet"},
+		{name: "edited realm", status: "pending", editedRealm: "fleet"},
+		{name: "edited flag realm", status: "pending", realm: "initial", editedRealm: "fleet"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, local, env, runner, main, fragment := newSSHDConfigurationTest(t)
-			cmd.DomainFile, cmd.CAPubkeyFile = local.DomainFile, local.CAPubkeyFile
+			cmd.RealmFile, cmd.CAPubkeyFile = local.RealmFile, local.CAPubkeyFile
 			cmd.Names = []string{"one.example"}
 			cmd.Token = tc.token
-			cmd.PrincipalDomain = tc.domain
+			cmd.PrincipalRealm = tc.realm
 			cmd.sshdEnv = env
 			cmd.EpithetBinary = ""
 			resolutions := 0
@@ -53,13 +53,13 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			}
 			reviewFile := filepath.Join(t.TempDir(), "reviewed.yaml")
 			t.Setenv("REVIEW", reviewFile)
-			t.Setenv("DOMAIN", cmd.DomainFile)
+			t.Setenv("REALM", cmd.RealmFile)
 			t.Setenv("CA_KEY", cmd.CAPubkeyFile)
 			t.Setenv("FRAGMENT", fragment)
-			t.Setenv("EDIT_DOMAIN", tc.editedDomain)
+			t.Setenv("EDIT_REALM", tc.editedRealm)
 			// The first review sees no installed state. Capture the actual proposal
-			// so the test can compare its in-memory domain with the installed one.
-			t.Setenv("EDITOR", `sh -c 'if [ ! -e "$REVIEW" ]; then test ! -e "$DOMAIN" && test ! -e "$CA_KEY" && test ! -e "$FRAGMENT" || exit 9; fi; if [ -n "$EDIT_DOMAIN" ]; then sed "/^domain:/d" "$1" > "$1.edit"; printf "domain: %s\n" "$EDIT_DOMAIN" >> "$1.edit"; mv "$1.edit" "$1"; fi; cp "$1" "$REVIEW"' editor`)
+			// so the test can compare its in-memory realm with the installed one.
+			t.Setenv("EDITOR", `sh -c 'if [ ! -e "$REVIEW" ]; then test ! -e "$REALM" && test ! -e "$CA_KEY" && test ! -e "$FRAGMENT" || exit 9; fi; if [ -n "$EDIT_REALM" ]; then sed "/^realm:/d" "$1" > "$1.edit"; printf "realm: %s\n" "$EDIT_REALM" >> "$1.edit"; mv "$1.edit" "$1"; fi; cp "$1" "$REVIEW"' editor`)
 			pub := newTestCAPublicKey(t)
 			requests := make(chan inventoryapi.ControlRequest, 2)
 			mux := http.NewServeMux()
@@ -80,9 +80,9 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 				}
 				requests <- req
 				require.FileExists(t, fragment, "local sshd configuration precedes submission")
-				domain, err := principal.ReadDomainFile(cmd.DomainFile)
+				realm, err := principal.ReadRealmFile(cmd.RealmFile)
 				require.NoError(t, err)
-				require.Equal(t, string(domain), req.Host.Domain)
+				require.Equal(t, string(realm), req.Host.Realm)
 				if tc.rejected {
 					w.WriteHeader(http.StatusForbidden)
 					json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Error: "rejected"})
@@ -115,10 +115,10 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			var reviewed inventory.Proposal
 			require.NoError(t, yaml.Unmarshal(data, &reviewed))
 			require.Equal(t, reviewed.ControlProposal(), *req.Host)
-			if tc.editedDomain != "" {
-				require.Equal(t, tc.editedDomain, reviewed.Domain)
-			} else if tc.domain != "" {
-				require.Equal(t, tc.domain, reviewed.Domain)
+			if tc.editedRealm != "" {
+				require.Equal(t, tc.editedRealm, reviewed.Realm)
+			} else if tc.realm != "" {
+				require.Equal(t, tc.realm, reviewed.Realm)
 			}
 			require.Equal(t, tc.token, req.Token)
 			requireFileContents(t, cmd.CAPubkeyFile, string(pub))
@@ -126,20 +126,20 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			// reload when sshd is already configured. No prior record is resumed.
 			tc.rejected = false
 			cmd.Token = ""
-			cmd.PrincipalDomain = ""
+			cmd.PrincipalRealm = ""
 			tc.status = "pending"
 			second, err := cmd.enroll(t.Context(), nil, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			require.Equal(t, "pending", second.Status)
 			require.Equal(t, 2, resolutions)
 			require.Len(t, runner.calls, 7, "unchanged setup only validates on rerun")
-			require.False(t, second.DomainCreated)
+			require.False(t, second.RealmCreated)
 			require.False(t, second.CAPublicKeyCreated)
-			require.Equal(t, reviewed.Domain, string(second.Domain))
+			require.Equal(t, reviewed.Realm, string(second.Realm))
 			resubmitted := <-requests
 			require.Equal(t, reviewed.ControlProposal(), *resubmitted.Host)
 			require.Empty(t, resubmitted.Token)
-			require.NoFileExists(t, filepath.Join(filepath.Dir(cmd.DomainFile), "enrollment.key"))
+			require.NoFileExists(t, filepath.Join(filepath.Dir(cmd.RealmFile), "enrollment.key"))
 		})
 	}
 }
@@ -158,7 +158,7 @@ func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 	}))
 	defer server.Close()
 	cmd.CAURL = server.URL + "/"
-	cmd.DomainFile = enrollment.DomainFile
+	cmd.RealmFile = enrollment.RealmFile
 	cmd.CAPubkeyFile = enrollment.CAPubkeyFile
 	cmd.sshdEnv = env
 	input, err := os.CreateTemp(t.TempDir(), "input")
@@ -170,7 +170,7 @@ func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 	_, err = cmd.enroll(context.Background(), nil, tlsconfig.Config{Insecure: true})
 	require.ErrorIs(t, err, errCanceled)
 	require.Empty(t, runner.calls)
-	require.NoDirExists(t, filepath.Dir(cmd.DomainFile))
+	require.NoDirExists(t, filepath.Dir(cmd.RealmFile))
 	require.NoFileExists(t, cmd.CAPubkeyFile)
 	requireFileContents(t, main, "Port 22\n")
 	_, err = os.Stat(fragment)
@@ -179,8 +179,8 @@ func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 
 func TestProposedHostNamesUseConfiguredSearchSuffix(t *testing.T) {
 	for _, tc := range []struct {
-		name, domain string
-		want         []string
+		name, realm string
+		want        []string
 	}{
 		{"", "example.com", []string{}},
 		{"host", "", []string{"host"}},
@@ -188,15 +188,15 @@ func TestProposedHostNamesUseConfiguredSearchSuffix(t *testing.T) {
 		{"HOST.Example.COM.", "example.com", []string{"host.example.com"}},
 		{"host.notexample.com", "example.com", []string{"host.notexample.com.example.com"}},
 	} {
-		require.Equal(t, tc.want, proposedHostNames(tc.name, tc.domain))
+		require.Equal(t, tc.want, proposedHostNames(tc.name, tc.realm))
 	}
 	for _, tc := range []struct{ config, want string }{
 		{"nameserver 127.0.0.1\n", ""},
 		{"# search ignored\nsearch home.example another.example # comment\n", "home.example"},
-		{"domain home.example\n", "home.example"},
-		{"domain old.example\nsearch new.example other.example\n", "new.example"},
+		{"realm home.example\n", "home.example"},
+		{"realm old.example\nsearch new.example other.example\n", "new.example"},
 	} {
-		require.Equal(t, tc.want, resolvSearchDomain(tc.config))
+		require.Equal(t, tc.want, resolvSearchRealm(tc.config))
 	}
 }
 

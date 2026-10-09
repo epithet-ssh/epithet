@@ -18,9 +18,9 @@ func TestControlResponseWireShape(t *testing.T) {
 		Directory:      &inventoryapi.BindingSnapshot{Revision: 7, Groups: []inventoryapi.GroupBinding{{ID: "g1", DisplayName: "Ops", Alias: "ops", Status: "bound"}}},
 		DirectoryAudit: []inventoryapi.DirectoryAuditEvent{{Sequence: 1, Revision: 7, Time: ts, Actor: "admin", Action: "rebind", ID: "g1", Alias: "ops", PreviousID: "g0"}},
 		Host: &inventoryapi.HostRecord{
-			SourceFile: "/f.yaml", Pattern: "*.example", ID: "h1", Revision: 3, Status: "active",
-			Proposal:  inventoryapi.Proposal{Names: []string{"a"}, Labels: map[string]string{"k": "v"}, Accounts: []string{}, PrincipalMode: "account-name", Domain: "d"},
-			CreatedAt: ts, UpdatedAt: ts, Source: "dynamic", ShadowedNames: []string{"b"},
+			ID: "h1", Revision: 3, Status: "active",
+			Proposal:  inventoryapi.Proposal{Pattern: "*.example", Labels: map[string]string{"k": "v"}, Accounts: []string{}, PrincipalMode: "account-name", Realm: "d"},
+			CreatedAt: ts, UpdatedAt: ts,
 		},
 		Hosts:  []inventoryapi.HostRecord{{ID: "h2", Revision: 1, Status: "pending", Proposal: inventoryapi.Proposal{Names: []string{"c"}, PrincipalMode: "account-name"}, CreatedAt: ts, UpdatedAt: ts}},
 		Token:  &inventoryapi.EnrollmentToken{ID: "t1", ExpiresAt: ts, UsedBy: "h1", Revoked: true},
@@ -32,7 +32,7 @@ func TestControlResponseWireShape(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `{"directory":{"revision":7,"groups":[{"id":"g1","displayName":"Ops","alias":"ops","status":"bound"}]},`+
 		`"directory-audit":[{"sequence":1,"revision":7,"time":"2026-09-18T12:00:00Z","actor":"admin","action":"rebind","id":"g1","alias":"ops","previous-id":"g0"}],`+
-		`"host":{"source-file":"/f.yaml","pattern":"*.example","id":"h1","revision":3,"status":"active","host":{"names":["a"],"labels":{"k":"v"},"accounts":[],"principal-mode":"account-name","domain":"d"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z","source":"dynamic","shadowed-names":["b"]},`+
+		`"host":{"id":"h1","revision":3,"status":"active","host":{"names":null,"pattern":"*.example","labels":{"k":"v"},"accounts":[],"principal-mode":"account-name","realm":"d"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"},`+
 		`"hosts":[{"id":"h2","revision":1,"status":"pending","host":{"names":["c"],"labels":null,"accounts":null,"principal-mode":"account-name"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"}],`+
 		`"token":{"id":"t1","expires-at":"2026-09-18T12:00:00Z","used-by":"h1","revoked":true},`+
 		`"tokens":[{"id":"t2","expires-at":"2026-09-18T12:00:00Z","revoked":false}],`+

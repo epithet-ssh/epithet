@@ -23,7 +23,7 @@ func TestReviewEnrollmentAcceptsUserReplaceableSymlink(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "ca.pub")
 	require.NoError(t, os.Symlink(rootFile, link))
-	// Both key and domain ownership gates currently check only resolved paths.
+	// Both key and realm ownership gates currently check only resolved paths.
 	require.NoError(t, validateAuthorizedPrincipalsAccess("", link, link, "", false))
 	fragment, err := renderSSHDFragment(&sshdSettings{
 		principalMode: accountNamePrincipalMode,

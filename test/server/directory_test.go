@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDirectoryUsersCLIWithStaticHosts(t *testing.T) {
+func TestDirectoryUsersCLIWithManagedInventory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
@@ -63,9 +63,7 @@ state-dir = "%s/state"
 directory-static-file = ["%s/static.yaml"]
 directory-admin-group = ["wheel"]
 scim-token = "provisioning-secret"
-inventory-mode = "static"
-inventory-static-file = ["%s/static.yaml"]
-`, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, source, dir, dir, dir)
+`, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, source, dir, dir)
 
 			path := filepath.Join(dir, "server.toml")
 			require.NoError(t, os.WriteFile(path, []byte(config), 0600))
@@ -115,9 +113,9 @@ inventory-static-file = ["%s/static.yaml"]
 					require.Equal(t, "USERNAME\tID\tACTIVE\tGROUPS\n"+name+"\tsubject:admin\ttrue\twheel\n", string(output))
 				}
 			}
-			require.NoDirExists(t, filepath.Join(dir, "state", "inventory"))
+			require.FileExists(t, filepath.Join(dir, "state", "inventory", "inventory.db"))
 			if source == "static" {
-				require.NoDirExists(t, filepath.Join(dir, "state"))
+				require.NoDirExists(t, filepath.Join(dir, "state", "directory"))
 			}
 		})
 	}

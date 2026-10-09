@@ -25,7 +25,7 @@ import (
 )
 
 func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
-	store, err := inventory.OpenManaged(t.TempDir(), nil)
+	store, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer store.Close()
 	fixture := controltest.New(t, nil, nil, store, controlplane.Config{})
@@ -77,7 +77,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 `), 0600))
 	inv, err := inventory.NewStatic([]string{path})
 	require.NoError(t, err)
-	m, err := inventory.OpenManaged(t.TempDir(), inv)
+	m, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer m.Close()
 	idp := oidctest.New(t)
@@ -117,6 +117,27 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	audit, err := m.Audit()
 	require.NoError(t, err)
 	require.Equal(t, "directory-admin", audit[len(audit)-1].Actor)
+	pattern := inventoryapi.Proposal{Pattern: "ci-*.example", Accounts: []string{"root"}, PrincipalMode: "epithet-principal-v1", Realm: "CIRunners"}
+	for _, tc := range []struct {
+		id   string
+		want int
+	}{{"", 401}, {"directory-user", 403}, {"directory-disabled", 403}, {"directory-admin", 200}} {
+		bearer := ""
+		if tc.id != "" {
+			bearer = idp.MintIDTokenWithClaims("unrelated-subject", time.Now().Add(time.Hour), map[string]any{"oid": tc.id})
+		}
+		result, status, err := client.Control(t.Context(), bearer, inventoryapi.ControlRequest{Action: "add-pattern", Host: &pattern})
+		require.Equal(t, tc.want, status)
+		if status == 200 {
+			require.NoError(t, err)
+			require.Equal(t, "active", result.Host.Status)
+			require.Equal(t, "CIRunners", result.Host.Proposal.Realm)
+			require.Equal(t, pattern.Pattern, result.Host.Proposal.Pattern)
+		} else {
+			require.Error(t, err)
+		}
+	}
+
 }
 
 func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {

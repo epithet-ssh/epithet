@@ -7,10 +7,11 @@ import "github.com/epithet-ssh/epithet/pkg/inventoryapi"
 func (p Proposal) ControlProposal() inventoryapi.Proposal {
 	return inventoryapi.Proposal{
 		Names:         p.Names,
+		Pattern:       p.Pattern,
 		Labels:        p.Labels,
 		Accounts:      p.Accounts,
 		PrincipalMode: string(p.PrincipalMode),
-		Domain:        p.Domain,
+		Realm:         p.Realm,
 	}
 }
 
@@ -19,26 +20,23 @@ func (p Proposal) ControlProposal() inventoryapi.Proposal {
 func ProposalFromControl(p inventoryapi.Proposal) Proposal {
 	return Proposal{
 		Names:         p.Names,
+		Pattern:       p.Pattern,
 		Labels:        p.Labels,
 		Accounts:      p.Accounts,
 		PrincipalMode: PrincipalMode(p.PrincipalMode),
-		Domain:        p.Domain,
+		Realm:         p.Realm,
 	}
 }
 
 // ControlRecord projects the record onto the control API.
 func (r HostRecord) ControlRecord() inventoryapi.HostRecord {
 	return inventoryapi.HostRecord{
-		SourceFile:    r.SourceFile,
-		Pattern:       r.Pattern,
-		ID:            r.ID,
-		Revision:      r.Revision,
-		Status:        r.Status,
-		Proposal:      r.Proposal.ControlProposal(),
-		CreatedAt:     r.CreatedAt,
-		UpdatedAt:     r.UpdatedAt,
-		Source:        r.Source,
-		ShadowedNames: r.ShadowedNames,
+		ID:        r.ID,
+		Revision:  r.Revision,
+		Status:    r.Status,
+		Proposal:  r.Proposal.ControlProposal(),
+		CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt,
 	}
 }
 

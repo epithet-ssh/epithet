@@ -57,7 +57,7 @@ ID is used only as a display/certificate Key ID fallback.
   "names": ["host.example", "host.internal"],
   "accounts": ["root", "deploy"],
   "labels": {"env":"production"},
-  "principal": {"mode":"epithet-principal-v1", "domain":"fleet-id"},
+  "principal": {"mode":"epithet-principal-v1", "realm":"fleet-id"},
   "revision": "provider-defined"
 }
 ```
@@ -72,10 +72,10 @@ no accounts, and an array of names restricts issuance to those accounts. Writ
 still decides whether access is allowed.
 
 Principal modes are `{"mode":"account-name"}` or
-`{"mode":"epithet-principal-v1","domain":"..."}`. The latter requires a valid,
-nonempty opaque principal domain. The domain is credential scope, not a hostname
+`{"mode":"epithet-principal-v1","realm":"..."}`. The latter requires a valid,
+nonempty opaque principal realm. The realm is credential scope, not a hostname
 or a policy selector. Do not substitute it into `names`. Multiple hosts can share
-a domain intentionally; all then accept the same principal for a given account.
+a realm intentionally; all then accept the same principal for a given account.
 
 Both response types may include `revision`, an opaque string of at most 256 UTF-8
 bytes. It is logged only: no comparison, ordering, caching, or authorization
@@ -114,3 +114,43 @@ See [inventory-api.yaml](inventory-api.yaml) and
 [directory-api.yaml](directory-api.yaml) for response schemas, and
 [inventory.md](inventory.md) for deployment configuration. Bespoke providers do not
 need Epithet's private `/manage`, `/actor`, or `/scim` backend endpoints.
+
+## Built-in managed storage
+
+The built-in directory and inventory services each own a separate SQLite
+database under `state-dir`: `directory/directory.db` for SCIM users and
+`inventory/inventory.db` for managed exact and pattern records. Both use private database files,
+foreign keys, WAL journaling, and fully synchronous transactions. Static directory
+facts remain YAML configuration; the host proposal editor also continues to use YAML.
+
+Managed inventory stores typed host records, names, labels, accounts, enrollment
+tokens, and audit events. Mutations check admission rules and commit the host,
+token state, audit, and inventory revision together. Lookups read current host
+facts and the revision in one snapshot. Pending and denied hosts supply no facts;
+exact records take precedence over pattern records. A pattern match exposes the
+requested hostname as its resource name. If multiple active patterns match, lookup
+fails with a conflict rather than selecting one by order.
+Removing a managed host also deletes its names, token metadata, and audit history.
+Host inventory has no static mode or file overlay. Each editable proposal contains
+either `names` (1–64 exact DNS names) or `pattern`, never both. Patterns use the
+same DNS-label matching language as Writ host selectors: `*` and `?` within a
+label, and whole-label `**` across labels. The standalone `*` matches any hostname.
+
+Existing `inventory/records/*.yaml` files are not read or imported by the SQLite
+backend. Convert existing managed state with the service stopped before starting
+this version. `inventory --check` initializes and validates the configured
+database; schema or storage errors fail startup. The old `inventory-mode`,
+`inventory-static-file`, and server-wide `principal-mode` settings are removed.
+Principal mode is explicit on each managed record.
+
+Use `epithet inventory add-pattern 'ci-*.example'` to declare an active pattern
+through the YAML editor. Creation requires inventory-admin authorization. Choose
+its labels, explicit accounts (`null`, `[]`, or a list), principal mode, and realm.
+Patterns cannot use a generated per-host realm. Existing `edit`, `show`, and
+`remove` commands operate on pattern records by ID or their pattern text. Pattern
+creation, editing, and removal update the inventory revision transactionally.
+
+Named realms need no separate declaration. They are case-sensitive attributes
+of records, and may include uppercase ASCII letters. All active records sharing
+the same named realm must have identical labels and account sets; account order
+does not matter, while `null` and `[]` remain distinct.

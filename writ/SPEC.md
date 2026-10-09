@@ -146,11 +146,12 @@ a negated matcher succeeds only when none of the names match. Thus a deny on
 one name applies through every other name of the same host.
 
 An inventory implementation may carry other host data, but Writ does not
-observe it. Static inventory supports exact host records with multiple DNS
-names and ordered patterns for ephemeral fleets. Principal domains are opaque
+observe it. The built-in inventory supports exact host records with multiple DNS
+names and hostname patterns for ephemeral fleets. Exact records take precedence;
+ambiguous pattern matches fail. Principal realms are opaque
 issuance metadata, independent of host names and DNS domains. They never
 replace the host's names in policy evaluation, even when several hosts have
-the same principal domain.
+the same principal realm.
 Label selector `{k=v, ...}` entries remain ANDed.
 
 **Accounts** are byte-exact local login names. If a resolved host supplies an

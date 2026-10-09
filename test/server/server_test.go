@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -54,17 +55,12 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("failed to write CA key: %v", err)
 	}
 
-	// Keep user and host files separate so this exercises independent static-file
-	// options all the way through the supervisor and the fact services.
+	// User configuration and managed host storage are independent.
 	policyPath := filepath.Join(tmpDir, "policy.writ")
 	if err := os.WriteFile(policyPath, []byte("allow userName:\"test@example.com\" -> root@*\n"), 0644); err != nil {
 		t.Fatalf("failed to write policy: %v", err)
 	}
-	inventoryPath := filepath.Join(tmpDir, "inventory.yaml")
-	inventoryContent := "hosts:\n  - pattern: \"*\"\n"
-	if err := os.WriteFile(inventoryPath, []byte(inventoryContent), 0644); err != nil {
-		t.Fatalf("failed to write inventory: %v", err)
-	}
+	seedManagedPattern(t, filepath.Join(tmpDir, "state"), nil)
 	directoryPath := filepath.Join(tmpDir, "directory.yaml")
 	if err := os.WriteFile(directoryPath, []byte("users:\n  - userName: test@example.com\n    id: subject:test@example.com\n"), 0644); err != nil {
 		t.Fatalf("failed to write directory: %v", err)
@@ -78,9 +74,8 @@ control-key-file = %q
 policy-file = %q
 oidc-issuer = %q
 oidc-client-id = %q
-principal-mode = "account-name"
-inventory-mode = "static"
-`, caKeyPath, controlPath, policyPath, mockURL, oidctest.ClientID)
+state-dir = %q
+`, caKeyPath, controlPath, policyPath, mockURL, oidctest.ClientID, filepath.Join(tmpDir, "state"))
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -96,7 +91,6 @@ inventory-mode = "static"
 		"server",
 		"--listen", fmt.Sprintf(":%d", port),
 		"--directory-static-file", directoryPath,
-		"--inventory-static-file", inventoryPath,
 		"-v",
 	)
 	runtimeDir := filepath.Join(tmpDir, "run")
@@ -254,7 +248,7 @@ inventory-mode = "static"
 		defer cancel()
 		failed := exec.CommandContext(ctx, epithetBin, "--config", configPath, "server",
 			"--listen", occupied.Addr().String(),
-			"--directory-static-file", directoryPath, "--inventory-static-file", inventoryPath)
+			"--directory-static-file", directoryPath)
 		failed.Env = serverCmd.Env
 		output, err := failed.CombinedOutput()
 		if ctx.Err() != nil {
@@ -323,4 +317,20 @@ func writeControlKey(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func seedManagedPattern(t *testing.T, state string, accounts []string) {
+	t.Helper()
+	store, err := inventory.OpenManaged(filepath.Join(state, "inventory", "inventory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record, err := store.Enroll(inventory.Proposal{Pattern: "*", Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Change("admin", "approve", record.ID, record.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
 }

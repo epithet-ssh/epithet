@@ -8,15 +8,15 @@ import (
 	"os/user"
 )
 
-func validateAuthorizedPrincipalsAccess(binary, domainPath, caKeyPath, commandUser string, destinationBound bool) error {
+func validateAuthorizedPrincipalsAccess(binary, realmPath, caKeyPath, commandUser string, destinationBound bool) error {
 	if destinationBound {
 		if _, err := user.Lookup(commandUser); err != nil {
 			return fmt.Errorf("looking up AuthorizedPrincipalsCommandUser %q: %w", commandUser, err)
 		}
 	}
 	paths := map[string]string{
-		"principal-domain file": domainPath,
-		"CA public-key file":    caKeyPath,
+		"principal-realm file": realmPath,
+		"CA public-key file":   caKeyPath,
 	}
 	if destinationBound {
 		paths["AuthorizedPrincipalsCommand"] = binary

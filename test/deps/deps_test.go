@@ -60,7 +60,7 @@ func TestClientPackagesDoNotLinkServers(t *testing.T) {
 
 func TestWireContractsAreLeaves(t *testing.T) {
 	allowed := map[string][]string{
-		// wire validates host names and principal domains, both leaf packages.
+		// wire validates host names and principal realms, both leaf packages.
 		"./pkg/wire":         {module + "pkg/hostpattern", module + "pkg/principal", module + "pkg/sshcert"},
 		"./pkg/inventoryapi": {},
 	}

@@ -164,14 +164,14 @@ func TestRenderSSHDFragmentDestinationBound(t *testing.T) {
 		principalMode: principal.SchemeV1,
 		commandUser:   "nobody",
 	}
-	got, err := renderSSHDFragment(settings, "/var/lib/epithet/domain", "/var/lib/epithet/epithet-ca.pub", "linux")
+	got, err := renderSSHDFragment(settings, "/var/lib/epithet/realm", "/var/lib/epithet/epithet-ca.pub", "linux")
 	require.NoError(t, err)
 	require.Equal(t, `# Managed by epithet host enroll. DO NOT EDIT.
 # principal-mode: epithet-principal-v1
-# domain-file: "/var/lib/epithet/domain"
+# domain-file: "/var/lib/epithet/realm"
 # ca-pubkey-file: "/var/lib/epithet/epithet-ca.pub"
 TrustedUserCAKeys "/var/lib/epithet/epithet-ca.pub"
-AuthorizedPrincipalsCommand /opt/Epithet\ Bin/epithet host authorized-principals --principal-domain-file "/var/lib/epithet/domain" %u
+AuthorizedPrincipalsCommand /opt/Epithet\ Bin/epithet host authorized-principals --principal-realm-file "/var/lib/epithet/realm" %u
 AuthorizedPrincipalsCommandUser nobody
 `, string(got))
 	commandLine := strings.Split(string(got), "\n")[5]
@@ -181,7 +181,7 @@ AuthorizedPrincipalsCommandUser nobody
 
 func TestRenderSSHDFragmentAccountNameOmitsPrincipalCommand(t *testing.T) {
 	settings := &sshdSettings{principalMode: accountNamePrincipalMode}
-	got, err := renderSSHDFragment(settings, "/state/domain", "/state/epithet-ca.pub", "linux")
+	got, err := renderSSHDFragment(settings, "/state/realm", "/state/epithet-ca.pub", "linux")
 	require.NoError(t, err)
 	require.Contains(t, string(got), "TrustedUserCAKeys")
 	require.NotContains(t, string(got), "AuthorizedPrincipalsCommand")
@@ -193,10 +193,10 @@ func TestRenderSSHDFragmentEscapesPercentTokensInPaths(t *testing.T) {
 		principalMode: principal.SchemeV1,
 		commandUser:   "nobody",
 	}
-	got, err := renderSSHDFragment(settings, "/state/%h/domain", "/state/epithet-ca.pub", "linux")
+	got, err := renderSSHDFragment(settings, "/state/%h/realm", "/state/epithet-ca.pub", "linux")
 	require.NoError(t, err)
 	require.Contains(t, string(got), `/opt/%%d/epithet`)
-	require.Contains(t, string(got), `"/state/%%h/domain" %u`)
+	require.Contains(t, string(got), `"/state/%%h/realm" %u`)
 }
 
 func TestEscapeSSHDCommandPathRejectsNonAbsolutePath(t *testing.T) {
@@ -219,7 +219,7 @@ func TestAdoptExistingSSHDEnrollmentRecoversDurableChoices(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "ssh", "sshd_config")
 	fragmentPath := filepath.Join(dir, "custom", "epithet.conf")
-	domainPath := filepath.Join(dir, "identity", "domain")
+	realmPath := filepath.Join(dir, "identity", "realm")
 	caKeyPath := filepath.Join(dir, "trust", "epithet-ca.pub")
 	require.NoError(t, os.MkdirAll(filepath.Dir(mainPath), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(fragmentPath), 0o755))
@@ -230,7 +230,7 @@ func TestAdoptExistingSSHDEnrollmentRecoversDurableChoices(t *testing.T) {
 		epithetBinary: "/opt/epithet",
 		principalMode: principal.SchemeV1,
 		commandUser:   "nobody",
-	}, domainPath, caKeyPath, "linux")
+	}, realmPath, caKeyPath, "linux")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(fragmentPath, fragment, 0o644))
 
@@ -238,7 +238,7 @@ func TestAdoptExistingSSHDEnrollmentRecoversDurableChoices(t *testing.T) {
 	env := &sshdEnvironment{goos: "linux", getenv: func(string) string { return "" }}
 	require.NoError(t, cmd.adoptExistingSSHDEnrollment(env))
 	require.Equal(t, fragmentPath, cmd.SSHDFragmentFile)
-	require.Equal(t, domainPath, cmd.DomainFile)
+	require.Equal(t, realmPath, cmd.RealmFile)
 	require.Equal(t, caKeyPath, cmd.CAPubkeyFile)
 	require.Equal(t, principal.SchemeV1, cmd.PrincipalMode)
 }
@@ -251,15 +251,15 @@ func TestAdoptExistingSSHDEnrollmentKeepsExplicitIdentityOverrideTogether(t *tes
 	mainConfig, err := renderManagedSSHDMain([]byte("Port 22\n"), fragmentPath, "linux")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(mainPath, mainConfig, 0o600))
-	fragment, err := renderSSHDFragment(&sshdSettings{principalMode: accountNamePrincipalMode}, "/old/domain", "/old/epithet-ca.pub", "linux")
+	fragment, err := renderSSHDFragment(&sshdSettings{principalMode: accountNamePrincipalMode}, "/old/realm", "/old/epithet-ca.pub", "linux")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(fragmentPath, fragment, 0o644))
 
-	cmd := &HostEnrollCLI{SSHDConfigFile: mainPath, DomainFile: "/new/domain"}
+	cmd := &HostEnrollCLI{SSHDConfigFile: mainPath, RealmFile: "/new/realm"}
 	env := &sshdEnvironment{goos: "linux", getenv: func(string) string { return "" }}
 	require.NoError(t, cmd.adoptExistingSSHDEnrollment(env))
-	require.Equal(t, "/new/domain", cmd.DomainFile)
-	require.Empty(t, cmd.CAPubkeyFile, "a new explicit domain file must use its own default CA-key path")
+	require.Equal(t, "/new/realm", cmd.RealmFile)
+	require.Empty(t, cmd.CAPubkeyFile, "a new explicit realm file must use its own default CA-key path")
 	require.Equal(t, accountNamePrincipalMode, cmd.PrincipalMode)
 }
 
@@ -381,7 +381,7 @@ func newSSHDConfigurationTest(t *testing.T) (*HostEnrollCLI, *hostEnrollment, *s
 		AuthorizedPrincipalsCommandUser: "nobody",
 	}
 	enrollment := &hostEnrollment{
-		DomainFile:   filepath.Join(dir, "state", "domain"),
+		RealmFile:    filepath.Join(dir, "state", "realm"),
 		CAPubkeyFile: filepath.Join(dir, "state", "epithet-ca.pub"),
 	}
 	return cmd, enrollment, env, runner, mainPath, fragmentPath

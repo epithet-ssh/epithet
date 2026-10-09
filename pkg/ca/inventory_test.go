@@ -35,14 +35,14 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 	for _, mode := range []string{"account-name", "epithet-principal-v1"} {
 		t.Run(mode, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "inventory.yaml")
-			domain := ""
+			realm := ""
 			expected := "ubuntu"
 			if mode == "epithet-principal-v1" {
-				domain = "    domain: production\n"
+				realm = "    realm: production\n"
 				expected, err = principal.DeriveV1("production", "ubuntu")
 				require.NoError(t, err)
 			}
-			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("domains: [production]\nusers:\n  - id: subject:alice\n    userName: Alice\nhosts:\n  - names: [host]\n    accounts: [ubuntu]\n    principal-mode: %s\n%s", mode, domain)), 0600))
+			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("realms: [production]\nusers:\n  - id: subject:alice\n    userName: Alice\nhosts:\n  - names: [host]\n    accounts: [ubuntu]\n    principal-mode: %s\n%s", mode, realm)), 0600))
 			inv, err := inventory.NewStatic([]string{path})
 			require.NoError(t, err)
 			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
@@ -91,7 +91,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 							return
 						}
 						// Inventory transport, principal construction, and audit metadata stay at CA.
-						for _, field := range []string{"version", "resolvedAt", "revision", "directoryRevision", "inventoryRevision", "principal", "domain"} {
+						for _, field := range []string{"version", "resolvedAt", "revision", "directoryRevision", "inventoryRevision", "principal", "realm"} {
 							assert.NotContains(t, string(data), `"`+field+`"`)
 						}
 						assert.Equal(t, "host", request.Facts.Target)

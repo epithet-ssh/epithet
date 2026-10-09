@@ -18,27 +18,25 @@ import (
 type InventoryCLI struct {
 	ManagementCLI `embed:""`
 
-	InventoryMode string              `help:"Host inventory mode: static files only, or enrollment with optional static files" name:"inventory-mode" default:"enrollment" enum:"static,enrollment"`
-	StateDir      string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
-	Serve         InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve directory and inventory"`
-	List          InventoryListCLI    `cmd:"list" aliases:"l,ls" help:"List static and dynamic host records"`
-	Show          InventoryShowCLI    `cmd:"show" aliases:"s,sh" help:"Show one host record"`
-	Edit          InventoryEditCLI    `cmd:"edit" aliases:"e,ed" help:"Edit a dynamic host in EDITOR"`
-	Approve       InventoryApproveCLI `cmd:"approve" aliases:"a,app" help:"Review, edit, approve, or deny enrollment"`
-	Remove        InventoryRemoveCLI  `cmd:"remove" aliases:"rm" help:"Withdraw a dynamic host from inventory"`
-	Token         InventoryTokenCLI   `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
-	Audit         InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
+	StateDir   string                 `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
+	Serve      InventoryServeCLI      `cmd:"" default:"withargs" help:"Serve managed inventory"`
+	List       InventoryListCLI       `cmd:"list" aliases:"l,ls" help:"List managed host records"`
+	AddPattern InventoryAddPatternCLI `cmd:"add-pattern" help:"Declare a managed hostname pattern in EDITOR"`
+	Show       InventoryShowCLI       `cmd:"show" aliases:"s,sh" help:"Show one host record"`
+	Edit       InventoryEditCLI       `cmd:"edit" aliases:"e,ed" help:"Edit a managed host in EDITOR"`
+	Approve    InventoryApproveCLI    `cmd:"approve" aliases:"a,app" help:"Review, edit, approve, or deny enrollment"`
+	Remove     InventoryRemoveCLI     `cmd:"remove" aliases:"rm" help:"Withdraw a managed host from inventory"`
+	Token      InventoryTokenCLI      `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
+	Audit      InventoryAuditCLI      `cmd:"audit" help:"Show durable inventory mutation audit"`
 
-	Listen        string   `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
-	ControlPubkey string   `help:"Control service public key for administration" name:"control-public-key"`
-	CAPubkey      string   `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-public-key"`
-	Static        []string `help:"Static inventory file path or glob (repeatable; optional in enrollment mode)" name:"inventory-static-file"`
-	PrincipalMode string   `help:"Default host principal mode" name:"principal-mode" default:"epithet-principal-v1" enum:"account-name,epithet-principal-v1"`
-	Check         bool     `help:"Validate inventory files, then exit" name:"check"`
+	Listen        string `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
+	ControlPubkey string `help:"Control service public key for administration" name:"control-public-key"`
+	CAPubkey      string `help:"CA public key (URL, file path, or literal SSH key)" name:"ca-public-key"`
+	Check         bool   `help:"Validate the inventory database, then exit" name:"check"`
 }
 
 func printInventory(v any) error {
-	// Preserve the API field names and source metadata when presenting records as YAML.
+	// Preserve the API field names when presenting records as YAML.
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -58,7 +56,7 @@ func printInventory(v any) error {
 func (c *InventoryCLI) find(id string) (*inventoryapi.HostRecord, error) {
 	// Full IDs use the server's record index rather than downloading every host.
 	_, hexErr := hex.DecodeString(id)
-	if (len(id) == 64 && hexErr == nil) || strings.HasPrefix(id, "static:") {
+	if len(id) == 64 && hexErr == nil {
 		response, err := c.request(inventoryapi.ControlRequest{Action: "get", ID: id})
 		if err != nil {
 			return nil, err
@@ -78,7 +76,7 @@ func (c *InventoryCLI) find(id string) (*inventoryapi.HostRecord, error) {
 		if h.ID == id {
 			return &h, nil
 		}
-		match := strings.HasPrefix(h.ID, id)
+		match := strings.HasPrefix(h.ID, id) || h.Proposal.Pattern == id
 		for _, n := range h.Proposal.Names {
 			match = match || n == id
 		}
@@ -105,15 +103,15 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 	displayNames := func(h inventoryapi.HostRecord) string {
-		if h.Pattern != "" {
-			return h.Pattern
+		if h.Proposal.Pattern != "" {
+			return h.Proposal.Pattern
 		}
 		return strings.Join(h.Proposal.Names, ", ")
 	}
 	slices.SortStableFunc(r.Hosts, func(a, b inventoryapi.HostRecord) int {
 		return strings.Compare(displayNames(a), displayNames(b))
 	})
-	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tSOURCE\tNAMES"); err != nil {
+	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tNAMES"); err != nil {
 		return err
 	}
 	for _, h := range r.Hosts {
@@ -121,10 +119,10 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 			continue
 		}
 		id := h.ID
-		if len(id) == 64 && h.Source != "static" {
+		if len(id) == 64 {
 			id = id[:12]
 		}
-		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\n", id, h.Status, h.Source, displayNames(h)); err != nil {
+		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", id, h.Status, displayNames(h)); err != nil {
 			return err
 		}
 	}
@@ -133,6 +131,35 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 
 type InventoryShowCLI struct {
 	Host string `arg:"" help:"Host record ID or unambiguous name"`
+}
+
+type InventoryAddPatternCLI struct {
+	Pattern string `arg:"" help:"Hostname pattern (quote shell wildcards)"`
+}
+
+func (c *InventoryAddPatternCLI) Run(p *InventoryCLI) error {
+	fmt.Fprintln(os.Stderr, "Set realm to the shared SSH authorization boundary for this pattern, and choose its labels and accounts.")
+	proposal, err := editProposal(inventory.Proposal{
+		Pattern: c.Pattern, Labels: map[string]string{}, Accounts: []string{},
+		PrincipalMode: inventory.EpithetPrincipalV1,
+	}, bufio.NewReader(os.Stdin), func(p inventory.Proposal) error {
+		if p.Pattern == "" {
+			return fmt.Errorf("pattern is required")
+		}
+		return nil
+	})
+	if errors.Is(err, errCanceled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	submitted := proposal.ControlProposal()
+	r, err := p.request(inventoryapi.ControlRequest{Action: "add-pattern", Host: &submitted})
+	if err != nil {
+		return err
+	}
+	return printInventory(r.Host)
 }
 
 func (c *InventoryShowCLI) Run(p *InventoryCLI) error {
@@ -163,9 +190,6 @@ func (c *InventoryEditCLI) Run(p *InventoryCLI) error {
 }
 
 func editInventoryHost(p *InventoryCLI, h *inventoryapi.HostRecord, input *bufio.Reader) (*inventoryapi.HostRecord, error) {
-	if h.Source == "static" || strings.HasPrefix(h.ID, "static:") {
-		return nil, fmt.Errorf("static record: edit the YAML files selected by inventory-static-file and restart inventory")
-	}
 	proposal, err := editProposal(inventory.ProposalFromControl(h.Proposal), input)
 	if err != nil {
 		return nil, err
@@ -246,9 +270,7 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 	if err != nil {
 		return err
 	}
-	if h.Source == "static" {
-		return fmt.Errorf("static record: edit the YAML files selected by inventory-static-file and restart inventory")
-	}
+
 	_, err = p.request(inventoryapi.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
 	return err
 }

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/crypto/ssh"
 )
@@ -33,17 +32,10 @@ type ServerCLI struct {
 	// only needed when configuring via flags rather than a config file.
 	PolicyFile      string            `help:"Path to the writ policy file" name:"policy-file"`
 	DirectoryStatic []string          `help:"Static directory file path or glob (repeatable)" name:"directory-static-file"`
-	InventoryStatic []string          `help:"Static inventory file path or glob (repeatable)" name:"inventory-static-file"`
 	Extension       map[string]string `help:"Certificate extension for issued certs (name=value, repeatable)" name:"certificate-extension"`
-	// Leave unset to inherit inventory configuration (including its default).
-	// Validate in Run so Kong does not require an enum default here.
-	PrincipalMode string `help:"Override inventory principal mode: account-name or epithet-principal-v1 (default: inherit inventory configuration)" name:"principal-mode"`
 }
 
 func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
-	if err := inventory.PrincipalMode(c.PrincipalMode).Validate(); err != nil {
-		return err
-	}
 	caKeyPath := c.CAKey
 
 	// Derive the trusted reader key for both fact services.
@@ -187,12 +179,6 @@ func (c *ServerCLI) routerArgs(globalArgs []string, caSock, inventorySock string
 
 func (c *ServerCLI) inventoryArgs(globalArgs []string, socket, key string) []string {
 	args := append(append([]string{}, globalArgs...), "inventory", "--listen", "unix://"+socket, "--ca-public-key", key)
-	for _, path := range c.InventoryStatic {
-		args = append(args, "--inventory-static-file", path)
-	}
-	if c.PrincipalMode != "" {
-		args = append(args, "--principal-mode", c.PrincipalMode)
-	}
 	return args
 }
 

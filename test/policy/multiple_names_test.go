@@ -19,7 +19,7 @@ import (
 )
 
 func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
-	const domain = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+	const realm = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 	for _, mode := range []string{"account-name", "epithet-principal-v1"} {
 		t.Run(mode, func(t *testing.T) {
 			idp := oidctest.New(t)
@@ -28,8 +28,8 @@ func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
 			config := "users:\n  - id: subject:alice\n    userName: alice\nhosts:\n  - names: [freki.home, freki.tailca597.ts.net]\n    accounts: [root]\n    principal-mode: " + mode + "\n"
 			expectedPrincipal := "root"
 			if mode == "epithet-principal-v1" {
-				config += "    domain: " + domain + "\n"
-				expectedPrincipal, err = principal.DeriveV1(principal.Domain(domain), "root")
+				config += "    realm: " + realm + "\n"
+				expectedPrincipal, err = principal.DeriveV1(principal.Realm(realm), "root")
 				require.NoError(t, err)
 			}
 			path := filepath.Join(t.TempDir(), "inventory.yaml")

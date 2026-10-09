@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The editor and on-disk documents must keep unrestricted (null) and empty
+// The editor must keep unrestricted (null) and empty
 // ([]) account sets distinct through a marshal and parse cycle.
 func TestProposalYAMLRoundTripPreservesAccounts(t *testing.T) {
 	for _, tc := range []struct {
@@ -29,4 +29,10 @@ func TestProposalYAMLRoundTripPreservesAccounts(t *testing.T) {
 			require.Equal(t, p.ControlProposal(), parsed.ControlProposal())
 		})
 	}
+}
+
+func TestPatternEditorDraftShowsRealm(t *testing.T) {
+	data, err := yaml.Marshal(inventory.Proposal{Pattern: "ci-*.example", Accounts: []string{}, PrincipalMode: inventory.EpithetPrincipalV1})
+	require.NoError(t, err)
+	require.Contains(t, string(data), "realm: \"\"")
 }

@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const evaluatorDomain = principal.Domain("production-database")
+const evaluatorRealm = principal.Realm("production-database")
 
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
@@ -96,11 +96,11 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 	}
 }
 
-func TestIssueAuthorizesHostWithPrincipalDomain(t *testing.T) {
+func TestIssueAuthorizesHostWithPrincipalRealm(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
-	inv.hosts["prod-db-1"].Domain = evaluatorDomain
+	inv.hosts["prod-db-1"].Realm = evaluatorRealm
 	e := NewForTesting(pol, inv)
 
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
@@ -108,14 +108,14 @@ func TestIssueAuthorizesHostWithPrincipalDomain(t *testing.T) {
 	require.Positive(t, resp.TTLSeconds)
 }
 
-func TestIssueHashedPrincipalWithoutDomainFailsClosed(t *testing.T) {
+func TestIssueHashedPrincipalWithoutRealmFailsClosed(t *testing.T) {
 	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	e := NewForTesting(pol, inv)
 
 	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
-	require.ErrorContains(t, err, "invalid principal domain")
+	require.ErrorContains(t, err, "invalid principal realm")
 	var perr *wire.PolicyError
 	require.False(t, errors.As(err, &perr), "issuance configuration errors are 500s, not policy denials")
 }
@@ -362,7 +362,7 @@ func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.
 		input.User = &wire.User{ID: u.ID, UserName: u.UserName, Active: &u.Active, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
 	}
 	if h != nil {
-		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Labels: h.Policy.Labels}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Domain: string(h.Domain)}}
+		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Labels: h.Policy.Labels}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
 		if err := host.Validate(conn.RemoteHost); err != nil {
 			return nil, err
 		}
@@ -487,14 +487,14 @@ func TestUserFactsPreserveAuthorization(t *testing.T) {
 }
 
 func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
-	for _, principalDomain := range []bool{false, true} {
+	for _, principalRealm := range []bool{false, true} {
 		inv := testInv()
 		host := inv.hosts["prod-db-1"]
 		host.Policy.Names = []string{"prod-db-1", "database.internal"}
 		inv.hosts["database.internal"] = host
-		if principalDomain {
+		if principalRealm {
 			host.PrincipalMode = inventory.EpithetPrincipalV1
-			host.Domain = evaluatorDomain
+			host.Realm = evaluatorRealm
 		}
 		for _, tc := range []struct {
 			rule    string
@@ -513,7 +513,7 @@ func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
 				e := NewForTesting(mustPolicy(t, tc.rule), inv)
 				response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", name))
 				if tc.allowed {
-					require.NoError(t, err, "principalDomain=%v target=%s rule=%s", principalDomain, name, tc.rule)
+					require.NoError(t, err, "principalRealm=%v target=%s rule=%s", principalRealm, name, tc.rule)
 					require.NotNil(t, response)
 				} else {
 					var denied *wire.PolicyError

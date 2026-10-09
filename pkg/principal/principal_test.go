@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const vectorDomain = Domain("ai-worker-pool-1")
+const vectorRealm = Realm("ai-worker-pool-1")
 
 func TestDeriveV1NormativeVector(t *testing.T) {
-	got, err := DeriveV1(vectorDomain, "ubuntu")
+	got, err := DeriveV1(vectorRealm, "ubuntu")
 	require.NoError(t, err)
 	require.Equal(t,
 		"epithet-principal-v1-MTgFaDsSaL2IM0v4UljbMjiyxMUQiOK9KymVavQ2Y14",
@@ -20,25 +20,33 @@ func TestDeriveV1NormativeVector(t *testing.T) {
 }
 
 func TestDeriveV1AccountIsByteExact(t *testing.T) {
-	lower, err := DeriveV1(vectorDomain, "ubuntu")
+	lower, err := DeriveV1(vectorRealm, "ubuntu")
 	require.NoError(t, err)
-	upper, err := DeriveV1(vectorDomain, "Ubuntu")
+	upper, err := DeriveV1(vectorRealm, "Ubuntu")
 	require.NoError(t, err)
-	withNUL, err := DeriveV1(vectorDomain, "ubuntu\x00")
+	withNUL, err := DeriveV1(vectorRealm, "ubuntu\x00")
 	require.NoError(t, err)
 
 	require.NotEqual(t, lower, upper)
 	require.NotEqual(t, lower, withNUL)
 }
 
-func TestDeriveV1RequiresValidDomain(t *testing.T) {
+func TestDeriveV1RealmIsCaseSensitive(t *testing.T) {
+	lower, err := DeriveV1("fleet", "ubuntu")
+	require.NoError(t, err)
+	upper, err := DeriveV1("Fleet", "ubuntu")
+	require.NoError(t, err)
+	require.NotEqual(t, lower, upper)
+}
+
+func TestDeriveV1RequiresValidRealm(t *testing.T) {
 	_, err := DeriveV1("", "ubuntu")
-	require.ErrorContains(t, err, "invalid principal domain")
+	require.ErrorContains(t, err, "invalid principal realm")
 }
 
 func TestV1PreimageFraming(t *testing.T) {
 	h := sha256.New()
-	for _, field := range [][]byte{[]byte(SchemeV1), []byte(vectorDomain), []byte("ubuntu")} {
+	for _, field := range [][]byte{[]byte(SchemeV1), []byte(vectorRealm), []byte("ubuntu")} {
 		require.NoError(t, writeSSHString(h, field))
 	}
 

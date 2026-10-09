@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestInventoryDisplayPreservesRevisionAndSource(t *testing.T) {
+func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
 	output, err := os.CreateTemp(t.TempDir(), "output")
 	require.NoError(t, err)
 	defer output.Close()
@@ -20,11 +20,9 @@ func TestInventoryDisplayPreservesRevisionAndSource(t *testing.T) {
 	os.Stdout = output
 	defer func() { os.Stdout = original }()
 	record := inventoryapi.HostRecord{
-		ID:         strings.Repeat("a", 64),
-		Revision:   9007199254740993,
-		Source:     "dynamic",
-		SourceFile: "/inventory/records/item.yaml",
-		Proposal:   inventoryapi.Proposal{Names: []string{"host"}, PrincipalMode: "account-name"},
+		ID:       strings.Repeat("a", 64),
+		Revision: 9007199254740993,
+		Proposal: inventoryapi.Proposal{Pattern: "*.example", PrincipalMode: "account-name"},
 	}
 	require.NoError(t, printInventory(record))
 	_, err = output.Seek(0, 0)
@@ -37,10 +35,9 @@ func TestInventoryDisplayPreservesRevisionAndSource(t *testing.T) {
 	revisionNode := fields["revision"]
 	require.NoError(t, revisionNode.Decode(&revision))
 	require.Equal(t, record.Revision, revision)
-	require.Equal(t, record.SourceFile, fields["source-file"].Value)
-	require.Equal(t, "dynamic", fields["source"].Value)
 	var host inventory.Proposal
 	hostNode := fields["host"]
 	require.NoError(t, hostNode.Decode(&host))
 	require.Nil(t, host.Accounts)
+	require.Equal(t, "*.example", host.Pattern)
 }

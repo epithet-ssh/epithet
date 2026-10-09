@@ -17,8 +17,8 @@ type HostCLI struct {
 // HostAuthorizedPrincipalsCLI implements the offline
 // AuthorizedPrincipalsCommand hook for sshd.
 type HostAuthorizedPrincipalsCLI struct {
-	DomainFile string `name:"principal-domain-file" help:"Principal-domain file" required:""`
-	Account    string `arg:"" name:"account" help:"Target account name supplied by sshd as %u" required:""`
+	RealmFile string `name:"principal-realm-file" help:"Principal-realm file" required:""`
+	Account   string `arg:"" name:"account" help:"Target account name supplied by sshd as %u" required:""`
 }
 
 func (c *HostAuthorizedPrincipalsCLI) Run() error {
@@ -26,22 +26,22 @@ func (c *HostAuthorizedPrincipalsCLI) Run() error {
 }
 
 func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) error {
-	if c.DomainFile == "" {
-		return fmt.Errorf("principal-domain file is required")
+	if c.RealmFile == "" {
+		return fmt.Errorf("principal-realm file is required")
 	}
 	if c.Account == "" {
 		return fmt.Errorf("account name is empty")
 	}
 
-	path, err := expandPath(c.DomainFile)
+	path, err := expandPath(c.RealmFile)
 	if err != nil {
-		return fmt.Errorf("expanding principal-domain path %q: %w", c.DomainFile, err)
+		return fmt.Errorf("expanding principal-realm path %q: %w", c.RealmFile, err)
 	}
-	domain, err := readDomain(path)
+	realm, err := readRealm(path)
 	if err != nil {
 		return err
 	}
-	name, err := principal.DeriveV1(domain, c.Account)
+	name, err := principal.DeriveV1(realm, c.Account)
 	if err != nil {
 		return fmt.Errorf("deriving principal from %s: %w", path, err)
 	}
@@ -52,6 +52,6 @@ func (c *HostAuthorizedPrincipalsCLI) writeAuthorizedPrincipals(dst io.Writer) e
 	return nil
 }
 
-func readDomain(path string) (principal.Domain, error) {
-	return principal.ReadDomainFile(path)
+func readRealm(path string) (principal.Realm, error) {
+	return principal.ReadRealmFile(path)
 }

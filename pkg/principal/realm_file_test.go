@@ -24,7 +24,7 @@ func TestDefaultPath(t *testing.T) {
 	}
 	for goos, want := range tests {
 		t.Run(goos, func(t *testing.T) {
-			got, err := defaultDomainPath(goos, func(string) string { return "" })
+			got, err := defaultRealmPath(goos, func(string) string { return "" })
 			require.NoError(t, err)
 			require.Equal(t, want, got)
 		})
@@ -32,7 +32,7 @@ func TestDefaultPath(t *testing.T) {
 }
 
 func TestDefaultPathWindowsUsesProgramData(t *testing.T) {
-	got, err := defaultDomainPath("windows", func(name string) string {
+	got, err := defaultRealmPath("windows", func(name string) string {
 		require.Equal(t, "ProgramData", name)
 		return `C:\ProgramData`
 	})
@@ -41,7 +41,7 @@ func TestDefaultPathWindowsUsesProgramData(t *testing.T) {
 }
 
 func TestDefaultPathRejectsUnknownOS(t *testing.T) {
-	_, err := defaultDomainPath("plan9", func(string) string { return "" })
+	_, err := defaultRealmPath("plan9", func(string) string { return "" })
 	require.ErrorContains(t, err, "use an explicit path")
 }
 
@@ -49,64 +49,64 @@ func TestDefaultPathMatchesCurrentOS(t *testing.T) {
 	if runtime.GOOS == "plan9" || runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
 		t.Skip("current OS deliberately has no host-enrollment default")
 	}
-	_, err := DefaultDomainPath()
+	_, err := DefaultRealmPath()
 	require.NoError(t, err)
 }
 
-func TestEnsureFileCreatesAndThenReadsSameDomain(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "domain")
+func TestEnsureFileCreatesAndThenReadsSameRealm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "realm")
 
-	createdDomain, err := GenerateHostDomain()
+	createdRealm, err := GenerateHostRealm()
 	require.NoError(t, err)
-	created, err := EnsureDomainFile(path, createdDomain)
+	created, err := EnsureRealmFile(path, createdRealm)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.NoError(t, createdDomain.Validate())
-	require.True(t, createdDomain.IsGeneratedHost())
+	require.NoError(t, createdRealm.Validate())
+	require.True(t, createdRealm.IsGeneratedHost())
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 
-	created, err = EnsureDomainFile(path, createdDomain)
+	created, err = EnsureRealmFile(path, createdRealm)
 	require.NoError(t, err)
-	readDomain, err := ReadDomainFile(path)
+	readRealm, err := ReadRealmFile(path)
 	require.NoError(t, err)
 	require.False(t, created)
-	require.Equal(t, createdDomain, readDomain)
+	require.Equal(t, createdRealm, readRealm)
 }
 
-func TestEnsureFilePreservesNamedDomain(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "domain")
+func TestEnsureFilePreservesNamedRealm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "realm")
 	require.NoError(t, os.WriteFile(path, []byte("ai-worker-pool-1\n"), 0o644))
 
-	created, err := EnsureDomainFile(path, "ai-worker-pool-1")
-	domain, readErr := ReadDomainFile(path)
+	created, err := EnsureRealmFile(path, "ai-worker-pool-1")
+	realm, readErr := ReadRealmFile(path)
 	require.NoError(t, readErr)
 	require.NoError(t, err)
 	require.False(t, created)
-	require.Equal(t, Domain("ai-worker-pool-1"), domain)
+	require.Equal(t, Realm("ai-worker-pool-1"), realm)
 }
 
 func TestEnsureFileRejectsMalformedExistingState(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "domain")
-	require.NoError(t, os.WriteFile(path, []byte("broken domain\n"), 0o644))
+	path := filepath.Join(t.TempDir(), "realm")
+	require.NoError(t, os.WriteFile(path, []byte("broken realm\n"), 0o644))
 
-	created, err := EnsureDomainFile(path, "ai-worker-pool-1")
-	require.ErrorContains(t, err, "parsing principal domain")
+	created, err := EnsureRealmFile(path, "ai-worker-pool-1")
+	require.ErrorContains(t, err, "parsing principal realm")
 	require.False(t, created)
 
 	data, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
-	require.Equal(t, "broken domain\n", string(data), "malformed state must not be replaced")
+	require.Equal(t, "broken realm\n", string(data), "malformed state must not be replaced")
 }
 
-func TestConcurrentEnsureFileInstallsReviewedDomain(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "domain")
+func TestConcurrentEnsureFileInstallsReviewedRealm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "realm")
 	const count = 16
 
 	type result struct {
-		domain  Domain
+		realm   Realm
 		created bool
 		err     error
 	}
@@ -118,26 +118,26 @@ func TestConcurrentEnsureFileInstallsReviewedDomain(t *testing.T) {
 		go func() {
 			ready.Done()
 			<-start
-			created, err := EnsureDomainFile(path, "reviewed-domain")
-			domain, readErr := ReadDomainFile(path)
+			created, err := EnsureRealmFile(path, "reviewed-realm")
+			realm, readErr := ReadRealmFile(path)
 			if err == nil {
 				err = readErr
 			}
-			results <- result{domain: domain, created: created, err: err}
+			results <- result{realm: realm, created: created, err: err}
 		}()
 	}
 	ready.Wait()
 	close(start)
 
-	var want Domain
+	var want Realm
 	createdCount := 0
 	for range count {
 		result := <-results
 		require.NoError(t, result.err)
 		if want == "" {
-			want = result.domain
+			want = result.realm
 		}
-		require.Equal(t, want, result.domain)
+		require.Equal(t, want, result.realm)
 		if result.created {
 			createdCount++
 		}
@@ -152,11 +152,11 @@ func TestReadFileLineEndings(t *testing.T) {
 		"CRLF": "ai-worker-pool-1\r\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "domain")
+			path := filepath.Join(t.TempDir(), "realm")
 			require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
-			domain, err := ReadDomainFile(path)
+			realm, err := ReadRealmFile(path)
 			require.NoError(t, err)
-			require.Equal(t, Domain("ai-worker-pool-1"), domain)
+			require.Equal(t, Realm("ai-worker-pool-1"), realm)
 		})
 	}
 }
@@ -164,35 +164,35 @@ func TestReadFileLineEndings(t *testing.T) {
 func TestReadFileRejectsAdditionalLinesAndWhitespace(t *testing.T) {
 	for name, contents := range map[string]string{
 		"two newlines":   "floop\n\n",
-		"two domains":    "floop\nother\n",
+		"two realms":     "floop\nother\n",
 		"leading space":  " floop\n",
 		"trailing space": "floop \n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "domain")
+			path := filepath.Join(t.TempDir(), "realm")
 			require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
-			_, err := ReadDomainFile(path)
+			_, err := ReadRealmFile(path)
 			require.Error(t, err)
 		})
 	}
 }
 
 func TestEnsureFileRequiresExistingParent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing", "domain")
-	created, err := EnsureDomainFile(path, "ai-worker-pool-1")
-	require.ErrorContains(t, err, "creating temporary principal domain")
+	path := filepath.Join(t.TempDir(), "missing", "realm")
+	created, err := EnsureRealmFile(path, "ai-worker-pool-1")
+	require.ErrorContains(t, err, "creating temporary principal realm")
 	require.False(t, created)
 }
 
-func TestEnsureFileRejectsDifferentReviewedDomain(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "domain")
-	created, err := EnsureDomainFile(path, "first-domain")
+func TestEnsureFileRejectsDifferentReviewedRealm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "realm")
+	created, err := EnsureRealmFile(path, "first-realm")
 	require.NoError(t, err)
 	require.True(t, created)
-	created, err = EnsureDomainFile(path, "second-domain")
-	require.ErrorContains(t, err, "conflicts with the prepared domain")
+	created, err = EnsureRealmFile(path, "second-realm")
+	require.ErrorContains(t, err, "conflicts with the prepared realm")
 	require.False(t, created)
-	domain, err := ReadDomainFile(path)
+	realm, err := ReadRealmFile(path)
 	require.NoError(t, err)
-	require.Equal(t, Domain("first-domain"), domain)
+	require.Equal(t, Realm("first-realm"), realm)
 }

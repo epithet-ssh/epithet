@@ -15,6 +15,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -94,10 +95,10 @@ func TestBespokeProviderResponseValidation(t *testing.T) {
 		{"missing id", `{}`, false, false}, {"mismatch", `{"id":"other"}`, false, false}, {"null user", `null`, false, false},
 		{"unrestricted", `{"names":["host","alias"],"accounts":null,"principal":{"mode":"account-name"}}`, true, true},
 		{"no accounts", `{"names":["host"],"accounts":[],"principal":{"mode":"account-name"}}`, true, true},
-		{"opaque domain", `{"names":["host"],"accounts":["root"],"principal":{"mode":"epithet-principal-v1","domain":"fleet"},"revision":"inventory-v1"}`, true, true},
+		{"opaque realm", `{"names":["host"],"accounts":["root"],"principal":{"mode":"epithet-principal-v1","realm":"fleet"},"revision":"inventory-v1"}`, true, true},
 		{"missing accounts", `{"names":["host"],"principal":{"mode":"account-name"}}`, true, false},
 		{"missing principal", `{"names":["host"],"accounts":null}`, true, false},
-		{"no domain", `{"names":["host"],"accounts":null,"principal":{"mode":"epithet-principal-v1"}}`, true, false},
+		{"no realm", `{"names":["host"],"accounts":null,"principal":{"mode":"epithet-principal-v1"}}`, true, false},
 		{"wrong names", `{"names":["other"],"accounts":null,"principal":{"mode":"account-name"}}`, true, false},
 		{"host revision null", `{"names":["host"],"accounts":null,"principal":{"mode":"account-name"},"revision":null}`, true, false},
 	} {
@@ -212,4 +213,36 @@ func TestRevisionPreservesPresenceAndUTF8Bound(t *testing.T) {
 	}
 	var r factservice.Revision
 	require.Error(t, json.Unmarshal([]byte{'"', 0xff, '"'}, &r))
+}
+
+func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
+	pub, key, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	require.NoError(t, err)
+	defer hosts.Close()
+	for _, pattern := range []string{"*.example", "ci-*.*"} {
+		_, err = hosts.AddPattern("admin", inventory.Proposal{Pattern: pattern, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
+		require.NoError(t, err)
+	}
+	handler, err := factservice.Handler(nil, hosts, pub, "")
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	signed, err := serviceauth.NewClient(server.URL, key, serviceauth.InventoryAudience, tlsconfig.Config{Insecure: true})
+	require.NoError(t, err)
+	resp, err := signed.Do(t.Context(), "GET", "/lookup", url.Values{"host": {"ci-one.example"}}, nil, "")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	client, err := factservice.NewClient(server.URL, key, serviceauth.InventoryAudience, tlsconfig.Config{Insecure: true})
+	require.NoError(t, err)
+	h, err := client.Host(t.Context(), "ci-one.example")
+	require.Nil(t, h)
+	require.ErrorContains(t, err, "inventory conflict")
+	require.ErrorContains(t, err, "ci-one.example matches pattern records")
+	require.NoError(t, hosts.Close())
+	_, err = client.Host(t.Context(), "ci-one.example")
+	require.ErrorContains(t, err, "HTTP 503")
 }

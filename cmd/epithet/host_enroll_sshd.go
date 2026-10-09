@@ -24,7 +24,7 @@ const (
 
 type sshdEnrollmentMetadata struct {
 	principalMode string
-	domainFile    string
+	realmFile     string
 	caPubkeyFile  string
 }
 
@@ -240,7 +240,7 @@ func absoluteExpandedPath(path string) (string, error) {
 
 // adoptExistingSSHDEnrollment recovers the durable enrollment choices recorded
 // in an existing Epithet-managed sshd fragment. This must run before paths() so
-// that a CA-URL-only rerun does not create a second principal domain at a platform
+// that a CA-URL-only rerun does not create a second principal realm at a platform
 // default path.
 func (c *HostEnrollCLI) adoptExistingSSHDEnrollment(env *sshdEnvironment) error {
 	defaults := platformSSHDDefaults(env.goos, env.getenv)
@@ -284,8 +284,8 @@ func (c *HostEnrollCLI) adoptExistingSSHDEnrollment(env *sshdEnvironment) error 
 	if c.SSHDFragmentFile == "" {
 		c.SSHDFragmentFile = fragmentFile
 	}
-	if c.DomainFile == "" {
-		c.DomainFile = metadata.domainFile
+	if c.RealmFile == "" {
+		c.RealmFile = metadata.realmFile
 		if c.CAPubkeyFile == "" {
 			c.CAPubkeyFile = metadata.caPubkeyFile
 		}
@@ -303,9 +303,9 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 	if err != nil {
 		return fmt.Errorf("resolving sshd configuration file %s: %w", settings.configFile, err)
 	}
-	domainPath, err := absoluteExpandedPath(enrollment.DomainFile)
+	realmPath, err := absoluteExpandedPath(enrollment.RealmFile)
 	if err != nil {
-		return fmt.Errorf("resolving enrolled principal-domain path: %w", err)
+		return fmt.Errorf("resolving enrolled principal-realm path: %w", err)
 	}
 	caKeyPath, err := absoluteExpandedPath(enrollment.CAPubkeyFile)
 	if err != nil {
@@ -314,7 +314,7 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 	if env.validateAccess != nil {
 		if err := env.validateAccess(
 			settings.epithetBinary,
-			domainPath,
+			realmPath,
 			caKeyPath,
 			settings.commandUser,
 			settings.principalMode == principal.SchemeV1,
@@ -323,7 +323,7 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 		}
 	}
 
-	fragment, err := renderSSHDFragment(&settings, domainPath, caKeyPath, env.goos)
+	fragment, err := renderSSHDFragment(&settings, realmPath, caKeyPath, env.goos)
 	if err != nil {
 		return err
 	}
@@ -420,10 +420,10 @@ func configureSSHD(ctx context.Context, enrollment *hostEnrollment, resolved *ss
 	return nil
 }
 
-func renderSSHDFragment(settings *sshdSettings, domainPath, caKeyPath, goos string) ([]byte, error) {
-	domainMetadata, err := quoteSSHDToken(normalizeSSHDPath(domainPath, goos))
+func renderSSHDFragment(settings *sshdSettings, realmPath, caKeyPath, goos string) ([]byte, error) {
+	realmMetadata, err := quoteSSHDToken(normalizeSSHDPath(realmPath, goos))
 	if err != nil {
-		return nil, fmt.Errorf("rendering principal-domain metadata: %w", err)
+		return nil, fmt.Errorf("rendering principal-realm metadata: %w", err)
 	}
 	caToken, err := quoteSSHDToken(normalizeSSHDPath(caKeyPath, goos))
 	if err != nil {
@@ -432,7 +432,8 @@ func renderSSHDFragment(settings *sshdSettings, domainPath, caKeyPath, goos stri
 	var b strings.Builder
 	fmt.Fprintln(&b, sshdFragmentHeader)
 	fmt.Fprintf(&b, "# principal-mode: %s\n", settings.principalMode)
-	fmt.Fprintf(&b, "# domain-file: %s\n", domainMetadata)
+	// Keep the on-disk metadata key so enrollment can reuse existing identity paths.
+	fmt.Fprintf(&b, "# domain-file: %s\n", realmMetadata)
 	fmt.Fprintf(&b, "# ca-pubkey-file: %s\n", caToken)
 	fmt.Fprintf(&b, "TrustedUserCAKeys %s\n", caToken)
 	if settings.principalMode == principal.SchemeV1 {
@@ -440,11 +441,11 @@ func renderSSHDFragment(settings *sshdSettings, domainPath, caKeyPath, goos stri
 		if err != nil {
 			return nil, fmt.Errorf("rendering epithet executable path: %w", err)
 		}
-		domainToken, err := quoteSSHDToken(escapeSSHDPercent(normalizeSSHDPath(domainPath, goos)))
+		realmToken, err := quoteSSHDToken(escapeSSHDPercent(normalizeSSHDPath(realmPath, goos)))
 		if err != nil {
-			return nil, fmt.Errorf("rendering principal-domain path: %w", err)
+			return nil, fmt.Errorf("rendering principal-realm path: %w", err)
 		}
-		fmt.Fprintf(&b, "AuthorizedPrincipalsCommand %s host authorized-principals --principal-domain-file %s %%u\n", binaryToken, domainToken)
+		fmt.Fprintf(&b, "AuthorizedPrincipalsCommand %s host authorized-principals --principal-realm-file %s %%u\n", binaryToken, realmToken)
 		fmt.Fprintf(&b, "AuthorizedPrincipalsCommandUser %s\n", settings.commandUser)
 	}
 	return []byte(b.String()), nil
@@ -483,7 +484,7 @@ func parseSSHDEnrollmentMetadata(fragment []byte) (sshdEnrollmentMetadata, error
 	if !ok || (mode != principal.SchemeV1 && mode != accountNamePrincipalMode) {
 		return sshdEnrollmentMetadata{}, fmt.Errorf("fragment has invalid principal-mode metadata")
 	}
-	domainFile, err := parseSSHDMetadataPath(lines[2], "# domain-file: ")
+	realmFile, err := parseSSHDMetadataPath(lines[2], "# domain-file: ")
 	if err != nil {
 		return sshdEnrollmentMetadata{}, err
 	}
@@ -493,7 +494,7 @@ func parseSSHDEnrollmentMetadata(fragment []byte) (sshdEnrollmentMetadata, error
 	}
 	return sshdEnrollmentMetadata{
 		principalMode: mode,
-		domainFile:    domainFile,
+		realmFile:     realmFile,
 		caPubkeyFile:  caPubkeyFile,
 	}, nil
 }

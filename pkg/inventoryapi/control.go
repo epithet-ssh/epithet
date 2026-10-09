@@ -53,10 +53,11 @@ type Capabilities struct {
 // itself. Accounts nil means unrestricted; an empty list permits no accounts.
 type Proposal struct {
 	Names         []string          `json:"names"`
+	Pattern       string            `json:"pattern,omitempty"`
 	Labels        map[string]string `json:"labels"`
 	Accounts      []string          `json:"accounts"`
 	PrincipalMode string            `json:"principal-mode"`
-	Domain        string            `json:"domain,omitempty"`
+	Realm         string            `json:"realm,omitempty"`
 }
 
 // UnmarshalJSON requires accounts at the input boundary. Explicit null is
@@ -81,19 +82,14 @@ func (p *Proposal) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// HostRecord is one inventory host as administrators see it. Source metadata
-// is present only for records the server can attribute to a file or pattern.
+// HostRecord is one managed inventory record as administrators see it.
 type HostRecord struct {
-	SourceFile    string    `json:"source-file,omitempty"`
-	Pattern       string    `json:"pattern,omitempty"`
-	ID            string    `json:"id"`
-	Revision      uint64    `json:"revision"`
-	Status        string    `json:"status"`
-	Proposal      Proposal  `json:"host"`
-	CreatedAt     time.Time `json:"created-at"`
-	UpdatedAt     time.Time `json:"updated-at"`
-	Source        string    `json:"source,omitempty"`
-	ShadowedNames []string  `json:"shadowed-names,omitempty"`
+	ID        string    `json:"id"`
+	Revision  uint64    `json:"revision"`
+	Status    string    `json:"status"`
+	Proposal  Proposal  `json:"host"`
+	CreatedAt time.Time `json:"created-at"`
+	UpdatedAt time.Time `json:"updated-at"`
 }
 
 // EnrollmentToken is a single-use preapproval for host enrollment.

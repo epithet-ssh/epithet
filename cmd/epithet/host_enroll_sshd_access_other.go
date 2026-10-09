@@ -7,10 +7,10 @@ import (
 	"os"
 )
 
-func validateAuthorizedPrincipalsAccess(binary, domainPath, caKeyPath, _ string, destinationBound bool) error {
+func validateAuthorizedPrincipalsAccess(binary, realmPath, caKeyPath, _ string, destinationBound bool) error {
 	paths := map[string]string{
-		"principal-domain file": domainPath,
-		"CA public-key file":    caKeyPath,
+		"principal-realm file": realmPath,
+		"CA public-key file":   caKeyPath,
 	}
 	if destinationBound {
 		paths["AuthorizedPrincipalsCommand"] = binary

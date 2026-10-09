@@ -24,9 +24,9 @@ type HostEnrollCLI struct {
 	Names     []string `name:"host-name" help:"Proposed DNS name (repeatable; overrides detection)"`
 
 	CAURL                           string `name:"ca" placeholder:"URL" help:"CA bootstrap URL" required:""`
-	PrincipalDomain                 string `name:"principal-domain" help:"Proposed principal domain (default: reuse the local domain file's value or generate one)"`
-	DomainFile                      string `name:"principal-domain-file" help:"Principal-domain file (default: native system state directory)"`
-	CAPubkeyFile                    string `name:"ca-public-key-file" help:"CA public-key file (default: epithet-ca.pub beside the domain file)"`
+	PrincipalRealm                  string `name:"principal-realm" help:"Proposed principal realm (default: reuse the local realm file's value or generate one)"`
+	RealmFile                       string `name:"principal-realm-file" help:"Principal-realm file (default: native system state directory)"`
+	CAPubkeyFile                    string `name:"ca-public-key-file" help:"CA public-key file (default: epithet-ca.pub beside the realm file)"`
 	PrincipalMode                   string `name:"principal-mode" help:"Principal mode to accept: account-name or epithet-principal-v1 (default: epithet-principal-v1; account-name on Windows)"`
 	SSHDConfigFile                  string `name:"sshd-config-file" help:"Main sshd configuration file (default: platform native)"`
 	SSHDFragmentFile                string `name:"sshd-fragment-file" help:"Epithet-managed sshd fragment (default: platform native)"`
@@ -40,9 +40,9 @@ type HostEnrollCLI struct {
 type hostEnrollment struct {
 	RecordID             string
 	Status               string
-	Domain               principal.Domain
-	DomainFile           string
-	DomainCreated        bool
+	Realm                principal.Realm
+	RealmFile            string
+	RealmCreated         bool
 	CAPublicKey          sshcert.RawPublicKey
 	CAPubkeyFile         string
 	CAPublicKeyCreated   bool
@@ -62,7 +62,7 @@ func (c *HostEnrollCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error 
 		_, err = fmt.Fprintf(os.Stdout, "%s\t%s\n", result.RecordID, result.Status)
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout, result.Domain)
+	_, err = fmt.Fprintln(os.Stdout, result.Realm)
 	return err
 }
 
@@ -95,7 +95,7 @@ func (c *HostEnrollCLI) enroll(ctx context.Context, logger *slog.Logger, tlsCfg 
 }
 
 // preparedHostEnrollment holds the local identity and resolved settings for this
-// attempt. Preparation reads existing state and generates any new domain in
+// attempt. Preparation reads existing state and generates any new realm in
 // memory; installation happens only after proposal review succeeds.
 type preparedHostEnrollment struct {
 	state    *hostEnrollment
@@ -120,7 +120,7 @@ func (c *HostEnrollCLI) prepareEnrollment(ctx context.Context, logger *slog.Logg
 	return &preparedHostEnrollment{state: state, settings: settings}, nil
 }
 
-// prepareState fetches trust and chooses a domain without writing local state.
+// prepareState fetches trust and chooses a realm without writing local state.
 func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, tlsCfg tlsconfig.Config) (*hostEnrollment, error) {
 	endpoint, err := caclient.ParseCAURL(c.CAURL)
 	if err != nil {
@@ -130,12 +130,12 @@ func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, t
 		return nil, err
 	}
 
-	domainPath, caKeyPath, err := c.paths()
+	realmPath, caKeyPath, err := c.paths()
 	if err != nil {
 		return nil, err
 	}
-	if filepath.Clean(domainPath) == filepath.Clean(caKeyPath) {
-		return nil, fmt.Errorf("principal-domain file and CA public-key file must be different paths")
+	if filepath.Clean(realmPath) == filepath.Clean(caKeyPath) {
+		return nil, fmt.Errorf("principal-realm file and CA public-key file must be different paths")
 	}
 
 	client, err := caclient.New([]caclient.CAEndpoint{endpoint},
@@ -149,32 +149,32 @@ func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, t
 		return nil, fmt.Errorf("fetching CA public key from %s: %w", endpoint.URL, err)
 	}
 
-	domain, err := readDomainIfPresent(domainPath)
+	realm, err := readRealmIfPresent(realmPath)
 	if err != nil {
 		return nil, err
 	}
-	if c.PrincipalDomain != "" {
-		chosen, err := principal.ParseDomain(c.PrincipalDomain)
+	if c.PrincipalRealm != "" {
+		chosen, err := principal.ParseRealm(c.PrincipalRealm)
 		if err != nil {
-			return nil, fmt.Errorf("invalid principal-domain: %w", err)
+			return nil, fmt.Errorf("invalid principal-realm: %w", err)
 		}
-		if domain != "" && domain != chosen {
-			return nil, fmt.Errorf("principal-domain conflicts with the installed domain in %s", domainPath)
+		if realm != "" && realm != chosen {
+			return nil, fmt.Errorf("principal-realm conflicts with the installed realm in %s", realmPath)
 		}
-		domain = chosen
+		realm = chosen
 	}
 	if _, err := publicKeyFileMatches(caKeyPath, root.PublicKey); err != nil {
 		return nil, err
 	}
-	if domain == "" {
-		domain, err = principal.GenerateHostDomain()
+	if realm == "" {
+		realm, err = principal.GenerateHostRealm()
 		if err != nil {
 			return nil, err
 		}
 	}
 	return &hostEnrollment{
-		Domain:               domain,
-		DomainFile:           domainPath,
+		Realm:                realm,
+		RealmFile:            realmPath,
 		CAPublicKey:          root.PublicKey,
 		CAPubkeyFile:         caKeyPath,
 		CAFinalURL:           root.FinalURL,
@@ -187,17 +187,17 @@ func (c *HostEnrollCLI) prepareState(ctx context.Context, logger *slog.Logger, t
 // leave these files in place for the next invocation.
 func (e *hostEnrollment) install(logger *slog.Logger) error {
 	// Recheck both files after review before writing either one.
-	domain, err := readDomainIfPresent(e.DomainFile)
+	realm, err := readRealmIfPresent(e.RealmFile)
 	if err != nil {
 		return err
 	}
-	if domain != "" && domain != e.Domain {
-		return fmt.Errorf("principal domain %s changed since preparation", e.DomainFile)
+	if realm != "" && realm != e.Realm {
+		return fmt.Errorf("principal realm %s changed since preparation", e.RealmFile)
 	}
 	if _, err := publicKeyFileMatches(e.CAPubkeyFile, e.CAPublicKey); err != nil {
 		return err
 	}
-	for _, dir := range uniqueDirectories(e.DomainFile, e.CAPubkeyFile) {
+	for _, dir := range uniqueDirectories(e.RealmFile, e.CAPubkeyFile) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating enrollment directory %s: %w", dir, err)
 		}
@@ -206,15 +206,15 @@ func (e *hostEnrollment) install(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	e.DomainCreated, err = principal.EnsureDomainFile(e.DomainFile, e.Domain)
+	e.RealmCreated, err = principal.EnsureRealmFile(e.RealmFile, e.Realm)
 	if err != nil {
 		return err
 	}
 	if logger != nil {
 		logger.Info("host enrollment state ready",
-			"domain", e.Domain,
-			"domain_file", e.DomainFile,
-			"domain_created", e.DomainCreated,
+			"realm", e.Realm,
+			"realm_file", e.RealmFile,
+			"realm_created", e.RealmCreated,
 			"ca_public_key_file", e.CAPubkeyFile,
 			"ca_public_key_created", e.CAPublicKeyCreated)
 	}
@@ -222,36 +222,36 @@ func (e *hostEnrollment) install(logger *slog.Logger) error {
 }
 
 func (c *HostEnrollCLI) paths() (string, string, error) {
-	domainPath := c.DomainFile
-	if domainPath == "" {
+	realmPath := c.RealmFile
+	if realmPath == "" {
 		var err error
-		domainPath, err = principal.DefaultDomainPath()
+		realmPath, err = principal.DefaultRealmPath()
 		if err != nil {
 			return "", "", err
 		}
 	}
-	domainPath, err := expandPath(domainPath)
+	realmPath, err := expandPath(realmPath)
 	if err != nil {
-		return "", "", fmt.Errorf("expanding principal-domain path %q: %w", c.DomainFile, err)
+		return "", "", fmt.Errorf("expanding principal-realm path %q: %w", c.RealmFile, err)
 	}
 
 	caKeyPath := c.CAPubkeyFile
 	if caKeyPath == "" {
-		caKeyPath = filepath.Join(filepath.Dir(domainPath), "epithet-ca.pub")
+		caKeyPath = filepath.Join(filepath.Dir(realmPath), "epithet-ca.pub")
 	}
 	caKeyPath, err = expandPath(caKeyPath)
 	if err != nil {
 		return "", "", fmt.Errorf("expanding CA public-key path %q: %w", c.CAPubkeyFile, err)
 	}
-	return domainPath, caKeyPath, nil
+	return realmPath, caKeyPath, nil
 }
 
-func readDomainIfPresent(path string) (principal.Domain, error) {
-	domain, err := principal.ReadDomainFile(path)
+func readRealmIfPresent(path string) (principal.Realm, error) {
+	realm, err := principal.ReadRealmFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
-	return domain, err
+	return realm, err
 }
 
 func publicKeyFileMatches(path string, expected sshcert.RawPublicKey) (bool, error) {
