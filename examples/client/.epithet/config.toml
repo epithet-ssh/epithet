@@ -1,3 +1,0 @@
-# Place in ~/.epithet/config.toml.
-# OIDC settings are discovered from the CA. Host selection belongs in ssh_config.
-ca = ["https://ca.example.com/"]
