@@ -1,8 +1,9 @@
-// Package facts owns authenticated communication with directory and inventory
-// services, including issuance lookups and signed control requests. Providers
-// supply facts without authenticating end users or implementing administration.
-// Built-in HTTP services live in the server subpackage; shared database support
-// lives in the independent storage subpackage.
+// Package facts owns directory and inventory protocol types, service
+// authentication, and typed clients. DataClient performs issuance lookups,
+// ControlClient invokes private operations with service-key credentials, and
+// AdminClient invokes public administration with user bearer credentials.
+// Built-in services and stores live in the control, server, directory, inventory,
+// and storage subpackages; this package does not depend on those implementations.
 package facts
 
 import (

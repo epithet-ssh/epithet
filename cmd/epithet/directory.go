@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 )
 
 type DirectoryCLI struct {
@@ -36,7 +36,7 @@ type DirectoryUsersListCLI struct {
 }
 
 func (c *DirectoryUsersListCLI) Run(p *DirectoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "directory-users"})
+	r, err := p.request(facts.ControlRequest{Action: "directory-users"})
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (c *DirectoryUsersListCLI) Run(p *DirectoryCLI) error {
 	return c.writeOutput(os.Stdout, r.DirectoryUsers)
 }
 
-func (c *DirectoryUsersListCLI) writeOutput(w io.Writer, snapshot *inventoryapi.UserSnapshot) error {
+func (c *DirectoryUsersListCLI) writeOutput(w io.Writer, snapshot *facts.UserSnapshot) error {
 	if c.JSON {
 		return json.NewEncoder(w).Encode(snapshot)
 	}
@@ -73,7 +73,7 @@ type DirectoryGroupsListCLI struct {
 }
 
 func (c *DirectoryGroupsListCLI) Run(p *DirectoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "directory-groups"})
+	r, err := p.request(facts.ControlRequest{Action: "directory-groups"})
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ type DirectoryGroupsBindCLI struct {
 }
 
 func (c *DirectoryGroupsBindCLI) Run(p *DirectoryCLI) error {
-	_, err := p.request(inventoryapi.ControlRequest{Action: "directory-bind", Alias: c.Alias, ID: c.GroupID, Revision: c.Revision})
+	_, err := p.request(facts.ControlRequest{Action: "directory-bind", Alias: c.Alias, ID: c.GroupID, Revision: c.Revision})
 	return err
 }
 
@@ -107,7 +107,7 @@ type DirectoryGroupsAuditCLI struct {
 }
 
 func (c *DirectoryGroupsAuditCLI) Run(p *DirectoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "directory-audit", AuditAfter: c.After, AuditLimit: c.Limit})
+	r, err := p.request(facts.ControlRequest{Action: "directory-audit", AuditAfter: c.After, AuditLimit: c.Limit})
 	if err != nil {
 		return err
 	}

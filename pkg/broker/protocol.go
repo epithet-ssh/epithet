@@ -8,18 +8,18 @@ import (
 	"net"
 	"sync"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // Request is one line of JSON sent by the client. Exactly one field is set.
 type Request struct {
-	Inventory *inventoryapi.ControlRequest `json:"inventory,omitempty"`
-	Identity  *struct{}                    `json:"identity,omitempty"`
-	Match     *wire.Connection             `json:"match,omitempty"`
-	Inspect   *InspectRequest              `json:"inspect,omitempty"`
-	Logout    *struct{}                    `json:"logout,omitempty"`
-	Kill      *KillRequest                 `json:"kill,omitempty"`
+	Inventory *facts.ControlRequest `json:"inventory,omitempty"`
+	Identity  *struct{}             `json:"identity,omitempty"`
+	Match     *wire.Connection      `json:"match,omitempty"`
+	Inspect   *InspectRequest       `json:"inspect,omitempty"`
+	Logout    *struct{}             `json:"logout,omitempty"`
+	Kill      *KillRequest          `json:"kill,omitempty"`
 }
 
 // Event is one line of JSON sent by the broker in response to a Request.
@@ -43,7 +43,7 @@ type Event struct {
 // from the broker's CA discovery and is used by the CLI for enrollment instructions;
 // it is not part of the remote inventory API.
 type InventoryResponse struct {
-	inventoryapi.ControlResponse
+	facts.ControlResponse
 	CAURL string `json:"ca-url,omitempty"`
 }
 

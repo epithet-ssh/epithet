@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
 )
@@ -26,13 +25,13 @@ func TestInventoryResponseKeepsCAURLLocal(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
-			client, err := inventoryclient.New(server.URL, tlsconfig.Config{Insecure: true})
+			client, err := facts.NewAdminClient(server.URL, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			session := newAuthSession(func() TokenFunc { return stubTokenFunc })
 			defer session.cancel()
 			session.auth = &Auth{token: "test-token", expiresAt: time.Now().Add(time.Hour)}
 			b := &Broker{log: *testLogger(t), session: session, inventoryClient: client, publicCAURL: "https://configured.example/"}
-			response := b.InventoryWithUserOutput(t.Context(), inventoryapi.ControlRequest{Action: tc.name}, io.Discard)
+			response := b.InventoryWithUserOutput(t.Context(), facts.ControlRequest{Action: tc.name}, io.Discard)
 			require.Empty(t, response.Error)
 			require.Equal(t, tc.wantURL, response.CAURL)
 

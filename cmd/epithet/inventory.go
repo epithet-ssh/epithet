@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"gopkg.in/yaml.v3"
 )
 
@@ -53,11 +53,11 @@ func printInventory(v any) error {
 	return err
 }
 
-func (c *InventoryCLI) find(id string) (*inventoryapi.HostRecord, error) {
+func (c *InventoryCLI) find(id string) (*facts.HostRecord, error) {
 	// Full IDs use the server's record index rather than downloading every host.
 	_, hexErr := hex.DecodeString(id)
 	if len(id) == 64 && hexErr == nil {
-		response, err := c.request(inventoryapi.ControlRequest{Action: "get", ID: id})
+		response, err := c.request(facts.ControlRequest{Action: "get", ID: id})
 		if err != nil {
 			return nil, err
 		}
@@ -67,11 +67,11 @@ func (c *InventoryCLI) find(id string) (*inventoryapi.HostRecord, error) {
 		return response.Host, nil
 	}
 
-	resp, err := c.request(inventoryapi.ControlRequest{Action: "list"})
+	resp, err := c.request(facts.ControlRequest{Action: "list"})
 	if err != nil {
 		return nil, err
 	}
-	var matches []inventoryapi.HostRecord
+	var matches []facts.HostRecord
 	for _, h := range resp.Hosts {
 		if h.ID == id {
 			return &h, nil
@@ -98,17 +98,17 @@ type InventoryListCLI struct {
 }
 
 func (c *InventoryListCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "list"})
+	r, err := p.request(facts.ControlRequest{Action: "list"})
 	if err != nil {
 		return err
 	}
-	displayNames := func(h inventoryapi.HostRecord) string {
+	displayNames := func(h facts.HostRecord) string {
 		if h.Proposal.Pattern != "" {
 			return h.Proposal.Pattern
 		}
 		return strings.Join(h.Proposal.Names, ", ")
 	}
-	slices.SortStableFunc(r.Hosts, func(a, b inventoryapi.HostRecord) int {
+	slices.SortStableFunc(r.Hosts, func(a, b facts.HostRecord) int {
 		return strings.Compare(displayNames(a), displayNames(b))
 	})
 	if _, err := fmt.Fprintln(os.Stdout, "ID\tSTATUS\tNAMES"); err != nil {
@@ -155,7 +155,7 @@ func (c *InventoryAddPatternCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 	submitted := proposal.ControlProposal()
-	r, err := p.request(inventoryapi.ControlRequest{Action: "add-pattern", Host: &submitted})
+	r, err := p.request(facts.ControlRequest{Action: "add-pattern", Host: &submitted})
 	if err != nil {
 		return err
 	}
@@ -189,13 +189,13 @@ func (c *InventoryEditCLI) Run(p *InventoryCLI) error {
 	return printInventory(h)
 }
 
-func editInventoryHost(p *InventoryCLI, h *inventoryapi.HostRecord, input *bufio.Reader) (*inventoryapi.HostRecord, error) {
+func editInventoryHost(p *InventoryCLI, h *facts.HostRecord, input *bufio.Reader) (*facts.HostRecord, error) {
 	proposal, err := editProposal(inventory.ProposalFromControl(h.Proposal), input)
 	if err != nil {
 		return nil, err
 	}
 	submitted := proposal.ControlProposal()
-	r, err := p.request(inventoryapi.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &submitted})
+	r, err := p.request(facts.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &submitted})
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func (c *InventoryApproveCLI) Run(p *InventoryCLI) error {
 			if choice == "d" || choice == "deny" {
 				action = "deny"
 			}
-			r, e := p.request(inventoryapi.ControlRequest{Action: action, ID: h.ID, Revision: h.Revision})
+			r, e := p.request(facts.ControlRequest{Action: action, ID: h.ID, Revision: h.Revision})
 			if e != nil {
 				fmt.Fprintln(os.Stderr, e)
 				fresh, e2 := p.find(h.ID)
@@ -271,14 +271,14 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 
-	_, err = p.request(inventoryapi.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
+	_, err = p.request(facts.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
 	return err
 }
 
 type InventoryAuditCLI struct{}
 
 func (*InventoryAuditCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "audit"})
+	r, err := p.request(facts.ControlRequest{Action: "audit"})
 	if err != nil {
 		return err
 	}

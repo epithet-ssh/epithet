@@ -10,11 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/scim"
 	"github.com/epithet-ssh/epithet/pkg/facts"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory/scim"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
@@ -68,7 +67,7 @@ func (c *backend) handler(key sshcert.RawPublicKey) (http.Handler, error) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(facts.ActorSnapshot{User: u, Revision: rev})
+			json.NewEncoder(w).Encode(facts.ActorSnapshot{User: controlActor(u), Revision: string(rev)})
 		case "/scim":
 			if r.Method != "POST" || provision == nil || actor != "" {
 				http.NotFound(w, r)
@@ -99,7 +98,7 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 	w.Header().Set("Content-Type", "application/json")
 	fail := func(code int, msg string) {
 		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Error: msg})
+		json.NewEncoder(w).Encode(facts.ControlResponse{Error: msg})
 	}
 	if r.Method == "GET" {
 		capabilities := []string{"admin"}
@@ -112,7 +111,7 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		if canListUsers {
 			capabilities = append(capabilities, "directory-users")
 		}
-		json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: capabilities})
+		json.NewEncoder(w).Encode(facts.Capabilities{Version: 1, Capabilities: capabilities})
 		return
 	}
 	if r.Method != "POST" {
@@ -141,19 +140,19 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		return
 	}
 	var err error
-	var resp inventoryapi.ControlResponse
+	var resp facts.ControlResponse
 	switch req.Action {
 	case "directory-users":
-		var facts []directory.User
+		var userFacts []directory.User
 		var revision directory.Revision
-		facts, revision, err = users.ListUserFacts(r.Context())
-		resp.DirectoryUsers = &inventoryapi.UserSnapshot{Revision: string(revision), Users: controlSlice(facts, controlUser)}
+		userFacts, revision, err = users.ListUserFacts(r.Context())
+		resp.DirectoryUsers = &facts.UserSnapshot{Revision: string(revision), Users: controlSlice(userFacts, controlUser)}
 	case "directory-groups":
 		var snapshot directory.BindingSnapshot
 		snapshot, err = c.ManagedDirectory.Bindings(r.Context())
 		resp.Directory = controlBindings(snapshot)
 	case "directory-bind":
-		err = c.ManagedDirectory.Rebind(r.Context(), actor, req.Alias, req.ID, req.Revision, authorizationRevision)
+		err = c.ManagedDirectory.Rebind(r.Context(), actor, req.Alias, req.ID, req.Revision, directory.Revision(authorizationRevision))
 	case "directory-audit":
 		var events []directory.AuditEvent
 		events, err = c.ManagedDirectory.Audit(r.Context(), directory.AuditSequence(req.AuditAfter), req.AuditLimit)

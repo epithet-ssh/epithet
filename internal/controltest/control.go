@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/controlplane"
-	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/control"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ import (
 
 type Fixture struct {
 	*httptest.Server
-	Control                    *controlplane.Server
+	Control                    *control.Server
 	DirectoryURL, InventoryURL string
 	CAKey, ControlKey          sshcert.RawPrivateKey
 }
@@ -35,7 +35,7 @@ func (noAuthentication) Validate(context.Context, string) (*oidc.Claims, error) 
 	return nil, fmt.Errorf("no authentication configured")
 }
 
-func New(t *testing.T, users directory.Directory, managed directory.Store, hosts *inventory.Managed, config controlplane.Config) *Fixture {
+func New(t *testing.T, users directory.Directory, managed directory.Store, hosts *inventory.Managed, config control.Config) *Fixture {
 	t.Helper()
 	caPub, caKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func New(t *testing.T, users directory.Directory, managed directory.Store, hosts
 	if config.Validator == nil {
 		config.Validator = noAuthentication{}
 	}
-	f.Control, err = controlplane.New(config)
+	f.Control, err = control.New(config)
 	require.NoError(t, err)
 	f.Server = httptest.NewServer(f.Control)
 	t.Cleanup(f.Close)

@@ -14,9 +14,8 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
@@ -34,7 +33,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	}
 
 	if endpoint != "" {
-		client, e := inventoryclient.New(endpoint, cfg)
+		client, e := facts.NewAdminClient(endpoint, cfg)
 		if e != nil {
 			return nil, e
 		}
@@ -103,12 +102,12 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 }
 
 func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, cfg tlsconfig.Config, logger *slog.Logger) error {
-	client, err := inventoryclient.New(r.endpoint, cfg)
+	client, err := facts.NewAdminClient(r.endpoint, cfg)
 	if err != nil {
 		return err
 	}
 	proposal := r.proposal.ControlProposal()
-	response, _, err := client.Control(ctx, "", inventoryapi.ControlRequest{
+	response, _, err := client.Control(ctx, "", facts.ControlRequest{
 		Action: "enroll",
 		Host:   &proposal,
 		Token:  r.token,

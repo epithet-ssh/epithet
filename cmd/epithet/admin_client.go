@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 )
 
 // ManagementCLI shares agent selection and authenticated transport between
@@ -25,7 +24,7 @@ type ManagementCLI struct {
 	Broker string `help:"Agent broker socket override for administrative commands" name:"broker-socket"`
 }
 
-func (c *ManagementCLI) request(req inventoryapi.ControlRequest) (*broker.InventoryResponse, error) {
+func (c *ManagementCLI) request(req facts.ControlRequest) (*broker.InventoryResponse, error) {
 	logger := c.logger
 	if logger == nil {
 		logger = slog.Default()
@@ -56,7 +55,7 @@ func (c *ManagementCLI) request(req inventoryapi.ControlRequest) (*broker.Invent
 	}
 	logger.Debug("waiting for inventory agent response")
 	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 4096), inventoryclient.MaxControlResponse)
+	scanner.Buffer(make([]byte, 4096), facts.MaxControlResponse)
 	for scanner.Scan() {
 		var event broker.Event
 		if err = json.Unmarshal(scanner.Bytes(), &event); err != nil {

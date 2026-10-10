@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"gopkg.in/yaml.v3"
 )
 

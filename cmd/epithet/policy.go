@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writ/diag"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 )
 
 // PolicyConfig is shared by CA startup and offline policy validation.

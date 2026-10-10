@@ -8,13 +8,12 @@ import (
 
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +33,7 @@ func TestMultipleDNSNamesAuthorizeTheSameHost(t *testing.T) {
 			}
 			path := filepath.Join(t.TempDir(), "inventory.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(config), 0600))
-			inv, err := inventory.NewStatic([]string{path})
+			inv, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
 			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			for _, deny := range []bool{false, true} {

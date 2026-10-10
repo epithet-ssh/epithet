@@ -102,7 +102,7 @@ callers do not supply paths or manage HTTP response bodies.
 `InventoryHandler` assemble lookup authentication, optional private control
 operations, and routes. `LookupHandler` serves a read-only directory or inventory
 source. The CLI owns store lifetimes, key resolution, and listeners.
-`pkg/controlplane` owns public authentication and administrative authorization;
+`pkg/facts/control` owns public authentication and administrative authorization;
 it depends on the typed clients, without importing the built-in handlers or stores.
 
 Human control operations receive the already authorized actor and directory
@@ -110,7 +110,8 @@ revision explicitly. Enrollment and SCIM provisioning keep their nonhuman
 credential semantics. Control results are domain records; rejected operations
 return `ServiceError`, with categories available through `errors.Is`. SCIM results
 retain the provisioning status, response body, ETag, location, and response format.
-The CLI-facing public `inventoryclient` continues to use user bearer credentials.
+`facts.AdminClient` invokes the public administration endpoint using user bearer
+credentials. Its requests and responses are also defined in `pkg/facts`.
 
 | Claim | Meaning |
 |---|---|
@@ -138,6 +139,32 @@ See [inventory-api.yaml](inventory-api.yaml) and
 [directory-api.yaml](directory-api.yaml) for response schemas, and
 [inventory.md](inventory.md) for deployment configuration. Bespoke providers do not
 need Epithet's private `/manage`, `/actor`, or `/scim` backend endpoints.
+
+## Package ownership
+
+`pkg/facts` contains the shared directory and inventory protocol types, clients,
+and service authentication. Its consumers do not link built-in stores or handlers.
+The fact-service implementation lives under the same namespace:
+
+| Package | Responsibility |
+|---|---|
+| `facts/control` | Public authentication and administrative authorization |
+| `facts/server` | Built-in lookup and private management HTTP handlers |
+| `facts/directory` | Directory contracts and static YAML user loading |
+| `facts/directory/sqlitestore` | Managed directory persistence and invariants |
+| `facts/directory/scim` | SCIM protocol adaptation to the directory contract |
+| `facts/inventory` | Managed host inventory, enrollment, patterns, and persistence |
+| `facts/storage` | Shared SQLite permissions and connection settings |
+
+Directory contracts stay independent of the SQLite implementation, allowing
+alternative stores. The SCIM adapter owns its protocol parsing and response
+semantics, separately from store transactions. Combined YAML host loading is
+integration-test support in `internal/inventorytest`; production inventory is
+managed only, and static directory loading supplies user facts only.
+
+Policy evaluation lives separately in `pkg/writpolicy`. CA owns the evaluator
+interface it consumes; Writ evaluation uses supplied facts and has no service
+transport or storage responsibility.
 
 ## Built-in managed storage
 

@@ -22,13 +22,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/stretchr/testify/require"
@@ -109,7 +108,7 @@ hosts:
 	}
 	inventoryYAML = strings.ReplaceAll(inventoryYAML, "id: victim-subject", "id: "+inventoryID)
 	require.NoError(t, os.WriteFile(invPath, []byte(inventoryYAML), 0600))
-	inv, err := inventory.NewStatic([]string{invPath})
+	inv, err := inventorytest.NewStatic([]string{invPath})
 	require.NoError(t, err)
 	pol, diags := writ.Load("allow id:\"" + inventoryID + "\" -> root@prod.example.com\nallow userName:\"inactive@example.com\" -> root@prod.example.com\n")
 	require.NotNil(t, pol, "%v", diags)

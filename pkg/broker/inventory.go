@@ -5,13 +5,13 @@ import (
 	"io"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 )
 
 // InventoryWithUserOutput sends an administrative operation through the agent's
 // CA-discovered inventory endpoint. Only the short-lived ID token goes to that
 // endpoint; no token or refresh state is returned over the local protocol.
-func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventoryapi.ControlRequest, out io.Writer) *InventoryResponse {
+func (b *Broker) InventoryWithUserOutput(ctx context.Context, request facts.ControlRequest, out io.Writer) *InventoryResponse {
 	session, ctx, cancel := b.sessionRequest(ctx)
 	defer cancel()
 	logger := b.log.With("action", request.Action)
@@ -19,7 +19,7 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 	defer func() { logger.Debug("inventory request ended", "elapsed", time.Since(started)) }()
 	fail := func(err error) *InventoryResponse {
 		logger.Debug("inventory request failed", "error", err)
-		return &InventoryResponse{ControlResponse: inventoryapi.ControlResponse{Error: err.Error()}}
+		return &InventoryResponse{ControlResponse: facts.ControlResponse{Error: err.Error()}}
 	}
 	logger.Debug("authenticating inventory request")
 	token, err := session.auth.Token(ctx, out)
@@ -49,7 +49,7 @@ func (b *Broker) InventoryWithUserOutput(ctx context.Context, request inventorya
 	return result
 }
 
-func (b *Broker) inventoryWithToken(ctx context.Context, token string, request inventoryapi.ControlRequest) (*inventoryapi.ControlResponse, int, error) {
+func (b *Broker) inventoryWithToken(ctx context.Context, token string, request facts.ControlRequest) (*facts.ControlResponse, int, error) {
 	started := time.Now()
 	b.log.Debug("sending inventory HTTP request", "action", request.Action)
 	response, status, err := b.inventoryClient.Control(ctx, token, request)

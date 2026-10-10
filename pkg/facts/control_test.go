@@ -10,12 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -86,7 +85,7 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	userSnapshot, err := control.Users(t.Context(), auth)
 	require.NoError(t, err)
 	require.Len(t, userSnapshot.Users, 2)
-	proposal := inventoryapi.Proposal{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
+	proposal := facts.Proposal{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
 	host, err := control.Enroll(t.Context(), proposal, "")
 	require.NoError(t, err)
 	require.Equal(t, "pending", host.Status)
@@ -110,7 +109,7 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	records, err := control.Hosts(t.Context(), auth)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
-	pattern, err := control.AddPattern(t.Context(), auth, inventoryapi.Proposal{Pattern: "ci-*", Accounts: []string{"root"}, PrincipalMode: "account-name"})
+	pattern, err := control.AddPattern(t.Context(), auth, facts.Proposal{Pattern: "ci-*", Accounts: []string{"root"}, PrincipalMode: "account-name"})
 	require.NoError(t, err)
 	require.Equal(t, "active", pattern.Status)
 	token, err := control.CreateToken(t.Context(), auth, 60)

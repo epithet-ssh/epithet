@@ -15,7 +15,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
@@ -77,10 +77,10 @@ type Broker struct {
 	newToken       TokenFactory                       // Immutable after New()
 	agents         map[wire.ConnectionHash]agentEntry // Protected by b.lock
 
-	inventoryClient *inventoryclient.Client // Immutable after New()
-	publicCAURL     string                  // Public CA URL for token enrollment instructions; immutable after New()
-	caClient        *caclient.Client        // Immutable after New()
-	agentSocketDir  string                  // Immutable after New()
+	inventoryClient *facts.AdminClient // Immutable after New()
+	publicCAURL     string             // Public CA URL for token enrollment instructions; immutable after New()
+	caClient        *caclient.Client   // Immutable after New()
+	agentSocketDir  string             // Immutable after New()
 
 	// For graceful shutdown: track in-flight RPC connections
 	activeRPC       sync.WaitGroup
@@ -88,7 +88,7 @@ type Broker struct {
 }
 
 // New creates a new Broker instance. This does not start listening - call Serve() to begin accepting connections.
-func New(log slog.Logger, socketPath string, newToken TokenFactory, caClient *caclient.Client, publicCAURL string, inventoryClient *inventoryclient.Client, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
+func New(log slog.Logger, socketPath string, newToken TokenFactory, caClient *caclient.Client, publicCAURL string, inventoryClient *facts.AdminClient, verifyIdentity IdentityVerifier, agentSocketDir string) (*Broker, error) {
 	if caClient == nil {
 		return nil, fmt.Errorf("caClient is required")
 	}

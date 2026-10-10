@@ -18,7 +18,7 @@ import (
 	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/oauth2"
 )
@@ -202,7 +202,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 	}
 
 	// Bind inventory management to the endpoint advertised by the CA.
-	inventoryClient, err := inventoryclient.New(discovery.InventoryURL, tlsCfg)
+	inventoryClient, err := facts.NewAdminClient(discovery.InventoryURL, tlsCfg)
 	if err != nil {
 		return err
 	}

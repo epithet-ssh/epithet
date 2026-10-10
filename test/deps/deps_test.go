@@ -1,7 +1,6 @@
 // Package deps pins the layering between client, wire and server packages.
-// The agent, broker and CA client must never link a server or storage
-// package; the wire and control API packages must stay leaves so both sides
-// can import them without importing each other.
+// The agent, broker and CA client must never link a server or storage package.
+// Shared fact contracts and clients stay independent of their implementations.
 package deps_test
 
 import (
@@ -36,21 +35,22 @@ func TestClientPackagesDoNotLinkServers(t *testing.T) {
 	forbidden := []string{
 		module + "pkg/ca",
 		module + "pkg/caserver",
-		module + "pkg/controlplane",
-		module + "pkg/facts",
-		module + "pkg/policyserver",
-		module + "pkg/inventory",
-		module + "pkg/directory",
+		module + "pkg/facts/control",
+		module + "pkg/facts/server",
+		module + "pkg/facts/inventory",
+		module + "pkg/facts/directory",
+		module + "pkg/facts/storage",
+		module + "pkg/writpolicy",
 		"modernc.org/sqlite",
 		"github.com/elimity-com/scim",
 		"gopkg.in/yaml.v3",
 	}
-	for _, pkg := range []string{"./pkg/agent", "./pkg/broker", "./pkg/caclient", "./pkg/inventoryclient"} {
+	for _, pkg := range []string{"./pkg/agent", "./pkg/broker", "./pkg/caclient", "./pkg/facts"} {
 		t.Run(pkg, func(t *testing.T) {
 			for _, dep := range deps(t, pkg) {
 				for _, bad := range forbidden {
 					if dep == bad || strings.HasPrefix(dep, bad+"/") {
-						t.Errorf("%s depends on %s; wire contracts belong in pkg/wire or pkg/inventoryapi, not in server packages", pkg, dep)
+						t.Errorf("%s depends on %s; shared contracts and clients must not link service implementations", pkg, dep)
 					}
 				}
 			}
@@ -61,8 +61,7 @@ func TestClientPackagesDoNotLinkServers(t *testing.T) {
 func TestWireContractsAreLeaves(t *testing.T) {
 	allowed := map[string][]string{
 		// wire validates host names and principal realms, both leaf packages.
-		"./pkg/wire":         {module + "pkg/hostpattern", module + "pkg/principal", module + "pkg/sshcert"},
-		"./pkg/inventoryapi": {},
+		"./pkg/wire": {module + "pkg/hostpattern", module + "pkg/principal", module + "pkg/sshcert"},
 	}
 	for pkg, ok := range allowed {
 		t.Run(pkg, func(t *testing.T) {
@@ -78,15 +77,14 @@ func TestWireContractsAreLeaves(t *testing.T) {
 // Fact clients and the public control frontend must be usable without linking
 // the built-in handlers or SQLite stores, including through indirect imports.
 func TestFactClientsAndControlDoNotLinkBuiltInServices(t *testing.T) {
-	for _, pkg := range []string{"./pkg/facts", "./pkg/controlplane", "./pkg/ca"} {
+	for _, pkg := range []string{"./pkg/facts", "./pkg/facts/control", "./pkg/ca"} {
 		t.Run(pkg, func(t *testing.T) {
 			for _, dep := range deps(t, pkg) {
 				for _, bad := range []string{
 					module + "pkg/facts/server",
 					module + "pkg/facts/storage",
-					module + "pkg/inventory",
-					module + "pkg/directory/sqlitestore",
-					module + "pkg/directory/scim",
+					module + "pkg/facts/inventory",
+					module + "pkg/facts/directory",
 					"modernc.org/sqlite",
 					"github.com/elimity-com/scim",
 				} {

@@ -9,13 +9,12 @@ import (
 
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -52,7 +51,7 @@ func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalRealm(t *testing.T) {
 			yaml := declared + fmt.Sprintf("users:\n - userName: alice\n   id: subject:alice\nhosts:\n - names: [prod.example.com]\n   principal-mode: epithet-principal-v1\n   realm: %s\n   labels: {env: prod}\n   accounts: [root]\n", tc.realm)
 			path := filepath.Join(t.TempDir(), "inventory.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
-			inv, err := inventory.NewStatic([]string{path})
+			inv, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
 			pol, diags := writ.Load(tc.policy)
 			require.NotNil(t, pol, "%v", diags)

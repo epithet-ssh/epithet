@@ -3,8 +3,6 @@ package caserver_test
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/epithet-ssh/epithet/internal/catest"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,10 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/catest"
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -34,7 +33,7 @@ func newTestCAServer(t *testing.T, policyHandler http.Handler, loggers ...*slog.
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "inventory.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:test-user\n    userName: test-user\nhosts:\n  - pattern: \"**\"\n"), 0600))
-	inv, err := inventory.NewStatic([]string{path})
+	inv, err := inventorytest.NewStatic([]string{path})
 	require.NoError(t, err)
 	is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 	policyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

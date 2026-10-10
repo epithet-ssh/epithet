@@ -19,15 +19,13 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -260,8 +258,8 @@ func countingHandler(hits *int32, h http.Handler) http.Handler {
 // the real writpolicy evaluator - the same evaluator `epithet policy`
 // runs, not a stub.
 type evaluatorFixture struct {
-	policyserver.PolicyEvaluator
-	inv *inventory.Static
+	ca.PolicyEvaluator
+	inv *inventorytest.Static
 }
 
 func writEvaluator(t *testing.T, policySrc, inventoryYAML string) evaluatorFixture {
@@ -270,7 +268,7 @@ func writEvaluator(t *testing.T, policySrc, inventoryYAML string) evaluatorFixtu
 	require.NotNil(t, pol, "policy failed to load: %v", diags)
 	invPath := t.TempDir() + "/inventory.yaml"
 	require.NoError(t, os.WriteFile(invPath, []byte(inventoryYAML), 0o600))
-	inv, err := inventory.NewStatic([]string{invPath})
+	inv, err := inventorytest.NewStatic([]string{invPath})
 	require.NoError(t, err)
 	e, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 	require.NoError(t, err)
@@ -510,9 +508,9 @@ func testIdentityVerifier(context.Context, string) (*Identity, error) {
 	return nil, fmt.Errorf("identity verification is not configured for this test")
 }
 
-func testInventoryClient(t *testing.T) *inventoryclient.Client {
+func testInventoryClient(t *testing.T) *facts.AdminClient {
 	t.Helper()
-	client, err := inventoryclient.New("", tlsconfig.Config{Insecure: true})
+	client, err := facts.NewAdminClient("", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	return client
 }

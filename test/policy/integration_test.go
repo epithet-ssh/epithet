@@ -10,12 +10,11 @@ import (
 
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +40,7 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	pol, diags := writ.Load(string(src))
 	require.NotNil(t, pol, "policy failed to load: %v", diags)
 
-	inv, err := inventory.NewStatic([]string{invPath})
+	inv, err := inventorytest.NewStatic([]string{invPath})
 	require.NoError(t, err)
 
 	// The default TTL stays at the deployment default (5m), deliberately

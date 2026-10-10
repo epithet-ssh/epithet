@@ -13,7 +13,6 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
-	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -26,7 +25,7 @@ type CA struct {
 	facts      *facts.DataClient
 	validator  *oidc.Validator
 	discovery  *wire.Discovery
-	evaluator  policyserver.PolicyEvaluator
+	evaluator  PolicyEvaluator
 	signer     ssh.Signer
 	privateKey sshcert.RawPrivateKey
 	logger     *slog.Logger
@@ -79,7 +78,7 @@ func (c *CA) Issue(ctx context.Context, token string, conn wire.Connection, publ
 }
 
 // New creates the issuing authority with its in-process policy evaluator.
-func New(privateKey sshcert.RawPrivateKey, evaluator policyserver.PolicyEvaluator, options ...Option) (*CA, error) {
+func New(privateKey sshcert.RawPrivateKey, evaluator PolicyEvaluator, options ...Option) (*CA, error) {
 	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
 	if err != nil {
 		return nil, err

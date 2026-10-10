@@ -20,8 +20,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -92,13 +91,13 @@ state-dir = "%s/state"
 	endpoint, err := caclient.InventoryURL(root, tlsCfg)
 	require.NoError(t, err)
 	require.Equal(t, base+"inventory", endpoint)
-	inventoryClient, err := inventoryclient.New(endpoint, tlsCfg)
+	inventoryClient, err := facts.NewAdminClient(endpoint, tlsCfg)
 	require.NoError(t, err)
-	_, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "list"})
+	_, status, err := inventoryClient.Control(t.Context(), "", facts.ControlRequest{Action: "list"})
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
-	proposal := inventoryapi.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	enrolled, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal})
+	proposal := facts.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
+	enrolled, status, err := inventoryClient.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
@@ -143,7 +142,7 @@ state-dir = "%s/state"
 	created := strings.TrimSpace(string(admin("token", "create", "--quiet")))
 	require.Len(t, created, 64)
 	proposal.Names = []string{"second.example"}
-	second, status, err := inventoryClient.Control(t.Context(), "", inventoryapi.ControlRequest{Action: "enroll", Host: &proposal, Token: created})
+	second, status, err := inventoryClient.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Host: &proposal, Token: created})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", second.Host.Status)
@@ -166,7 +165,7 @@ state-dir = "%s/state"
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.Contains(t, string(output), "ci-*.internal")
-	declared, status, err := inventoryClient.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "list"})
+	declared, status, err := inventoryClient.Control(t.Context(), token, facts.ControlRequest{Action: "list"})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	var patternID string
@@ -182,7 +181,7 @@ state-dir = "%s/state"
 	admin("remove", enrolled.Host.ID)
 	_, err = client.GetCert(t.Context(), token, &request)
 	require.NoError(t, err, "removal restores wildcard-based issuance")
-	_, status, err = inventoryClient.Control(t.Context(), token, inventoryapi.ControlRequest{Action: "get", ID: enrolled.Host.ID})
+	_, status, err = inventoryClient.Control(t.Context(), token, facts.ControlRequest{Action: "get", ID: enrolled.Host.ID})
 	require.Error(t, err)
 	require.Equal(t, http.StatusNotFound, status)
 }

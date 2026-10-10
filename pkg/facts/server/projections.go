@@ -1,16 +1,16 @@
 package server
 
 import (
-	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 )
 
 // Projections from storage types onto the control API. Host records convert
-// through pkg/inventory; directory types convert here so pkg/directory never
-// learns the inventory API's shape.
+// through pkg/facts/inventory; directory types convert here so pkg/facts/directory never
+// learns the shared protocol's shape.
 
-func controlRecord(r *inventory.HostRecord) *inventoryapi.HostRecord {
+func controlRecord(r *inventory.HostRecord) *facts.HostRecord {
 	if r == nil {
 		return nil
 	}
@@ -30,21 +30,21 @@ func controlSlice[S, T any](in []S, f func(S) T) []T {
 	return out
 }
 
-func controlBindings(s directory.BindingSnapshot) *inventoryapi.BindingSnapshot {
-	return &inventoryapi.BindingSnapshot{Revision: s.Revision, Groups: controlSlice(s.Groups, controlGroupBinding)}
+func controlBindings(s directory.BindingSnapshot) *facts.BindingSnapshot {
+	return &facts.BindingSnapshot{Revision: s.Revision, Groups: controlSlice(s.Groups, controlGroupBinding)}
 }
 
-func controlUser(u directory.User) inventoryapi.DirectoryUser {
-	return inventoryapi.DirectoryUser{UserName: u.UserName, ID: u.ID, Active: u.Active,
+func controlUser(u directory.User) facts.DirectoryUser {
+	return facts.DirectoryUser{UserName: u.UserName, ID: u.ID, Active: u.Active,
 		Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
 }
 
-func controlGroupBinding(g directory.GroupBinding) inventoryapi.GroupBinding {
-	return inventoryapi.GroupBinding{ID: g.ID, DisplayName: g.DisplayName, Alias: g.Alias, Status: g.Status}
+func controlGroupBinding(g directory.GroupBinding) facts.GroupBinding {
+	return facts.GroupBinding{ID: g.ID, DisplayName: g.DisplayName, Alias: g.Alias, Status: g.Status}
 }
 
-func controlDirectoryEvent(e directory.AuditEvent) inventoryapi.DirectoryAuditEvent {
-	return inventoryapi.DirectoryAuditEvent{
+func controlDirectoryEvent(e directory.AuditEvent) facts.DirectoryAuditEvent {
+	return facts.DirectoryAuditEvent{
 		Sequence:   uint64(e.Sequence),
 		Revision:   e.Revision,
 		Time:       e.Time,
@@ -54,4 +54,11 @@ func controlDirectoryEvent(e directory.AuditEvent) inventoryapi.DirectoryAuditEv
 		Alias:      e.Alias,
 		PreviousID: e.PreviousID,
 	}
+}
+
+func controlActor(u *directory.User) *facts.Actor {
+	if u == nil {
+		return nil
+	}
+	return &facts.Actor{UserName: u.UserName, ID: u.ID, Active: u.Active, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
 }

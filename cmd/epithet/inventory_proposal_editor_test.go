@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/inventory"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/stretchr/testify/require"
 )
 

@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -61,7 +61,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			// so the test can compare its in-memory realm with the installed one.
 			t.Setenv("EDITOR", `sh -c 'if [ ! -e "$REVIEW" ]; then test ! -e "$REALM" && test ! -e "$CA_KEY" && test ! -e "$FRAGMENT" || exit 9; fi; if [ -n "$EDIT_REALM" ]; then sed "/^realm:/d" "$1" > "$1.edit"; printf "realm: %s\n" "$EDIT_REALM" >> "$1.edit"; mv "$1.edit" "$1"; fi; cp "$1" "$REVIEW"' editor`)
 			pub := newTestCAPublicKey(t)
-			requests := make(chan inventoryapi.ControlRequest, 2)
+			requests := make(chan facts.ControlRequest, 2)
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/control"`)
@@ -69,10 +69,10 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			})
 			mux.HandleFunc("/manage", func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "GET" {
-					json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
+					json.NewEncoder(w).Encode(facts.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
 					return
 				}
-				var req inventoryapi.ControlRequest
+				var req facts.ControlRequest
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					t.Error(err)
 					w.WriteHeader(400)
@@ -85,10 +85,10 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 				require.Equal(t, string(realm), req.Host.Realm)
 				if tc.rejected {
 					w.WriteHeader(http.StatusForbidden)
-					json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Error: "rejected"})
+					json.NewEncoder(w).Encode(facts.ControlResponse{Error: "rejected"})
 					return
 				}
-				json.NewEncoder(w).Encode(inventoryapi.ControlResponse{Host: &inventoryapi.HostRecord{ID: "record", Status: tc.status}})
+				json.NewEncoder(w).Encode(facts.ControlResponse{Host: &facts.HostRecord{ID: "record", Status: tc.status}})
 			})
 			server := httptest.NewServer(mux)
 			defer server.Close()
@@ -150,7 +150,7 @@ func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/manage" {
-			json.NewEncoder(w).Encode(inventoryapi.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
+			json.NewEncoder(w).Encode(facts.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
 			return
 		}
 		w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/control"`)

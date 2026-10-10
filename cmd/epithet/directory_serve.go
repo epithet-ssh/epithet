@@ -5,10 +5,9 @@ import (
 	"log/slog"
 
 	"github.com/epithet-ssh/epithet/pkg/config"
-	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
@@ -27,8 +26,8 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 		if len(paths) == 0 {
 			return fmt.Errorf("no static directory files matched")
 		}
-		// Static inventory's user projection ignores host-specific configuration.
-		inv, err := inventory.NewStatic(paths, inventory.WithoutHosts())
+		// Static directory loading ignores host-specific configuration.
+		inv, err := directory.NewStatic(paths)
 		if err != nil {
 			return err
 		}

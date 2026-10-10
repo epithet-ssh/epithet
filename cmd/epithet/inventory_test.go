@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -19,10 +19,10 @@ func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
 	original := os.Stdout
 	os.Stdout = output
 	defer func() { os.Stdout = original }()
-	record := inventoryapi.HostRecord{
+	record := facts.HostRecord{
 		ID:       strings.Repeat("a", 64),
 		Revision: 9007199254740993,
-		Proposal: inventoryapi.Proposal{Pattern: "*.example", PrincipalMode: "account-name"},
+		Proposal: facts.Proposal{Pattern: "*.example", PrincipalMode: "account-name"},
 	}
 	require.NoError(t, printInventory(record))
 	_, err = output.Seek(0, 0)

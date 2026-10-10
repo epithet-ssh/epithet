@@ -1,5 +1,5 @@
 // Package wire contains shared certificate, discovery, host, and evaluation
-// types. Public administration has a separate contract in pkg/inventoryapi.
+// types. Public administration has a separate contract in pkg/facts.
 package wire
 
 import (

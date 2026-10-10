@@ -3,7 +3,6 @@ package ca_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/epithet-ssh/epithet/internal/catest"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/catest"
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -43,7 +42,7 @@ func TestCAConstructsCertificateFromFactsAndPolicyLimits(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("realms: [production]\nusers:\n  - id: subject:alice\n    userName: Alice\nhosts:\n  - names: [host]\n    accounts: [ubuntu]\n    principal-mode: %s\n%s", mode, realm)), 0600))
-			inv, err := inventory.NewStatic([]string{path})
+			inv, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
 			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			for _, tc := range []struct {
@@ -179,7 +178,7 @@ func TestCATrustsPolicyEligibilityWithRequiredConstructionData(t *testing.T) {
 				src += "hosts:\n  - names: [host]\n" + tc.host
 			}
 			require.NoError(t, os.WriteFile(path, []byte(src), 0600))
-			inv, err := inventory.NewStatic([]string{path})
+			inv, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
 			is := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			ps := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

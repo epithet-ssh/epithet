@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/epithet-ssh/epithet/pkg/controlplane"
+	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -41,7 +41,7 @@ func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	handler, err := controlplane.New(controlplane.Config{Key: sshcert.RawPrivateKey(key), DirectoryURL: c.Directory, DirectoryBackendURL: c.DirectoryBackend, InventoryBackendURL: c.InventoryBackend, Validator: validator, DirectoryAdmins: controlplane.Admins{Users: c.DirectoryAdminUsers, Groups: c.DirectoryAdminGroups}, InventoryAdmins: controlplane.Admins{Users: c.InventoryAdminUsers, Groups: c.InventoryAdminGroups}, SCIMToken: token, TLS: tlsCfg})
+	handler, err := control.New(control.Config{Key: sshcert.RawPrivateKey(key), DirectoryURL: c.Directory, DirectoryBackendURL: c.DirectoryBackend, InventoryBackendURL: c.InventoryBackend, Validator: validator, DirectoryAdmins: control.Admins{Users: c.DirectoryAdminUsers, Groups: c.DirectoryAdminGroups}, InventoryAdmins: control.Admins{Users: c.InventoryAdminUsers, Groups: c.InventoryAdminGroups}, SCIMToken: token, TLS: tlsCfg})
 	if err != nil {
 		return err
 	}

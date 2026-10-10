@@ -15,10 +15,9 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
-	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -82,7 +81,7 @@ scim-token = "provisioning-secret"
 			endpoint, err := caclient.InventoryURL(root, cfg)
 			require.NoError(t, err)
 			require.Equal(t, "http://"+address+"/inventory", endpoint)
-			client, err := inventoryclient.New(endpoint, cfg)
+			client, err := facts.NewAdminClient(endpoint, cfg)
 			require.NoError(t, err)
 			socket := filepath.Join(dir, "broker.sock")
 			token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
@@ -105,10 +104,10 @@ scim-token = "provisioning-secret"
 				output, err := exec.Command(binary, args...).CombinedOutput()
 				require.NoError(t, err, string(output))
 				if asJSON {
-					var snapshot inventoryapi.UserSnapshot
+					var snapshot facts.UserSnapshot
 					require.NoError(t, json.Unmarshal(output, &snapshot))
 					require.NotEmpty(t, snapshot.Revision)
-					require.Equal(t, []inventoryapi.DirectoryUser{{UserName: name, ID: "subject:admin", Active: true, Groups: []string{"wheel"}}}, snapshot.Users)
+					require.Equal(t, []facts.DirectoryUser{{UserName: name, ID: "subject:admin", Active: true, Groups: []string{"wheel"}}}, snapshot.Users)
 				} else {
 					require.Equal(t, "USERNAME\tID\tACTIVE\tGROUPS\n"+name+"\tsubject:admin\ttrue\twheel\n", string(output))
 				}

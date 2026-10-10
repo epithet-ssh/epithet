@@ -1,0 +1,526 @@
+package writpolicy
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	"github.com/epithet-ssh/epithet/pkg/hostpattern"
+	"github.com/epithet-ssh/epithet/pkg/principal"
+	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writ/il"
+	"github.com/stretchr/testify/require"
+)
+
+const evaluatorRealm = principal.Realm("production-database")
+
+// fakeInv is an in-memory Inventory for unit tests.
+type fakeInv struct {
+	users map[string]*directory.User
+	hosts map[string]*inventory.ResolvedHost
+	err   error
+}
+
+func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.User, directory.Revision, error) {
+	return f.users[identity], "d1", f.err
+}
+
+func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, string, error) {
+	return f.hosts[name], "h1", f.err
+}
+
+func testInv() *fakeInv {
+	return &fakeInv{
+		users: map[string]*directory.User{
+			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []string{"SRE"}, UserType: "employee"},
+		},
+		hosts: map[string]*inventory.ResolvedHost{
+			"prod-db-1": {Policy: inventory.Host{Names: []string{"prod-db-1"}, Labels: map[string]string{"env": "prod"}}},
+		},
+	}
+}
+
+func mustPolicy(t *testing.T, src string) *il.Policy {
+	t.Helper()
+	pol, diags := writ.Load(src)
+	require.NotNil(t, pol, "policy failed to load: %v", diags)
+	return pol
+}
+
+func conn(account, host string) wire.Connection {
+	return wire.Connection{RemoteHost: host, RemoteUser: account, Port: 22}
+}
+
+func TestIssueReturnsPolicyLimits(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	e := NewForTesting(pol, testInv())
+	expiry := time.Now().Add(2 * time.Minute)
+
+	resp, err := e.Evaluate(context.Background(), "alice-id", expiry, conn("root", "prod-db-1"))
+	require.NoError(t, err)
+	require.WithinDuration(t, expiry, resp.NotAfter, 0, "Writ supplies its authentication-derived certificate deadline")
+	require.NotEmpty(t, resp.PolicyID)
+	require.Equal(t, int64(300), resp.TTLSeconds, "deployment default TTL")
+	require.Contains(t, resp.Extensions, "permit-pty")
+}
+
+func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T) {
+	inv := testInv()
+	inv.users["alice-id"].UserName = "renamed-user"
+	for _, tc := range []struct {
+		rule    string
+		allowed bool
+	}{
+		{"allow userName:\"alice@example.com\" -> root@*\n", false},
+		{"allow userName:\"renamed-user\" -> root@*\n", true},
+		{"allow group:SRE -> root@*\n", true},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			e := NewForTesting(mustPolicy(t, tc.rule), inv)
+			resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Minute), conn("root", "prod-db-1"))
+			if tc.allowed {
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+			} else {
+				var denied *wire.PolicyError
+				require.ErrorAs(t, err, &denied)
+				require.Equal(t, http.StatusForbidden, denied.StatusCode)
+			}
+		})
+	}
+}
+
+func TestIssueAuthorizesHostWithPrincipalRealm(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	inv := testInv()
+	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
+	inv.hosts["prod-db-1"].Realm = evaluatorRealm
+	e := NewForTesting(pol, inv)
+
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.NoError(t, err)
+	require.Positive(t, resp.TTLSeconds)
+}
+
+func TestIssueHashedPrincipalWithoutRealmFailsClosed(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	inv := testInv()
+	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
+	e := NewForTesting(pol, inv)
+
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.ErrorContains(t, err, "invalid principal realm")
+	var perr *wire.PolicyError
+	require.False(t, errors.As(err, &perr), "issuance configuration errors are 500s, not policy denials")
+}
+
+func TestIssueUnknownPrincipalModeFailsClosed(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	inv := testInv()
+	inv.hosts["prod-db-1"].PrincipalMode = "mystery"
+	e := NewForTesting(pol, inv)
+
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.ErrorContains(t, err, `unknown principal mode "mystery"`)
+}
+
+func TestRuleTTLOverridesDefault(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}, ttl 2m\n")
+	e := NewForTesting(pol, testInv())
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.NoError(t, err)
+	require.Equal(t, int64(120), resp.TTLSeconds)
+}
+
+func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	e, warnings, err := newWithInventory(pol, testInv(), nil, Options{
+		DefaultTTL: 10 * time.Minute,
+		Extensions: map[string]string{"permit-pty": ""},
+	})
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.NoError(t, err)
+	require.Equal(t, int64(600), resp.TTLSeconds)
+	require.Equal(t, map[string]string{"permit-pty": ""}, resp.Extensions)
+}
+
+func TestUnknownUserIsForbidden(t *testing.T) {
+	pol := mustPolicy(t, "allow * -> *@*\n")
+	e := NewForTesting(pol, testInv())
+	_, err := e.Evaluate(context.Background(), "nobody@example.com", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	var perr *wire.PolicyError
+	require.ErrorAs(t, err, &perr)
+	require.Equal(t, http.StatusForbidden, perr.StatusCode)
+}
+
+func TestUnknownHostIsForbidden(t *testing.T) {
+	pol := mustPolicy(t, "allow * -> *@*\n")
+	e := NewForTesting(pol, testInv())
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "mystery-host"))
+	var perr *wire.PolicyError
+	require.ErrorAs(t, err, &perr)
+	require.Equal(t, http.StatusForbidden, perr.StatusCode)
+}
+
+// The requested host name is lowercased before the inventory lookup.
+func TestHostNameLowercasedAtRequest(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@prod-db-1\n")
+	e := NewForTesting(pol, testInv())
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "PROD-DB-1"))
+	require.NoError(t, err)
+}
+
+func TestDenyRuleNamesItselfInMessage(t *testing.T) {
+	pol := mustPolicy(t, "allow * -> *@*\ndeny userType:employee -> root@{env=prod}, label \"no-emp-root\"\n")
+	e := NewForTesting(pol, testInv())
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	var perr *wire.PolicyError
+	require.ErrorAs(t, err, &perr)
+	require.Equal(t, http.StatusForbidden, perr.StatusCode)
+	require.Contains(t, perr.Message, "no-emp-root")
+}
+
+func TestInventoryErrorFailsClosed(t *testing.T) {
+	pol := mustPolicy(t, "allow * -> *@*\n")
+	inv := testInv()
+	inv.err = errors.New("database down")
+	e := NewForTesting(pol, inv)
+	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.Error(t, err)
+	var perr *wire.PolicyError
+	require.False(t, errors.As(err, &perr), "an inventory failure is a 500, not a policy denial")
+}
+
+// ── registry validation ─────────────────────────────────────────────
+
+func TestUnknownRequirementFailsAtConstruction(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@*, require oncall, label \"sre-root\"\n")
+	_, _, err := newWithInventory(pol, testInv(), &Registry{}, Options{})
+	require.ErrorContains(t, err, "unknown requirement")
+	require.ErrorContains(t, err, "oncall")
+	require.ErrorContains(t, err, "sre-root")
+}
+
+func TestUnknownFlagAndNotifyFailAtConstruction(t *testing.T) {
+	pol := mustPolicy(t, "deny * -> *@*, when freeze, notify \"alerts\"\n")
+	_, _, err := newWithInventory(pol, testInv(), &Registry{}, Options{})
+	require.ErrorContains(t, err, "unknown flag")
+	require.ErrorContains(t, err, "freeze")
+	require.ErrorContains(t, err, "unknown notify target")
+	require.ErrorContains(t, err, "alerts")
+}
+
+func TestUnlabeledRuleNamedByShortID(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@*, require oncall\n")
+	_, _, err := newWithInventory(pol, testInv(), &Registry{}, Options{})
+	require.ErrorContains(t, err, il.ShortID(pol.Allows[0].ContentID()))
+}
+
+func TestPastUntilWarnsButLoads(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@*, until \"2020-01-01T00:00Z\", label \"expired\"\n")
+	e, warnings, err := newWithInventory(pol, testInv(), nil, Options{})
+	require.NoError(t, err, "a past until is a warning, not a startup failure")
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], "expired")
+	require.Contains(t, warnings[0], "never match")
+	require.NotNil(t, e)
+}
+
+// ── registered handlers ─────────────────────────────────────────────
+
+type staticFlag bool
+
+func (s staticFlag) Holds(context.Context, string) (bool, error) { return bool(s), nil }
+
+type staticFact struct {
+	status  FactStatus
+	lastReq FactRequest
+}
+
+func (s *staticFact) Latency() Latency  { return Fast }
+func (s *staticFact) SideEffects() bool { return false }
+func (s *staticFact) Check(_ context.Context, req FactRequest) (FactResult, error) {
+	s.lastReq = req
+	return FactResult{Status: s.status}, nil
+}
+
+func TestRegisteredFlagGatesDeny(t *testing.T) {
+	pol := mustPolicy(t, "allow * -> *@*\ndeny * -> *@{env=prod}, when freeze\n")
+	frozen, _, err := newWithInventory(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(true)}}, Options{})
+	require.NoError(t, err)
+	_, err = frozen.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	var perr *wire.PolicyError
+	require.ErrorAs(t, err, &perr)
+	require.Equal(t, http.StatusForbidden, perr.StatusCode)
+
+	thawed, _, err := newWithInventory(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(false)}}, Options{})
+	require.NoError(t, err)
+	_, err = thawed.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.NoError(t, err)
+}
+
+func TestPendingRequirementReturns202(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@*, require approval\n")
+	fact := &staticFact{status: Pending}
+	e, _, err := newWithInventory(pol, testInv(), &Registry{Requirements: map[string]RequirementHandler{"approval": fact}}, Options{})
+	require.NoError(t, err)
+	_, err = e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	var perr *wire.PolicyError
+	require.ErrorAs(t, err, &perr)
+	require.Equal(t, http.StatusAccepted, perr.StatusCode)
+	require.Contains(t, perr.Message, "approval")
+	require.Equal(t, "approval", fact.lastReq.Requirement)
+	require.Equal(t, "root", fact.lastReq.Account)
+}
+
+func TestSatisfiedRequirementIssues(t *testing.T) {
+	pol := mustPolicy(t, "allow group:SRE -> root@*, require approval\n")
+	e, _, err := newWithInventory(pol, testInv(), &Registry{Requirements: map[string]RequirementHandler{"approval": &staticFact{status: Satisfied}}}, Options{})
+	require.NoError(t, err)
+	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+	require.NoError(t, err)
+	require.Positive(t, resp.TTLSeconds)
+}
+
+func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
+	ctx := context.Background()
+	inv := testInv()
+	const id = "alice-id"
+	e := NewForTesting(mustPolicy(t, "allow id:alice-id -> root@*\n"), inv)
+	for _, name := range []string{"alice@example.com", "renamed-user"} {
+		inv.users[id].UserName = name
+		resp, err := e.Evaluate(ctx, id, time.Now().Add(time.Minute), conn("root", "prod-db-1"))
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+	}
+	// Reusing the old name gives the replacement a different inventory ID.
+	inv.users["replacement-id"] = &directory.User{UserName: "alice@example.com", ID: "replacement-id", Active: true}
+	for _, other := range []string{"replacement-id", "alice@example.com", "unmapped-oidc-subject"} {
+		_, err := e.Evaluate(ctx, other, time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+		var denied *wire.PolicyError
+		require.ErrorAs(t, err, &denied)
+		require.Equal(t, http.StatusForbidden, denied.StatusCode)
+	}
+	// Deleting the original record never transfers its ID grant.
+	delete(inv.users, id)
+	for _, candidate := range []string{id, "replacement-id"} {
+		_, err := e.Evaluate(ctx, candidate, time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+		var denied *wire.PolicyError
+		require.ErrorAs(t, err, &denied)
+		require.Equal(t, http.StatusForbidden, denied.StatusCode)
+	}
+}
+
+func TestNewRejectsLegacyIL(t *testing.T) {
+	p := mustPolicy(t, "allow * -> root@*\ndeny userName:alice -> root@*\n")
+	p.Schema = 1
+	_, _, err := newWithInventory(p, testInv(), nil, Options{})
+	require.ErrorContains(t, err, "recompile")
+	p.Schema = il.Schema
+	p.Denies[0].Users.Or[0].Kind = il.MatcherKind("uid")
+	_, _, err = newWithInventory(p, testInv(), nil, Options{})
+	require.ErrorContains(t, err, "user selectors")
+}
+
+// Resolve test fixtures before invoking the production fact-only evaluator.
+type fixtureEvaluator struct {
+	*Evaluator
+	inv *fakeInv
+}
+
+func newWithInventory(pol *il.Policy, inv *fakeInv, reg *Registry, opts Options) (*fixtureEvaluator, []string, error) {
+	e, w, err := New(pol, reg, opts)
+	return &fixtureEvaluator{e, inv}, w, err
+}
+func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
+	e, _, err := newWithInventory(pol, inv, nil, Options{})
+	if err != nil {
+		panic(err)
+	}
+	return e
+}
+func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn wire.Connection) (*wire.PolicyResponse, error) {
+	conn.RemoteHost = hostpattern.NormalizeName(conn.RemoteHost)
+	u, _, err := e.inv.LookupUser(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	h, _, err := e.inv.LookupHost(ctx, conn.RemoteHost)
+	if err != nil {
+		return nil, err
+	}
+	input := &wire.PolicyFacts{Authentication: wire.Authentication{ID: id, ExpiresAt: expiry}, Target: conn.RemoteHost}
+	if u != nil {
+		input.User = &wire.User{ID: u.ID, UserName: u.UserName, Active: &u.Active, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
+	}
+	if h != nil {
+		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Labels: h.Policy.Labels}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
+		if err := host.Validate(conn.RemoteHost); err != nil {
+			return nil, err
+		}
+		input.Host = &host.HostResource
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	var decoded wire.PolicyFacts
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, err
+	}
+	if err := decoded.Validate(conn.RemoteHost); err != nil {
+		return nil, err
+	}
+	return e.Evaluator.Evaluate(ctx, conn, &decoded)
+}
+
+func TestProjectedHostPreservesAccountGrounding(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accounts []string
+		allowed  bool
+	}{
+		{"ungrounded", nil, true},
+		{"empty", []string{}, false},
+		{"matching", []string{"root"}, true},
+		{"other account", []string{"ubuntu"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := testInv()
+			inv.hosts["prod-db-1"].Policy.Accounts = tc.accounts
+			e := NewForTesting(mustPolicy(t, "allow group:SRE -> root@*\n"), inv)
+			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+			if tc.allowed {
+				require.NoError(t, err)
+				require.NotNil(t, response)
+			} else {
+				var denied *wire.PolicyError
+				require.ErrorAs(t, err, &denied)
+				require.Equal(t, http.StatusForbidden, denied.StatusCode)
+			}
+		})
+	}
+}
+
+func TestPolicyTTLUsesWholeSecondsWithoutExtendingLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name, rule string
+		defaultTTL time.Duration
+		seconds    int64
+		invalid    bool
+	}{
+		{name: "default fractional seconds", defaultTTL: 1500 * time.Millisecond, seconds: 1},
+		{name: "default below one second", defaultTTL: 500 * time.Millisecond, invalid: true},
+		{name: "one-second rule", rule: ", ttl 1s", seconds: 1},
+		{name: "rule overrides subsecond default", rule: ", ttl 2s", defaultTTL: 500 * time.Millisecond, seconds: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _, err := newWithInventory(mustPolicy(t, "allow group:SRE -> root@*"+tc.rule+"\n"), testInv(), nil, Options{DefaultTTL: tc.defaultTTL})
+			require.NoError(t, err)
+			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+			if tc.invalid {
+				require.ErrorContains(t, err, "at least one whole second")
+				require.Nil(t, response)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.seconds, response.TTLSeconds)
+			}
+		})
+	}
+}
+
+// These decisions exercise directory projection and the policy JSON boundary,
+// including exact matching of values that must not be normalized in transit.
+func TestUserFactsPreserveAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name, selector            string
+		inactive, absent, allowed bool
+	}{
+		{name: "ID", selector: "id:alice-id", allowed: true},
+		{name: "ID case differs", selector: "id:Alice-id"},
+		{name: "username", selector: "userName:\"Alice Example\"", allowed: true},
+		{name: "username case differs", selector: "userName:\"alice example\""},
+		{name: "group", selector: "group:\" Platform \"", allowed: true},
+		{name: "group whitespace differs", selector: "group:Platform"},
+		{name: "group case differs", selector: "group:\" platform \""},
+		{name: "user type", selector: "userType:employee", allowed: true},
+		{name: "other user type", selector: "userType:contractor"},
+		{name: "department", selector: "department:Engineering", allowed: true},
+		{name: "other department", selector: "department:Sales"},
+		{name: "organization", selector: "organization:Example", allowed: true},
+		{name: "other organization", selector: "organization:Other"},
+		{name: "inactive", selector: "*", inactive: true},
+		{name: "absent", selector: "*", absent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := testInv()
+			user := inv.users["alice-id"]
+			user.UserName = "Alice Example"
+			user.Groups = []string{" Platform "}
+			user.Department = "Engineering"
+			user.Organization = "Example"
+			user.Active = !tc.inactive
+			if tc.absent {
+				delete(inv.users, "alice-id")
+			}
+			e := NewForTesting(mustPolicy(t, "allow "+tc.selector+" -> root@*\n"), inv)
+			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
+			if tc.allowed {
+				require.NoError(t, err)
+				require.NotNil(t, response)
+			} else {
+				var denied *wire.PolicyError
+				require.ErrorAs(t, err, &denied)
+				require.Equal(t, http.StatusForbidden, denied.StatusCode)
+				require.Nil(t, response)
+			}
+		})
+	}
+}
+
+func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
+	for _, principalRealm := range []bool{false, true} {
+		inv := testInv()
+		host := inv.hosts["prod-db-1"]
+		host.Policy.Names = []string{"prod-db-1", "database.internal"}
+		inv.hosts["database.internal"] = host
+		if principalRealm {
+			host.PrincipalMode = inventory.EpithetPrincipalV1
+			host.Realm = evaluatorRealm
+		}
+		for _, tc := range []struct {
+			rule    string
+			allowed bool
+		}{
+			{"allow * -> root@prod-db-1\n", true},
+			{"allow * -> root@*.internal\n", true},
+			{"allow * -> root@production-database\n", false},
+			{"allow * -> root@*\ndeny * -> root@database.internal\n", false},
+			{"allow * -> root@*\ndeny * -> root@*.internal\n", false},
+			{"allow * -> root@*\ndeny * -> root@!prod-db-1\n", true},
+			{"allow * -> root@*\ndeny * -> root@!*.internal\n", true},
+			{"allow * -> root@*\ndeny * -> root@production-database\n", true},
+		} {
+			for _, name := range []string{"prod-db-1", "database.internal"} {
+				e := NewForTesting(mustPolicy(t, tc.rule), inv)
+				response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", name))
+				if tc.allowed {
+					require.NoError(t, err, "principalRealm=%v target=%s rule=%s", principalRealm, name, tc.rule)
+					require.NotNil(t, response)
+				} else {
+					var denied *wire.PolicyError
+					require.ErrorAs(t, err, &denied)
+					require.Equal(t, http.StatusForbidden, denied.StatusCode)
+				}
+			}
+		}
+	}
+}

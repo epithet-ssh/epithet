@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 	"fmt"
-	"github.com/epithet-ssh/epithet/internal/catest"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,11 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/catest"
 	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -48,7 +47,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			require.NoError(t, err)
 			path := filepath.Join(t.TempDir(), "inventory.yaml")
 			require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: subject:user\n    userName: user\nhosts:\n  - names: [host]\n"), 0600))
-			inv, err := inventory.NewStatic([]string{path})
+			inv, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
 			realInventory := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
 			inventoryHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

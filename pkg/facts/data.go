@@ -13,7 +13,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// DataClient supplies validated authorization facts. It exposes only lookups;
+// DataClient supplies validated authorization  It exposes only lookups;
 // caller identity and management operations belong to ControlClient.
 type DataClient struct{ directory, inventory *transport }
 

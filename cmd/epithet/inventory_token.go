@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 )
 
 type InventoryTokenCLI struct {
@@ -23,7 +23,7 @@ func (c *InventoryTokenCreateCLI) Run(p *InventoryCLI) error {
 	if c.ExpiresIn < time.Second || c.ExpiresIn > 24*time.Hour {
 		return fmt.Errorf("expires-in must be between 1s and 24h")
 	}
-	r, err := p.request(inventoryapi.ControlRequest{Action: "token-create", LifetimeSeconds: int64(c.ExpiresIn / time.Second)})
+	r, err := p.request(facts.ControlRequest{Action: "token-create", LifetimeSeconds: int64(c.ExpiresIn / time.Second)})
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'
 type InventoryTokenListCLI struct{}
 
 func (*InventoryTokenListCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(inventoryapi.ControlRequest{Action: "token-list"})
+	r, err := p.request(facts.ControlRequest{Action: "token-list"})
 	if err != nil {
 		return err
 	}
@@ -52,6 +52,6 @@ type InventoryTokenRevokeCLI struct {
 }
 
 func (c *InventoryTokenRevokeCLI) Run(p *InventoryCLI) error {
-	_, err := p.request(inventoryapi.ControlRequest{Action: "token-revoke", ID: c.ID})
+	_, err := p.request(facts.ControlRequest{Action: "token-revoke", ID: c.ID})
 	return err
 }

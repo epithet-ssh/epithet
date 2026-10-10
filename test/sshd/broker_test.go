@@ -25,14 +25,13 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
+	"github.com/epithet-ssh/epithet/pkg/writpolicy"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"
@@ -77,7 +76,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
 	invYAML := fmt.Sprintf("users:\n  - userName: %s\n    id: %s\nhosts:\n  - pattern: \"*\"\n", oidctest.TokenEmail, oidctest.Subject(oidctest.TokenEmail))
 	require.NoError(t, os.WriteFile(invPath, []byte(invYAML), 0o600))
-	inv, err := inventory.NewStatic([]string{invPath})
+	inv, err := inventorytest.NewStatic([]string{invPath})
 	require.NoError(t, err)
 
 	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
@@ -109,7 +108,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	caClient, err := caclient.New(caEndpoints)
 	require.NoError(t, err)
 
-	inventoryClient, err := inventoryclient.New("", tlsconfig.Config{Insecure: true})
+	inventoryClient, err := facts.NewAdminClient("", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
 		return nil, fmt.Errorf("unexpected identity request in SSH test")
