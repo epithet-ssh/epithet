@@ -1,4 +1,4 @@
-package facts_test
+package server_test
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -34,7 +35,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	source := &users{active: true}
-	handler, err := facts.Handler(source, nil, pub, "")
+	handler, err := factserver.LookupHandler(source, nil, pub, "")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -161,7 +162,7 @@ func TestProviderStatusAndNoRedirects(t *testing.T) {
 func TestUnixFactTransport(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	handler, err := facts.Handler(&users{active: true}, nil, pub, "")
+	handler, err := factserver.LookupHandler(&users{active: true}, nil, pub, "")
 	require.NoError(t, err)
 	// A short directory is required for the macOS Unix socket path limit.
 	dir := t.TempDir()
@@ -186,7 +187,7 @@ func TestUnixFactTransport(t *testing.T) {
 func TestFactReaderAndControlKeysMustDiffer(t *testing.T) {
 	pub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	_, err = facts.Handler(&users{active: true}, nil, pub, pub)
+	_, err = factserver.LookupHandler(&users{active: true}, nil, pub, pub)
 	require.ErrorContains(t, err, "distinct signing keys")
 }
 
@@ -229,7 +230,7 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 		_, err = hosts.AddPattern("admin", inventory.Proposal{Pattern: pattern, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
 		require.NoError(t, err)
 	}
-	handler, err := facts.Handler(nil, hosts, pub, "")
+	handler, err := factserver.LookupHandler(nil, hosts, pub, "")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()

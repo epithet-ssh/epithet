@@ -1,4 +1,4 @@
-package facts
+package server
 
 import (
 	"bytes"
@@ -11,15 +11,16 @@ import (
 	"net/url"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
-// Handler serves one kind of fact; directory and inventory use separate
+// LookupHandler serves one kind of fact; directory and inventory use separate
 // audiences and transports. Either the CA reader or control key may read.
-func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
+func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
 	if (users == nil) == (hosts == nil) {
 		return nil, fmt.Errorf("exactly one fact source is required")
 	}
@@ -36,16 +37,16 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 			return nil, fmt.Errorf("CA and control must use distinct signing keys")
 		}
 	}
-	audience, param := InventoryAudience, "host"
+	audience, param := facts.InventoryAudience, "host"
 	if users != nil {
-		audience, param = DirectoryAudience, "id"
+		audience, param = facts.DirectoryAudience, "id"
 	}
-	var verifiers []*Verifier
+	var verifiers []*facts.Verifier
 	for _, key := range []sshcert.RawPublicKey{caKey, controlKey} {
 		if key == "" {
 			continue
 		}
-		v, err := NewVerifierFor(key, audience)
+		v, err := facts.NewVerifierFor(key, audience)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +89,7 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 			u, revision, e := users.LookupUser(r.Context(), value)
 			err = e
 			if err == nil && u != nil && u.Active {
-				response = &User{ID: u.ID, UserName: u.UserName, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization, Revision: Revision{value: string(revision), present: revision != ""}}
+				response = &userFacts{User: facts.User{ID: u.ID, UserName: u.UserName, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}, Revision: string(revision)}
 			}
 		} else {
 			if value != hostpattern.NormalizeName(value) {
@@ -98,7 +99,7 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 			h, revision, e := hosts.LookupHost(r.Context(), value)
 			err = e
 			if err == nil && h != nil {
-				response = &Host{Host: wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}, Revision: Revision{value: string(revision), present: revision != ""}}
+				response = &hostFacts{Host: wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}, Revision: string(revision)}
 			}
 		}
 		if err != nil {
@@ -121,4 +122,16 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	}), nil
+}
+
+// Stores omit empty revision metadata. The client representation separately
+// validates and preserves the presence of revisions supplied by any provider.
+type userFacts struct {
+	facts.User
+	Revision string `json:"revision,omitempty"`
+}
+
+type hostFacts struct {
+	wire.Host
+	Revision string `json:"revision,omitempty"`
 }

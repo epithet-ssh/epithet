@@ -4,13 +4,12 @@ package controltest
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/facts"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -46,14 +45,9 @@ func New(t *testing.T, users directory.Directory, managed directory.Store, hosts
 	if users == nil {
 		users = emptyDirectory{}
 	}
-	facts, err := facts.Handler(users, nil, caPub, pub)
+	handler, err := factserver.DirectoryHandler(users, managed, caPub, pub)
 	require.NoError(t, err)
-	backend, err := (&controlplane.Backend{Directory: users, ManagedDirectory: managed}).Handler(pub)
-	require.NoError(t, err)
-	mux := http.NewServeMux()
-	mux.Handle("/lookup", facts)
-	mux.Handle("/", backend)
-	ds := httptest.NewServer(mux)
+	ds := httptest.NewServer(handler)
 	t.Cleanup(ds.Close)
 	f.DirectoryURL = ds.URL
 	config.Key = key
@@ -61,7 +55,7 @@ func New(t *testing.T, users directory.Directory, managed directory.Store, hosts
 	config.DirectoryBackendURL = ds.URL
 	config.TLS = tlsconfig.Config{Insecure: true}
 	if hosts != nil {
-		h, err := (&controlplane.Backend{Store: hosts}).Handler(pub)
+		h, err := factserver.InventoryHandler(hosts, caPub, pub)
 		require.NoError(t, err)
 		is := httptest.NewServer(h)
 		t.Cleanup(is.Close)

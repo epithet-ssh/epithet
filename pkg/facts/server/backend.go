@@ -1,5 +1,4 @@
-// Package controlplane separates public authentication from backend mutations.
-package controlplane
+package server
 
 import (
 	"bytes"
@@ -19,15 +18,16 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
-// Backend owns only storage and invariants. Only the configured control key can
-// invoke it; CA reader credentials never confer mutation authority.
-type Backend struct {
+// backend adapts the private control protocol to store operations. Only the
+// configured control key can invoke it; CA reader credentials never confer
+// mutation authority. Stores enforce their transactional invariants.
+type backend struct {
 	Store            *inventory.Managed
 	ManagedDirectory directory.Store
 	Directory        directory.Directory
 }
 
-func (c *Backend) Handler(key sshcert.RawPublicKey) (http.Handler, error) {
+func (c *backend) handler(key sshcert.RawPublicKey) (http.Handler, error) {
 	audience := facts.InventoryAudience
 	if c.Directory != nil {
 		audience = facts.DirectoryAudience
@@ -94,7 +94,7 @@ func (c *Backend) Handler(key sshcert.RawPublicKey) (http.Handler, error) {
 		}
 	}), nil
 }
-func (c *Backend) manage(w http.ResponseWriter, r *http.Request, body []byte, actor string) {
+func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, actor string) {
 	users, canListUsers := c.Directory.(directory.UserLister)
 	w.Header().Set("Content-Type", "application/json")
 	fail := func(code int, msg string) {

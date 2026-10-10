@@ -7,7 +7,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/facts"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
@@ -33,9 +33,9 @@ func ServeFactsWithConfig(t *testing.T, inv *inventory.Static, cfg oidc.Config, 
 }
 func ServeFactsWithSources(t *testing.T, users directory.Directory, hosts inventory.Hosts, cfg oidc.Config, key sshcert.RawPublicKey) *Facts {
 	t.Helper()
-	dir, err := facts.Handler(users, nil, key, "")
+	dir, err := factserver.LookupHandler(users, nil, key, "")
 	require.NoError(t, err)
-	inv, err := facts.Handler(nil, hosts, key, "")
+	inv, err := factserver.LookupHandler(nil, hosts, key, "")
 	require.NoError(t, err)
 	mux := http.NewServeMux()
 	mux.Handle("/directory/lookup", dir)

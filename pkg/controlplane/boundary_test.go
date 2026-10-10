@@ -14,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
@@ -138,7 +139,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 		json.NewEncoder(w).Encode(facts.User{ID: "subject:admin"})
 	}))
 	defer custom.Close()
-	handler, err := (&controlplane.Backend{Store: hosts}).Handler(pub)
+	handler, err := factserver.InventoryHandler(hosts, "", pub)
 	require.NoError(t, err)
 	backend := httptest.NewServer(handler)
 	defer backend.Close()

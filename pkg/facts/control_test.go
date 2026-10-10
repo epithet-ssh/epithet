@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -41,20 +41,14 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
-	serve := func(source directory.Directory, machines inventory.Hosts, backend *controlplane.Backend) *httptest.Server {
-		lookup, err := facts.Handler(source, machines, readerPublic, controlPublic)
+	serve := func(handler http.Handler, err error) *httptest.Server {
 		require.NoError(t, err)
-		manage, err := backend.Handler(controlPublic)
-		require.NoError(t, err)
-		mux := http.NewServeMux()
-		mux.Handle("/lookup", lookup)
-		mux.Handle("/", manage)
-		server := httptest.NewServer(mux)
+		server := httptest.NewServer(handler)
 		t.Cleanup(server.Close)
 		return server
 	}
-	dir := serve(users, nil, &controlplane.Backend{Directory: users, ManagedDirectory: users})
-	inv := serve(nil, hosts, &controlplane.Backend{Store: hosts})
+	dir := serve(factserver.DirectoryHandler(users, users, readerPublic, controlPublic))
+	inv := serve(factserver.InventoryHandler(hosts, readerPublic, controlPublic))
 	cfg := tlsconfig.Config{Insecure: true}
 	data, err := facts.NewDataClient(dir.URL, inv.URL, readerKey, cfg)
 	require.NoError(t, err)

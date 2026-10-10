@@ -1,3 +1,6 @@
+// Package controlplane authenticates public requests and authorizes administrative
+// operations, then invokes fact services through their typed clients. Built-in
+// private service handlers and storage adapters live in pkg/facts/server.
 package controlplane
 
 import (

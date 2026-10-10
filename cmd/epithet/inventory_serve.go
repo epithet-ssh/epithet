@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 
-	"github.com/epithet-ssh/epithet/pkg/controlplane"
-	"github.com/epithet-ssh/epithet/pkg/facts"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -46,19 +44,10 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 			return err
 		}
 	}
-	handler, err := facts.Handler(nil, managed, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
+	handler, err := factserver.InventoryHandler(managed, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
 	if err != nil {
 		return err
 	}
-	mux := http.NewServeMux()
-	mux.Handle("/lookup", handler)
-	if controlKey != "" {
-		backend, err := (&controlplane.Backend{Store: managed}).Handler(sshcert.RawPublicKey(controlKey))
-		if err != nil {
-			return err
-		}
-		mux.Handle("/manage", backend)
-	}
 	logger.Info("starting inventory server", "listen", c.Listen)
-	return listenAndServe(c.Listen, mux)
+	return listenAndServe(c.Listen, handler)
 }

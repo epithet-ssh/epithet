@@ -1,4 +1,4 @@
-package controlplane
+package server
 
 import (
 	"github.com/epithet-ssh/epithet/pkg/directory"

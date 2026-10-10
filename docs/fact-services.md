@@ -96,8 +96,14 @@ SSH private key. `pkg/facts` is the reference implementation. Its
 only validated `User` and `Host` lookups. `NewControlClient` configures private
 backend endpoints and exposes typed administration and provisioning operations.
 Both select service audiences and own their signed HTTP transport internally;
-callers do not supply paths or manage HTTP response bodies. `Handler` authenticates
-readers and serves a directory or inventory source.
+callers do not supply paths or manage HTTP response bodies.
+
+`pkg/facts/server` owns built-in service handlers. `DirectoryHandler` and
+`InventoryHandler` assemble lookup authentication, optional private control
+operations, and routes. `LookupHandler` serves a read-only directory or inventory
+source. The CLI owns store lifetimes, key resolution, and listeners.
+`pkg/controlplane` owns public authentication and administrative authorization;
+it depends on the typed clients, without importing the built-in handlers or stores.
 
 Human control operations receive the already authorized actor and directory
 revision explicitly. Enrollment and SCIM provisioning keep their nonhuman

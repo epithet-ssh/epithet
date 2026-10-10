@@ -1,7 +1,8 @@
 // Package facts owns authenticated communication with directory and inventory
 // services, including issuance lookups and signed control requests. Providers
 // supply facts without authenticating end users or implementing administration.
-// Built-in database support lives in the independent storage subpackage.
+// Built-in HTTP services live in the server subpackage; shared database support
+// lives in the independent storage subpackage.
 package facts
 
 import (

@@ -74,3 +74,27 @@ func TestWireContractsAreLeaves(t *testing.T) {
 		})
 	}
 }
+
+// Fact clients and the public control frontend must be usable without linking
+// the built-in handlers or SQLite stores, including through indirect imports.
+func TestFactClientsAndControlDoNotLinkBuiltInServices(t *testing.T) {
+	for _, pkg := range []string{"./pkg/facts", "./pkg/controlplane", "./pkg/ca"} {
+		t.Run(pkg, func(t *testing.T) {
+			for _, dep := range deps(t, pkg) {
+				for _, bad := range []string{
+					module + "pkg/facts/server",
+					module + "pkg/facts/storage",
+					module + "pkg/inventory",
+					module + "pkg/directory/sqlitestore",
+					module + "pkg/directory/scim",
+					"modernc.org/sqlite",
+					"github.com/elimity-com/scim",
+				} {
+					if dep == bad || strings.HasPrefix(dep, bad+"/") {
+						t.Errorf("%s depends on %s; built-in service implementations belong behind pkg/facts/server", pkg, dep)
+					}
+				}
+			}
+		})
+	}
+}
