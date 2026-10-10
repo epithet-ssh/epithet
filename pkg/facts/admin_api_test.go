@@ -25,7 +25,7 @@ func TestControlResponseWireShape(t *testing.T) {
 		Hosts:  []facts.HostRecord{{ID: "h2", Revision: 1, Status: "pending", Proposal: facts.Proposal{Names: []string{"c"}, PrincipalMode: "account-name"}, CreatedAt: ts, UpdatedAt: ts}},
 		Token:  &facts.EnrollmentToken{ID: "t1", ExpiresAt: ts, UsedBy: "h1", Revoked: true},
 		Tokens: []facts.EnrollmentToken{{ID: "t2", ExpiresAt: ts}},
-		Audit:  []facts.HostAuditEvent{{At: ts, Actor: "admin", Action: "approve", Resource: "h1"}},
+		Audit:  []facts.HostAuditEvent{{Sequence: 1, At: ts, Actor: "admin", Action: "approve", Resource: "h1"}},
 		Error:  "boom",
 	}
 	out, err := json.Marshal(resp)
@@ -36,7 +36,7 @@ func TestControlResponseWireShape(t *testing.T) {
 		`"hosts":[{"id":"h2","revision":1,"status":"pending","host":{"names":["c"],"labels":null,"accounts":null,"principal-mode":"account-name"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"}],`+
 		`"token":{"id":"t1","expires-at":"2026-09-18T12:00:00Z","used-by":"h1","revoked":true},`+
 		`"tokens":[{"id":"t2","expires-at":"2026-09-18T12:00:00Z","revoked":false}],`+
-		`"audit":[{"at":"2026-09-18T12:00:00Z","actor":"admin","action":"approve","resource":"h1"}],`+
+		`"audit":[{"sequence":1,"at":"2026-09-18T12:00:00Z","actor":"admin","action":"approve","resource":"h1"}],`+
 		`"error":"boom"}`, string(out))
 }
 

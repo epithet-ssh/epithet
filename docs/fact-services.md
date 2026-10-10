@@ -189,6 +189,26 @@ exact records take precedence over pattern records. A pattern match exposes the
 requested hostname as its resource name. If multiple active patterns match, lookup
 fails with a conflict rather than selecting one by order.
 Removing a managed host also deletes its names, token metadata, and audit history.
+
+Inventory administration returns bounded pages: 100 records by default, with a
+maximum of 1,000. `inventory list` and `inventory token list` accept `--after FULL_ID`
+and `--limit N`; `inventory list --pending` filters before applying the page limit.
+Host pages are selected by ID, then sorted by name for display. A full host page
+prints its continuation ID to stderr, preserving the concise stdout table.
+Token pages include their full IDs in YAML. Continue from the last ID in a token
+page; for hosts, use the continuation ID rather than the last displayed name.
+
+`inventory audit --after SEQUENCE --limit N` uses the same page bounds. Events
+include a stable, increasing `sequence`; timestamps do not define pagination.
+Sequences are never reused after deletion or restart. The last event's sequence
+is the next cursor. An empty page ends enumeration; separate pages may observe
+concurrent changes. A full page can be followed by an empty one.
+
+Control requests use `after`, `limit`, and `pending` for host lists, `after` and
+`limit` for token lists, and `audit-after` and `audit-limit` for inventory or
+directory audit. Zero limits select the default; negative or oversized limits
+are rejected. Each database query applies its limit before loading the page.
+
 Host inventory has no static mode or file overlay. Each editable proposal contains
 either `names` (1–64 exact DNS names) or `pattern`, never both. Patterns use the
 same DNS-label matching language as Writ host selectors: `*` and `?` within a

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
@@ -105,9 +104,10 @@ func storageError(err error) error {
 	return fmt.Errorf("%w: %w", inventory.ErrStorage, err)
 }
 
-// hostIDs closes its cursor before callers read each host on the same connection.
-func hostIDs(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT id FROM hosts ORDER BY id")
+// hostIDs reads one bounded page and closes its cursor before callers read each
+// host on the same connection.
+func hostIDs(ctx context.Context, tx *sql.Tx, after string, limit int, pending bool) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM hosts WHERE id>? AND (?=0 OR status='pending') ORDER BY id LIMIT ?", after, pending, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -238,35 +238,42 @@ func (m *Store) validate() error {
 	if _, err = inventoryRevision(ctx, tx); err != nil {
 		return err
 	}
-	ids, err := hostIDs(ctx, tx)
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		h, err := readHost(ctx, tx, id)
+	after := ""
+	for {
+		ids, err := hostIDs(ctx, tx, after, inventory.MaxPageLimit, false)
 		if err != nil {
 			return err
 		}
-		t, err := readToken(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if t != nil && (t.ExpiresAt.IsZero() || t.UsedBy == "" && !t.Revoked && h.Status != "pending") {
-			return fmt.Errorf("%s: invalid token metadata", id)
-		}
-		if !(emptyProposal(h.Proposal) && t != nil && t.UsedBy == "" && h.Status != "active") {
-			if err = h.Proposal.Validate(); err != nil {
-				return fmt.Errorf("%s: %w", id, err)
-			}
-		}
-		if h.Status == "active" {
-			if err = m.checkRealm(ctx, tx, h.Proposal, id); err != nil {
+		for _, id := range ids {
+			h, err := readHost(ctx, tx, id)
+			if err != nil {
 				return err
 			}
-			if err = checkNames(ctx, tx, h.Proposal, id); err != nil {
+			t, err := readToken(ctx, tx, id)
+			if err != nil {
 				return err
 			}
+			if t != nil && (t.ExpiresAt.IsZero() || t.UsedBy == "" && !t.Revoked && h.Status != "pending") {
+				return fmt.Errorf("%s: invalid token metadata", id)
+			}
+			if !(emptyProposal(h.Proposal) && t != nil && t.UsedBy == "" && h.Status != "active") {
+				if err = h.Proposal.Validate(); err != nil {
+					return fmt.Errorf("%s: %w", id, err)
+				}
+			}
+			if h.Status == "active" {
+				if err = m.checkRealm(ctx, tx, h.Proposal, id); err != nil {
+					return err
+				}
+				if err = checkNames(ctx, tx, h.Proposal, id); err != nil {
+					return err
+				}
+			}
 		}
+		if len(ids) == 0 {
+			break
+		}
+		after = ids[len(ids)-1]
 	}
 	return tx.Commit()
 }
@@ -318,13 +325,15 @@ func saveHost(ctx context.Context, tx *sql.Tx, h *inventory.HostRecord, create b
 // finish commits the mutation, audit, and inventory revision together. Removal
 // keeps the existing contract: cascading deletion also removes the host's audit.
 func finish(ctx context.Context, tx *sql.Tx, id, actor, action string) error {
-	if action != "remove" {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO audit (host_id,time,actor,action) VALUES (?,?,?,?)", id, time.Now().UTC().Format(time.RFC3339Nano), actor, action); err != nil {
-			return storageError(err)
-		}
-	}
 	if _, err := tx.ExecContext(ctx, "UPDATE state SET revision=revision+1 WHERE singleton=1"); err != nil {
 		return storageError(err)
+	}
+	if action != "remove" {
+		// The persistent revision counter survives audit deletion. Using it as
+		// the event sequence prevents a deleted last event's cursor being reused.
+		if _, err := tx.ExecContext(ctx, "INSERT INTO audit (sequence,host_id,time,actor,action) SELECT revision,?,?,?,? FROM state WHERE singleton=1", id, time.Now().UTC().Format(time.RFC3339Nano), actor, action); err != nil {
+			return storageError(err)
+		}
 	}
 	return storageError(tx.Commit())
 }
@@ -407,37 +416,45 @@ func (m *Store) checkRealm(ctx context.Context, tx *sql.Tx, p inventory.Proposal
 	if realm == "" {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id FROM hosts WHERE status='active' AND realm=? AND id<>? ORDER BY id", p.Realm, except)
-	if err != nil {
-		return storageError(err)
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
+	after := ""
+	for {
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM hosts WHERE status='active' AND realm=? AND id<>? AND id>? ORDER BY id LIMIT ?", p.Realm, except, after, inventory.MaxPageLimit)
+		if err != nil {
+			return storageError(err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				break
+			}
+			ids = append(ids, id)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return storageError(err)
+		}
+		for _, id := range ids {
+			if realm.IsGeneratedHost() {
+				return fmt.Errorf("%w: principal realm is already active on host %s", inventory.ErrConflict, id)
+			}
+			member, err := readHost(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if !sameAuthorization(member.Proposal.Labels, member.Proposal.Accounts, p.Labels, p.Accounts) {
+				return fmt.Errorf("%w: realm %q has different authorization attributes from host %s", inventory.ErrConflict, realm, id)
+			}
+		}
+		if len(ids) == 0 {
 			break
 		}
-		ids = append(ids, id)
+		after = ids[len(ids)-1]
 	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
-	if err != nil {
-		return storageError(err)
-	}
-	for _, id := range ids {
-		if realm.IsGeneratedHost() {
-			return fmt.Errorf("%w: principal realm is already active on host %s", inventory.ErrConflict, id)
-		}
-		member, err := readHost(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if !sameAuthorization(member.Proposal.Labels, member.Proposal.Accounts, p.Labels, p.Accounts) {
-			return fmt.Errorf("%w: realm %q has different authorization attributes from host %s", inventory.ErrConflict, realm, id)
-		}
-	}
+
 	return nil
 }
 
@@ -609,13 +626,17 @@ func (m *Store) Get(ctx context.Context, id string) (*inventory.HostRecord, erro
 	return h, storageError(tx.Commit())
 }
 
-func (m *Store) List(ctx context.Context) ([]inventory.HostRecord, error) {
+func (m *Store) List(ctx context.Context, after string, limit int, pending bool) ([]inventory.HostRecord, error) {
+	limit, err := recordPage(after, limit)
+	if err != nil {
+		return nil, err
+	}
 	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	ids, err := hostIDs(ctx, tx)
+	ids, err := hostIDs(ctx, tx, after, limit, pending)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -655,8 +676,12 @@ func (m *Store) CreateToken(ctx context.Context, actor string, lifetime time.Dur
 	return token, finish(ctx, tx, id, actor, "token-create")
 }
 
-func (m *Store) Tokens(ctx context.Context) ([]inventory.EnrollmentToken, error) {
-	rows, err := m.db.QueryContext(ctx, "SELECT host_id,expires,used,revoked FROM tokens ORDER BY host_id")
+func (m *Store) Tokens(ctx context.Context, after string, limit int) ([]inventory.EnrollmentToken, error) {
+	limit, err := recordPage(after, limit)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := m.db.QueryContext(ctx, "SELECT host_id,expires,used,revoked FROM tokens WHERE host_id>? ORDER BY host_id LIMIT ?", after, limit)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -702,8 +727,12 @@ func (m *Store) RevokeToken(ctx context.Context, actor, id string) error {
 	return finish(ctx, tx, id, actor, "token-revoke")
 }
 
-func (m *Store) Audit(ctx context.Context) ([]inventory.AuditEvent, error) {
-	rows, err := m.db.QueryContext(ctx, "SELECT time,actor,action,host_id FROM audit ORDER BY sequence")
+func (m *Store) Audit(ctx context.Context, after inventory.AuditSequence, limit int) ([]inventory.AuditEvent, error) {
+	limit, err := pageLimit(limit)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := m.db.QueryContext(ctx, "SELECT sequence,time,actor,action,host_id FROM audit WHERE sequence>? ORDER BY sequence LIMIT ?", after, limit)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -712,7 +741,7 @@ func (m *Store) Audit(ctx context.Context) ([]inventory.AuditEvent, error) {
 	for rows.Next() {
 		var e inventory.AuditEvent
 		var at string
-		if err = rows.Scan(&at, &e.Actor, &e.Action, &e.Resource); err != nil {
+		if err = rows.Scan(&e.Sequence, &at, &e.Actor, &e.Action, &e.Resource); err != nil {
 			return nil, storageError(err)
 		}
 		if e.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
@@ -720,12 +749,6 @@ func (m *Store) Audit(ctx context.Context) ([]inventory.AuditEvent, error) {
 		}
 		events = append(events, e)
 	}
-	slices.SortStableFunc(events, func(a, b inventory.AuditEvent) int {
-		if c := a.At.Compare(b.At); c != 0 {
-			return c
-		}
-		return strings.Compare(a.Resource, b.Resource)
-	})
 	return events, storageError(rows.Err())
 }
 
@@ -812,7 +835,7 @@ func validID(id string) bool {
 	return true
 }
 
-// empty identifies a reservation that has not supplied any host attributes yet.
+// emptyProposal identifies a reservation that has not supplied any host attributes yet.
 // It is permitted only on non-active host records with enrollment metadata.
 func emptyProposal(p inventory.Proposal) bool {
 	return p.Names == nil && p.Pattern == "" && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Realm == ""
@@ -828,4 +851,23 @@ func sameAuthorization(previousLabels map[string]string, previousAccounts []stri
 	slices.Sort(previous)
 	slices.Sort(proposed)
 	return slices.Equal(previous, proposed)
+}
+
+// Page bounds apply before reading rows, so memory use does not grow with the
+// number of stored records. IDs are already canonical hexadecimal strings.
+func recordPage(after string, limit int) (int, error) {
+	if after != "" && !validID(after) {
+		return 0, fmt.Errorf("after must be a full record ID")
+	}
+	return pageLimit(limit)
+}
+
+func pageLimit(limit int) (int, error) {
+	if limit == 0 {
+		return inventory.DefaultPageLimit, nil
+	}
+	if limit < 1 || limit > inventory.MaxPageLimit {
+		return 0, fmt.Errorf("limit must be between 1 and %d", inventory.MaxPageLimit)
+	}
+	return limit, nil
 }

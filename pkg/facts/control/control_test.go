@@ -15,6 +15,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
@@ -55,7 +56,7 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 			}
 		})
 	}
-	hosts, err := store.List(t.Context())
+	hosts, err := store.List(t.Context(), "", 0, false)
 	require.NoError(t, err)
 	require.Len(t, hosts, 3, "invalid input must never reach enrollment")
 }
@@ -114,7 +115,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", response.Host.Status)
-	audit, err := m.Audit(t.Context())
+	audit, err := m.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, "directory-admin", audit[len(audit)-1].Actor)
 	pattern := facts.Proposal{Pattern: "ci-*.example", Accounts: []string{"root"}, PrincipalMode: "epithet-principal-v1", Realm: "CIRunners"}
@@ -273,4 +274,100 @@ func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
 	_, status, err = client.Control(t.Context(), "", facts.ControlRequest{Action: "directory-audit", AuditAfter: after})
 	require.Error(t, err)
 	require.Equal(t, 401, status)
+}
+
+func TestInventoryPaginationThroughPublicControl(t *testing.T) {
+	users, err := sqlitestore.Open(filepath.Join(t.TempDir(), "directory.db"))
+	require.NoError(t, err)
+	defer users.Close()
+	_, err = users.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:admin", UserName: "admin", Active: true})
+	require.NoError(t, err)
+	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
+	require.NoError(t, err)
+	defer hosts.Close()
+	// The total audit exceeds the transport cap; each default page fits. The
+	// real stores and both HTTP planes must preserve cursors and page limits.
+	for n := 0; n < 130; n++ {
+		_, err = hosts.CreateToken(t.Context(), strings.Repeat("x", 70<<10), time.Hour)
+		require.NoError(t, err)
+	}
+	first, err := hosts.List(t.Context(), "", 1, false)
+	require.NoError(t, err)
+	p := inventory.Proposal{Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
+	h, err := hosts.Change(t.Context(), "admin", "edit", first[0].ID, first[0].Revision, &p)
+	require.NoError(t, err)
+	_, err = hosts.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+	require.NoError(t, err)
+	idp := oidctest.New(t)
+	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	require.NoError(t, err)
+	server := controltest.New(t, users, users, hosts, control.Config{Validator: validator, InventoryAdmins: control.Admins{Users: []string{"subject:admin"}}})
+	client, err := facts.NewAdminClient(server.URL+"/manage", tlsconfig.Config{Insecure: true})
+	require.NoError(t, err)
+	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
+	var after uint64
+	var count, bytes int
+	for {
+		r, _, err := client.Control(t.Context(), token, facts.ControlRequest{Action: "audit", AuditAfter: after})
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(r.Audit), inventory.DefaultPageLimit)
+		if len(r.Audit) == 0 {
+			break
+		}
+		for _, event := range r.Audit {
+			require.Greater(t, event.Sequence, after)
+			after = event.Sequence
+		}
+		data, err := json.Marshal(r.Audit)
+		require.NoError(t, err)
+		bytes += len(data)
+		count += len(r.Audit)
+	}
+	require.Equal(t, 132, count)
+	require.Greater(t, bytes, facts.MaxControlResponse)
+	for _, action := range []string{"list", "token-list"} {
+		var after string
+		count := 0
+		for {
+			r, _, err := client.Control(t.Context(), token, facts.ControlRequest{Action: action, After: after, Limit: 37})
+			require.NoError(t, err)
+			var ids []string
+			for _, h := range r.Hosts {
+				ids = append(ids, h.ID)
+			}
+			for _, token := range r.Tokens {
+				ids = append(ids, token.ID)
+			}
+			require.LessOrEqual(t, len(ids), 37)
+			if len(ids) == 0 {
+				break
+			}
+			for _, id := range ids {
+				require.Greater(t, id, after)
+				after = id
+			}
+			count += len(ids)
+		}
+		require.Equal(t, 130, count)
+		_, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: action, After: after})
+		require.Error(t, err)
+		require.Equal(t, 401, status)
+	}
+	r, _, err := client.Control(t.Context(), token, facts.ControlRequest{Action: "list", Pending: true, Limit: 3})
+	require.NoError(t, err)
+	require.Len(t, r.Hosts, 3)
+	for _, h := range r.Hosts {
+		require.Equal(t, "pending", h.Status)
+	}
+	for _, req := range []facts.ControlRequest{
+		{Action: "audit", AuditLimit: inventory.MaxPageLimit + 1},
+		{Action: "audit", AuditLimit: -1},
+		{Action: "list", Limit: inventory.MaxPageLimit + 1},
+		{Action: "token-list", Limit: -1},
+		{Action: "list", After: "short"},
+	} {
+		_, status, err := client.Control(t.Context(), token, req)
+		require.Error(t, err)
+		require.Equal(t, 400, status)
+	}
 }

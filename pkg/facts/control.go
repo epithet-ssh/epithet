@@ -255,9 +255,10 @@ func (c *ControlClient) host(ctx context.Context, auth Authorization, request Co
 	return result.Host, nil
 }
 
-// Hosts lists managed records, including pending and denied records.
-func (c *ControlClient) Hosts(ctx context.Context, auth Authorization) ([]HostRecord, error) {
-	result, err := c.call(ctx, c.inventory, auth, ControlRequest{Action: "list"})
+// Hosts returns one ID-ordered page of managed records, optionally restricted
+// to pending records. Empty after starts enumeration; zero limit defaults to 100.
+func (c *ControlClient) Hosts(ctx context.Context, auth Authorization, after string, limit int, pending bool) ([]HostRecord, error) {
+	result, err := c.call(ctx, c.inventory, auth, ControlRequest{Action: "list", After: after, Limit: limit, Pending: pending})
 	if err != nil {
 		return nil, err
 	}
@@ -277,9 +278,10 @@ func (c *ControlClient) CreateToken(ctx context.Context, auth Authorization, lif
 	return result.Token, nil
 }
 
-// Tokens lists enrollment tokens, including used and revoked tokens.
-func (c *ControlClient) Tokens(ctx context.Context, auth Authorization) ([]EnrollmentToken, error) {
-	result, err := c.call(ctx, c.inventory, auth, ControlRequest{Action: "token-list"})
+// Tokens returns one ID-ordered page of enrollment tokens, including used and
+// revoked tokens. Empty after starts enumeration; zero limit defaults to 100.
+func (c *ControlClient) Tokens(ctx context.Context, auth Authorization, after string, limit int) ([]EnrollmentToken, error) {
+	result, err := c.call(ctx, c.inventory, auth, ControlRequest{Action: "token-list", After: after, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -292,9 +294,10 @@ func (c *ControlClient) RevokeToken(ctx context.Context, auth Authorization, id 
 	return err
 }
 
-// HostAudit returns the inventory administration audit events.
-func (c *ControlClient) HostAudit(ctx context.Context, auth Authorization) ([]HostAuditEvent, error) {
-	result, err := c.call(ctx, c.inventory, auth, ControlRequest{Action: "audit"})
+// HostAudit returns one page of inventory events after an exclusive sequence
+// cursor. Zero starts at the beginning; zero limit defaults to 100.
+func (c *ControlClient) HostAudit(ctx context.Context, auth Authorization, after uint64, limit int) ([]HostAuditEvent, error) {
+	result, err := c.call(ctx, c.inventory, auth, ControlRequest{Action: "audit", AuditAfter: after, AuditLimit: limit})
 	if err != nil {
 		return nil, err
 	}

@@ -42,7 +42,7 @@ func TestManagedTokenRedemptionRollsBackAllState(t *testing.T) {
 	require.NoError(t, err)
 	before, err := m.Get(t.Context(), token.ID)
 	require.NoError(t, err)
-	auditBefore, err := m.Audit(t.Context())
+	auditBefore, err := m.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	_, revisionBefore, err := m.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
@@ -61,10 +61,10 @@ func TestManagedTokenRedemptionRollsBackAllState(t *testing.T) {
 	current, err := restarted.Get(t.Context(), token.ID)
 	require.NoError(t, err)
 	require.Equal(t, before, current)
-	tokens, err := restarted.Tokens(t.Context())
+	tokens, err := restarted.Tokens(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, []inventory.EnrollmentToken{token}, tokens)
-	auditAfter, err := restarted.Audit(t.Context())
+	auditAfter, err := restarted.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, auditBefore, auditAfter)
 	got, revisionAfter, err := restarted.LookupHost(t.Context(), "host")
@@ -86,7 +86,7 @@ func TestManagedRemovalRollsBackAndCascades(t *testing.T) {
 	p.Labels = map[string]string{"env": "test"}
 	h, err := m.Enroll(t.Context(), p, token.ID)
 	require.NoError(t, err)
-	auditBefore, err := m.Audit(t.Context())
+	auditBefore, err := m.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	_, revisionBefore, err := m.LookupHost(t.Context(), "alias")
 	require.NoError(t, err)
@@ -100,10 +100,10 @@ func TestManagedRemovalRollsBackAndCascades(t *testing.T) {
 	require.Equal(t, h.Proposal.Labels, got.Policy.Labels)
 	require.Equal(t, h.Proposal.Accounts, got.Policy.Accounts)
 	require.Equal(t, revisionBefore, revisionAfter)
-	auditAfter, err := m.Audit(t.Context())
+	auditAfter, err := m.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, auditBefore, auditAfter)
-	tokens, err := m.Tokens(t.Context())
+	tokens, err := m.Tokens(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Len(t, tokens, 1)
 	require.Equal(t, h.ID, tokens[0].UsedBy)
@@ -200,7 +200,7 @@ func TestManagedIDCollisionDoesNotOverwriteHost(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, next, token.ID)
 	require.Equal(t, 2, call)
-	tokens, err := m.Tokens(t.Context())
+	tokens, err := m.Tokens(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Contains(t, tokens, original)
 }
@@ -222,9 +222,9 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	token, err := m.CreateToken(t.Context(), "admin", time.Hour)
 	require.NoError(t, err)
-	records, err := m.List(t.Context())
+	records, err := m.List(t.Context(), "", 0, false)
 	require.NoError(t, err)
-	audit, err := m.Audit(t.Context())
+	audit, err := m.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	_, revision, err := m.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
@@ -238,11 +238,11 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 		{"add-pattern", func() error { _, err := m.AddPattern(ctx, "admin", patternProposal("*.example")); return err }},
 		{"approve", func() error { _, err := m.Change(ctx, "admin", "approve", host.ID, host.Revision, nil); return err }},
 		{"get", func() error { _, err := m.Get(ctx, host.ID); return err }},
-		{"list", func() error { _, err := m.List(ctx); return err }},
+		{"list", func() error { _, err := m.List(ctx, "", 0, false); return err }},
 		{"create-token", func() error { _, err := m.CreateToken(ctx, "admin", time.Hour); return err }},
-		{"tokens", func() error { _, err := m.Tokens(ctx); return err }},
+		{"tokens", func() error { _, err := m.Tokens(ctx, "", 0); return err }},
 		{"revoke-token", func() error { return m.RevokeToken(ctx, "admin", token.ID) }},
-		{"audit", func() error { _, err := m.Audit(ctx); return err }},
+		{"audit", func() error { _, err := m.Audit(ctx, 0, 0); return err }},
 		{"lookup", func() error { _, _, err := m.LookupHost(ctx, "host"); return err }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,16 +251,16 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 			require.ErrorIs(t, err, inventory.ErrStorage)
 		})
 	}
-	after, err := m.List(t.Context())
+	after, err := m.List(t.Context(), "", 0, false)
 	require.NoError(t, err)
 	require.Equal(t, records, after)
-	auditAfter, err := m.Audit(t.Context())
+	auditAfter, err := m.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, audit, auditAfter)
 	_, revisionAfter, err := m.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
 	require.Equal(t, revision, revisionAfter)
-	tokens, err := m.Tokens(t.Context())
+	tokens, err := m.Tokens(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, []inventory.EnrollmentToken{token}, tokens)
 }

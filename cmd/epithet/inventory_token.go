@@ -37,10 +37,13 @@ func (c *InventoryTokenCreateCLI) Run(p *InventoryCLI) error {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
-type InventoryTokenListCLI struct{}
+type InventoryTokenListCLI struct {
+	After string `help:"Return tokens after this full token ID"`
+	Limit int    `help:"Maximum tokens to return (1-1000; default 100)"`
+}
 
-func (*InventoryTokenListCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(facts.ControlRequest{Action: "token-list"})
+func (c *InventoryTokenListCLI) Run(p *InventoryCLI) error {
+	r, err := p.request(facts.ControlRequest{Action: "token-list", After: c.After, Limit: c.Limit})
 	if err != nil {
 		return err
 	}

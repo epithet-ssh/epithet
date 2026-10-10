@@ -47,5 +47,5 @@ func (t EnrollmentToken) ControlToken() facts.EnrollmentToken {
 
 // ControlEvent projects the audit event onto the control API.
 func (e AuditEvent) ControlEvent() facts.HostAuditEvent {
-	return facts.HostAuditEvent{At: e.At, Actor: e.Actor, Action: e.Action, Resource: e.Resource}
+	return facts.HostAuditEvent{Sequence: uint64(e.Sequence), At: e.At, Actor: e.Actor, Action: e.Action, Resource: e.Resource}
 }

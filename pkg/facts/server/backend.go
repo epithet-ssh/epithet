@@ -175,7 +175,7 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		resp.Host = controlRecord(h)
 	case "list":
 		var hosts []inventory.HostRecord
-		hosts, err = c.Store.List(r.Context())
+		hosts, err = c.Store.List(r.Context(), req.After, req.Limit, req.Pending)
 		resp.Hosts = controlSlice(hosts, inventory.HostRecord.ControlRecord)
 	case "get":
 		var h *inventory.HostRecord
@@ -205,13 +205,13 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		resp.Token = &token
 	case "token-list":
 		var tokens []inventory.EnrollmentToken
-		tokens, err = c.Store.Tokens(r.Context())
+		tokens, err = c.Store.Tokens(r.Context(), req.After, req.Limit)
 		resp.Tokens = controlSlice(tokens, inventory.EnrollmentToken.ControlToken)
 	case "token-revoke":
 		err = c.Store.RevokeToken(r.Context(), actor, req.ID)
 	case "audit":
 		var events []inventory.AuditEvent
-		events, err = c.Store.Audit(r.Context())
+		events, err = c.Store.Audit(r.Context(), inventory.AuditSequence(req.AuditAfter), req.AuditLimit)
 		resp.Audit = controlSlice(events, inventory.AuditEvent.ControlEvent)
 	default:
 		err = fmt.Errorf("unknown inventory action")

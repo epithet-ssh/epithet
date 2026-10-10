@@ -14,6 +14,13 @@ var (
 	ErrRevision = errors.New("record changed; reload before retrying")
 )
 
+const DefaultPageLimit = 100
+const MaxPageLimit = 1000
+
+// AuditSequence identifies one committed event independently of its timestamp.
+// Sequences increase and are never reused, including after record deletion.
+type AuditSequence uint64
+
 // Store owns managed inventory persistence and admission. Each mutation commits
 // the record, token changes, audit event, and inventory revision atomically.
 // Active exact names and patterns are unique; shared named realms require equal
@@ -43,17 +50,25 @@ type Store interface {
 	// deletes the record, its token, and its audit history.
 	Change(ctx context.Context, actor, action, id string, revision uint64, proposal *Proposal) (*HostRecord, error)
 	Get(ctx context.Context, id string) (*HostRecord, error)
-	// List includes all statuses, ordered by record ID.
-	List(context.Context) ([]HostRecord, error)
+	// List returns at most limit records after the exclusive full-ID cursor,
+	// ordered by ID. pending restricts results before applying the limit.
+	// Empty after starts at the beginning. Zero limit uses DefaultPageLimit;
+	// negative limits or limits above MaxPageLimit are invalid. An empty page
+	// ends enumeration. A short page means no further matching records exist in
+	// that snapshot. Each page is coherent; separate pages may see changes.
+	List(ctx context.Context, after string, limit int, pending bool) ([]HostRecord, error)
 	// CreateToken reserves an empty pending record for single-use preapproval.
 	// Lifetime must be positive and no more than 24 hours. The token's ID is the
 	// reserved host ID; redemption preserves its creation time.
 	CreateToken(ctx context.Context, actor string, lifetime time.Duration) (EnrollmentToken, error)
-	// Tokens includes used, revoked, and expired tokens, ordered by ID.
-	Tokens(context.Context) ([]EnrollmentToken, error)
+	// Tokens includes used, revoked, and expired tokens, ordered by ID, with
+	// the same exclusive full-ID cursor and page limits as List.
+	Tokens(ctx context.Context, after string, limit int) ([]EnrollmentToken, error)
 	RevokeToken(ctx context.Context, actor, id string) error
-	// Audit returns surviving events ordered by time, then resource ID.
-	Audit(context.Context) ([]AuditEvent, error)
+	// Audit returns at most limit surviving events after the exclusive sequence
+	// cursor, in sequence order. Zero after starts at the beginning. Page limits
+	// are the same as List; an empty page means the reader is caught up.
+	Audit(ctx context.Context, after AuditSequence, limit int) ([]AuditEvent, error)
 	Close() error
 }
 
@@ -78,8 +93,9 @@ type EnrollmentToken struct {
 }
 
 type AuditEvent struct {
-	At       time.Time `yaml:"at"`
-	Actor    string    `yaml:"actor"`
-	Action   string    `yaml:"action"`
-	Resource string    `yaml:"resource"`
+	Sequence AuditSequence `yaml:"sequence"`
+	At       time.Time     `yaml:"at"`
+	Actor    string        `yaml:"actor"`
+	Action   string        `yaml:"action"`
+	Resource string        `yaml:"resource"`
 }

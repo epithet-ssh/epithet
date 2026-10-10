@@ -75,7 +75,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		}
 
 	}
-	events, err := hosts.Audit(t.Context())
+	events, err := hosts.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, "subject:inventory-admin", events[len(events)-1].Actor)
 	// The provisioning bearer belongs to public control only, never the backend.
@@ -160,7 +160,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	require.Equal(t, 200, status)
 	require.Equal(t, record.ID, enrolled.Host.ID)
 	require.Equal(t, "active", enrolled.Host.Status)
-	events, err := hosts.Audit(t.Context())
+	events, err := hosts.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, "host", events[len(events)-1].Actor)
 }

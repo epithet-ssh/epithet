@@ -215,7 +215,7 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth fac
 		}
 		result.Host, err = s.control.AddPattern(ctx, auth, *req.Host)
 	case "list":
-		result.Hosts, err = s.control.Hosts(ctx, auth)
+		result.Hosts, err = s.control.Hosts(ctx, auth, req.After, req.Limit, req.Pending)
 	case "get":
 		result.Host, err = s.control.Host(ctx, auth, req.ID)
 	case "edit":
@@ -232,11 +232,11 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth fac
 	case "token-create":
 		result.Token, err = s.control.CreateToken(ctx, auth, req.LifetimeSeconds)
 	case "token-list":
-		result.Tokens, err = s.control.Tokens(ctx, auth)
+		result.Tokens, err = s.control.Tokens(ctx, auth, req.After, req.Limit)
 	case "token-revoke":
 		err = s.control.RevokeToken(ctx, auth, req.ID)
 	case "audit":
-		result.Audit, err = s.control.HostAudit(ctx, auth)
+		result.Audit, err = s.control.HostAudit(ctx, auth, req.AuditAfter, req.AuditLimit)
 	case "directory-users":
 		result.DirectoryUsers, err = s.control.Users(ctx, auth)
 	case "directory-groups":

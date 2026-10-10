@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -76,4 +77,26 @@ func TestDirectoryAuditPaginationFlags(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 9007199254740993, root.Directory.Groups.Audit.After)
 	require.Equal(t, 25, root.Directory.Groups.Audit.Limit)
+}
+
+func TestInventoryPaginationFlags(t *testing.T) {
+	var root struct {
+		Inventory InventoryCLI `cmd:"inventory"`
+	}
+	parser, err := kong.New(&root)
+	require.NoError(t, err)
+	_, err = parser.Parse([]string{"inventory", "audit", "--after", "9007199254740993", "--limit", "25"})
+	require.NoError(t, err)
+	require.EqualValues(t, 9007199254740993, root.Inventory.Audit.After)
+	require.Equal(t, 25, root.Inventory.Audit.Limit)
+	id := strings.Repeat("a", 64)
+	_, err = parser.Parse([]string{"inventory", "list", "--after", id, "--limit", "25", "--pending"})
+	require.NoError(t, err)
+	require.Equal(t, id, root.Inventory.List.After)
+	require.Equal(t, 25, root.Inventory.List.Limit)
+	require.True(t, root.Inventory.List.Pending)
+	_, err = parser.Parse([]string{"inventory", "token", "list", "--after", id, "--limit", "25"})
+	require.NoError(t, err)
+	require.Equal(t, id, root.Inventory.Token.List.After)
+	require.Equal(t, 25, root.Inventory.Token.List.Limit)
 }

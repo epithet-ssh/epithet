@@ -67,40 +67,55 @@ func (c *InventoryCLI) find(id string) (*facts.HostRecord, error) {
 		return response.Host, nil
 	}
 
-	resp, err := c.request(facts.ControlRequest{Action: "list"})
-	if err != nil {
-		return nil, err
-	}
-	var matches []facts.HostRecord
-	for _, h := range resp.Hosts {
-		if h.ID == id {
-			return &h, nil
+	var match *facts.HostRecord
+	after := ""
+	for {
+		resp, err := c.request(facts.ControlRequest{Action: "list", After: after, Limit: inventory.DefaultPageLimit})
+		if err != nil {
+			return nil, err
 		}
-		match := strings.HasPrefix(h.ID, id) || h.Proposal.Pattern == id
-		for _, n := range h.Proposal.Names {
-			match = match || n == id
+		for _, h := range resp.Hosts {
+			matches := strings.HasPrefix(h.ID, id) || h.Proposal.Pattern == id
+			for _, n := range h.Proposal.Names {
+				matches = matches || n == id
+			}
+			if matches {
+				if match != nil {
+					return nil, fmt.Errorf("ambiguous host; use the full record ID")
+				}
+				copy := h
+				match = &copy
+			}
 		}
-		if match {
-			matches = append(matches, h)
+		if len(resp.Hosts) < inventory.DefaultPageLimit {
+			break
 		}
+		next := resp.Hosts[len(resp.Hosts)-1].ID
+		if next <= after {
+			return nil, fmt.Errorf("inventory pagination did not advance")
+		}
+		after = next
 	}
-	if len(matches) == 1 {
-		return &matches[0], nil
-	}
-	if len(matches) > 1 {
-		return nil, fmt.Errorf("ambiguous host; use the full record ID")
+	if match != nil {
+		return match, nil
 	}
 	return nil, inventory.ErrNotFound
 }
 
 type InventoryListCLI struct {
-	Pending bool `help:"Show only pending requests"`
+	After   string `help:"Return records after this full record ID"`
+	Limit   int    `help:"Maximum records to return (1-1000; default 100)"`
+	Pending bool   `help:"Show only pending requests"`
 }
 
 func (c *InventoryListCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(facts.ControlRequest{Action: "list"})
+	r, err := p.request(facts.ControlRequest{Action: "list", After: c.After, Limit: c.Limit, Pending: c.Pending})
 	if err != nil {
 		return err
+	}
+	next := ""
+	if len(r.Hosts) > 0 {
+		next = r.Hosts[len(r.Hosts)-1].ID
 	}
 	displayNames := func(h facts.HostRecord) string {
 		if h.Proposal.Pattern != "" {
@@ -115,9 +130,6 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 	for _, h := range r.Hosts {
-		if c.Pending && h.Status != "pending" {
-			continue
-		}
 		id := h.ID
 		if len(id) == 64 {
 			id = id[:12]
@@ -125,6 +137,13 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 		if _, err := fmt.Fprintf(os.Stdout, "%s\t%s\t%s\n", id, h.Status, displayNames(h)); err != nil {
 			return err
 		}
+	}
+	limit := c.Limit
+	if limit == 0 {
+		limit = inventory.DefaultPageLimit
+	}
+	if len(r.Hosts) == limit {
+		fmt.Fprintf(os.Stderr, "Continue with --after %s\n", next)
 	}
 	return nil
 }
@@ -275,10 +294,13 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 	return err
 }
 
-type InventoryAuditCLI struct{}
+type InventoryAuditCLI struct {
+	After uint64 `help:"Return events after this audit sequence"`
+	Limit int    `help:"Maximum events to return (1-1000; default 100)"`
+}
 
-func (*InventoryAuditCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(facts.ControlRequest{Action: "audit"})
+func (c *InventoryAuditCLI) Run(p *InventoryCLI) error {
+	r, err := p.request(facts.ControlRequest{Action: "audit", AuditAfter: c.After, AuditLimit: c.Limit})
 	if err != nil {
 		return err
 	}
