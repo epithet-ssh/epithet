@@ -37,7 +37,7 @@ func TestClientPackagesDoNotLinkServers(t *testing.T) {
 		module + "pkg/ca",
 		module + "pkg/caserver",
 		module + "pkg/controlplane",
-		module + "pkg/factservice",
+		module + "pkg/facts",
 		module + "pkg/policyserver",
 		module + "pkg/inventory",
 		module + "pkg/directory",

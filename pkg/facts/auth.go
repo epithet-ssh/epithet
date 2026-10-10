@@ -1,7 +1,4 @@
-// Package serviceauth mints and verifies short-lived, request-bound JWTs
-// that authenticate CA requests to private services. Each service has a
-// distinct audience and verifies the token against the CA SSH public key.
-package serviceauth
+package facts
 
 import (
 	"crypto/ecdsa"

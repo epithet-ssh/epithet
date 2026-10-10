@@ -11,10 +11,10 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/policyserver/writpolicy"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -28,9 +28,9 @@ func TestMinimalCustomFactsAndOptionalUserName(t *testing.T) {
 	require.NoError(t, err)
 	userKey, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	userVerifier, err := serviceauth.NewVerifierFor(pub, serviceauth.DirectoryAudience)
+	userVerifier, err := facts.NewVerifierFor(pub, facts.DirectoryAudience)
 	require.NoError(t, err)
-	hostVerifier, err := serviceauth.NewVerifierFor(pub, serviceauth.InventoryAudience)
+	hostVerifier, err := facts.NewVerifierFor(pub, facts.InventoryAudience)
 	require.NoError(t, err)
 	token := idp.MintIDToken("alice", time.Now().Add(time.Hour))
 	directory := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

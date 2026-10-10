@@ -1,6 +1,8 @@
-// Package factservice defines the small issuance lookup contract. Providers do
-// not authenticate end users or implement administration to supply facts.
-package factservice
+// Package facts owns authenticated communication with directory and inventory
+// services, including issuance lookups and signed control requests. Providers
+// supply facts without authenticating end users or implementing administration.
+// Built-in database support lives in the independent storage subpackage.
+package facts
 
 import (
 	"bytes"

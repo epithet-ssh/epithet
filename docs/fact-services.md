@@ -91,7 +91,20 @@ APIs. These public keys are provisioned out of band; no shared user credential i
 sent to a fact provider.
 
 Each request has `Authorization: Bearer JWT`, signed with the calling service's
-SSH private key. `pkg/serviceauth` is the reference implementation:
+SSH private key. `pkg/facts` is the reference implementation. Its
+`NewDataClient` configures directory and inventory lookup endpoints and exposes
+only validated `User` and `Host` lookups. `NewControlClient` configures private
+backend endpoints and exposes typed administration and provisioning operations.
+Both select service audiences and own their signed HTTP transport internally;
+callers do not supply paths or manage HTTP response bodies. `Handler` authenticates
+readers and serves a directory or inventory source.
+
+Human control operations receive the already authorized actor and directory
+revision explicitly. Enrollment and SCIM provisioning keep their nonhuman
+credential semantics. Control results are domain records; rejected operations
+return `ServiceError`, with categories available through `errors.Is`. SCIM results
+retain the provisioning status, response body, ETag, location, and response format.
+The CLI-facing public `inventoryclient` continues to use user bearer credentials.
 
 | Claim | Meaning |
 |---|---|
@@ -109,6 +122,11 @@ uses PS256, and supported ECDSA curves use ES256/ES384. Preserve authority, esca
 path, and query through proxies. Rewriting any of them invalidates the signature.
 Tokens are request-bound but do not use a replay database. TLS remains necessary
 for remote services; Unix sockets are supported for local services.
+
+The built-in stores share database permissions and connection settings through
+`pkg/facts/storage`. Each store owns its schema, transactions, audit records, and
+authorization invariants. The storage package is independent of the fact-service
+HTTP handlers and the control plane.
 
 See [inventory-api.yaml](inventory-api.yaml) and
 [directory-api.yaml](directory-api.yaml) for response schemas, and

@@ -10,12 +10,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/policyserver"
 	"github.com/epithet-ssh/epithet/pkg/principal"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -24,13 +23,13 @@ import (
 
 // CA performs CA operations.
 type CA struct {
-	directory, inventory *factservice.Client
-	validator            *oidc.Validator
-	discovery            *wire.Discovery
-	evaluator            policyserver.PolicyEvaluator
-	signer               ssh.Signer
-	privateKey           sshcert.RawPrivateKey
-	logger               *slog.Logger
+	facts      *facts.DataClient
+	validator  *oidc.Validator
+	discovery  *wire.Discovery
+	evaluator  policyserver.PolicyEvaluator
+	signer     ssh.Signer
+	privateKey sshcert.RawPrivateKey
+	logger     *slog.Logger
 }
 
 // certParams are assembled by CA from trusted inventory and policy limits.
@@ -137,7 +136,7 @@ func (c *CA) FetchDiscovery(context.Context) (*wire.Discovery, error) {
 func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connection) (*authorization, error) {
 	ctx, cancel := context.WithTimeout(ctx, tlsconfig.DefaultTimeout)
 	defer cancel()
-	if c.validator == nil || c.directory == nil || c.inventory == nil || c.evaluator == nil {
+	if c.validator == nil || c.facts == nil || c.evaluator == nil {
 		return nil, fmt.Errorf("CA issuance is not configured")
 	}
 	claims, err := c.validator.Validate(ctx, token)
@@ -145,14 +144,14 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 		return nil, fmt.Errorf("%w: %w", ErrInvalidAuthentication, err)
 	}
 	name := hostpattern.NormalizeName(conn.RemoteHost)
-	user, err := c.directory.User(ctx, claims.UserID)
+	user, err := c.facts.User(ctx, claims.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: directory lookup: %w", ErrDependency, err)
 	}
 	if user == nil {
 		return nil, ErrAccessDenied
 	}
-	host, err := c.inventory.Host(ctx, name)
+	host, err := c.facts.Host(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("%w: inventory lookup: %w", ErrDependency, err)
 	}
@@ -270,11 +269,10 @@ func (c *CA) signPublicKey(rawPubKey sshcert.RawPublicKey, params *certParams) (
 func WithFacts(directoryURL, inventoryURL string, identity oidc.Config, discovery wire.AuthConfig, cfg tlsconfig.Config) Option {
 	return optionFunc(func(c *CA) error {
 		var err error
-		c.directory, err = factservice.NewClient(directoryURL, c.privateKey, serviceauth.DirectoryAudience, cfg)
-		if err != nil {
-			return err
+		if directoryURL == "" || inventoryURL == "" {
+			return fmt.Errorf("directory and inventory lookup endpoints are required")
 		}
-		c.inventory, err = factservice.NewClient(inventoryURL, c.privateKey, serviceauth.InventoryAudience, cfg)
+		c.facts, err = facts.NewDataClient(directoryURL, inventoryURL, c.privateKey, cfg)
 		if err != nil {
 			return err
 		}

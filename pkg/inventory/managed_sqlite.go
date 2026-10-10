@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/sqlitedb"
+	"github.com/epithet-ssh/epithet/pkg/facts/storage"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
@@ -30,7 +30,7 @@ type Managed struct {
 // OpenManaged opens a private SQLite database at path, creating its schema if
 // needed. Storage, schema, or validation errors fail startup.
 func OpenManaged(path string) (*Managed, error) {
-	db, err := sqlitedb.Open(path)
+	db, err := storage.Open(path)
 	if err != nil {
 		return nil, err
 	}

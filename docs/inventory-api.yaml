@@ -40,7 +40,7 @@ components:
         Request-bound JWT signed with a configured reader key. Audience is
         epithet-inventory. Verify the signature, audience, expiry, issued-at
         freshness, exact HTTP method, authority plus escaped path and raw query,
-        and unpadded base64url SHA256 body digest. See pkg/serviceauth.
+        and unpadded base64url SHA256 body digest. See pkg/facts.
   schemas:
     Revision:
       type: string

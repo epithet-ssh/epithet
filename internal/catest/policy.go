@@ -2,12 +2,14 @@
 package catest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -21,16 +23,30 @@ type HTTPPolicy struct {
 	TLS tlsconfig.Config
 }
 
-func (p HTTPPolicy) Evaluate(ctx context.Context, conn wire.Connection, facts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
-	c, err := serviceauth.NewClient(p.URL, p.Key, serviceauth.Audience, p.TLS)
+func (p HTTPPolicy) Evaluate(ctx context.Context, conn wire.Connection, policyFacts *wire.PolicyFacts) (*wire.PolicyResponse, error) {
+	client, err := tlsconfig.NewHTTPClient(p.TLS)
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(Request{Connection: conn, Facts: facts})
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	signer, err := facts.NewSigner(p.Key)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.Do(ctx, "POST", "", nil, data, "")
+	data, err := json.Marshal(Request{Connection: conn, Facts: policyFacts})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", p.URL, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cache-Control", "no-store")
+	if err = signer.Authorize(req, data); err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

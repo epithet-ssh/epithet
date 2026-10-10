@@ -1,4 +1,4 @@
-package serviceauth
+package facts
 
 import (
 	"net/http"

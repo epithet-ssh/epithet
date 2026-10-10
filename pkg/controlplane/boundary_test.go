@@ -13,13 +13,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
 	"github.com/epithet-ssh/epithet/pkg/inventoryclient"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -63,18 +62,19 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		f.Control.ServeHTTP(rec, req)
 		require.Equal(t, 400, rec.Code)
 	}
-	data := []byte(`{"request":{"action":"token-create"}}`)
 	for _, key := range []sshcert.RawPrivateKey{f.CAKey, f.ControlKey} {
-		private, err := serviceauth.NewClient(f.InventoryURL, key, serviceauth.InventoryAudience, tlsconfig.Config{Insecure: true})
+		private, err := facts.NewControlClient("", f.InventoryURL, key, tlsconfig.Config{Insecure: true})
 		require.NoError(t, err)
-		resp, err := private.Do(t.Context(), "POST", "/manage", nil, data, "subject:inventory-admin")
-		require.NoError(t, err)
-		resp.Body.Close()
+		_, err = private.CreateToken(t.Context(), facts.Authorization{Actor: "subject:inventory-admin"}, 0)
 		if key == f.CAKey {
-			require.Equal(t, 403, resp.StatusCode)
+			require.ErrorIs(t, err, facts.ErrDenied)
+			var rejected *facts.ServiceError
+			require.ErrorAs(t, err, &rejected)
+			require.Equal(t, 403, rejected.Status)
 		} else {
-			require.Equal(t, 200, resp.StatusCode)
+			require.NoError(t, err)
 		}
+
 	}
 	events, err := hosts.Audit()
 	require.NoError(t, err)
@@ -128,14 +128,14 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	defer hosts.Close()
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	verifier, err := serviceauth.NewVerifierFor(pub, serviceauth.DirectoryAudience)
+	verifier, err := facts.NewVerifierFor(pub, facts.DirectoryAudience)
 	require.NoError(t, err)
 	custom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, verifier.Verify(r, nil))
 		require.Equal(t, "/lookup", r.URL.Path)
 		require.Equal(t, "GET", r.Method)
 		require.Equal(t, "subject:admin", r.URL.Query().Get("id"))
-		json.NewEncoder(w).Encode(factservice.User{ID: "subject:admin"})
+		json.NewEncoder(w).Encode(facts.User{ID: "subject:admin"})
 	}))
 	defer custom.Close()
 	handler, err := (&controlplane.Backend{Store: hosts}).Handler(pub)

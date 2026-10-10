@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/epithet-ssh/epithet/pkg/controlplane"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -46,7 +46,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 			return err
 		}
 	}
-	handler, err := factservice.Handler(nil, managed, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
+	handler, err := facts.Handler(nil, managed, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
 	if err != nil {
 		return err
 	}

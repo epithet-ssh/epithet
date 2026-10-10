@@ -1,6 +1,7 @@
-package factservice_test
+package facts_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,9 +15,8 @@ import (
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -34,11 +34,11 @@ func TestDirectoryLookupContract(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	source := &users{active: true}
-	handler, err := factservice.Handler(source, nil, pub, "")
+	handler, err := facts.Handler(source, nil, pub, "")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	client, err := factservice.NewClient(server.URL, key, serviceauth.DirectoryAudience, tlsconfig.Config{Insecure: true})
+	client, err := facts.NewDataClient(server.URL, "", key, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	id := "opaque+id & slash/ ? こんにちは"
 	u, err := client.User(t.Context(), id)
@@ -51,7 +51,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	u, err = client.User(t.Context(), id)
 	require.NoError(t, err)
 	require.Nil(t, u, "same lookup must not reuse active facts")
-	signed, err := serviceauth.NewClient(server.URL, key, serviceauth.DirectoryAudience, tlsconfig.Config{Insecure: true})
+	signed, err := newSignedTestClient(server.URL, key, facts.DirectoryAudience)
 	require.NoError(t, err)
 	for _, id := range []string{"missing", "inactive"} {
 		resp, err := signed.Do(t.Context(), "GET", "/lookup", url.Values{"id": {id}}, nil, "")
@@ -70,7 +70,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, 400, resp.StatusCode)
-	wrong, err := serviceauth.NewClient(server.URL, key, serviceauth.InventoryAudience, tlsconfig.Config{Insecure: true})
+	wrong, err := newSignedTestClient(server.URL, key, facts.InventoryAudience)
 	require.NoError(t, err)
 	resp, err = wrong.Do(t.Context(), "GET", "/lookup", url.Values{"id": {"one"}}, nil, "")
 	require.NoError(t, err)
@@ -109,7 +109,11 @@ func TestBespokeProviderResponseValidation(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer server.Close()
-			client, err := factservice.NewClient(server.URL, key, serviceauth.DirectoryAudience, tlsconfig.Config{Insecure: true})
+			directoryURL, inventoryURL := server.URL, ""
+			if tc.host {
+				directoryURL, inventoryURL = "", server.URL
+			}
+			client, err := facts.NewDataClient(directoryURL, inventoryURL, key, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			if tc.host {
 				_, err = client.Host(t.Context(), "host")
@@ -138,7 +142,7 @@ func TestProviderStatusAndNoRedirects(t *testing.T) {
 				io.WriteString(w, `{"id":"id"}`)
 			}))
 			defer server.Close()
-			client, err := factservice.NewClient(server.URL, key, serviceauth.DirectoryAudience, tlsconfig.Config{Insecure: true})
+			client, err := facts.NewDataClient(server.URL, "", key, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			u, err := client.User(t.Context(), "id")
 			if status == 200 {
@@ -157,7 +161,7 @@ func TestProviderStatusAndNoRedirects(t *testing.T) {
 func TestUnixFactTransport(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	handler, err := factservice.Handler(&users{active: true}, nil, pub, "")
+	handler, err := facts.Handler(&users{active: true}, nil, pub, "")
 	require.NoError(t, err)
 	// A short directory is required for the macOS Unix socket path limit.
 	dir := t.TempDir()
@@ -169,7 +173,7 @@ func TestUnixFactTransport(t *testing.T) {
 	server := &http.Server{Handler: handler}
 	defer server.Close()
 	go server.Serve(listener)
-	client, err := factservice.NewClient("unix://"+path, key, serviceauth.DirectoryAudience, tlsconfig.Config{})
+	client, err := facts.NewDataClient("unix://"+path, "", key, tlsconfig.Config{})
 	require.NoError(t, err)
 	user, err := client.User(t.Context(), "id")
 	require.NoError(t, err)
@@ -182,7 +186,7 @@ func TestUnixFactTransport(t *testing.T) {
 func TestFactReaderAndControlKeysMustDiffer(t *testing.T) {
 	pub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	_, err = factservice.Handler(&users{active: true}, nil, pub, pub)
+	_, err = facts.Handler(&users{active: true}, nil, pub, pub)
 	require.ErrorContains(t, err, "distinct signing keys")
 }
 
@@ -193,9 +197,9 @@ func TestRevisionPreservesPresenceAndUTF8Bound(t *testing.T) {
 				var value any
 				data := `{"id":"id"` + revision + `}`
 				if kind == "user" {
-					value = &factservice.User{}
+					value = &facts.User{}
 				} else {
-					value = &factservice.Host{}
+					value = &facts.Host{}
 					data = `{"names":["host"],"accounts":null,"principal":{"mode":"account-name"}` + revision + `}`
 				}
 				require.NoError(t, json.Unmarshal([]byte(data), value))
@@ -211,7 +215,7 @@ func TestRevisionPreservesPresenceAndUTF8Bound(t *testing.T) {
 			})
 		}
 	}
-	var r factservice.Revision
+	var r facts.Revision
 	require.Error(t, json.Unmarshal([]byte{'"', 0xff, '"'}, &r))
 }
 
@@ -225,18 +229,18 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 		_, err = hosts.AddPattern("admin", inventory.Proposal{Pattern: pattern, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
 		require.NoError(t, err)
 	}
-	handler, err := factservice.Handler(nil, hosts, pub, "")
+	handler, err := facts.Handler(nil, hosts, pub, "")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	signed, err := serviceauth.NewClient(server.URL, key, serviceauth.InventoryAudience, tlsconfig.Config{Insecure: true})
+	signed, err := newSignedTestClient(server.URL, key, facts.InventoryAudience)
 	require.NoError(t, err)
 	resp, err := signed.Do(t.Context(), "GET", "/lookup", url.Values{"host": {"ci-one.example"}}, nil, "")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
-	client, err := factservice.NewClient(server.URL, key, serviceauth.InventoryAudience, tlsconfig.Config{Insecure: true})
+	client, err := facts.NewDataClient("", server.URL, key, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	h, err := client.Host(t.Context(), "ci-one.example")
 	require.Nil(t, h)
@@ -245,4 +249,30 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 	require.NoError(t, hosts.Close())
 	_, err = client.Host(t.Context(), "ci-one.example")
 	require.ErrorContains(t, err, "HTTP 503")
+}
+
+// signedTestClient sends malformed and cross-audience requests at the protocol
+// boundary. Raw HTTP stays test-only; production clients expose domain methods.
+type signedTestClient struct {
+	endpoint string
+	signer   *facts.Signer
+}
+
+func newSignedTestClient(endpoint string, key sshcert.RawPrivateKey, audience string) (*signedTestClient, error) {
+	signer, err := facts.NewSignerFor(key, audience)
+	if err != nil {
+		return nil, err
+	}
+	return &signedTestClient{endpoint: endpoint, signer: signer}, nil
+}
+func (c *signedTestClient) Do(ctx context.Context, method, path string, query url.Values, body []byte, actor string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.URL.RawQuery = query.Encode()
+	if err = c.signer.AuthorizeActor(req, body, actor); err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
 }

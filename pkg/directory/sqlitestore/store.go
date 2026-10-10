@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/sqlitedb"
 	"github.com/epithet-ssh/epithet/pkg/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/storage"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -27,7 +27,7 @@ func Open(path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("directory database path is required")
 	}
-	db, err := sqlitedb.Open(path)
+	db, err := storage.Open(path)
 	if err != nil {
 		return nil, err
 	}

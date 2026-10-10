@@ -1,9 +1,6 @@
-// Package sqlitedb owns the embedded database settings shared by fact services.
+// Package storage owns the database settings shared by the built-in fact stores.
 // Each service initializes its own schema and owns its transactions.
-package sqlitedb
-// <review>
-// `internal` thus far has only been used for testing stuff.
-// </review>
+package storage
 
 import (
 	"database/sql"

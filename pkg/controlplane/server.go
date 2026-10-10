@@ -5,20 +5,19 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -56,38 +55,30 @@ type Config struct {
 	TLS                                                    tlsconfig.Config
 }
 type Server struct {
-	config                             Config
-	directory                          *factservice.Client
-	directoryBackend, inventoryBackend *serviceauth.Client
-	mu                                 sync.Mutex
-	allowance                          float64
-	last                               time.Time
+	config    Config
+	data      *facts.DataClient
+	control   *facts.ControlClient
+	mu        sync.Mutex
+	allowance float64
+	last      time.Time
 }
 
 func New(config Config) (*Server, error) {
 	if config.Validator == nil {
 		return nil, fmt.Errorf("control OIDC validator is required")
 	}
-	c, err := factservice.NewClient(config.DirectoryURL, config.Key, serviceauth.DirectoryAudience, config.TLS)
+	data, err := facts.NewDataClient(config.DirectoryURL, "", config.Key, config.TLS)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{config: config, directory: c}
-	if config.DirectoryBackendURL != "" {
-		s.directoryBackend, err = serviceauth.NewClient(config.DirectoryBackendURL, config.Key, serviceauth.DirectoryAudience, config.TLS)
-		if err != nil {
-			return nil, err
-		}
+	control, err := facts.NewControlClient(config.DirectoryBackendURL, config.InventoryBackendURL, config.Key, config.TLS)
+	if err != nil {
+		return nil, err
 	}
-	if config.InventoryBackendURL != "" {
-		s.inventoryBackend, err = serviceauth.NewClient(config.InventoryBackendURL, config.Key, serviceauth.InventoryAudience, config.TLS)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if config.SCIMToken != "" && (s.directoryBackend == nil || strings.ContainsAny(config.SCIMToken, " \t\r\n")) {
+	if config.SCIMToken != "" && (config.DirectoryBackendURL == "" || strings.ContainsAny(config.SCIMToken, " \t\r\n")) {
 		return nil, fmt.Errorf("SCIM requires a directory backend and a bearer token without whitespace")
 	}
+	s := &Server{config: config, data: data, control: control}
 	return s, nil
 }
 func (s *Server) admit() bool {
@@ -147,13 +138,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isDirectory := strings.HasPrefix(req.Action, "directory-")
-	backend, admins := s.inventoryBackend, s.config.InventoryAdmins
+	endpoint, admins := s.config.InventoryBackendURL, s.config.InventoryAdmins
 	role := "inventory-admin"
 	if isDirectory {
-		backend, admins = s.directoryBackend, s.config.DirectoryAdmins
+		endpoint, admins = s.config.DirectoryBackendURL, s.config.DirectoryAdmins
 		role = "directory-admin"
 	}
-	if backend == nil {
+	if endpoint == "" {
 		controlError(w, 404, "requested inventory capability is not configured")
 		return
 	}
@@ -185,63 +176,94 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		actor, revision = u.ID, rev
 	}
-	data, err = json.Marshal(request{req, revision})
+	result, err := s.execute(r.Context(), req, facts.Authorization{Actor: actor, DirectoryRevision: revision})
 	if err != nil {
-		controlError(w, 400, "invalid control request")
+		var rejected *facts.ServiceError
+		if errors.As(err, &rejected) {
+			controlError(w, rejected.Status, rejected.Message)
+		} else {
+			controlError(w, 503, "control backend unavailable")
+		}
 		return
 	}
-	resp, err := backend.Do(r.Context(), "POST", "/manage", nil, data, actor)
-	s.forward(w, resp, err)
+	w.Header().Set("Content-Type", "application/json")
+	if req.Action == "enroll" && result.Host.Status == "pending" {
+		w.WriteHeader(http.StatusAccepted)
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+// execute adapts the public operation envelope to the typed private client.
+// Authentication and role checks precede this dispatch; the client owns the
+// signed backend protocol and returns only domain results.
+func (s *Server) execute(ctx context.Context, req inventoryapi.ControlRequest, auth facts.Authorization) (*inventoryapi.ControlResponse, error) {
+	var result inventoryapi.ControlResponse
+	var err error
+	invalid := func(message string) (*inventoryapi.ControlResponse, error) {
+		return nil, &facts.ServiceError{Status: 400, Message: message}
+	}
+	switch req.Action {
+	case "enroll":
+		if req.Host == nil {
+			return invalid("host proposal is required")
+		}
+		result.Host, err = s.control.Enroll(ctx, *req.Host, req.Token)
+	case "add-pattern":
+		if req.Host == nil {
+			return invalid("pattern proposal is required")
+		}
+		result.Host, err = s.control.AddPattern(ctx, auth, *req.Host)
+	case "list":
+		result.Hosts, err = s.control.Hosts(ctx, auth)
+	case "get":
+		result.Host, err = s.control.Host(ctx, auth, req.ID)
+	case "edit":
+		if req.Host == nil {
+			return invalid("host proposal is required")
+		}
+		result.Host, err = s.control.EditHost(ctx, auth, req.ID, req.Revision, *req.Host)
+	case "approve":
+		result.Host, err = s.control.ApproveHost(ctx, auth, req.ID, req.Revision)
+	case "deny":
+		result.Host, err = s.control.DenyHost(ctx, auth, req.ID, req.Revision)
+	case "remove":
+		err = s.control.RemoveHost(ctx, auth, req.ID, req.Revision)
+	case "token-create":
+		result.Token, err = s.control.CreateToken(ctx, auth, req.LifetimeSeconds)
+	case "token-list":
+		result.Tokens, err = s.control.Tokens(ctx, auth)
+	case "token-revoke":
+		err = s.control.RevokeToken(ctx, auth, req.ID)
+	case "audit":
+		result.Audit, err = s.control.HostAudit(ctx, auth)
+	case "directory-users":
+		result.DirectoryUsers, err = s.control.Users(ctx, auth)
+	case "directory-groups":
+		result.Directory, err = s.control.Bindings(ctx, auth)
+	case "directory-bind":
+		err = s.control.BindGroup(ctx, auth, req.Alias, req.ID, req.Revision)
+	case "directory-audit":
+		result.DirectoryAudit, err = s.control.DirectoryAudit(ctx, auth, req.AuditAfter, req.AuditLimit)
+	default:
+		return invalid("unknown inventory action")
+	}
+	return &result, err
 }
 func (s *Server) actor(ctx context.Context, id string) (*directory.User, directory.Revision, error) {
-	if s.directoryBackend != nil {
-		resp, err := s.directoryBackend.Do(ctx, "GET", "/actor", url.Values{"id": {id}}, nil, "")
-		if err != nil {
-			return nil, "", err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return nil, "", fmt.Errorf("actor lookup returned HTTP %d", resp.StatusCode)
-		}
-		var result actorFacts
-		dec := json.NewDecoder(io.LimitReader(resp.Body, wire.MaxBodySize))
-		if err := dec.Decode(&result); err != nil {
-			return nil, "", err
-		}
-		if result.User != nil && result.User.ID != id {
-			return nil, "", fmt.Errorf("actor identity mismatch")
-		}
-		return result.User, result.Revision, nil
+	if s.config.DirectoryBackendURL != "" {
+		return s.control.Actor(ctx, id)
 	}
-	u, err := s.directory.User(ctx, id)
+	u, err := s.data.User(ctx, id)
 	if err != nil || u == nil {
 		return nil, "", err
 	}
 	return &directory.User{ID: u.ID, UserName: u.UserName, Active: true, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}, "", nil
 }
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
-	result := inventoryapi.Capabilities{Version: 1, Capabilities: []string{"admin"}}
-	for _, backend := range []*serviceauth.Client{s.directoryBackend, s.inventoryBackend} {
-		if backend == nil {
-			continue
-		}
-		resp, err := backend.Do(r.Context(), "GET", "/manage", nil, nil, "")
-		if err != nil {
-			controlError(w, 503, "control backend unavailable")
-			return
-		}
-		var caps inventoryapi.Capabilities
-		err = json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&caps)
-		resp.Body.Close()
-		if err != nil || resp.StatusCode != 200 || caps.Version != 1 {
-			controlError(w, 503, "invalid backend capabilities")
-			return
-		}
-		for _, cap := range caps.Capabilities {
-			if !slices.Contains(result.Capabilities, cap) {
-				result.Capabilities = append(result.Capabilities, cap)
-			}
-		}
+	result, err := s.control.Capabilities(r.Context())
+	if err != nil {
+		controlError(w, 503, "control backend unavailable")
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
@@ -269,30 +291,20 @@ func (s *Server) scim(w http.ResponseWriter, r *http.Request) {
 		scimError(w, 413, "request too large")
 		return
 	}
-	// The signed envelope also binds SCIM preconditions and its query parameters.
-	data, err := json.Marshal(scimRequest{r.Method, r.URL.RequestURI(), r.Header.Get("Content-Type"), r.Header.Get("If-Match"), body})
-	if err != nil {
-		scimError(w, 400, "invalid request")
-		return
-	}
-	resp, err := s.directoryBackend.Do(r.Context(), "POST", "/scim", nil, data, "")
-	s.forward(w, resp, err)
-}
-func (s *Server) forward(w http.ResponseWriter, resp *http.Response, err error) {
+	result, err := s.control.Provision(r.Context(), facts.SCIMRequest{Method: r.Method, Target: r.URL.RequestURI(), ContentType: r.Header.Get("Content-Type"), IfMatch: r.Header.Get("If-Match"), Body: body})
 	if err != nil {
 		controlError(w, 503, "control backend unavailable")
 		return
 	}
-	defer resp.Body.Close()
-	// Preserve public SCIM ETags, locations, and response formats. Never forward
-	// private authentication headers or relax the public no-store requirement.
-	for _, name := range []string{"Content-Type", "ETag", "Location", "WWW-Authenticate"} {
-		if v := resp.Header.Get(name); v != "" {
-			w.Header().Set(name, v)
+	// Preserve the provisioning protocol's status and metadata without exposing
+	// the private service transport or forwarding its authentication headers.
+	for name, value := range map[string]string{"Content-Type": result.ContentType, "ETag": result.ETag, "Location": result.Location, "WWW-Authenticate": result.WWWAuthenticate} {
+		if value != "" {
+			w.Header().Set(name, value)
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	w.WriteHeader(result.Status)
+	w.Write(result.Body)
 }
 
 func scimError(w http.ResponseWriter, status int, detail string) {

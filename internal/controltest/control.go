@@ -10,7 +10,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -46,7 +46,7 @@ func New(t *testing.T, users directory.Directory, managed directory.Store, hosts
 	if users == nil {
 		users = emptyDirectory{}
 	}
-	facts, err := factservice.Handler(users, nil, caPub, pub)
+	facts, err := facts.Handler(users, nil, caPub, pub)
 	require.NoError(t, err)
 	backend, err := (&controlplane.Backend{Directory: users, ManagedDirectory: managed}).Handler(pub)
 	require.NoError(t, err)

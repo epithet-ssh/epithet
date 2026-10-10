@@ -13,9 +13,9 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/directory/scim"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/inventoryapi"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 )
 
@@ -26,28 +26,13 @@ type Backend struct {
 	ManagedDirectory directory.Store
 	Directory        directory.Directory
 }
-type request struct {
-	Request               inventoryapi.ControlRequest `json:"request"`
-	AuthorizationRevision directory.Revision          `json:"authorizationRevision,omitempty"`
-}
-type actorFacts struct {
-	User     *directory.User    `json:"user"`
-	Revision directory.Revision `json:"authorizationRevision"`
-}
-type scimRequest struct {
-	Method      string `json:"method"`
-	Target      string `json:"target"`
-	ContentType string `json:"contentType"`
-	IfMatch     string `json:"ifMatch"`
-	Body        []byte `json:"body"`
-}
 
 func (c *Backend) Handler(key sshcert.RawPublicKey) (http.Handler, error) {
-	audience := serviceauth.InventoryAudience
+	audience := facts.InventoryAudience
 	if c.Directory != nil {
-		audience = serviceauth.DirectoryAudience
+		audience = facts.DirectoryAudience
 	}
-	verifier, err := serviceauth.NewVerifierFor(key, audience)
+	verifier, err := facts.NewVerifierFor(key, audience)
 	if err != nil {
 		return nil, err
 	}
@@ -83,13 +68,13 @@ func (c *Backend) Handler(key sshcert.RawPublicKey) (http.Handler, error) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(actorFacts{u, rev})
+			json.NewEncoder(w).Encode(facts.ActorSnapshot{User: u, Revision: rev})
 		case "/scim":
 			if r.Method != "POST" || provision == nil || actor != "" {
 				http.NotFound(w, r)
 				return
 			}
-			var q scimRequest
+			var q facts.SCIMRequest
 			if err := json.Unmarshal(body, &q); err != nil || !strings.HasPrefix(q.Target, "/scim/v2/") {
 				http.Error(w, "invalid SCIM request", 400)
 				return
@@ -134,7 +119,7 @@ func (c *Backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		fail(405, "method not allowed")
 		return
 	}
-	var envelope request
+	var envelope facts.ControlEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		fail(400, "invalid control request")
 		return

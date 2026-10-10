@@ -1,8 +1,7 @@
-package factservice
+package facts
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,14 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
-	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
@@ -40,16 +36,16 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 			return nil, fmt.Errorf("CA and control must use distinct signing keys")
 		}
 	}
-	audience, param := serviceauth.InventoryAudience, "host"
+	audience, param := InventoryAudience, "host"
 	if users != nil {
-		audience, param = serviceauth.DirectoryAudience, "id"
+		audience, param = DirectoryAudience, "id"
 	}
-	var verifiers []*serviceauth.Verifier
+	var verifiers []*Verifier
 	for _, key := range []sshcert.RawPublicKey{caKey, controlKey} {
 		if key == "" {
 			continue
 		}
-		v, err := serviceauth.NewVerifierFor(key, audience)
+		v, err := NewVerifierFor(key, audience)
 		if err != nil {
 			return nil, err
 		}
@@ -125,72 +121,4 @@ func Handler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	}), nil
-}
-
-type Client struct{ service *serviceauth.Client }
-
-func NewClient(endpoint string, key sshcert.RawPrivateKey, audience string, cfg tlsconfig.Config) (*Client, error) {
-	c, err := serviceauth.NewClient(endpoint, key, audience, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &Client{c}, nil
-}
-func (c *Client) lookup(ctx context.Context, param, value string, result any) (bool, error) {
-	resp, err := c.service.Do(ctx, "GET", "/lookup", url.Values{param: {value}}, nil, "")
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 404 {
-		return false, nil
-	}
-	if resp.StatusCode == http.StatusConflict {
-		data, err := io.ReadAll(io.LimitReader(resp.Body, wire.MaxBodySize))
-		if err != nil {
-			return false, err
-		}
-		return false, fmt.Errorf("fact lookup returned HTTP 409: %s", strings.TrimSpace(string(data)))
-	}
-	if resp.StatusCode != 200 {
-		return false, fmt.Errorf("fact lookup returned HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, wire.MaxBodySize+1))
-	if err != nil {
-		return false, err
-	}
-	if len(data) > wire.MaxBodySize {
-		return false, fmt.Errorf("fact response exceeds size limit")
-	}
-	if err = json.Unmarshal(data, result); err != nil {
-		return false, fmt.Errorf("invalid fact response: %w", err)
-	}
-	return true, nil
-}
-func (c *Client) User(ctx context.Context, id string) (*User, error) {
-	var u User
-	found, err := c.lookup(ctx, "id", id, &u)
-	if err != nil || !found {
-		return nil, err
-	}
-	if u.ID == "" || u.ID != id {
-		return nil, fmt.Errorf("directory user does not match requested id")
-	}
-	for _, g := range u.Groups {
-		if g == "" {
-			return nil, fmt.Errorf("empty group ID")
-		}
-	}
-	return &u, nil
-}
-func (c *Client) Host(ctx context.Context, name string) (*Host, error) {
-	var h Host
-	found, err := c.lookup(ctx, "host", name, &h)
-	if err != nil || !found {
-		return nil, err
-	}
-	if err = h.Host.Validate(name); err != nil {
-		return nil, err
-	}
-	return &h, nil
 }

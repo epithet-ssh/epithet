@@ -9,7 +9,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/controlplane"
 	"github.com/epithet-ssh/epithet/pkg/directory"
 	"github.com/epithet-ssh/epithet/pkg/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/factservice"
+	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -67,7 +67,7 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 			return err
 		}
 	}
-	facts, err := factservice.Handler(users, nil, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
+	facts, err := facts.Handler(users, nil, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
 	if err != nil {
 		return err
 	}
