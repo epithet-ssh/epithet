@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
@@ -32,6 +31,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writpolicy"
+	"github.com/epithet-ssh/epithet/test/inventorytest"
 	"github.com/epithet-ssh/epithet/test/sshd"
 	"github.com/lmittmann/tint"
 	"github.com/stretchr/testify/require"

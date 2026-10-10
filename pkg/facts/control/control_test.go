@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/controltest"
-	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
@@ -21,6 +19,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/test/controltest"
+	"github.com/epithet-ssh/epithet/test/inventorytest"
 	"github.com/stretchr/testify/require"
 )
 

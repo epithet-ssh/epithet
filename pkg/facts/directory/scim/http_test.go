@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/internal/controltest"
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
+	"github.com/epithet-ssh/epithet/test/controltest"
 	"github.com/stretchr/testify/require"
 )
 

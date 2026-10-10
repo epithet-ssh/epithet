@@ -159,7 +159,7 @@ The fact-service implementation lives under the same namespace:
 Directory contracts stay independent of the SQLite implementation, allowing
 alternative stores. The SCIM adapter owns its protocol parsing and response
 semantics, separately from store transactions. Combined YAML host loading is
-integration-test support in `internal/inventorytest`; production inventory is
+integration-test support in `test/inventorytest`; production inventory is
 managed only, and static directory loading supplies user facts only.
 
 Policy evaluation lives separately in `pkg/writpolicy`. CA owns the evaluator

@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/catest"
-	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
@@ -21,6 +19,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/test/catest"
+	"github.com/epithet-ssh/epithet/test/inventorytest"
 	"github.com/stretchr/testify/require"
 )
 

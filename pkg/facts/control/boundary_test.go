@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/controltest"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
@@ -20,6 +19,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/test/controltest"
 	"github.com/stretchr/testify/require"
 )
 

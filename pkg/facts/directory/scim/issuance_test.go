@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/epithet-ssh/epithet/internal/controltest"
-	"github.com/epithet-ssh/epithet/internal/inventorytest"
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
@@ -18,6 +16,8 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writpolicy"
+	"github.com/epithet-ssh/epithet/test/controltest"
+	"github.com/epithet-ssh/epithet/test/inventorytest"
 	"github.com/stretchr/testify/require"
 )
 
