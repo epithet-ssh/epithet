@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"golang.org/x/oauth2"
 )
@@ -168,7 +168,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 
 	loginMethod, inferredDevice := resolveLoginMethod(parent.LoginMethod, os.Getenv)
 	logger.Info("selected interactive login method", "method", loginMethodName(loginMethod), "configured", parent.LoginMethod)
-	oidcCfg := authoidc.Config{
+	oidcCfg := oidc.LoginConfig{
 		IssuerURL:    discovery.Auth.Issuer,
 		ClientID:     discovery.Auth.ClientID,
 		ClientSecret: discovery.Auth.ClientSecret,
@@ -189,9 +189,9 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 				// path, which mints a genuinely new id_token.
 				oauthState.Expiry = time.Now().Add(-time.Minute)
 			}
-			idToken, next, err := authoidc.Authenticate(ctx, oidcCfg, oauthState, out)
+			idToken, next, err := oidc.Authenticate(ctx, oidcCfg, oauthState, out)
 			if err != nil {
-				if inferredDevice && errors.Is(err, authoidc.ErrDeviceAuthorizationUnsupported) {
+				if inferredDevice && errors.Is(err, oidc.ErrDeviceAuthorizationUnsupported) {
 					return "", fmt.Errorf("automatic device login is unavailable: %w; use --login-method browser to use a local callback", err)
 				}
 				return "", err
@@ -261,22 +261,22 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 
 // resolveLoginMethod keeps environment detection at the command boundary and
 // gives the authentication package only the concrete mechanism it must run.
-func resolveLoginMethod(configured string, getenv func(string) string) (method authoidc.LoginMethod, inferredDevice bool) {
+func resolveLoginMethod(configured string, getenv func(string) string) (method oidc.LoginMethod, inferredDevice bool) {
 	switch configured {
 	case "device":
-		return authoidc.LoginDevice, false
+		return oidc.LoginDevice, false
 	case "browser":
-		return authoidc.LoginBrowser, false
+		return oidc.LoginBrowser, false
 	default: // Kong restricts this field to auto, browser, or device.
 		if getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" {
-			return authoidc.LoginDevice, true
+			return oidc.LoginDevice, true
 		}
-		return authoidc.LoginBrowser, false
+		return oidc.LoginBrowser, false
 	}
 }
 
-func loginMethodName(method authoidc.LoginMethod) string {
-	if method == authoidc.LoginDevice {
+func loginMethodName(method oidc.LoginMethod) string {
+	if method == oidc.LoginDevice {
 		return "device"
 	}
 	return "browser"

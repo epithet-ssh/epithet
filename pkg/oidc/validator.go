@@ -7,20 +7,19 @@ import (
 	"strings"
 	"time"
 
-	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
-// Validator validates OIDC JWT tokens.
+// Validator verifies ID tokens and maps their claims to directory user IDs.
 type Validator struct {
-	verifier     *authoidc.Verifier
+	verifier     *Verifier
 	issuer       string
 	userIDClaim  string
 	identityMode IdentityMode
 }
 
-// Config configures the OIDC validator.
-type Config struct {
+// ValidatorConfig configures the OIDC validator.
+type ValidatorConfig struct {
 	// Issuer is the OIDC provider issuer URL (e.g., "https://accounts.google.com").
 	Issuer string
 
@@ -28,10 +27,10 @@ type Config struct {
 	// token issued by the provider for any client would be accepted.
 	ClientID string
 
-	// IdentityMode selects how verified claims resolve to an inventory ID.
+	// IdentityMode selects how verified claims resolve to a directory ID.
 	IdentityMode IdentityMode
 
-	// UserIDClaim selects a top-level string claim to map to inventory ID.
+	// UserIDClaim selects a top-level string claim to map to directory ID.
 	// Empty selects the provider default (oid for Entra, sub otherwise).
 	UserIDClaim string
 
@@ -45,7 +44,7 @@ type Claims struct {
 	Issuer string
 	// Subject is the stable, case-sensitive identifier within this issuer.
 	Subject string
-	// UserID is the verified claim value used to look up the inventory user.
+	// UserID is the verified claim value used to look up the directory user.
 	UserID string
 
 	// ExpiresAt is when the token expires.
@@ -54,12 +53,12 @@ type Claims struct {
 
 // NewValidator creates a new OIDC token validator.
 // It performs OIDC discovery to fetch the provider's JWKS (public keys).
-func NewValidator(ctx context.Context, config Config) (*Validator, error) {
+func NewValidator(ctx context.Context, config ValidatorConfig) (*Validator, error) {
 	mode, claim, err := ResolveIdentity(config.Issuer, config.IdentityMode, config.UserIDClaim)
 	if err != nil {
 		return nil, err
 	}
-	verifier, err := authoidc.NewVerifier(ctx, authoidc.Config{
+	verifier, err := NewVerifier(ctx, VerifierConfig{
 		IssuerURL: config.Issuer, ClientID: config.ClientID, TLSConfig: config.TLSConfig,
 	})
 	if err != nil {

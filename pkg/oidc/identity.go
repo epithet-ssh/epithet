@@ -2,7 +2,7 @@ package oidc
 
 import "fmt"
 
-// IdentityMode defines how a verified ID token maps to an inventory user.
+// IdentityMode defines how a verified ID token maps to a directory user.
 type IdentityMode string
 
 const (

@@ -11,7 +11,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"

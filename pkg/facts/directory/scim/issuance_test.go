@@ -9,7 +9,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -32,9 +32,9 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("hosts:\n - names: [host]\n   accounts: [root]\nusers:\n - id: subject:missing\n   userName: static-fallback\n   groups: [ops]\n"), 0600))
 	inv, e := inventorytest.NewStatic([]string{path}, inventorytest.WithoutUsers())
 	require.NoError(t, e)
-	validator, e := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	validator, e := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, e)
-	is := inventorytest.ServeFactsWithSources(t, f.store, inv, oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, pub)
+	is := inventorytest.ServeFactsWithSources(t, f.store, inv, oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, pub)
 	pol, diags := writ.Load("allow group:ops -> root@host\n")
 	require.NotNil(t, pol, "%v", diags)
 	evaluator, _, e := writpolicy.New(pol, nil, writpolicy.Options{})

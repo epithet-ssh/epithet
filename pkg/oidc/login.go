@@ -1,7 +1,3 @@
-// Package oidc performs OIDC/OAuth2 authentication and returns an ID token.
-// It is a plain library: callers own how the token state and user-facing
-// progress are surfaced (the broker streams progress to ssh sessions; other
-// callers may just discard it).
 package oidc
 
 import (
@@ -18,7 +14,8 @@ import (
 )
 
 // Scopes is the fixed set requested during browser authentication.
-// Policy maps a verified token to inventory using its configured identity mode.
+// CA and control map verified tokens to directory users using their configured
+// identity mode.
 var Scopes = []string{"openid", "profile", "email"}
 
 // LoginMethod selects the interactive operation used when neither a valid
@@ -40,8 +37,8 @@ var ErrDeviceAuthorizationUnsupported = errors.New("OIDC issuer does not adverti
 // real browser window.
 var openBrowser = browser.OpenURL
 
-// Config holds OIDC authentication configuration.
-type Config struct {
+// LoginConfig holds OIDC authentication configuration.
+type LoginConfig struct {
 	IssuerURL    string
 	ClientID     string
 	ClientSecret string // Optional for PKCE.
@@ -49,10 +46,11 @@ type Config struct {
 	LoginMethod  LoginMethod
 }
 
-// Authenticate returns a fresh ID token. prev carries refresh state from the
-// previous call (nil on first use); the returned token is the next state.
+// Authenticate obtains an ID token, reusing a valid token when available.
+// prev carries refresh state from the previous call (nil on first use); the
+// returned token is the next state.
 // User-facing progress ("visit this URL…") is written to out.
-func Authenticate(ctx context.Context, cfg Config, prev *oauth2.Token, out io.Writer) (idToken string, next *oauth2.Token, err error) {
+func Authenticate(ctx context.Context, cfg LoginConfig, prev *oauth2.Token, out io.Writer) (idToken string, next *oauth2.Token, err error) {
 	if out == nil {
 		// Callers that don't care about progress (e.g. token reuse in tests)
 		// shouldn't have to pass a throwaway writer explicitly.
@@ -109,7 +107,7 @@ func Authenticate(ctx context.Context, cfg Config, prev *oauth2.Token, out io.Wr
 	}
 
 	// Extract ID token from the OAuth2 token response.
-	// The ID token is a JWT that can be validated by the inventory service.
+	// CA and control validate the ID token before using it for authentication.
 	tok, ok := newToken.Extra("id_token").(string)
 	if !ok || tok == "" {
 		return "", nil, fmt.Errorf("no id_token in response - ensure 'openid' scope is requested")

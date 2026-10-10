@@ -20,7 +20,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -114,7 +114,7 @@ hosts:
 	require.NotNil(t, pol, "%v", diags)
 	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 	require.NoError(t, err)
-	is := inventorytest.ServeFactsWithConfig(t, inv, oidc.Config{Issuer: issuer, ClientID: "review-client", IdentityMode: mode, UserIDClaim: userIDClaim, TLSConfig: tlsconfigFor(t, idp)}, pub)
+	is := inventorytest.ServeFactsWithConfig(t, inv, oidc.ValidatorConfig{Issuer: issuer, ClientID: "review-client", IdentityMode: mode, UserIDClaim: userIDClaim, TLSConfig: tlsconfigFor(t, idp)}, pub)
 	authority, err := ca.New(priv, evaluator, is.CAOption())
 	require.NoError(t, err)
 	var issuanceLog bytes.Buffer

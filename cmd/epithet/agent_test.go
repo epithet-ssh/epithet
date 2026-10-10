@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	authoidc "github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,14 +51,14 @@ func TestResolveLoginMethod(t *testing.T) {
 	tests := []struct {
 		name, configured   string
 		environment        map[string]string
-		want               authoidc.LoginMethod
+		want               oidc.LoginMethod
 		wantInferredDevice bool
 	}{
-		{name: "local auto", configured: "auto", want: authoidc.LoginBrowser},
-		{name: "SSH connection", configured: "auto", environment: map[string]string{"SSH_CONNECTION": "client 1 server 2"}, want: authoidc.LoginDevice, wantInferredDevice: true},
-		{name: "SSH tty", configured: "auto", environment: map[string]string{"SSH_TTY": "/dev/pts/1"}, want: authoidc.LoginDevice, wantInferredDevice: true},
-		{name: "explicit browser overrides SSH", configured: "browser", environment: map[string]string{"SSH_CONNECTION": "set"}, want: authoidc.LoginBrowser},
-		{name: "explicit device", configured: "device", want: authoidc.LoginDevice},
+		{name: "local auto", configured: "auto", want: oidc.LoginBrowser},
+		{name: "SSH connection", configured: "auto", environment: map[string]string{"SSH_CONNECTION": "client 1 server 2"}, want: oidc.LoginDevice, wantInferredDevice: true},
+		{name: "SSH tty", configured: "auto", environment: map[string]string{"SSH_TTY": "/dev/pts/1"}, want: oidc.LoginDevice, wantInferredDevice: true},
+		{name: "explicit browser overrides SSH", configured: "browser", environment: map[string]string{"SSH_CONNECTION": "set"}, want: oidc.LoginBrowser},
+		{name: "explicit device", configured: "device", want: oidc.LoginDevice},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

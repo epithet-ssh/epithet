@@ -47,7 +47,7 @@ func TestAuthenticateCompletesCodeFlowViaAutoApprovingIdP(t *testing.T) {
 	t.Cleanup(func() { openBrowser = prevOpenBrowser })
 
 	idp := oidctest.New(t)
-	cfg := Config{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
+	cfg := LoginConfig{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
 
 	var out syncBuffer
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -82,7 +82,7 @@ func TestAuthenticateCompletesCodeFlowViaAutoApprovingIdP(t *testing.T) {
 
 func TestAuthenticateReusesValidToken(t *testing.T) {
 	idp := oidctest.New(t)
-	cfg := Config{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
+	cfg := LoginConfig{IssuerURL: idp.Issuer(), ClientID: oidctest.ClientID}
 	prev := &oauth2.Token{AccessToken: "still-good", Expiry: time.Now().Add(time.Hour)}
 	prev = prev.WithExtra(map[string]any{"id_token": idp.MintIDToken("x@y.z", time.Now().Add(time.Hour))})
 
@@ -126,7 +126,7 @@ func TestAuthenticateCompletesDeviceFlow(t *testing.T) {
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	idToken, next, err := Authenticate(ctx, Config{IssuerURL: server.URL, ClientID: "client", LoginMethod: LoginDevice}, nil, &out)
+	idToken, next, err := Authenticate(ctx, LoginConfig{IssuerURL: server.URL, ClientID: "client", LoginMethod: LoginDevice}, nil, &out)
 	require.NoError(t, err)
 	require.Equal(t, "header.payload.signature", idToken)
 	require.Equal(t, "access", next.AccessToken)

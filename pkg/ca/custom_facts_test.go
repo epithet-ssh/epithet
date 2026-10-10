@@ -12,7 +12,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/facts"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -66,7 +66,7 @@ func TestMinimalCustomFactsAndOptionalUserName(t *testing.T) {
 			eval, _, err := writpolicy.New(policy, nil, writpolicy.Options{})
 			require.NoError(t, err)
 			var logs bytes.Buffer
-			authority, err := ca.New(key, eval, ca.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))), ca.WithFacts(directory.URL, inventory.URL, oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
+			authority, err := ca.New(key, eval, ca.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))), ca.WithFacts(directory.URL, inventory.URL, oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
 			result, err := authority.Issue(t.Context(), token, wire.Connection{RemoteHost: "HOST", RemoteUser: "root"}, userKey)
 			if tc.allowed {

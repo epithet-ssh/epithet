@@ -88,7 +88,7 @@ func TestForceRefreshDiscardsCachedToken(t *testing.T) {
 // TestForceRefreshReturnsAndCachesTheFetchedToken guards against the bug
 // where ForceRefresh re-invoked fetch but fetch, unaware anything had
 // changed, handed back the exact credential the CA had just rejected
-// (pkg/auth/oidc's Authenticate returns prev unchanged while prev.Valid()).
+// (pkg/oidc's Authenticate returns prev unchanged while prev.Valid()).
 // fetch here honors force by minting a genuinely different token, the way a
 // real TokenFunc must; ForceRefresh must surface that new token, and it must
 // become the cache so the next plain Token() doesn't re-fetch.

@@ -15,7 +15,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -35,7 +35,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 	require.NoError(t, err)
 	defer hosts.Close()
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
 	f := controltest.New(t, users, users, hosts, control.Config{Validator: validator, DirectoryAdmins: control.Admins{Users: []string{"subject:directory-admin"}}, InventoryAdmins: control.Admins{Users: []string{"subject:inventory-admin"}}, SCIMToken: "provisioning-secret"})
 	client, err := facts.NewAdminClient(f.URL+"/manage", tlsconfig.Config{Insecure: true})
@@ -120,7 +120,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 
 func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
 	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)

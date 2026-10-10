@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
@@ -37,7 +37,7 @@ func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	validator, err := oidc.NewValidator(context.Background(), oidc.Config{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg})
+	validator, err := oidc.NewValidator(context.Background(), oidc.ValidatorConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg})
 	if err != nil {
 		return err
 	}

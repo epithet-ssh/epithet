@@ -17,7 +17,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/test/controltest"
@@ -82,7 +82,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	require.NoError(t, err)
 	defer m.Close()
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(context.Background(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, UserIDClaim: "oid", TLSConfig: tlsconfig.Config{Insecure: true}})
+	validator, err := oidc.NewValidator(context.Background(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, UserIDClaim: "oid", TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
 	server := controltest.New(t, inv, nil, m, control.Config{Validator: validator, InventoryAdmins: control.Admins{Users: []string{"directory-admin"}, Groups: []string{"ops"}}})
 	client, err := facts.NewAdminClient(server.URL+"/manage?route=inventory", tlsconfig.Config{Insecure: true})
@@ -177,7 +177,7 @@ func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
 				selected, managed = store, store
 			}
 			idp := oidctest.New(t)
-			validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+			validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 			require.NoError(t, err)
 			// No managed hosts: directory inspection must be independently available.
 			server := controltest.New(t, selected, managed, nil, control.Config{Validator: validator, DirectoryAdmins: control.Admins{Groups: []string{"wheel"}}})
@@ -236,7 +236,7 @@ func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
 	server := controltest.New(t, store, store, nil, control.Config{Validator: validator, DirectoryAdmins: control.Admins{Users: []string{"subject:admin"}}})
 	client, err := facts.NewAdminClient(server.URL+"/manage", tlsconfig.Config{Insecure: true})
@@ -299,7 +299,7 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 	_, err = hosts.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
 	require.NoError(t, err)
 	idp := oidctest.New(t)
-	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
+	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
 	server := controltest.New(t, users, users, hosts, control.Config{Validator: validator, InventoryAdmins: control.Admins{Users: []string{"subject:admin"}}})
 	client, err := facts.NewAdminClient(server.URL+"/manage", tlsconfig.Config{Insecure: true})

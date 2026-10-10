@@ -1,6 +1,6 @@
 package main
 
-import "github.com/epithet-ssh/epithet/pkg/identity/oidc"
+import "github.com/epithet-ssh/epithet/pkg/oidc"
 
 // ServiceOIDCConfig holds OIDC configuration for the issuing and control services.
 type ServiceOIDCConfig struct {

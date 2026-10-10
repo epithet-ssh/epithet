@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/auth/oidc"
 	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
@@ -121,7 +121,7 @@ func makeAgentIdentityVerifier(auth wire.AuthConfig, tlsCfg tlsconfig.Config) br
 		if cached != nil {
 			return cached, nil
 		}
-		v, err := oidc.NewVerifier(ctx, oidc.Config{
+		v, err := oidc.NewVerifier(ctx, oidc.VerifierConfig{
 			IssuerURL: auth.Issuer, ClientID: auth.ClientID,
 			TLSConfig: tlsCfg,
 		})

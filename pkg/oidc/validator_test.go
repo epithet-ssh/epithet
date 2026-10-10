@@ -11,7 +11,7 @@ import (
 )
 
 func newValidator(t *testing.T, idp *oidctest.IdP) *Validator {
-	v, err := NewValidator(context.Background(), Config{
+	v, err := NewValidator(context.Background(), ValidatorConfig{
 		Issuer:   idp.Issuer(),
 		ClientID: oidctest.ClientID,
 	})
@@ -88,7 +88,7 @@ func TestValidateRejectsWrongAudience(t *testing.T) {
 
 func TestNewValidatorRequiresClientID(t *testing.T) {
 	idp := oidctest.New(t)
-	_, err := NewValidator(context.Background(), Config{Issuer: idp.Issuer()})
+	_, err := NewValidator(context.Background(), ValidatorConfig{Issuer: idp.Issuer()})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "client_id")
 }
@@ -125,7 +125,7 @@ func TestValidateMappedUserID(t *testing.T) {
 	idp := oidctest.New(t)
 	for _, key := range []string{"oid", "https://example.com/user_id"} {
 		t.Run(key, func(t *testing.T) {
-			v, err := NewValidator(context.Background(), Config{
+			v, err := NewValidator(context.Background(), ValidatorConfig{
 				Issuer: idp.Issuer(), ClientID: oidctest.ClientID, UserIDClaim: key,
 			})
 			require.NoError(t, err)
@@ -190,8 +190,8 @@ func TestIdentityModeResolution(t *testing.T) {
 		mode, claim, err := ResolveIdentity("https://issuer.example", tc.mode, tc.claim)
 		if tc.invalid {
 			require.Error(t, err)
-			_, err = NewValidator(context.Background(), Config{Issuer: "https://invalid.invalid", ClientID: "client", IdentityMode: tc.mode, UserIDClaim: tc.claim})
-			require.ErrorContains(t, err, "mode") // Config rejected before discovery.
+			_, err = NewValidator(context.Background(), ValidatorConfig{Issuer: "https://invalid.invalid", ClientID: "client", IdentityMode: tc.mode, UserIDClaim: tc.claim})
+			require.ErrorContains(t, err, "mode") // ValidatorConfig rejected before discovery.
 		} else {
 			require.NoError(t, err)
 			require.Equal(t, tc.wantMode, mode)
@@ -205,7 +205,7 @@ func TestEmailIdentityModes(t *testing.T) {
 	otherIDP := oidctest.New(t)
 	for _, mode := range []IdentityMode{VerifiedEmail, StableID} {
 		t.Run(string(mode), func(t *testing.T) {
-			cfg := Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, IdentityMode: mode}
+			cfg := ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, IdentityMode: mode}
 			if mode == StableID {
 				cfg.UserIDClaim = "email"
 			}

@@ -14,7 +14,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -70,7 +70,7 @@ func TestDiscoveryIsAnonymousAndIndependentOfFacts(t *testing.T) {
 	upstream := httptest.NewServer(http.NotFoundHandler())
 	upstream.Close()
 	auth := wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}
-	c, err := ca.New(key, nil, ca.WithFacts(upstream.URL, upstream.URL, oidc.Config{Issuer: auth.Issuer, ClientID: auth.ClientID}, auth, tlsconfig.Config{Insecure: true}))
+	c, err := ca.New(key, nil, ca.WithFacts(upstream.URL, upstream.URL, oidc.ValidatorConfig{Issuer: auth.Issuer, ClientID: auth.ClientID}, auth, tlsconfig.Config{Insecure: true}))
 	require.NoError(t, err)
 	srv := caserver.New(c, slog.New(slog.DiscardHandler), nil)
 	rec := httptest.NewRecorder()

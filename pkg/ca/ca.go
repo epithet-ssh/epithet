@@ -12,7 +12,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
-	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
+	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -265,7 +265,7 @@ func (c *CA) signPublicKey(rawPubKey sshcert.RawPublicKey, params *certParams) (
 }
 
 // WithFacts configures independent read providers and CA-owned OIDC validation.
-func WithFacts(directoryURL, inventoryURL string, identity oidc.Config, discovery wire.AuthConfig, cfg tlsconfig.Config) Option {
+func WithFacts(directoryURL, inventoryURL string, identity oidc.ValidatorConfig, discovery wire.AuthConfig, cfg tlsconfig.Config) Option {
 	return optionFunc(func(c *CA) error {
 		var err error
 		if directoryURL == "" || inventoryURL == "" {

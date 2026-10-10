@@ -8,12 +8,20 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 )
 
-// Verifier checks ID tokens independently of inventory identity mapping.
+// Verifier checks ID tokens independently of directory identity mapping.
 // It can be shared by concurrent callers and caches the provider's signing keys.
 type Verifier struct{ verifier *coreoidc.IDTokenVerifier }
 
+// VerifierConfig identifies the issuer and audience trusted for ID tokens.
+// Login credentials and directory identity mapping are independent of verification.
+type VerifierConfig struct {
+	IssuerURL string
+	ClientID  string
+	TLSConfig tlsconfig.Config
+}
+
 // NewVerifier discovers the configured issuer and prepares token verification.
-func NewVerifier(ctx context.Context, config Config) (*Verifier, error) {
+func NewVerifier(ctx context.Context, config VerifierConfig) (*Verifier, error) {
 	if config.IssuerURL == "" {
 		return nil, fmt.Errorf("issuer is required")
 	}
