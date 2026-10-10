@@ -1,25 +1,30 @@
-package inventory
+// Package sqlitestore implements managed inventory using embedded SQLite.
+// SQL, admission checks, and transaction ownership stay here; callers use inventory.Store.
+package sqlitestore
 
 import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/facts/storage"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
 
-// Managed owns host persistence, admission, and authorization lookups. Each
+// Store owns host persistence, admission, and authorization lookups. Each
 // mutation checks conflicts and commits the host, token, audit, and inventory
 // revision in one transaction. Reads return independent, coherent snapshots;
 // there is no application cache or separate index to rebuild after a restart.
-type Managed struct {
+type Store struct {
 	db    *sql.DB
 	newID func() (string, error)
 	// <review>
@@ -27,14 +32,16 @@ type Managed struct {
 	// </review>
 }
 
-// OpenManaged opens a private SQLite database at path, creating its schema if
+var _ inventory.Store = (*Store)(nil)
+
+// Open opens a private SQLite database at path, creating its schema if
 // needed. Storage, schema, or validation errors fail startup.
-func OpenManaged(path string) (*Managed, error) {
+func Open(path string) (*Store, error) {
 	db, err := storage.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	m := &Managed{db: db, newID: RandomSecret}
+	m := &Store{db: db, newID: randomSecret}
 	if err = m.initialize(); err == nil {
 		err = m.validate()
 	}
@@ -45,23 +52,24 @@ func OpenManaged(path string) (*Managed, error) {
 	return m, nil
 }
 
-func (m *Managed) Close() error { return m.db.Close() }
+func (m *Store) Close() error { return m.db.Close() }
 
-func (m *Managed) initialize() error {
-	tx, err := m.db.Begin()
+func (m *Store) initialize() error {
+	ctx := context.Background()
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var version int
-	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
 	if version != 0 && version != 1 {
 		return fmt.Errorf("unsupported inventory database version %d", version)
 	}
 	if version == 0 {
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), instance TEXT NOT NULL, revision INTEGER NOT NULL);
 CREATE TABLE hosts (
  id TEXT PRIMARY KEY CHECK(length(id)=64 AND id NOT GLOB '*[^0-9a-f]*'),
@@ -83,7 +91,7 @@ PRAGMA user_version=1;`)
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec("INSERT INTO state VALUES (1, ?, 0)", rand.Text()); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO state VALUES (1, ?, 0)", rand.Text()); err != nil {
 			return err
 		}
 	}
@@ -94,12 +102,12 @@ func storageError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%w: %w", ErrStorage, err)
+	return fmt.Errorf("%w: %w", inventory.ErrStorage, err)
 }
 
 // hostIDs closes its cursor before callers read each host on the same connection.
-func hostIDs(tx *sql.Tx) ([]string, error) {
-	rows, err := tx.Query("SELECT id FROM hosts ORDER BY id")
+func hostIDs(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM hosts ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -115,13 +123,13 @@ func hostIDs(tx *sql.Tx) ([]string, error) {
 	return ids, rows.Err()
 }
 
-func readHost(tx *sql.Tx, id string) (*HostRecord, error) {
-	h := &HostRecord{ID: id}
+func readHost(ctx context.Context, tx *sql.Tx, id string) (*inventory.HostRecord, error) {
+	h := &inventory.HostRecord{ID: id}
 	var labelsNull, accountsNull bool
 	var created, updated string
-	err := tx.QueryRow("SELECT revision,status,principal_mode,realm,pattern,labels_null,accounts_null,created,updated FROM hosts WHERE id=?", id).Scan(&h.Revision, &h.Status, &h.Proposal.PrincipalMode, &h.Proposal.Realm, &h.Proposal.Pattern, &labelsNull, &accountsNull, &created, &updated)
+	err := tx.QueryRowContext(ctx, "SELECT revision,status,principal_mode,realm,pattern,labels_null,accounts_null,created,updated FROM hosts WHERE id=?", id).Scan(&h.Revision, &h.Status, &h.Proposal.PrincipalMode, &h.Proposal.Realm, &h.Proposal.Pattern, &labelsNull, &accountsNull, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, inventory.ErrNotFound
 	}
 	if err != nil {
 		return nil, storageError(err)
@@ -138,7 +146,7 @@ func readHost(tx *sql.Tx, id string) (*HostRecord, error) {
 	if !accountsNull {
 		h.Proposal.Accounts = []string{}
 	}
-	rows, err := tx.Query("SELECT name FROM names WHERE host_id=? ORDER BY name", id)
+	rows, err := tx.QueryContext(ctx, "SELECT name FROM names WHERE host_id=? ORDER BY name", id)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -156,7 +164,7 @@ func readHost(tx *sql.Tx, id string) (*HostRecord, error) {
 	if err != nil {
 		return nil, storageError(err)
 	}
-	rows, err = tx.Query("SELECT name,value FROM labels WHERE host_id=?", id)
+	rows, err = tx.QueryContext(ctx, "SELECT name,value FROM labels WHERE host_id=?", id)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -178,7 +186,7 @@ func readHost(tx *sql.Tx, id string) (*HostRecord, error) {
 	if err != nil {
 		return nil, storageError(err)
 	}
-	rows, err = tx.Query("SELECT name FROM accounts WHERE host_id=? ORDER BY position", id)
+	rows, err = tx.QueryContext(ctx, "SELECT name FROM accounts WHERE host_id=? ORDER BY position", id)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -200,11 +208,11 @@ func readHost(tx *sql.Tx, id string) (*HostRecord, error) {
 	return h, storageError(err)
 }
 
-func readToken(tx *sql.Tx, id string) (*EnrollmentToken, error) {
-	t := &EnrollmentToken{ID: id}
+func readToken(ctx context.Context, tx *sql.Tx, id string) (*inventory.EnrollmentToken, error) {
+	t := &inventory.EnrollmentToken{ID: id}
 	var expires string
 	var used bool
-	err := tx.QueryRow("SELECT expires,used,revoked FROM tokens WHERE host_id=?", id).Scan(&expires, &used, &t.Revoked)
+	err := tx.QueryRowContext(ctx, "SELECT expires,used,revoked FROM tokens WHERE host_id=?", id).Scan(&expires, &used, &t.Revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -220,41 +228,42 @@ func readToken(tx *sql.Tx, id string) (*EnrollmentToken, error) {
 	return t, nil
 }
 
-func (m *Managed) validate() error {
-	tx, err := m.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+func (m *Store) validate() error {
+	ctx := context.Background()
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = inventoryRevision(tx); err != nil {
+	if _, err = inventoryRevision(ctx, tx); err != nil {
 		return err
 	}
-	ids, err := hostIDs(tx)
+	ids, err := hostIDs(ctx, tx)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		h, err := readHost(tx, id)
+		h, err := readHost(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		t, err := readToken(tx, id)
+		t, err := readToken(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if t != nil && (t.ExpiresAt.IsZero() || t.UsedBy == "" && !t.Revoked && h.Status != "pending") {
 			return fmt.Errorf("%s: invalid token metadata", id)
 		}
-		if !(h.Proposal.empty() && t != nil && t.UsedBy == "" && h.Status != "active") {
+		if !(emptyProposal(h.Proposal) && t != nil && t.UsedBy == "" && h.Status != "active") {
 			if err = h.Proposal.Validate(); err != nil {
 				return fmt.Errorf("%s: %w", id, err)
 			}
 		}
 		if h.Status == "active" {
-			if err = m.checkRealm(tx, h.Proposal, id); err != nil {
+			if err = m.checkRealm(ctx, tx, h.Proposal, id); err != nil {
 				return err
 			}
-			if err = checkNames(tx, h.Proposal, id); err != nil {
+			if err = checkNames(ctx, tx, h.Proposal, id); err != nil {
 				return err
 			}
 		}
@@ -262,44 +271,44 @@ func (m *Managed) validate() error {
 	return tx.Commit()
 }
 
-func inventoryRevision(tx *sql.Tx) (string, error) {
+func inventoryRevision(ctx context.Context, tx *sql.Tx) (string, error) {
 	var instance string
 	var revision uint64
-	err := tx.QueryRow("SELECT instance,revision FROM state WHERE singleton=1").Scan(&instance, &revision)
+	err := tx.QueryRowContext(ctx, "SELECT instance,revision FROM state WHERE singleton=1").Scan(&instance, &revision)
 	return fmt.Sprintf("managed:%s:%d", instance, revision), storageError(err)
 }
 
 // saveHost replaces the typed record and its collections inside the caller's
 // transaction. Null flags preserve null versus empty collections across reads.
-func saveHost(tx *sql.Tx, h *HostRecord, create bool) error {
+func saveHost(ctx context.Context, tx *sql.Tx, h *inventory.HostRecord, create bool) error {
 	p := h.Proposal
 	fields := []any{h.Revision, h.Status, p.PrincipalMode, p.Realm, p.Pattern, p.Labels == nil, p.Accounts == nil, h.CreatedAt.UTC().Format(time.RFC3339Nano), h.UpdatedAt.UTC().Format(time.RFC3339Nano), h.ID}
 	var err error
 	if create {
-		_, err = tx.Exec("INSERT INTO hosts (revision,status,principal_mode,realm,pattern,labels_null,accounts_null,created,updated,id) VALUES (?,?,?,?,?,?,?,?,?,?)", fields...)
+		_, err = tx.ExecContext(ctx, "INSERT INTO hosts (revision,status,principal_mode,realm,pattern,labels_null,accounts_null,created,updated,id) VALUES (?,?,?,?,?,?,?,?,?,?)", fields...)
 	} else {
-		_, err = tx.Exec("UPDATE hosts SET revision=?,status=?,principal_mode=?,realm=?,pattern=?,labels_null=?,accounts_null=?,created=?,updated=? WHERE id=?", fields...)
+		_, err = tx.ExecContext(ctx, "UPDATE hosts SET revision=?,status=?,principal_mode=?,realm=?,pattern=?,labels_null=?,accounts_null=?,created=?,updated=? WHERE id=?", fields...)
 	}
 	if err != nil {
 		return storageError(err)
 	}
 	for _, table := range []string{"names", "labels", "accounts"} {
-		if _, err = tx.Exec("DELETE FROM "+table+" WHERE host_id=?", h.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE host_id=?", h.ID); err != nil {
 			return storageError(err)
 		}
 	}
 	for _, name := range p.Names {
-		if _, err = tx.Exec("INSERT INTO names VALUES (?,?)", h.ID, name); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO names VALUES (?,?)", h.ID, name); err != nil {
 			return storageError(err)
 		}
 	}
 	for name, value := range p.Labels {
-		if _, err = tx.Exec("INSERT INTO labels VALUES (?,?,?)", h.ID, name, value); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO labels VALUES (?,?,?)", h.ID, name, value); err != nil {
 			return storageError(err)
 		}
 	}
 	for i, name := range p.Accounts {
-		if _, err = tx.Exec("INSERT INTO accounts VALUES (?,?,?)", h.ID, i, name); err != nil {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO accounts VALUES (?,?,?)", h.ID, i, name); err != nil {
 			return storageError(err)
 		}
 	}
@@ -308,13 +317,13 @@ func saveHost(tx *sql.Tx, h *HostRecord, create bool) error {
 
 // finish commits the mutation, audit, and inventory revision together. Removal
 // keeps the existing contract: cascading deletion also removes the host's audit.
-func finish(tx *sql.Tx, id, actor, action string) error {
+func finish(ctx context.Context, tx *sql.Tx, id, actor, action string) error {
 	if action != "remove" {
-		if _, err := tx.Exec("INSERT INTO audit (host_id,time,actor,action) VALUES (?,?,?,?)", id, time.Now().UTC().Format(time.RFC3339Nano), actor, action); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO audit (host_id,time,actor,action) VALUES (?,?,?,?)", id, time.Now().UTC().Format(time.RFC3339Nano), actor, action); err != nil {
 			return storageError(err)
 		}
 	}
-	if _, err := tx.Exec("UPDATE state SET revision=revision+1 WHERE singleton=1"); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE state SET revision=revision+1 WHERE singleton=1"); err != nil {
 		return storageError(err)
 	}
 	return storageError(tx.Commit())
@@ -322,12 +331,12 @@ func finish(tx *sql.Tx, id, actor, action string) error {
 
 // checkNames only considers active hosts. An immediate write transaction spans
 // the check and mutation, preventing duplicate admissions across connections.
-func checkNames(tx *sql.Tx, p Proposal, except string) error {
+func checkNames(ctx context.Context, tx *sql.Tx, p inventory.Proposal, except string) error {
 	if p.Pattern != "" {
 		var owner string
-		err := tx.QueryRow("SELECT id FROM hosts WHERE pattern=? AND status='active' AND id<>? LIMIT 1", p.Pattern, except).Scan(&owner)
+		err := tx.QueryRowContext(ctx, "SELECT id FROM hosts WHERE pattern=? AND status='active' AND id<>? LIMIT 1", p.Pattern, except).Scan(&owner)
 		if err == nil {
-			return fmt.Errorf("%w: pattern %s is active on record %s", ErrConflict, p.Pattern, owner)
+			return fmt.Errorf("%w: pattern %s is active on record %s", inventory.ErrConflict, p.Pattern, owner)
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return storageError(err)
@@ -335,9 +344,9 @@ func checkNames(tx *sql.Tx, p Proposal, except string) error {
 	}
 	for _, name := range p.Names {
 		var owner string
-		err := tx.QueryRow("SELECT host_id FROM names JOIN hosts ON hosts.id=names.host_id WHERE name=? AND status='active' AND host_id<>? LIMIT 1", name, except).Scan(&owner)
+		err := tx.QueryRowContext(ctx, "SELECT host_id FROM names JOIN hosts ON hosts.id=names.host_id WHERE name=? AND status='active' AND host_id<>? LIMIT 1", name, except).Scan(&owner)
 		if err == nil {
-			return fmt.Errorf("%w: name %s is active on host %s", ErrConflict, name, owner)
+			return fmt.Errorf("%w: name %s is active on host %s", inventory.ErrConflict, name, owner)
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return storageError(err)
@@ -349,56 +358,56 @@ func checkNames(tx *sql.Tx, p Proposal, except string) error {
 // AddPattern declares an active fleet rule as an administrative operation.
 // Its attributes and admission checks are the same as an approved proposal;
 // creation and its audit event commit together.
-func (m *Managed) AddPattern(actor string, p Proposal) (*HostRecord, error) {
+func (m *Store) AddPattern(ctx context.Context, actor string, p inventory.Proposal) (*inventory.HostRecord, error) {
 	if p.Pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
 	}
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	tx, err := m.db.Begin()
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	if err = m.conflict(tx, p, ""); err != nil {
+	if err = m.conflict(ctx, tx, p, ""); err != nil {
 		return nil, err
 	}
-	id, err := m.unusedID(tx)
+	id, err := m.unusedID(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	h := &HostRecord{ID: id, Revision: 1, Status: "active", Proposal: p, CreatedAt: now, UpdatedAt: now}
-	if err = saveHost(tx, h, true); err != nil {
+	h := &inventory.HostRecord{ID: id, Revision: 1, Status: "active", Proposal: p, CreatedAt: now, UpdatedAt: now}
+	if err = saveHost(ctx, tx, h, true); err != nil {
 		return nil, err
 	}
-	h, err = readHost(tx, id)
+	h, err = readHost(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err = finish(tx, id, actor, "add-pattern"); err != nil {
+	if err = finish(ctx, tx, id, actor, "add-pattern"); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
 
-func (m *Managed) conflict(tx *sql.Tx, p Proposal, except string) error {
-	if err := m.checkRealm(tx, p, except); err != nil {
+func (m *Store) conflict(ctx context.Context, tx *sql.Tx, p inventory.Proposal, except string) error {
+	if err := m.checkRealm(ctx, tx, p, except); err != nil {
 		return err
 	}
-	return checkNames(tx, p, except)
+	return checkNames(ctx, tx, p, except)
 }
 
 // checkRealm preserves per-host identity for generated realms and identical
 // authorization attributes for shared named realms. Realm names are attributes
 // of records; there is no separate registry or declaration step.
-func (m *Managed) checkRealm(tx *sql.Tx, p Proposal, except string) error {
+func (m *Store) checkRealm(ctx context.Context, tx *sql.Tx, p inventory.Proposal, except string) error {
 	realm := principal.Realm(p.Realm)
 	if realm == "" {
 		return nil
 	}
-	rows, err := tx.Query("SELECT id FROM hosts WHERE status='active' AND realm=? AND id<>? ORDER BY id", p.Realm, except)
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM hosts WHERE status='active' AND realm=? AND id<>? ORDER BY id", p.Realm, except)
 	if err != nil {
 		return storageError(err)
 	}
@@ -419,27 +428,27 @@ func (m *Managed) checkRealm(tx *sql.Tx, p Proposal, except string) error {
 	}
 	for _, id := range ids {
 		if realm.IsGeneratedHost() {
-			return fmt.Errorf("%w: principal realm is already active on host %s", ErrConflict, id)
+			return fmt.Errorf("%w: principal realm is already active on host %s", inventory.ErrConflict, id)
 		}
-		member, err := readHost(tx, id)
+		member, err := readHost(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if !sameAuthorization(member.Proposal.Labels, member.Proposal.Accounts, p.Labels, p.Accounts) {
-			return fmt.Errorf("%w: realm %q has different authorization attributes from host %s", ErrConflict, realm, id)
+			return fmt.Errorf("%w: realm %q has different authorization attributes from host %s", inventory.ErrConflict, realm, id)
 		}
 	}
 	return nil
 }
 
-func (m *Managed) unusedID(tx *sql.Tx) (string, error) {
+func (m *Store) unusedID(ctx context.Context, tx *sql.Tx) (string, error) {
 	for {
 		id, err := m.newID()
 		if err != nil {
 			return "", err
 		}
 		var exists bool
-		if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM hosts WHERE id=?)", id).Scan(&exists); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM hosts WHERE id=?)", id).Scan(&exists); err != nil {
 			return "", storageError(err)
 		}
 		if !exists {
@@ -448,86 +457,86 @@ func (m *Managed) unusedID(tx *sql.Tx) (string, error) {
 	}
 }
 
-func (m *Managed) Enroll(p Proposal, token string) (*HostRecord, error) {
+func (m *Store) Enroll(ctx context.Context, p inventory.Proposal, token string) (*inventory.HostRecord, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	tx, err := m.db.Begin()
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
-	h := &HostRecord{Revision: 1, Status: "pending", Proposal: p, CreatedAt: now, UpdatedAt: now}
+	h := &inventory.HostRecord{Revision: 1, Status: "pending", Proposal: p, CreatedAt: now, UpdatedAt: now}
 	if token != "" {
 		if !validID(token) {
-			return nil, ErrToken
+			return nil, inventory.ErrToken
 		}
-		reserved, err := readHost(tx, token)
-		if errors.Is(err, ErrNotFound) {
-			return nil, ErrToken
+		reserved, err := readHost(ctx, tx, token)
+		if errors.Is(err, inventory.ErrNotFound) {
+			return nil, inventory.ErrToken
 		}
 		if err != nil {
 			return nil, err
 		}
-		t, err := readToken(tx, token)
+		t, err := readToken(ctx, tx, token)
 		if err != nil {
 			return nil, err
 		}
 		if reserved.Status != "pending" || t == nil || t.Revoked || t.UsedBy != "" || !now.Before(t.ExpiresAt) {
-			return nil, ErrToken
+			return nil, inventory.ErrToken
 		}
-		if err = m.conflict(tx, p, ""); err != nil {
+		if err = m.conflict(ctx, tx, p, ""); err != nil {
 			return nil, err
 		}
 		h.ID, h.Status, h.CreatedAt, h.Revision = token, "active", reserved.CreatedAt, reserved.Revision+1
-		if _, err = tx.Exec("UPDATE tokens SET used=1 WHERE host_id=?", token); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET used=1 WHERE host_id=?", token); err != nil {
 			return nil, storageError(err)
 		}
 	} else {
 		var pending int
-		if err = tx.QueryRow("SELECT count(*) FROM hosts WHERE status='pending'").Scan(&pending); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM hosts WHERE status='pending'").Scan(&pending); err != nil {
 			return nil, storageError(err)
 		}
 		if pending >= 1000 {
 			return nil, fmt.Errorf("pending enrollment queue is full")
 		}
-		if h.ID, err = m.unusedID(tx); err != nil {
+		if h.ID, err = m.unusedID(ctx, tx); err != nil {
 			return nil, err
 		}
 	}
-	if err = saveHost(tx, h, token == ""); err != nil {
+	if err = saveHost(ctx, tx, h, token == ""); err != nil {
 		return nil, err
 	}
 	// Read back detached collections before committing; callers never share the
 	// slices or maps passed in their proposal with the returned snapshot.
-	h, err = readHost(tx, h.ID)
+	h, err = readHost(ctx, tx, h.ID)
 	if err != nil {
 		return nil, err
 	}
-	if err = finish(tx, h.ID, "host", "enroll"); err != nil {
+	if err = finish(ctx, tx, h.ID, "host", "enroll"); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
 
-func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal) (*HostRecord, error) {
+func (m *Store) Change(ctx context.Context, actor, action, id string, revision uint64, p *inventory.Proposal) (*inventory.HostRecord, error) {
 	if p != nil {
 		if err := p.Validate(); err != nil {
 			return nil, err
 		}
 	}
-	tx, err := m.db.Begin()
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	h, err := readHost(tx, id)
+	h, err := readHost(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
 	if revision == 0 || h.Revision != revision {
-		return nil, ErrRevision
+		return nil, inventory.ErrRevision
 	}
 	switch action {
 	case "edit":
@@ -538,7 +547,7 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 			return nil, fmt.Errorf("only pending or active records can be edited")
 		}
 		if h.Status == "active" {
-			if err = m.conflict(tx, *p, id); err != nil {
+			if err = m.conflict(ctx, tx, *p, id); err != nil {
 				return nil, err
 			}
 		}
@@ -550,7 +559,7 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		if err = h.Proposal.Validate(); err != nil {
 			return nil, fmt.Errorf("host attributes are required before approval: %w", err)
 		}
-		if err = m.conflict(tx, h.Proposal, id); err != nil {
+		if err = m.conflict(ctx, tx, h.Proposal, id); err != nil {
 			return nil, err
 		}
 		h.Status = "active"
@@ -560,59 +569,59 @@ func (m *Managed) Change(actor, action, id string, revision uint64, p *Proposal)
 		}
 		h.Status = "denied"
 	case "remove":
-		if _, err = tx.Exec("DELETE FROM hosts WHERE id=?", id); err != nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM hosts WHERE id=?", id); err != nil {
 			return nil, storageError(err)
 		}
-		return nil, finish(tx, id, actor, action)
+		return nil, finish(ctx, tx, id, actor, action)
 	default:
 		return nil, fmt.Errorf("unknown inventory action")
 	}
 	if h.Status != "pending" {
-		if _, err = tx.Exec("UPDATE tokens SET revoked=1 WHERE host_id=? AND used=0", id); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET revoked=1 WHERE host_id=? AND used=0", id); err != nil {
 			return nil, storageError(err)
 		}
 	}
 	h.Revision++
 	h.UpdatedAt = time.Now().UTC()
-	if err = saveHost(tx, h, false); err != nil {
+	if err = saveHost(ctx, tx, h, false); err != nil {
 		return nil, err
 	}
-	h, err = readHost(tx, id)
+	h, err = readHost(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err = finish(tx, id, actor, action); err != nil {
+	if err = finish(ctx, tx, id, actor, action); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
 
-func (m *Managed) Get(id string) (*HostRecord, error) {
-	tx, err := m.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+func (m *Store) Get(ctx context.Context, id string) (*inventory.HostRecord, error) {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	h, err := readHost(tx, id)
+	h, err := readHost(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
 	return h, storageError(tx.Commit())
 }
 
-func (m *Managed) List() ([]HostRecord, error) {
-	tx, err := m.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+func (m *Store) List(ctx context.Context) ([]inventory.HostRecord, error) {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	ids, err := hostIDs(tx)
+	ids, err := hostIDs(ctx, tx)
 	if err != nil {
 		return nil, storageError(err)
 	}
-	hosts := []HostRecord{}
+	hosts := []inventory.HostRecord{}
 	for _, id := range ids {
-		h, err := readHost(tx, id)
+		h, err := readHost(ctx, tx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -621,40 +630,40 @@ func (m *Managed) List() ([]HostRecord, error) {
 	return hosts, storageError(tx.Commit())
 }
 
-func (m *Managed) CreateToken(actor string, lifetime time.Duration) (EnrollmentToken, error) {
+func (m *Store) CreateToken(ctx context.Context, actor string, lifetime time.Duration) (inventory.EnrollmentToken, error) {
 	if lifetime <= 0 || lifetime > 24*time.Hour {
-		return EnrollmentToken{}, fmt.Errorf("token lifetime must be positive and no more than 24h")
+		return inventory.EnrollmentToken{}, fmt.Errorf("token lifetime must be positive and no more than 24h")
 	}
-	tx, err := m.db.Begin()
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return EnrollmentToken{}, storageError(err)
+		return inventory.EnrollmentToken{}, storageError(err)
 	}
 	defer tx.Rollback()
-	id, err := m.unusedID(tx)
+	id, err := m.unusedID(ctx, tx)
 	if err != nil {
-		return EnrollmentToken{}, err
+		return inventory.EnrollmentToken{}, err
 	}
 	now := time.Now().UTC()
-	token := EnrollmentToken{ID: id, ExpiresAt: now.Add(lifetime)}
-	h := &HostRecord{ID: id, Revision: 1, Status: "pending", CreatedAt: now, UpdatedAt: now}
-	if err = saveHost(tx, h, true); err != nil {
-		return EnrollmentToken{}, err
+	token := inventory.EnrollmentToken{ID: id, ExpiresAt: now.Add(lifetime)}
+	h := &inventory.HostRecord{ID: id, Revision: 1, Status: "pending", CreatedAt: now, UpdatedAt: now}
+	if err = saveHost(ctx, tx, h, true); err != nil {
+		return inventory.EnrollmentToken{}, err
 	}
-	if _, err = tx.Exec("INSERT INTO tokens VALUES (?,?,0,0)", id, token.ExpiresAt.Format(time.RFC3339Nano)); err != nil {
-		return EnrollmentToken{}, storageError(err)
+	if _, err = tx.ExecContext(ctx, "INSERT INTO tokens VALUES (?,?,0,0)", id, token.ExpiresAt.Format(time.RFC3339Nano)); err != nil {
+		return inventory.EnrollmentToken{}, storageError(err)
 	}
-	return token, finish(tx, id, actor, "token-create")
+	return token, finish(ctx, tx, id, actor, "token-create")
 }
 
-func (m *Managed) Tokens() ([]EnrollmentToken, error) {
-	rows, err := m.db.Query("SELECT host_id,expires,used,revoked FROM tokens ORDER BY host_id")
+func (m *Store) Tokens(ctx context.Context) ([]inventory.EnrollmentToken, error) {
+	rows, err := m.db.QueryContext(ctx, "SELECT host_id,expires,used,revoked FROM tokens ORDER BY host_id")
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer rows.Close()
-	tokens := []EnrollmentToken{}
+	tokens := []inventory.EnrollmentToken{}
 	for rows.Next() {
-		var t EnrollmentToken
+		var t inventory.EnrollmentToken
 		var expires string
 		var used bool
 		if err = rows.Scan(&t.ID, &expires, &used, &t.Revoked); err != nil {
@@ -671,37 +680,37 @@ func (m *Managed) Tokens() ([]EnrollmentToken, error) {
 	return tokens, storageError(rows.Err())
 }
 
-func (m *Managed) RevokeToken(actor, id string) error {
-	tx, err := m.db.Begin()
+func (m *Store) RevokeToken(ctx context.Context, actor, id string) error {
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return storageError(err)
 	}
 	defer tx.Rollback()
-	t, err := readToken(tx, id)
+	t, err := readToken(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	if t == nil {
-		return ErrNotFound
+		return inventory.ErrNotFound
 	}
-	if _, err = tx.Exec("UPDATE tokens SET revoked=1 WHERE host_id=?", id); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE tokens SET revoked=1 WHERE host_id=?", id); err != nil {
 		return storageError(err)
 	}
-	if _, err = tx.Exec("UPDATE hosts SET revision=revision+1,updated=? WHERE id=?", time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE hosts SET revision=revision+1,updated=? WHERE id=?", time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
 		return storageError(err)
 	}
-	return finish(tx, id, actor, "token-revoke")
+	return finish(ctx, tx, id, actor, "token-revoke")
 }
 
-func (m *Managed) Audit() ([]AuditEvent, error) {
-	rows, err := m.db.Query("SELECT time,actor,action,host_id FROM audit ORDER BY sequence")
+func (m *Store) Audit(ctx context.Context) ([]inventory.AuditEvent, error) {
+	rows, err := m.db.QueryContext(ctx, "SELECT time,actor,action,host_id FROM audit ORDER BY sequence")
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer rows.Close()
-	events := []AuditEvent{}
+	events := []inventory.AuditEvent{}
 	for rows.Next() {
-		var e AuditEvent
+		var e inventory.AuditEvent
 		var at string
 		if err = rows.Scan(&at, &e.Actor, &e.Action, &e.Resource); err != nil {
 			return nil, storageError(err)
@@ -711,7 +720,7 @@ func (m *Managed) Audit() ([]AuditEvent, error) {
 		}
 		events = append(events, e)
 	}
-	slices.SortStableFunc(events, func(a, b AuditEvent) int {
+	slices.SortStableFunc(events, func(a, b inventory.AuditEvent) int {
 		if c := a.At.Compare(b.At); c != 0 {
 			return c
 		}
@@ -722,21 +731,21 @@ func (m *Managed) Audit() ([]AuditEvent, error) {
 
 // LookupHost reads current host facts and the inventory revision in the same
 // snapshot. Exact names take precedence over active pattern records.
-func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, string, error) {
+func (m *Store) LookupHost(ctx context.Context, name string) (*inventory.ResolvedHost, string, error) {
 	name = hostpattern.NormalizeName(name)
 	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, "", storageError(err)
 	}
 	defer tx.Rollback()
-	revision, err := inventoryRevision(tx)
+	revision, err := inventoryRevision(ctx, tx)
 	if err != nil {
 		return nil, "", err
 	}
 	var id string
-	err = tx.QueryRow("SELECT host_id FROM names JOIN hosts ON hosts.id=names.host_id WHERE name=? AND status='active'", name).Scan(&id)
+	err = tx.QueryRowContext(ctx, "SELECT host_id FROM names JOIN hosts ON hosts.id=names.host_id WHERE name=? AND status='active'", name).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		rows, queryErr := tx.Query("SELECT id,pattern FROM hosts WHERE status='active' AND pattern<>'' ORDER BY id")
+		rows, queryErr := tx.QueryContext(ctx, "SELECT id,pattern FROM hosts WHERE status='active' AND pattern<>'' ORDER BY id")
 		if queryErr != nil {
 			return nil, "", storageError(queryErr)
 		}
@@ -753,7 +762,7 @@ func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, s
 			}
 			if pattern.Match(name) {
 				if id != "" {
-					queryErr = fmt.Errorf("%w: hostname %s matches pattern records %s and %s", ErrConflict, name, id, candidate)
+					queryErr = fmt.Errorf("%w: hostname %s matches pattern records %s and %s", inventory.ErrConflict, name, id, candidate)
 					break
 				}
 				id = candidate
@@ -774,7 +783,7 @@ func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, s
 	if err != nil {
 		return nil, "", storageError(err)
 	}
-	h, err := readHost(tx, id)
+	h, err := readHost(ctx, tx, id)
 	if err != nil {
 		return nil, "", err
 	}
@@ -782,6 +791,41 @@ func (m *Managed) LookupHost(ctx context.Context, name string) (*ResolvedHost, s
 	if p.Pattern != "" {
 		p.Names = []string{name}
 	}
-	resolved := &ResolvedHost{Policy: Host{Names: p.Names, Labels: p.Labels, Accounts: p.Accounts}, PrincipalMode: p.PrincipalMode, Realm: principal.Realm(p.Realm)}
+	resolved := &inventory.ResolvedHost{Policy: inventory.Host{Names: p.Names, Labels: p.Labels, Accounts: p.Accounts}, PrincipalMode: p.PrincipalMode, Realm: principal.Realm(p.Realm)}
 	return resolved, revision, storageError(tx.Commit())
+}
+
+func randomSecret() (string, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	return hex.EncodeToString(b), err
+}
+func validID(id string) bool {
+	if len(id) != 64 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// empty identifies a reservation that has not supplied any host attributes yet.
+// It is permitted only on non-active host records with enrollment metadata.
+func emptyProposal(p inventory.Proposal) bool {
+	return p.Names == nil && p.Pattern == "" && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Realm == ""
+}
+
+// sameAuthorization compares the authorization attributes shared by all realm members.
+// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
+func sameAuthorization(previousLabels map[string]string, previousAccounts []string, labels map[string]string, accounts []string) bool {
+	if !maps.Equal(previousLabels, labels) || (previousAccounts == nil) != (accounts == nil) {
+		return false
+	}
+	previous, proposed := slices.Clone(previousAccounts), slices.Clone(accounts)
+	slices.Sort(previous)
+	slices.Sort(proposed)
+	return slices.Equal(previous, proposed)
 }

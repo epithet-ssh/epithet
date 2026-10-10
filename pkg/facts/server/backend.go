@@ -21,7 +21,7 @@ import (
 // configured control key can invoke it; CA reader credentials never confer
 // mutation authority. Stores enforce their transactional invariants.
 type backend struct {
-	Store            *inventory.Managed
+	Store            inventory.Store
 	ManagedDirectory directory.Store
 	Directory        directory.Directory
 }
@@ -163,7 +163,7 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 			break
 		}
 		var h *inventory.HostRecord
-		h, err = c.Store.Enroll(inventory.ProposalFromControl(*req.Host), req.Token)
+		h, err = c.Store.Enroll(r.Context(), inventory.ProposalFromControl(*req.Host), req.Token)
 		resp.Host = controlRecord(h)
 	case "add-pattern":
 		if req.Host == nil {
@@ -171,15 +171,15 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 			break
 		}
 		var h *inventory.HostRecord
-		h, err = c.Store.AddPattern(actor, inventory.ProposalFromControl(*req.Host))
+		h, err = c.Store.AddPattern(r.Context(), actor, inventory.ProposalFromControl(*req.Host))
 		resp.Host = controlRecord(h)
 	case "list":
 		var hosts []inventory.HostRecord
-		hosts, err = c.Store.List()
+		hosts, err = c.Store.List(r.Context())
 		resp.Hosts = controlSlice(hosts, inventory.HostRecord.ControlRecord)
 	case "get":
 		var h *inventory.HostRecord
-		h, err = c.Store.Get(req.ID)
+		h, err = c.Store.Get(r.Context(), req.ID)
 		resp.Host = controlRecord(h)
 	case "edit", "approve", "deny", "remove":
 		var proposal *inventory.Proposal
@@ -188,7 +188,7 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 			proposal = &p
 		}
 		var h *inventory.HostRecord
-		h, err = c.Store.Change(actor, req.Action, req.ID, req.Revision, proposal)
+		h, err = c.Store.Change(r.Context(), actor, req.Action, req.ID, req.Revision, proposal)
 		resp.Host = controlRecord(h)
 	case "token-create":
 		seconds := req.LifetimeSeconds
@@ -200,18 +200,18 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 			break
 		}
 		var t inventory.EnrollmentToken
-		t, err = c.Store.CreateToken(actor, time.Duration(seconds)*time.Second)
+		t, err = c.Store.CreateToken(r.Context(), actor, time.Duration(seconds)*time.Second)
 		token := t.ControlToken()
 		resp.Token = &token
 	case "token-list":
 		var tokens []inventory.EnrollmentToken
-		tokens, err = c.Store.Tokens()
+		tokens, err = c.Store.Tokens(r.Context())
 		resp.Tokens = controlSlice(tokens, inventory.EnrollmentToken.ControlToken)
 	case "token-revoke":
-		err = c.Store.RevokeToken(actor, req.ID)
+		err = c.Store.RevokeToken(r.Context(), actor, req.ID)
 	case "audit":
 		var events []inventory.AuditEvent
-		events, err = c.Store.Audit()
+		events, err = c.Store.Audit(r.Context())
 		resp.Audit = controlSlice(events, inventory.AuditEvent.ControlEvent)
 	default:
 		err = fmt.Errorf("unknown inventory action")

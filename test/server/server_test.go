@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -321,16 +322,16 @@ func writeControlKey(t *testing.T, dir string) string {
 
 func seedManagedPattern(t *testing.T, state string, accounts []string) {
 	t.Helper()
-	store, err := inventory.OpenManaged(filepath.Join(state, "inventory", "inventory.db"))
+	store, err := inventorysqlite.Open(filepath.Join(state, "inventory", "inventory.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	record, err := store.Enroll(inventory.Proposal{Pattern: "*", Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, "")
+	record, err := store.Enroll(t.Context(), inventory.Proposal{Pattern: "*", Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Change("admin", "approve", record.ID, record.Revision, nil); err != nil {
+	if _, err = store.Change(t.Context(), "admin", "approve", record.ID, record.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 }

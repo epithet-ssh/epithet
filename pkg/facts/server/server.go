@@ -23,7 +23,7 @@ func DirectoryHandler(users directory.Directory, managed directory.Store, caKey,
 // InventoryHandler assembles managed inventory lookup and private control routes.
 // An empty control key disables management. The caller owns the store and its
 // lifetime; the CA reader key never confers mutation authority.
-func InventoryHandler(store *inventory.Managed, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
+func InventoryHandler(store inventory.Store, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
 	var hosts inventory.Hosts
 	if store != nil {
 		hosts = store

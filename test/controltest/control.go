@@ -35,7 +35,7 @@ func (noAuthentication) Validate(context.Context, string) (*oidc.Claims, error) 
 	return nil, fmt.Errorf("no authentication configured")
 }
 
-func New(t *testing.T, users directory.Directory, managed directory.Store, hosts *inventory.Managed, config control.Config) *Fixture {
+func New(t *testing.T, users directory.Directory, managed directory.Store, hosts inventory.Store, config control.Config) *Fixture {
 	t.Helper()
 	caPub, caKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)

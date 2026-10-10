@@ -13,7 +13,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
@@ -31,7 +31,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		_, err = users.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:" + id, UserName: id, Active: true})
 		require.NoError(t, err)
 	}
-	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
 	idp := oidctest.New(t)
@@ -75,7 +75,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		}
 
 	}
-	events, err := hosts.Audit()
+	events, err := hosts.Audit(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "subject:inventory-admin", events[len(events)-1].Actor)
 	// The provisioning bearer belongs to public control only, never the backend.
@@ -122,7 +122,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.Config{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
-	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
 	pub, key, err := sshcert.GenerateKeys()
@@ -150,7 +150,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	created, status, err := client.Control(t.Context(), idp.MintIDToken("admin", time.Now().Add(time.Hour)), facts.ControlRequest{Action: "token-create"})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	record, err := hosts.Get(created.Token.ID)
+	record, err := hosts.Get(t.Context(), created.Token.ID)
 	require.NoError(t, err)
 	require.Equal(t, "pending", record.Status)
 	require.Empty(t, record.Proposal.Names)
@@ -160,7 +160,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	require.Equal(t, 200, status)
 	require.Equal(t, record.ID, enrolled.Host.ID)
 	require.Equal(t, "active", enrolled.Host.Status)
-	events, err := hosts.Audit()
+	events, err := hosts.Audit(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "host", events[len(events)-1].Actor)
 }

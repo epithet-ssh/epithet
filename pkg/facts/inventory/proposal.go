@@ -2,26 +2,14 @@ package inventory
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/principal"
 	"gopkg.in/yaml.v3"
-)
-
-var (
-	ErrStorage  = errors.New("managed inventory storage unavailable")
-	ErrConflict = errors.New("inventory conflict")
-	ErrNotFound = errors.New("inventory record not found")
-	ErrToken    = errors.New("invalid, expired, revoked, or used enrollment token")
-	ErrRevision = errors.New("record changed; reload before retrying")
 )
 
 // Proposal is the entire editable authorization record. Admission and ownership
@@ -86,12 +74,6 @@ func (p Proposal) MarshalYAML() (any, error) {
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: ""})
 	}
 	return &node, nil
-}
-
-// empty identifies a reservation that has not supplied any host attributes yet.
-// It is permitted only on non-active host records with enrollment metadata.
-func (p Proposal) empty() bool {
-	return p.Names == nil && p.Pattern == "" && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Realm == ""
 }
 
 func (p *Proposal) Validate() error {
@@ -179,43 +161,4 @@ func DecodeYAML(data []byte, dst any) error {
 		return fmt.Errorf("expected exactly one YAML document")
 	}
 	return nil
-}
-
-type HostRecord struct {
-	ID        string    `yaml:"id"`
-	Revision  uint64    `yaml:"revision"`
-	Status    string    `yaml:"status"`
-	Proposal  Proposal  `yaml:"host,omitempty"`
-	CreatedAt time.Time `yaml:"created-at"`
-	UpdatedAt time.Time `yaml:"updated-at"`
-}
-
-type EnrollmentToken struct {
-	ID        string    `yaml:"id"`
-	ExpiresAt time.Time `yaml:"expires-at"`
-	UsedBy    string    `yaml:"used-by,omitempty"`
-	Revoked   bool      `yaml:"revoked"`
-}
-type AuditEvent struct {
-	At       time.Time `yaml:"at"`
-	Actor    string    `yaml:"actor"`
-	Action   string    `yaml:"action"`
-	Resource string    `yaml:"resource"`
-}
-
-func RandomSecret() (string, error) {
-	b := make([]byte, 32)
-	_, err := rand.Read(b)
-	return hex.EncodeToString(b), err
-}
-func validID(id string) bool {
-	if len(id) != 64 {
-		return false
-	}
-	for _, c := range id {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
 }

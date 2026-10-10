@@ -17,6 +17,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -223,11 +224,11 @@ func TestRevisionPreservesPresenceAndUTF8Bound(t *testing.T) {
 func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
 	for _, pattern := range []string{"*.example", "ci-*.*"} {
-		_, err = hosts.AddPattern("admin", inventory.Proposal{Pattern: pattern, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
+		_, err = hosts.AddPattern(t.Context(), "admin", inventory.Proposal{Pattern: pattern, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
 		require.NoError(t, err)
 	}
 	handler, err := factserver.LookupHandler(nil, hosts, pub, "")

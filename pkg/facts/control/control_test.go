@@ -15,7 +15,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	"github.com/epithet-ssh/epithet/pkg/identity/oidc"
 	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -25,7 +25,7 @@ import (
 )
 
 func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
-	store, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	store, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer store.Close()
 	fixture := controltest.New(t, nil, nil, store, control.Config{})
@@ -55,7 +55,7 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 			}
 		})
 	}
-	hosts, err := store.List()
+	hosts, err := store.List(t.Context())
 	require.NoError(t, err)
 	require.Len(t, hosts, 3, "invalid input must never reach enrollment")
 }
@@ -77,7 +77,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 `), 0600))
 	inv, err := inventorytest.NewStatic([]string{path})
 	require.NoError(t, err)
-	m, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	m, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer m.Close()
 	idp := oidctest.New(t)
@@ -114,7 +114,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", response.Host.Status)
-	audit, err := m.Audit()
+	audit, err := m.Audit(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "directory-admin", audit[len(audit)-1].Actor)
 	pattern := facts.Proposal{Pattern: "ci-*.example", Accounts: []string{"root"}, PrincipalMode: "epithet-principal-v1", Realm: "CIRunners"}

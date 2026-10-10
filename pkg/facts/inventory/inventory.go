@@ -4,8 +4,6 @@ package inventory
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
@@ -67,16 +65,4 @@ type Host struct {
 // lookup failures return an error.
 type Hosts interface {
 	LookupHost(context.Context, string) (*ResolvedHost, string, error)
-}
-
-// sameAuthorization compares the authorization attributes shared by all realm members.
-// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
-func sameAuthorization(previousLabels map[string]string, previousAccounts []string, labels map[string]string, accounts []string) bool {
-	if !maps.Equal(previousLabels, labels) || (previousAccounts == nil) != (accounts == nil) {
-		return false
-	}
-	previous, proposed := slices.Clone(previousAccounts), slices.Clone(accounts)
-	slices.Sort(previous)
-	slices.Sort(proposed)
-	return slices.Equal(previous, proposed)
 }

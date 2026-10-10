@@ -96,3 +96,19 @@ func TestFactClientsAndControlDoNotLinkBuiltInServices(t *testing.T) {
 		})
 	}
 }
+
+// Managed backends implement the domain contracts; service adapters must not
+// force alternative backends to link the built-in SQLite implementation.
+func TestFactContractsAndHandlersDoNotLinkSQLite(t *testing.T) {
+	for _, pkg := range []string{"./pkg/facts/directory", "./pkg/facts/inventory", "./pkg/facts/server"} {
+		t.Run(pkg, func(t *testing.T) {
+			for _, dep := range deps(t, pkg) {
+				for _, bad := range []string{module + "pkg/facts/storage", "modernc.org/sqlite", module + "pkg/facts/directory/sqlitestore", module + "pkg/facts/inventory/sqlitestore"} {
+					if dep == bad || strings.HasPrefix(dep, bad+"/") {
+						t.Errorf("%s depends on %s; managed backends must remain replaceable", pkg, dep)
+					}
+				}
+			}
+		})
+	}
+}

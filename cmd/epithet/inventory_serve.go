@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -21,7 +21,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 	if err != nil {
 		return err
 	}
-	managed, err := inventory.OpenManaged(path)
+	managed, err := inventorysqlite.Open(path)
 	if err != nil {
 		return err
 	}

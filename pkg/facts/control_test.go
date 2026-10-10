@@ -13,7 +13,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
@@ -37,7 +37,7 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	// A second group with the same display name awaits an explicit rebind.
 	group, err := users.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 	require.NoError(t, err)
-	hosts, err := inventory.OpenManaged(filepath.Join(t.TempDir(), "inventory.db"))
+	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer hosts.Close()
 	serve := func(handler http.Handler, err error) *httptest.Server {

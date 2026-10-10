@@ -153,11 +153,18 @@ The fact-service implementation lives under the same namespace:
 | `facts/directory` | Directory contracts and static YAML user loading |
 | `facts/directory/sqlitestore` | Managed directory persistence and invariants |
 | `facts/directory/scim` | SCIM protocol adaptation to the directory contract |
-| `facts/inventory` | Managed host inventory, enrollment, patterns, and persistence |
+| `facts/inventory` | Host lookup and managed store contracts, records, and proposal validation |
+| `facts/inventory/sqlitestore` | Managed inventory persistence and admission invariants |
 | `facts/storage` | Shared SQLite permissions and connection settings |
 
-Directory contracts stay independent of the SQLite implementation, allowing
-alternative stores. The SCIM adapter owns its protocol parsing and response
+Directory and inventory contracts stay independent of their SQLite implementations,
+allowing alternative managed stores. `directory.Store` and `inventory.Store` expose
+complete operations; each backend owns atomic changes, conflicts, audit history,
+and revisions. Every operation carries a request context. Service handlers accept
+these contracts and leave store lifetime to their caller. A backend can use an
+external database without changing the control plane or fact clients.
+
+The SCIM adapter owns its protocol parsing and response
 semantics, separately from store transactions. Combined YAML host loading is
 integration-test support in `test/inventorytest`; production inventory is
 managed only, and static directory loading supplies user facts only.
