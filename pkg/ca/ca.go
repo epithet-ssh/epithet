@@ -140,6 +140,9 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 	}
 	claims, err := c.validator.Validate(ctx, token)
 	if err != nil {
+		if errors.Is(err, oidc.ErrUnavailable) {
+			return nil, fmt.Errorf("%w: %w", ErrDependency, err)
+		}
 		return nil, fmt.Errorf("%w: %w", ErrInvalidAuthentication, err)
 	}
 	name := hostpattern.NormalizeName(conn.RemoteHost)

@@ -163,6 +163,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		claims, err := s.config.Validator.Validate(r.Context(), raw)
 		if err != nil {
+			if errors.Is(err, oidc.ErrUnavailable) {
+				controlError(w, 503, "OIDC dependency unavailable")
+				return
+			}
 			controlError(w, 401, "invalid or expired authentication")
 			return
 		}

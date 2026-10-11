@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,9 +28,10 @@ const TokenEmail = "test@example.com"
 func Subject(email string) string { return "subject:" + email }
 
 type IdP struct {
-	server *httptest.Server
-	key    *rsa.PrivateKey
-	signer jose.Signer
+	server               *httptest.Server
+	key                  *rsa.PrivateKey
+	signer               jose.Signer
+	discoveryUnavailable atomic.Bool
 }
 
 func New(t *testing.T) *IdP {
@@ -62,6 +64,10 @@ func New(t *testing.T) *IdP {
 }
 
 func (p *IdP) Issuer() string { return p.server.URL }
+
+// SetDiscoveryAvailable simulates a provider outage without changing its issuer
+// or signing keys, including while clients are attempting discovery.
+func (p *IdP) SetDiscoveryAvailable(available bool) { p.discoveryUnavailable.Store(!available) }
 
 func (p *IdP) MintIDToken(email string, expiresAt time.Time) string {
 	return p.MintIDTokenWithAudience(email, ClientID, expiresAt)
@@ -98,6 +104,10 @@ func (p *IdP) MintIDTokenWithClaims(email string, expiresAt time.Time, overrides
 }
 
 func (p *IdP) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
+	if p.discoveryUnavailable.Load() {
+		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                p.server.URL,
 		"authorization_endpoint":                p.server.URL + "/auth",

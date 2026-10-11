@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,7 @@ func TestServerEndToEnd(t *testing.T) {
 	// actual token-validation path rather than a stub that never verifies
 	// anything.
 	idp := oidctest.New(t)
+	idp.SetDiscoveryAvailable(false)
 	mockURL := idp.Issuer()
 
 	// Build the epithet binary.
@@ -109,6 +111,118 @@ state-dir = %q
 	// Wait for the server to accept TCP connections.
 	baseURL := fmt.Sprintf("http://localhost:%d", port)
 	waitForTCP(t, fmt.Sprintf("localhost:%d", port), 15*time.Second)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	checkStatus := func(t *testing.T, path string, want int) string {
+		t.Helper()
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != want {
+			t.Fatalf("GET %s: status %d, want %d: %s", path, resp.StatusCode, want, body)
+		}
+		return string(body)
+	}
+	requestCert := func(t *testing.T, token string, want int) {
+		t.Helper()
+		key, _, err := sshcert.GenerateKeys()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(wire.CreateCertRequest{PublicKey: key, Connection: wire.Connection{RemoteHost: "host", RemoteUser: "root"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequest("POST", baseURL+"/", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		response, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != want {
+			t.Fatalf("issuance: status %d, want %d: %s", resp.StatusCode, want, response)
+		}
+		if want == http.StatusOK {
+			var certResponse wire.CreateCertResponse
+			if err := json.Unmarshal(response, &certResponse); err != nil {
+				t.Fatal(err)
+			}
+			cert, err := sshcert.Parse(certResponse.Certificate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cert.KeyId != "test@example.com" || len(cert.ValidPrincipals) != 1 || cert.ValidPrincipals[0] != "root" {
+				t.Fatalf("unexpected certificate: identity %q, principals %v", cert.KeyId, cert.ValidPrincipals)
+			}
+		}
+	}
+	t.Run("startup_recovers_after_provider_outage", func(t *testing.T) {
+		// Keep the external dependency down beyond the supervisor's ten-second
+		// socket deadline. The same process must remain alive and explain why
+		// it is unready, while bootstrap continues to work.
+		deadline := time.Now().Add(11 * time.Second)
+		for time.Now().Before(deadline) {
+			checkStatus(t, "/", http.StatusOK)
+			reason := checkStatus(t, "/readyz", http.StatusServiceUnavailable)
+			if !strings.Contains(reason, "OIDC discovery unavailable") {
+				t.Fatalf("missing readiness reason: %s", reason)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		checkStatus(t, "/", http.StatusOK)
+		checkStatus(t, "/discovery", http.StatusOK)
+		token := idp.MintIDToken("test@example.com", time.Now().Add(time.Minute))
+		requestCert(t, token, http.StatusBadGateway)
+		req, err := http.NewRequest("POST", baseURL+"/inventory", strings.NewReader(`{"action":"list"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("control during discovery: status %d", resp.StatusCode)
+		}
+		idp.SetDiscoveryAvailable(true)
+		deadline = time.Now().Add(35 * time.Second)
+		for {
+			resp, err := client.Get(baseURL + "/readyz")
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("server did not recover after provider restoration")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		requestCert(t, token, http.StatusOK)
+		requestCert(t, "invalid-token", http.StatusUnauthorized)
+		idp.SetDiscoveryAvailable(false)
+		checkStatus(t, "/readyz", http.StatusOK)
+		requestCert(t, token, http.StatusOK)
+		idp.SetDiscoveryAvailable(true)
+	})
 
 	// GET / → 200, body = CA public key (routed to CA subprocess).
 	t.Run("ca_pubkey", func(t *testing.T) {
@@ -264,6 +378,40 @@ state-dir = %q
 		}
 		if len(entries) != 0 {
 			t.Fatalf("private sockets remain after shutdown/failure: %v", entries)
+		}
+	})
+
+	t.Run("shutdown_during_discovery_cleans_up", func(t *testing.T) {
+		idp.SetDiscoveryAvailable(false)
+		port := availablePort(t)
+		pending := exec.CommandContext(t.Context(), epithetBin, "--config", configPath, "server",
+			"--listen", fmt.Sprintf("127.0.0.1:%d", port), "--directory-static-file", directoryPath)
+		pending.Env = serverCmd.Env
+		pending.Stderr = os.Stderr
+		if err := pending.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- pending.Wait() }()
+		t.Cleanup(func() { pending.Process.Kill() })
+		waitForTCP(t, fmt.Sprintf("127.0.0.1:%d", port), 10*time.Second)
+		if err := pending.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("shutdown during discovery: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("shutdown remained blocked by discovery")
+		}
+		entries, err := os.ReadDir(runtimeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("private sockets remain after shutdown: %v", entries)
 		}
 	})
 }

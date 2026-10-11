@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -36,6 +37,10 @@ type ValidatorConfig struct {
 
 	// TLSConfig configures TLS for OIDC provider connections.
 	TLSConfig tlsconfig.Config
+
+	// Prepared only by PrepareService. Copies of the returned configuration use
+	// the same discovery state; ordinary configurations discover synchronously.
+	serviceVerifier *Verifier
 }
 
 // Claims represents the claims extracted from an OIDC token.
@@ -52,26 +57,48 @@ type Claims struct {
 }
 
 // NewValidator creates a new OIDC token validator.
-// It performs OIDC discovery to fetch the provider's JWKS (public keys).
+// Ordinary configurations perform one discovery attempt; configurations returned
+// by PrepareService share its discovery state. Signing keys are fetched on demand.
 func NewValidator(ctx context.Context, config ValidatorConfig) (*Validator, error) {
 	mode, claim, err := ResolveIdentity(config.Issuer, config.IdentityMode, config.UserIDClaim)
 	if err != nil {
 		return nil, err
 	}
-	verifier, err := NewVerifier(ctx, VerifierConfig{
-		IssuerURL: config.Issuer, ClientID: config.ClientID, TLSConfig: config.TLSConfig,
-	})
-	if err != nil {
-		return nil, err
+	verifier := config.serviceVerifier
+	if verifier == nil {
+		verifier, err = NewVerifier(ctx, VerifierConfig{IssuerURL: config.Issuer, ClientID: config.ClientID, TLSConfig: config.TLSConfig})
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	return &Validator{
-		verifier:     verifier,
-		issuer:       config.Issuer,
-		userIDClaim:  claim,
-		identityMode: mode,
-	}, nil
+	return &Validator{verifier: verifier, issuer: config.Issuer, userIDClaim: claim, identityMode: mode}, nil
 }
+
+// PrepareService validates local configuration without contacting the issuer.
+// Pass the returned configuration unchanged to service construction; validators
+// built from it share the returned handle's discovery state. The service binds
+// its listener, calls Run once on the handle, and uses Ready for startup status.
+// Ordinary NewValidator configurations retain synchronous discovery.
+func PrepareService(config ValidatorConfig) (ValidatorConfig, *Validator, error) {
+	verifier, err := prepareVerifier(VerifierConfig{IssuerURL: config.Issuer, ClientID: config.ClientID, TLSConfig: config.TLSConfig})
+	if err != nil {
+		return ValidatorConfig{}, nil, err
+	}
+	config.serviceVerifier = verifier
+	validator, err := NewValidator(context.Background(), config)
+	if err != nil {
+		return ValidatorConfig{}, nil, err
+	}
+	return config, validator, nil
+}
+
+// Run owns discovery recovery for the service lifecycle. Call once per validator.
+func (v *Validator) Run(ctx context.Context, logger *slog.Logger) error {
+	return v.verifier.Run(ctx, logger)
+}
+
+// Ready reports completed discovery, independently of current IdP reachability.
+func (v *Validator) Ready() error { return v.verifier.Ready() }
 
 // Validate validates an OIDC JWT token and extracts claims.
 // Returns Claims if the token is valid, error otherwise.

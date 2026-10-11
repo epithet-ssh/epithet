@@ -130,6 +130,8 @@ func (c *ServerCLI) Run(logger *slog.Logger, _ tlsconfig.Config) error {
 			exited <- fmt.Errorf("%s subprocess exited: %v", child.name, err)
 		}()
 		if child.socket != "" {
+			// Local initialization must bind promptly. CA/control discovery runs
+			// after binding and is exposed separately through /readyz.
 			ready := make(chan error, 1)
 			go func() { ready <- waitForSocket(ctx, child.socket, 10*time.Second) }()
 			select {

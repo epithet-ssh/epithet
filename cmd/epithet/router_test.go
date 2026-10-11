@@ -115,3 +115,47 @@ func TestRouterRequiresPrivateUnixBackends(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterReadinessRequiresBothServices(t *testing.T) {
+	for _, tc := range []struct {
+		ca, control int
+		want        int
+		reason      string
+	}{
+		{200, 200, 200, "ok"},
+		{503, 200, 503, "ca: OIDC discovery unavailable"},
+		{200, 503, 503, "control: OIDC discovery unavailable"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			backend := func(status int) string {
+				return routerTestSocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					require.Equal(t, "/readyz", r.URL.Path)
+					require.Equal(t, "GET", r.Method)
+					require.Empty(t, r.Header.Get("Authorization"))
+					w.WriteHeader(status)
+					if status == 503 {
+						io.WriteString(w, "OIDC discovery unavailable\n")
+					}
+				}))
+			}
+			router, closeIdle, err := newServiceRouter(backend(tc.ca), backend(tc.control), slog.New(slog.DiscardHandler))
+			require.NoError(t, err)
+			defer closeIdle()
+			response := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "http://ca.example/readyz", nil)
+			req.Header.Set("Authorization", "Bearer must-not-be-forwarded")
+			router.ServeHTTP(response, req)
+			require.Equal(t, tc.want, response.Code)
+			require.Contains(t, response.Body.String(), tc.reason)
+			require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+		})
+	}
+	// An absent private backend leaves the combined server unready.
+	router, closeIdle, err := newServiceRouter("unix:///tmp/epithet-health-missing.sock", "", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	defer closeIdle()
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("GET", "http://ca.example/readyz", nil))
+	require.Equal(t, 503, response.Code)
+	require.Contains(t, response.Body.String(), "ca service unavailable")
+}

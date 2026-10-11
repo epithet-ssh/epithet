@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -63,7 +64,7 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 			inventoryTransport.CloseIdleConnections()
 		}
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	routes := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only management and SCIM paths map to control. Fact lookups
 		// are never public router destinations.
 		if r.URL.Path == "/inventory" && inventory != nil {
@@ -75,7 +76,39 @@ func newServiceRouter(caEndpoint, inventoryEndpoint string, logger *slog.Logger)
 			return
 		}
 		ca.ServeHTTP(w, r)
-	}), closeIdle, nil
+	})
+	// Combined readiness requires both public services to finish initialization.
+	// Fact services are already initialized before their sockets are accepted by
+	// the supervisor. These checks only contact private services, never the IdP.
+	ready := func(r *http.Request) error {
+		for _, backend := range []struct {
+			name      string
+			transport *http.Transport
+		}{{"ca", caTransport}, {"control", inventoryTransport}} {
+			if backend.transport == nil {
+				continue
+			}
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://"+backend.name+"/readyz", nil)
+			if err != nil {
+				return err
+			}
+			client := &http.Client{Transport: backend.transport, Timeout: tlsconfig.DefaultTimeout}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("%s service unavailable", backend.name)
+			}
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			resp.Body.Close()
+			if readErr != nil {
+				return fmt.Errorf("%s service unavailable", backend.name)
+			}
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("%s: %s", backend.name, strings.TrimSpace(string(body)))
+			}
+		}
+		return nil
+	}
+	return serviceReadiness(routes, ready), closeIdle, nil
 }
 
 func unixServiceProxy(service, endpoint, targetPath string, logger *slog.Logger) (*httputil.ReverseProxy, *http.Transport, error) {

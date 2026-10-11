@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,7 +36,7 @@ func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	validator, err := oidc.NewValidator(context.Background(), oidc.ValidatorConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg})
+	_, validator, err := oidc.PrepareService(oidc.ValidatorConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg})
 	if err != nil {
 		return err
 	}
@@ -46,7 +45,7 @@ func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 		return err
 	}
 	logger.Info("starting control server", "listen", c.Listen)
-	return listenAndServe(c.Listen, handler)
+	return serveWithOIDC(c.Listen, handler, validator, logger)
 }
 
 func (c *ControlCLI) provisioningToken() (string, error) {

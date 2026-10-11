@@ -45,6 +45,10 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	}
 	identity := oidc.ValidatorConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg}
 	discovery := wire.AuthConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, ClientSecret: c.OIDC.ClientSecret}
+	identity, validator, err := oidc.PrepareService(identity)
+	if err != nil {
+		return err
+	}
 	caInstance, err := ca.New(sshcert.RawPrivateKey(string(privKey)), evaluator, ca.WithLogger(logger), ca.WithFacts(c.Directory, c.Inventory, identity, discovery, tlsCfg))
 	if err != nil {
 		return fmt.Errorf("unable to create CA: %w", err)
@@ -70,7 +74,7 @@ func (c *CACLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	r.Handle("/discovery", server.DiscoveryHandler())
 
 	logger.Info("listening", "address", c.Listen)
-	return listenAndServe(c.Listen, r)
+	return serveWithOIDC(c.Listen, r, validator, logger)
 }
 
 // certAuditLogger returns a logger that emits at Info or below, regardless of
