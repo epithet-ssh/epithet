@@ -3,13 +3,15 @@ yatl_version: 1
 title: Design fact provider management operations and discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-12T09:04:43.475738Z
+updated: 2026-10-12T09:17:51.205352Z
 author: Brian McCallister
 priority: medium
 tags:
 - design
 - control
 - facts
+blocked_by:
+- rv3znarg
 ---
 
 # Fact provider management API exploration
@@ -33,7 +35,7 @@ Direction established in discussion:
 - The short form selects the `name` attribute. The fact-service reply contains the mapped names; Writ has no provider-controlled default-attribute configuration.
 - `name` is multi-valued for users, groups, and hosts. A name selector matches any supplied name. Users will commonly have one username but may have aliases; adding an alias is authorization-relevant.
 
-Still resolve in the Writ work: precise fact shapes and group identity source/scope, typed values and collection matching beyond names, missing-attribute and negation semantics, nested paths, hostname-pattern behavior, and the effects of new policy-visible host attributes on shared principal realms. These are discussion points, not authorization for speculative features.
+Still resolve in the Writ work: precise fact shapes and group identity source/scope, typed values and collection matching beyond names, missing-attribute and negation semantics, nested paths, and hostname-pattern behavior. These are discussion points, not authorization for speculative features.
 
 Resume control-plane design after those semantics land: identify the administrator operations still needed, reconsider directory binding/reconciliation operations, then settle operation schemas and OPTIONS/Link capability discovery. Preserve the agreed direction that the data-plane endpoint is an arbitrary configured URL with query parameters as its contract; discovery should advertise optional management support without requiring a fixed lookup path.
 
@@ -383,3 +385,23 @@ Completed design exploration: compared three exact operation sets, checked lifec
 # Log: 2026-10-12T09:04:43Z Brian McCallister
 
 Deferred control-plane API design until Writ structured selectors, provider-defined attributes, and multi-valued names land. Recorded the revised direction and withdrew workflow preservation as a design requirement; retain the proposals for reassessment afterward.
+
+---
+# Log: 2026-10-12T09:09:40Z Brian McCallister
+
+Recorded the agreed Writ evolution and rationale in docs/adr/0001-writ-object-selectors-and-provider-facts.md. This ADR is the design record to review before implementation planning; finalize Writ semantics and land them before resuming the control-plane API contract.
+
+---
+# Log: 2026-10-12T09:12:40Z Brian McCallister
+
+Corrected the Writ discussion scope: principal realms are a certificate mechanism, not an aspect of policy. Removed shared-realm assessment as a Writ design question from ADR 0001 and this task.
+
+---
+# Log: 2026-10-12T09:16:42Z Brian McCallister
+
+Writ evolution work is tracked in rv3znarg. Keep open questions, implementation planning, and sequencing in YATL; ADR 0001 records the technical decision and lasting rationale. Resume the control-plane contract after the Writ work lands.
+
+---
+# Log: 2026-10-12T09:17:51Z Brian McCallister
+
+Added blocker: rv3znarg
