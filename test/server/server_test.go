@@ -19,9 +19,9 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 )
 
 // TestServerEndToEnd verifies the combined server starts a router and four

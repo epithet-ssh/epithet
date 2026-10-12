@@ -18,7 +18,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 	"github.com/stretchr/testify/require"
 )
 

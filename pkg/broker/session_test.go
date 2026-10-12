@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/agent"
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 	"github.com/stretchr/testify/require"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )

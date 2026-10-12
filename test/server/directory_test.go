@@ -18,9 +18,9 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 	"github.com/stretchr/testify/require"
 )
 

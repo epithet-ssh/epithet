@@ -15,12 +15,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/test/catest"
 	"github.com/epithet-ssh/epithet/test/inventorytest"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 	"github.com/stretchr/testify/require"
 )
 

@@ -16,10 +16,10 @@ import (
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/test/controltest"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 	"github.com/stretchr/testify/require"
 )
 

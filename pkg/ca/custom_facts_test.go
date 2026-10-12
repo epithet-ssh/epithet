@@ -13,12 +13,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/caserver"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
-	"github.com/epithet-ssh/epithet/pkg/oidctest"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ"
 	"github.com/epithet-ssh/epithet/pkg/writpolicy"
+	"github.com/epithet-ssh/epithet/test/oidctest"
 	"github.com/stretchr/testify/require"
 )
 
