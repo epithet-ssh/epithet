@@ -316,23 +316,16 @@ func (c *ControlClient) Users(ctx context.Context, auth Authorization) (*UserSna
 	return result.DirectoryUsers, nil
 }
 
-// Bindings returns group bindings and the revision that binds their review.
-func (c *ControlClient) Bindings(ctx context.Context, auth Authorization) (*BindingSnapshot, error) {
+// Groups returns current directory group names and identifiers.
+func (c *ControlClient) Groups(ctx context.Context, auth Authorization) (*GroupSnapshot, error) {
 	result, err := c.call(ctx, c.directory, auth, ControlRequest{Action: "directory-groups"})
 	if err != nil {
 		return nil, err
 	}
 	if result.Directory == nil {
-		return nil, fmt.Errorf("%w: missing binding snapshot", ErrUnavailable)
+		return nil, fmt.Errorf("%w: missing group snapshot", ErrUnavailable)
 	}
 	return result.Directory, nil
-}
-
-// BindGroup changes a reviewed binding. Authorization.DirectoryRevision binds
-// the write to the same directory snapshot that authorized the administrator.
-func (c *ControlClient) BindGroup(ctx context.Context, auth Authorization, alias, id string, revision uint64) error {
-	_, err := c.call(ctx, c.directory, auth, ControlRequest{Action: "directory-bind", Alias: alias, ID: id, Revision: revision})
-	return err
 }
 
 // DirectoryAudit reads at most limit events after the exclusive sequence

@@ -88,21 +88,29 @@ func TestBespokeProviderResponseValidation(t *testing.T) {
 		host, valid bool
 	}{
 		{"minimal user", `{"id":"id"}`, false, true},
-		{"optional fields", `{"id":"id","userName":"alice","groups":["ops"],"department":"eng"}`, false, true},
+		{"optional fields", `{"id":"id","userName":"alice","name":["alice"],"groups":[{"name":["ops"]}],"attributes":{"department":"eng"}}`, false, true},
+		{"numeric user attribute", `{"id":"id","attributes":{"cost":1}}`, false, false},
+		{"null group member", `{"id":"id","groups":[null]}`, false, false},
+		{"null name member", `{"id":"id","name":[null]}`, false, false},
+		{"null attribute member", `{"id":"id","attributes":{"role":["ops",null]}}`, false, false},
+		{"shadow name", `{"id":"id","attributes":{"name":"forged"}}`, false, false},
+		{"shadow group id", `{"id":"id","groups":[{"attributes":{"id":"forged"}}]}`, false, false},
+		{"host attribute type", `{"name":["host"],"accounts":null,"attributes":{"cost":false},"principal":{"mode":"account-name"}}`, true, false},
+		{"null account member", `{"name":["host"],"accounts":[null],"principal":{"mode":"account-name"}}`, true, false},
 		{"opaque revision", `{"id":"id","revision":"not a hash"}`, false, true},
 		{"max revision", `{"id":"id","revision":"` + strings.Repeat("x", 256) + `"}`, false, true},
 		{"oversize revision", `{"id":"id","revision":"` + strings.Repeat("é", 129) + `"}`, false, false},
 		{"null revision", `{"id":"id","revision":null}`, false, false},
 		{"numeric revision", `{"id":"id","revision":1}`, false, false},
 		{"missing id", `{}`, false, false}, {"mismatch", `{"id":"other"}`, false, false}, {"null user", `null`, false, false},
-		{"unrestricted", `{"names":["host","alias"],"accounts":null,"principal":{"mode":"account-name"}}`, true, true},
-		{"no accounts", `{"names":["host"],"accounts":[],"principal":{"mode":"account-name"}}`, true, true},
-		{"opaque realm", `{"names":["host"],"accounts":["root"],"principal":{"mode":"epithet-principal-v1","realm":"fleet"},"revision":"inventory-v1"}`, true, true},
-		{"missing accounts", `{"names":["host"],"principal":{"mode":"account-name"}}`, true, false},
-		{"missing principal", `{"names":["host"],"accounts":null}`, true, false},
-		{"no realm", `{"names":["host"],"accounts":null,"principal":{"mode":"epithet-principal-v1"}}`, true, false},
-		{"wrong names", `{"names":["other"],"accounts":null,"principal":{"mode":"account-name"}}`, true, false},
-		{"host revision null", `{"names":["host"],"accounts":null,"principal":{"mode":"account-name"},"revision":null}`, true, false},
+		{"unrestricted", `{"name":["host","alias"],"accounts":null,"principal":{"mode":"account-name"}}`, true, true},
+		{"no accounts", `{"name":["host"],"accounts":[],"principal":{"mode":"account-name"}}`, true, true},
+		{"opaque realm", `{"name":["host"],"accounts":["root"],"principal":{"mode":"epithet-principal-v1","realm":"fleet"},"revision":"inventory-v1"}`, true, true},
+		{"missing accounts", `{"name":["host"],"principal":{"mode":"account-name"}}`, true, false},
+		{"missing principal", `{"name":["host"],"accounts":null}`, true, false},
+		{"no realm", `{"name":["host"],"accounts":null,"principal":{"mode":"epithet-principal-v1"}}`, true, false},
+		{"wrong names", `{"name":["other"],"accounts":null,"principal":{"mode":"account-name"}}`, true, false},
+		{"host revision null", `{"name":["host"],"accounts":null,"principal":{"mode":"account-name"},"revision":null}`, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +210,7 @@ func TestRevisionPreservesPresenceAndUTF8Bound(t *testing.T) {
 					value = &facts.User{}
 				} else {
 					value = &facts.Host{}
-					data = `{"names":["host"],"accounts":null,"principal":{"mode":"account-name"}` + revision + `}`
+					data = `{"name":["host"],"accounts":null,"principal":{"mode":"account-name"}` + revision + `}`
 				}
 				require.NoError(t, json.Unmarshal([]byte(data), value))
 				encoded, err := json.Marshal(value)

@@ -2,6 +2,7 @@ package inventorytest
 
 import (
 	"context"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,14 +23,14 @@ const basicInventory = `
 users:
   - userName: alice@example.com
     id: subject:alice@example.com
-    groups: [SRE, Engineering]
+    groups: [{name: [SRE]}, {name: [Engineering]}]
     userType: employee
     department: Platform
     organization: Acme
   - userName: mallory@example.com
     id: subject:mallory@example.com
     active: false
-    groups: [SRE]
+    groups: [{name: [SRE]}]
 
 hosts:
   - names: [PROD-DB-1]
@@ -123,7 +124,7 @@ func TestLookupUser(t *testing.T) {
 	require.Equal(t, "alice@example.com", u.UserName)
 	require.Equal(t, "subject:alice@example.com", u.ID)
 	require.True(t, u.Active, "active defaults to true")
-	require.Equal(t, []string{"SRE", "Engineering"}, u.Groups)
+	require.Equal(t, []string{"Engineering", "SRE"}, object.GroupNames(u.Groups))
 	require.Equal(t, "employee", u.UserType)
 	require.Equal(t, "Platform", u.Department)
 	require.Equal(t, "Acme", u.Organization)
@@ -571,7 +572,7 @@ func TestListUserFacts(t *testing.T) {
    active: false
  - id: a-id
    userName: alice
-   groups: [wheel, ops]
+   groups: [{name: [wheel]}, {name: [ops]}]
    department: engineering
 `), 0600))
 	inv, err := NewStatic([]string{path})
@@ -582,15 +583,15 @@ func TestListUserFacts(t *testing.T) {
 	require.Equal(t, "alice", users[0].UserName)
 	require.Equal(t, "a-id", users[0].ID)
 	require.Equal(t, "engineering", users[0].Department)
-	require.Equal(t, []string{"ops", "wheel"}, users[0].Groups)
+	require.Equal(t, []string{"ops", "wheel"}, object.GroupNames(users[0].Groups))
 	require.False(t, users[1].Active)
 	require.Equal(t, directory.Revision(inv.DirectoryRevision()), revision)
 	users[0].UserName = "changed"
-	users[0].Groups[0] = "changed"
+	users[0].Groups[0].Names[0] = "changed"
 	fact, _, err := inv.LookupUser(t.Context(), "a-id")
 	require.NoError(t, err)
 	require.Equal(t, "alice", fact.UserName)
-	require.ElementsMatch(t, []string{"wheel", "ops"}, fact.Groups)
+	require.ElementsMatch(t, []string{"wheel", "ops"}, object.GroupNames(fact.Groups))
 	hostsOnly, err := NewStatic([]string{path}, WithoutUsers())
 	require.NoError(t, err)
 	users, _, err = hostsOnly.ListUserFacts(t.Context())

@@ -110,18 +110,9 @@ func (p *parser) expectTerm() {
 	p.skipToTerm()
 }
 
-// tagStart reports whether the parser sits on `tag:` — a tag word with
-// an immediately adjacent colon (no interior whitespace, SPEC §3).
 func (p *parser) tagStart() bool {
 	t := p.cur()
-	if t.kind != tokBare {
-		return false
-	}
-	if _, ok := ast.TagOf(t.text); !ok {
-		return false
-	}
-	n := p.toks[p.i+1]
-	return n.kind == tokColon && n.start == t.end
+	return t.kind == tokBare && (t.text == "user" || t.text == "group") && p.toks[p.i+1].kind == tokColon
 }
 
 // ── statements ──────────────────────────────────────────────────────
@@ -232,199 +223,149 @@ func (p *parser) eatBang() bool {
 
 func (p *parser) parseExpr(kind ast.Kind, ctx negCtx) ast.Expr {
 	pos := p.cur().pos
-	if !p.at(tokLBracket) {
-		var atoms []ast.Atom
-		if a := p.parseAtom(kind, ctx, false); a != nil {
-			atoms = append(atoms, a)
-		}
-		return ast.Expr{Atoms: atoms, Pos: pos}
-	}
-	p.advance()
-	var atoms []ast.Atom
-	for {
-		if p.at(tokRBracket) {
-			p.advance()
-			break
-		}
-		if p.at(tokTerm) || p.at(tokEOF) {
-			p.stmtErr(p.cur().pos, "syntax error — unclosed `[`")
-			break
-		}
-		if a := p.parseAtom(kind, ctx, true); a != nil {
-			atoms = append(atoms, a)
-		}
-		if p.at(tokComma) {
-			p.advance()
-			continue
-		}
-		if !p.at(tokRBracket) {
-			p.stmtErr(p.cur().pos, "syntax error — expected `,` or `]`, found %s", p.cur().describe())
-			break
-		}
-	}
-	if len(atoms) == 0 && !p.bad {
-		p.stmtErr(pos, "syntax error — expected at least one matcher in the list")
-	}
-	return ast.Expr{Atoms: atoms, Bracketed: true, Pos: pos}
+	return ast.Expr{Atom: p.parseAtom(kind, ctx), Pos: pos}
 }
 
-func (p *parser) parseAtom(kind ast.Kind, ctx negCtx, inList bool) ast.Atom {
+func (p *parser) parseAtom(kind ast.Kind, ctx negCtx) ast.Atom {
 	t := p.cur()
-	switch t.kind {
-	case tokBang:
+	if t.kind == tokBang {
 		p.advance()
-		var msg string
-		switch {
-		case ctx == ctxMacroBody:
-			msg = "negation is not allowed in macro bodies — macros are purely positive"
-		case ctx == ctxAllow:
-			msg = "negation is only legal on deny rules"
-		case inList:
-			msg = "negation applies to the whole expression — write `![$a, $b]`, not `[!$a, !$b]`"
-		default:
-			msg = "unexpected `!` — negation already applies to the whole expression"
+		if ctx == ctxMacroBody {
+			p.stmtErr(t.pos, "negation is not allowed in macro bodies")
+		} else {
+			p.stmtErr(t.pos, "negation is only legal once, on a whole deny selector")
 		}
-		p.stmtErr(t.pos, "%s", msg)
-		p.parseAtom(kind, ctx, inList) // consume the negated atom
+		p.parseAtom(kind, ctx)
 		return nil
-	case tokMacroRef:
+	}
+	if t.kind == tokLBracket {
+		p.stmtErr(t.pos, "selector alternatives are not supported; use separate rules")
+		return nil
+	}
+	if t.kind == tokMacroRef {
 		p.advance()
 		return &ast.MacroRef{Name: t.text, P: t.pos}
-	case tokString:
-		p.advance()
-		if kind == ast.KindUser {
-			p.stmtErr(t.pos, "a quoted string alone is not a user matcher — use `userName:\"...\"`, `group:\"...\"`, etc.")
+	}
+	if kind == ast.KindUser {
+		if t.kind == tokBare && t.text == "*" {
+			p.advance()
+			return &ast.Any{P: t.pos}
+		}
+		if t.kind != tokBare || (t.text != "user" && t.text != "group") {
+			p.stmtErr(t.pos, "expected user or group selector")
+			if t.kind != tokEOF && t.kind != tokTerm {
+				p.advance()
+			}
 			return nil
 		}
-		return &ast.Name{Value: ast.Value{Text: t.text, Quoted: true, Pos: t.pos}}
-	case tokLBrace:
-		sel := p.parseLabelSel()
+		p.advance()
+		if p.at(tokColon) {
+			colon := p.advance()
+			if colon.start != t.end {
+				p.stmtErr(colon.pos, "no space is allowed before the selector colon")
+			}
+			v := p.parseValue(false)
+			if v == nil {
+				return nil
+			}
+			if p.toks[p.i-1].start != colon.end {
+				p.stmtErr(v.Pos, "no space is allowed after the selector colon")
+			}
+			return &ast.Filter{Object: t.text, Pairs: []ast.Pair{{Key: ast.Value{Text: "name", Pos: t.pos}, Value: *v}}, P: t.pos}
+		}
+		if p.at(tokLBrace) {
+			return p.parseFilter(t.text)
+		}
+		p.stmtErr(p.cur().pos, "expected ':' or '{' after %s", t.text)
+		return nil
+	}
+	if t.kind == tokLBrace {
+		f := p.parseFilter("host")
 		if kind != ast.KindHost {
-			p.stmtErr(t.pos, "a `{key=value}` selector is only legal in host position")
-			return nil
+			p.stmtErr(t.pos, "object filters are not legal in account position")
 		}
-		return sel
-	case tokBare:
-		if kind == ast.KindUser {
-			return p.parseUserBare(t)
+		return f
+	}
+	if t.kind != tokBare && t.kind != tokString {
+		p.stmtErr(t.pos, "expected a selector, found %s", t.describe())
+		if t.kind != tokEOF && t.kind != tokTerm {
+			p.advance()
 		}
-		p.advance()
+		return nil
+	}
+	p.advance()
+	if t.kind == tokBare && strings.Contains(t.text, "/") {
+		p.stmtErr(t.pos, "'/' is not legal in a bare name; quote the name")
+	}
+	v := ast.Value{Text: t.text, Quoted: t.kind == tokString, Pos: t.pos}
+	if kind == ast.KindAccount {
 		if t.text == "*" {
 			return &ast.Any{P: t.pos}
 		}
-		if strings.Contains(t.text, "/") {
-			p.stmtErr(t.pos, "`/` is not legal in a bare name — quote \"%s\" if the name really contains `/`", t.text)
-			return nil
-		}
-		return &ast.Name{Value: ast.Value{Text: t.text, Quoted: false, Pos: t.pos}}
-	default:
-		p.stmtErr(t.pos, "syntax error — expected a matcher, found %s", t.describe())
-		if t.kind != tokTerm && t.kind != tokEOF {
-			p.advance()
-		}
-		return nil
+		return &ast.Name{Value: v}
 	}
-}
-
-func (p *parser) parseUserBare(t token) ast.Atom {
-	if tag, ok := ast.TagOf(t.text); ok && p.tagStart() {
-		p.advance()          // tag word
-		colon := p.advance() // adjacent colon
-		val := p.parseAttrValue(t.text+":", &colon)
-		if val == nil {
-			return nil
+	if p.at(tokLBrace) {
+		f := p.parseFilter("host")
+		if t.text == "*" {
+			p.stmtErr(t.pos, "use an attribute-only host filter instead of *{...}")
 		}
-		return &ast.TagMatcher{Tag: tag, Value: *val}
+		f.P = t.pos
+		f.Pairs = append([]ast.Pair{{Key: ast.Value{Text: "name", Pos: t.pos}, Value: v}}, f.Pairs...)
+		return f
 	}
-	p.advance()
 	if t.text == "*" {
 		return &ast.Any{P: t.pos}
 	}
-	if _, ok := ast.TagOf(t.text); ok {
-		p.stmtErr(t.pos, "expected `:` after user tag `%s`", t.text)
-	} else {
-		p.stmtErr(t.pos, "bare words are not user matchers — identity is opaque; use `userName:\"%s\"` or a tag matcher (userName, id, group, userType, department, organization)", t.text)
-	}
-	return nil
+	return &ast.Filter{Object: "host", Pairs: []ast.Pair{{Key: ast.Value{Text: "name", Pos: t.pos}, Value: v}}, P: t.pos}
 }
 
-// parseAttrValue parses an attribute value (after `tag:` or `key=`).
-// Globs match names, never attribute values (SPEC §7 error 11); a
-// quoted value is always a literal. A non-nil after token enforces
-// adjacency (tag values allow no interior whitespace).
-func (p *parser) parseAttrValue(ctxStr string, after *token) *ast.Value {
-	v := p.cur()
-	if v.kind != tokBare && v.kind != tokString {
-		p.stmtErr(v.pos, "syntax error — expected a value after `%s`, found %s", ctxStr, v.describe())
-		return nil
-	}
-	if after != nil && v.start != after.end {
-		p.stmtErr(v.pos, "no space is allowed in `%svalue`", ctxStr)
+func (p *parser) parseValue(pattern bool) *ast.Value {
+	t := p.cur()
+	if t.kind != tokBare && t.kind != tokString {
+		p.stmtErr(t.pos, "expected a string value")
 		return nil
 	}
 	p.advance()
-	if v.kind == tokBare && strings.ContainsAny(v.text, "*?") {
-		p.stmtErr(v.pos, "globs match names, never attribute values — quote the value (`%s\"%s\"`) to match a literal, or use a union of exact values", ctxStr, v.text)
-		return nil
+	if !pattern && t.kind == tokBare && strings.ContainsAny(t.text, "*?") {
+		p.stmtErr(t.pos, "globs are only legal in host/account names; quote a literal wildcard")
 	}
-	return &ast.Value{Text: v.text, Quoted: v.kind == tokString, Pos: v.pos}
+	return &ast.Value{Text: t.text, Quoted: t.kind == tokString, Pos: t.pos}
 }
 
-func (p *parser) parseLabelSel() *ast.Labels {
-	lb := p.advance() // {
-	var pairs []ast.LabelPair
-	for {
-		if p.at(tokRBrace) {
-			p.advance()
-			break
+func (p *parser) parseFilter(object string) *ast.Filter {
+	start := p.advance()
+	f := &ast.Filter{Object: object, P: start.pos}
+	for !p.at(tokRBrace) {
+		if p.at(tokEOF) || p.at(tokTerm) {
+			p.stmtErr(p.cur().pos, "unclosed '{'")
+			return f
 		}
-		if p.at(tokTerm) || p.at(tokEOF) {
-			p.stmtErr(p.cur().pos, "syntax error — unclosed `{`")
-			break
+		key := p.parseValue(false)
+		if key == nil {
+			return f
 		}
-		kt := p.cur()
-		var key *ast.Value
-		switch kt.kind {
-		case tokBare:
-			p.advance()
-			if strings.ContainsAny(kt.text, "*?") {
-				p.stmtErr(kt.pos, "globs are not legal in label keys")
-			} else {
-				key = &ast.Value{Text: kt.text, Quoted: false, Pos: kt.pos}
-			}
-		case tokString:
-			p.advance()
-			key = &ast.Value{Text: kt.text, Quoted: true, Pos: kt.pos}
-		default:
-			p.stmtErr(kt.pos, "syntax error — expected a label key, found %s", kt.describe())
-			p.advance()
+		if !p.at(tokColon) {
+			p.stmtErr(p.cur().pos, "expected ':' in attribute predicate")
+			return f
 		}
-		if !p.at(tokEq) {
-			p.stmtErr(p.cur().pos, "syntax error — expected `=` in label selector, found %s", p.cur().describe())
-		} else {
-			p.advance()
-			ctxStr := "key="
-			if key != nil {
-				ctxStr = key.Text + "="
-			}
-			// Whitespace is legal around `=`, so no adjacency check here.
-			if val := p.parseAttrValue(ctxStr, nil); val != nil && key != nil {
-				pairs = append(pairs, ast.LabelPair{Key: *key, Value: *val})
-			}
+		p.advance()
+		value := p.parseValue(object == "host" && key.Text == "name")
+		if value == nil {
+			return f
 		}
+		f.Pairs = append(f.Pairs, ast.Pair{Key: *key, Value: *value})
 		if p.at(tokComma) {
 			p.advance()
 			continue
 		}
 		if !p.at(tokRBrace) {
-			p.stmtErr(p.cur().pos, "syntax error — expected `,` or `}`, found %s", p.cur().describe())
-			break
+			p.stmtErr(p.cur().pos, "expected ',' or '}' in filter")
+			return f
 		}
 	}
-	return &ast.Labels{Pairs: pairs, P: lb.pos}
+	p.advance()
+	return f
 }
-
-// ── clauses ─────────────────────────────────────────────────────────
 
 func (p *parser) parseClauses(isDeny bool) []ast.Clause {
 	var clauses []ast.Clause

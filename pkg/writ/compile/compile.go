@@ -7,7 +7,6 @@ package compile
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,7 +24,7 @@ func Compile(file *ast.File) (*il.Policy, []diag.Diagnostic) {
 	if diag.HasErrors(diags) {
 		return nil, diags
 	}
-	l := &lowerer{macros: map[string][]il.Matcher{}}
+	l := &lowerer{macros: map[string]il.Selector{}}
 	pol := l.lower(file)
 	diags = append(diags, l.diags...)
 	// Lowering itself can error (e.g. a timestamp the shape validator
@@ -41,8 +40,7 @@ func Compile(file *ast.File) (*il.Policy, []diag.Diagnostic) {
 
 // Check runs the compile-time static checks on a parsed file: macro
 // resolution (define-before-use, redefinition, kind mismatch),
-// duplicate clauses, duplicate selector keys, and the unused-macro and
-// duplicate-list-entry lints.
+// duplicate clauses, and unused macros.
 func Check(file *ast.File) []diag.Diagnostic {
 	c := &checker{macros: map[string]*macroInfo{}}
 	c.run(file)
@@ -105,22 +103,7 @@ func (c *checker) run(file *ast.File) {
 }
 
 func (c *checker) checkExpr(expr *ast.Expr, kind ast.Kind) {
-	// Duplicates the author wrote lint; duplicates arising from macro
-	// expansion are ordinary composition and collapse silently.
-	seen := map[string]diag.Pos{}
-	for _, atom := range expr.Atoms {
-		c.checkAtom(atom, kind)
-		key := atomKey(atom)
-		if first, ok := seen[key]; ok {
-			c.warnf(atom.Pos(), "duplicate list entry — already listed at %s", first)
-		} else {
-			seen[key] = atom.Pos()
-		}
-	}
-}
-
-func (c *checker) checkAtom(atom ast.Atom, kind ast.Kind) {
-	switch a := atom.(type) {
+	switch a := expr.Atom.(type) {
 	case *ast.MacroRef:
 		info, ok := c.macros[a.Name]
 		if !ok {
@@ -131,21 +114,17 @@ func (c *checker) checkAtom(atom ast.Atom, kind ast.Kind) {
 		if info.kind != kind {
 			c.errf(a.P, "`$%s` is a %s macro, used in %s position", a.Name, info.kind, kind)
 		}
-	case *ast.Labels:
-		seen := map[string]diag.Pos{}
-		for _, pair := range a.Pairs {
-			if first, ok := seen[pair.Key.Text]; ok {
-				c.errf(pair.Key.Pos, "duplicate key `%s` in label selector — first at %s", pair.Key.Text, first)
-			} else {
-				seen[pair.Key.Text] = pair.Key.Pos
+	case *ast.Filter:
+		for _, p := range a.Pairs {
+			if a.Object == "host" && p.Key.Text == "name" && strings.ContainsAny(p.Value.Text, "*?") {
+				if _, err := hostpattern.Parse(il.HostName(p.Value.Text)); err != nil {
+					c.errf(p.Value.Pos, "invalid host pattern `%s`: %v", p.Value.Text, err)
+				}
 			}
 		}
-	case *ast.Name:
-		if kind == ast.KindHost && strings.ContainsAny(a.Value.Text, "*?") {
-			if _, err := hostpattern.Parse(il.HostName(a.Value.Text)); err != nil {
-				c.errf(a.Value.Pos, "invalid host pattern `%s`: %v", a.Value.Text, err)
-			}
-		}
+	case *ast.Name, *ast.Any:
+	default:
+		c.errf(expr.Pos, "missing selector")
 	}
 }
 
@@ -160,33 +139,10 @@ func (c *checker) checkClauses(clauses []ast.Clause) {
 	}
 }
 
-// atomKey is a structural key for duplicate detection within one
-// authored list.
-func atomKey(atom ast.Atom) string {
-	switch a := atom.(type) {
-	case *ast.MacroRef:
-		return "$:" + a.Name
-	case *ast.TagMatcher:
-		return fmt.Sprintf("t:%s:%s", a.Tag, a.Value.Text)
-	case *ast.Name:
-		return "n:" + a.Value.Text
-	case *ast.Any:
-		return "*"
-	case *ast.Labels:
-		ps := make([]string, 0, len(a.Pairs))
-		for _, pair := range a.Pairs {
-			ps = append(ps, pair.Key.Text+"="+pair.Value.Text)
-		}
-		sort.Strings(ps)
-		return "l:" + strings.Join(ps, ",")
-	}
-	return "?"
-}
-
 // ── lowering ────────────────────────────────────────────────────────
 
 type lowerer struct {
-	macros map[string][]il.Matcher // name → expanded matchers (splices flatten)
+	macros map[string]il.Selector // name → fully expanded selector
 	diags  []diag.Diagnostic
 }
 
@@ -203,7 +159,7 @@ func (l *lowerer) lower(file *ast.File) *il.Policy {
 	for _, item := range file.Items {
 		switch it := item.(type) {
 		case *ast.MacroDef:
-			l.macros[it.Name] = l.matchers(&it.Body, it.Kind)
+			l.macros[it.Name] = l.selector(&it.Body, it.Kind)
 		case *ast.AllowRule:
 			rule := l.lowerAllow(it)
 			if first, ok := seen[rule.ContentID()]; ok {
@@ -232,9 +188,9 @@ func (l *lowerer) dupWarn(pos diag.Pos, first ruleID) {
 
 func (l *lowerer) lowerAllow(r *ast.AllowRule) il.AllowRule {
 	rule := il.AllowRule{
-		Users:    il.MatchSet{Or: l.matchers(&r.Users, ast.KindUser)},
-		Accounts: il.MatchSet{Or: l.matchers(&r.Accounts, ast.KindAccount)},
-		Hosts:    il.MatchSet{Or: l.matchers(&r.Hosts, ast.KindHost)},
+		Users:    l.selector(&r.Users, ast.KindUser),
+		Accounts: l.selector(&r.Accounts, ast.KindAccount),
+		Hosts:    l.selector(&r.Hosts, ast.KindHost),
 	}
 	for _, cl := range r.Clauses {
 		switch c := cl.(type) {
@@ -264,9 +220,9 @@ func (l *lowerer) lowerAllow(r *ast.AllowRule) il.AllowRule {
 
 func (l *lowerer) lowerDeny(r *ast.DenyRule) il.DenyRule {
 	rule := il.DenyRule{
-		Users:    il.NegatableMatchSet{Not: r.Users.Not, MatchSet: il.MatchSet{Or: l.matchers(&r.Users.Expr, ast.KindUser)}},
-		Accounts: il.NegatableMatchSet{Not: r.Accounts.Not, MatchSet: il.MatchSet{Or: l.matchers(&r.Accounts.Expr, ast.KindAccount)}},
-		Hosts:    il.NegatableMatchSet{Not: r.Hosts.Not, MatchSet: il.MatchSet{Or: l.matchers(&r.Hosts.Expr, ast.KindHost)}},
+		Users:    il.NegatableSelector{Not: r.Users.Not, Selector: l.selector(&r.Users.Expr, ast.KindUser)},
+		Accounts: il.NegatableSelector{Not: r.Accounts.Not, Selector: l.selector(&r.Accounts.Expr, ast.KindAccount)},
+		Hosts:    il.NegatableSelector{Not: r.Hosts.Not, Selector: l.selector(&r.Hosts.Expr, ast.KindHost)},
 	}
 	for _, cl := range r.Clauses {
 		switch c := cl.(type) {
@@ -281,65 +237,26 @@ func (l *lowerer) lowerDeny(r *ast.DenyRule) il.DenyRule {
 	return rule
 }
 
-// matchers lowers an expression to IL matchers, splicing macros. A
-// splice flattens: nothing downstream knows the macro existed.
-func (l *lowerer) matchers(expr *ast.Expr, kind ast.Kind) []il.Matcher {
-	var out []il.Matcher
-	for _, atom := range expr.Atoms {
-		switch a := atom.(type) {
-		case *ast.MacroRef:
-			out = append(out, l.macros[a.Name]...)
-		case *ast.TagMatcher:
-			out = append(out, il.Matcher{Kind: tagKind(a.Tag), Value: a.Value.Text})
-		case *ast.Name:
-			out = append(out, nameMatcher(a.Value.Text, kind))
-		case *ast.Labels:
-			labels := make(map[string]string, len(a.Pairs))
-			for _, pair := range a.Pairs {
-				labels[pair.Key.Text] = pair.Value.Text
+// selector expands aliases and preserves every predicate in the conjunction.
+// Canonical identity ignores ordering and identical repetitions.
+func (l *lowerer) selector(expr *ast.Expr, kind ast.Kind) il.Selector {
+	switch a := expr.Atom.(type) {
+	case *ast.MacroRef:
+		return l.macros[a.Name]
+	case *ast.Filter:
+		s := il.Selector{Kind: il.Kind(a.Object)}
+		for _, p := range a.Pairs {
+			value := p.Value.Text
+			if a.Object == "host" && p.Key.Text == "name" {
+				value = il.HostName(value)
 			}
-			out = append(out, il.Matcher{Kind: il.MatchLabels, Labels: labels})
-		case *ast.Any:
-			out = append(out, il.Matcher{Kind: il.MatchAny})
+			s.Predicates = append(s.Predicates, il.Predicate{Attribute: p.Key.Text, Value: value})
 		}
-	}
-	return out
-}
-
-// nameMatcher classifies a name as exact or glob. Quoting is a
-// rendering decision, not stored state (SPEC §9): a quoted glob in a
-// name position globs exactly like a bare one. Host names and globs
-// pass through the lowercasing chokepoint here — policy compilation is
-// one of the three ingress boundaries.
-func nameMatcher(text string, kind ast.Kind) il.Matcher {
-	if kind == ast.KindHost {
-		text = il.HostName(text)
-	}
-	// Quoting affects tokenization, not matcher meaning. Preserve the one
-	// universal spelling in the IL even when an author quotes it.
-	if text == "*" {
-		return il.Matcher{Kind: il.MatchAny}
-	}
-	if strings.ContainsAny(text, "*?") {
-		return il.Matcher{Kind: il.MatchGlob, Value: text}
-	}
-	return il.Matcher{Kind: il.MatchName, Value: text}
-}
-
-func tagKind(t ast.Tag) il.MatcherKind {
-	switch t {
-	case ast.TagUserName:
-		return il.MatchUserName
-	case ast.TagID:
-		return il.MatchID
-	case ast.TagGroup:
-		return il.MatchGroup
-	case ast.TagUserType:
-		return il.MatchUserType
-	case ast.TagDepartment:
-		return il.MatchDepartment
+		return s
+	case *ast.Name:
+		return il.Selector{Kind: il.Account, Predicates: []il.Predicate{{Attribute: "name", Value: a.Value.Text}}}
 	default:
-		return il.MatchOrganization
+		return il.Selector{Kind: il.Kind(kind.String())}
 	}
 }
 

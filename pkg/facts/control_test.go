@@ -34,8 +34,8 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	_, err = users.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 	require.NoError(t, err)
-	// A second group with the same display name awaits an explicit rebind.
-	group, err := users.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
+	// Same-name groups remain distinct resources.
+	_, err = users.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 	require.NoError(t, err)
 	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
@@ -68,17 +68,10 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	caps, err := control.Capabilities(t.Context())
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"admin", "enroll", "directory", "directory-users"}, caps.Capabilities)
-	snapshot, err := control.Bindings(t.Context(), auth)
+	snapshot, err := control.Groups(t.Context(), auth)
 	require.NoError(t, err)
-	require.NoError(t, control.BindGroup(t.Context(), auth, "ops", group.ID, snapshot.Revision))
-	// The binding changed authorization. Reusing the old actor snapshot must
-	// still fail even if the caller has refreshed the binding's own revision.
-	snapshot, err = control.Bindings(t.Context(), auth)
-	require.NoError(t, err)
-	require.ErrorIs(t, control.BindGroup(t.Context(), auth, "ops", group.ID, snapshot.Revision), facts.ErrConflict)
-	_, revision, err = control.Actor(t.Context(), "admin")
-	require.NoError(t, err)
-	auth.DirectoryRevision = revision
+	require.Len(t, snapshot.Groups, 2)
+	require.NotEqual(t, snapshot.Groups[0].ID, snapshot.Groups[1].ID)
 	directoryEvents, err := control.DirectoryAudit(t.Context(), auth, 0, 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, directoryEvents)

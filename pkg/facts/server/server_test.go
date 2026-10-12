@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -131,9 +132,9 @@ func TestInventoryServiceAcceptsAlternateManagedStore(t *testing.T) {
 	require.NoError(t, err)
 	host, err := data.Host(t.Context(), "runner-one.example")
 	require.NoError(t, err)
-	require.Equal(t, []string{"runner-one.example"}, host.Names)
+	require.Equal(t, []string{"runner-one.example"}, []string(host.Names))
 	require.Equal(t, p.Accounts, host.Accounts)
-	require.Equal(t, p.Labels, host.Labels)
+	require.Equal(t, object.FromStrings(p.Labels), host.Attributes)
 	require.Equal(t, "opaque-backend-revision", host.Revision.String())
 	require.Equal(t, "request-context", store.contextValue)
 	require.False(t, store.closed, "store lifetime belongs to the service caller")

@@ -1,9 +1,6 @@
 %YAML 1.2
 ---
-# Syntax highlighting for the writ policy language (ideas/6.md C' grammar,
-# 7.md amendments, explicit `allow`). Regex approximation of the real
-# grammar in prototype/src/grammar.pest — statement keywords anchor at line
-# start, clause keywords after a comma or continuation indent.
+# Syntax highlighting approximates writ/SPEC.md and the Go parser.
 name: Writ Policy
 file_extensions:
   - writ
@@ -26,10 +23,12 @@ contexts:
     - match: '(?:^|,)\s*(require|when|until|ttl|notify|label)\b'
       captures:
         1: keyword.other.clause.writ
-    - match: '\b(userName|id|group|userType|department|organization)(:)'
+    - match: '\b(user|group)(:)'
       captures:
         1: support.type.tag.writ
         2: punctuation.separator.key-value.writ
+    - match: '\b(user|group)(?=\{)'
+      scope: support.type.object.writ
     - match: '\${{ident}}'
       scope: variable.other.macro.writ
     - match: '"'
@@ -55,17 +54,17 @@ contexts:
     - match: ','
       scope: punctuation.separator.writ
 
-  # {key=value, ...} label selectors: keys get attribute-name scope.
+  # {key:value, ...} object filters: keys get attribute-name scope.
   selector:
     - match: '\}'
       scope: punctuation.section.braces.end.writ
       pop: true
     - match: '#.*$'
       scope: comment.line.number-sign.writ
-    - match: '([A-Za-z0-9_./-]+|"[^"]*")\s*(=)'
+    - match: '([A-Za-z0-9_./-]+|"[^"]*")\s*(:)'
       captures:
         1: entity.other.attribute-name.writ
-        2: keyword.operator.assignment.writ
+        2: punctuation.separator.key-value.writ
     - match: '"'
       scope: punctuation.definition.string.begin.writ
       push: string

@@ -30,8 +30,8 @@ user  eng   = group:Engineering
 user  sec   = group:"Security Oncall"
 user  infra = group:Infrastructure
 
-host  prod = {env=prod}
-host  dev  = {env=dev}
+host  prod = {env:prod}
+host  dev  = {env:dev}
 
 # ── rules ───────────────────────────────────────────────
 allow $sre -> ubuntu@$prod
@@ -42,7 +42,7 @@ allow $eng -> *@$dev
 
 allow $sec -> root@*, require mfa, notify "security-alerts", label "breakglass-root"
 
-deny userType:contractor -> *@$prod, label "no-contractors-in-prod"
+deny user{userType:contractor} -> *@$prod, label "no-contractors-in-prod"
 
 deny !$infra -> *@$prod, when freeze, label "prod-freeze"
 ```
@@ -63,102 +63,56 @@ The language matches against three entity kinds supplied by the surrounding
 service. Writ consumes normalized facts; it does not query provisioning or
 storage services.
 
-**Users** resolve through inventory independently of policy selectors. The
-policy view uses plain user facts; Epithet supplies them from static YAML or its
-managed SCIM directory.
+**Users** are resolved and checked for eligibility by the directory provider.
+The policy receives an eligible user or no user, never an `active` status.
+Each user has a required canonical authentication `id`, a collection `name`,
+optional presentation `userName`, flat `attributes`, and structured `groups`.
+The ID must equal the identity authenticated by CA. Presentation uses `userName`
+with ID fallback; name order does not affect certificate key IDs or audit identity.
 
-| Matcher | Inventory source |
-|---|---|
-| `userName:"..."` | Current, mutable `userName` |
-| `id:"..."` | Normalized provider identity within the configured provider/tenant |
-| `group:...` | Membership string in `groups` |
-| `userType:...` | `userType` |
-| `department:...` | `department` |
-| `organization:...` | `organization` |
+**Groups** are membership objects, each with its own `name` collection, optional
+`id`, and `attributes`. Static groups need no manufactured IDs. The built-in SCIM
+adapter exposes each group's current `displayName` as its name and its
+server-issued resource ID as `id`. Optional `externalId` is a separate attribute.
+Same-name groups remain distinct objects. Renames and name reuse change name-based
+matches immediately; ID-based rules continue to follow the selected resource.
+There are no historical name bindings or reconciliation commands.
 
-Both userName and id selectors compare opaque strings byte-for-byte, without
-case folding, normalization, or globbing. A quoted wildcard is literal.
-An absent ID never matches `id:`, including `id:""`. Normal deny negation
-still applies: `deny !id:X` matches a resolved user without an ID.
+The built-in SCIM user adapter retains the normalized authentication identity as
+user `id` (mapped from provisioning `externalId`), independently of the SCIM user
+resource ID. Writ does not interpret OIDC or SCIM fields. Providers own mapping,
+eligibility, membership resolution, and source-specific validation.
 
-An intentional inventory `userName` rename changes which `userName:` rules
-match. Reusing that name for another user intentionally lets name-based rules
-match the replacement. In contrast, `id:` follows the provider identity
-across renames and does not adopt a replacement just because a name was
-reused. Deleting and reprovisioning a local SCIM resource with the same provider
-identity preserves the meaning of explicit `id:` grants. A trusted provisioning
-change to `externalId` changes the normalized ID and which `id:` rules match.
-Providers should not reuse a person's identity for someone else.
-Group and attribute selectors always inspect the authenticated user's
-resolved record, independently of its current name.
+**Hosts** resolve through inventory to one resource with all equivalent
+normalized hostnames in `name`, an optional provider `id`, and flat `attributes`.
+Every hostname, including aliases, participates in the same host match. A deny
+on one alias therefore applies through any other alias. Principal issuance
+metadata is outside selectable attributes. Built-in inventory labels map to
+attributes; exact records and ephemeral host patterns retain their existing
+resolution behavior.
 
-Authentication validates the OIDC token and maps a configured stable claim to
-an inventory `id` before Writ evaluation. Writ only sees that normalized ID;
-it does not interpret provider-specific OIDC or SCIM fields. Static YAML
-supplies `id` directly. Epithet defaults to OIDC `sub` for Google, Okta, and
-generic providers, and `oid` for tenant-specific Microsoft Entra issuers;
-`inventory.oidc.user-id-claim` overrides the mapping. Inventory IDs are scoped
-to the configured provider/tenant. Epithet SCIM maps user `externalId` to that
-normalized ID. With Pocket ID, `externalId` equals OIDC `sub`; the server-issued
-SCIM `id` is a separate provisioning key. Writ does not interpret those fields.
-A user with `active=false`, or with no inventory match, matches nothing —
-this is a structural gate no policy text can express or bypass. Certificate
-key ID remains the resolved `userName`; private issuance audit also records
-the normalized provider ID and directory revision.
+**Attributes** have string values, either single or multivalued. A predicate
+compares one string against any value of that attribute. Missing, null, and empty
+collections supply no values. An empty string is a value. Numbers, booleans,
+objects, and collections with non-string members invalidate the facts and prevent
+authorization. Keys are flat; no path traversal or implicit type conversion occurs.
+Defined `name` and `id` fields cannot be shadowed in `attributes`.
 
-**Migration (breaking, pre-1.0):** Scalar selector names now use SCIM attribute
-names verbatim: `userName`, `id`, `userType`, `department`, and
-`organization`. The singular `group` selector tests one group membership.
-The former aliases `username`, `uid`, `type`,
-`dept`, and `org` are rejected. Replace old name-based `id:` rules with
-`userName:`, including in macros and negated denies. **The spelling `id:`
-now means only the normalized provider identity.** There is no alias or
-language-version declaration preserving the former meaning. Use it only
-with the normalized ID provided by inventory. Static inventory requires an
-explicit `id`; its former `subject` and `oidc-subject` keys are rejected.
+**Accounts** are local login names filtered by the host's explicit `accounts`
+field: null means unrestricted, an empty array permits none, and a list permits
+only those names. The field must be present at the fact API boundary. Writ must
+still allow the requested account. This filter does not claim to enumerate the
+operating system's accounts.
 
-Recompile policies to IL schema 2; schema 1 and obsolete matcher names are
-rejected. Renamed matcher keys change rule content IDs, so review external
-rule-ID references. Rule content IDs are unrelated to user resource IDs.
-
-Writ uses these names without implementing SCIM's JSON structure
-or filter language. `group:Admins` tests membership by group name; SCIM
-represents memberships as complex entries in the User's `groups` attribute.
-The inventory field remains plural `groups`; the selector is singular
-`group` because each matcher tests membership in one named group.
-`department` and `organization` are the unqualified Enterprise User extension
-attribute names. Matching retains Writ's exact, case-sensitive semantics.
-See [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643.html).
-
-Epithet inventory binds a policy group name to one SCIM group ID. The initial
-`displayName` claims an unused name; renames preserve that binding. A duplicate
-name provisions successfully but stays unbound, with a visible conflict and audit
-entry. Deleting a group reserves its policy name until an administrator explicitly
-rebinds it. Memberships of same-named groups are never implicitly combined.
-These bindings apply equally to allow, deny, negated selectors, and inventory
-administrator group grants. See [SCIM directory management](../docs/scim.md).
-
-**Hosts** resolve through the configured inventory. A resolved authorization
-resource has a nonempty set of equivalent `names`, a `map[string]string` of labels
-(k8s-style), and an optional list of local account names. A hostname matcher or
-glob matches if any name matches. Negation is applied to that whole-host result:
-a negated matcher succeeds only when none of the names match. Thus a deny on
-one name applies through every other name of the same host.
-
-An inventory implementation may carry other host data, but Writ does not
-observe it. The built-in inventory supports exact host records with multiple DNS
-names and hostname patterns for ephemeral fleets. Exact records take precedence;
-ambiguous pattern matches fail. Principal realms are opaque
-issuance metadata, independent of host names and DNS domains. They never
-replace the host's names in policy evaluation, even when several hosts have
-the same principal realm.
-Label selector `{k=v, ...}` entries remain ANDed.
-
-**Accounts** are byte-exact local login names. If a resolved host supplies an
-account list, matching is **inventory-grounded**: the requested account must
-be present, and even `*` or a glob cannot bypass the list. If the account list
-is absent, rules match the requested account name directly. Account existence
-is ultimately enforced by the target host's login system, not by Writ.
+**Breaking migration:** recompile source to IL schema 3. Older IL schemas and
+selector unions are rejected. Replace `userName:alice` with `user:alice`, `id:X`
+with `user{id:X}`, fixed user attributes with `user{department:engineering}`,
+and host labels `{env=prod}` with `{env:prod}`. Express alternatives in separate
+rules, reviewing deny semantics rather than mechanically splitting negation.
+Rule content IDs change with the new representation. Static user `groups` now
+contains objects, for example `groups: [{name: [ops]}]`. Fact HTTP responses use
+`name`, `attributes`, and structured `groups`; see
+[the provider contract](../docs/fact-services.md).
 
 Writ stops at the authorization decision for the human-readable
 `(identity, account, host)` tuple. It does not define SSH certificate principal
@@ -229,8 +183,8 @@ word at statement start is a parse error.)
 `-`. `$` is its own token, followed by an identifier; `$foo.bar` is a
 diagnosable error rather than a silent short match.
 
-**Tags** are the six user-matcher prefixes `userName`, `id`, `group`, `userType`,
-`department`, `organization`, each immediately followed by `:`.
+**Short selectors** use `user:` or `group:` immediately followed by a value.
+They select the object's `name` attribute.
 
 **Timestamps** are ordinary quoted strings, validated after parsing as
 RFC 3339 with a mandatory offset or `Z`: `until "2026-08-31T22:00Z"`. A
@@ -285,17 +239,12 @@ deny-clause  = "when"    name-list
              | "notify"  string-list
              | "label"   string ;
 
-user-expr    = user-atom | "[" user-atom { "," user-atom } [ "," ] "]" ;
-user-atom    = "$" ident | tag ":" value | "*" ;
-tag          = "userName" | "id" | "group" | "userType" | "department" | "organization" ;
-
-acct-expr    = acct-atom | "[" acct-atom { "," acct-atom } [ "," ] "]" ;
-acct-atom    = "$" ident | name | "*" ;
-
-host-expr    = host-atom | "[" host-atom { "," host-atom } [ "," ] "]" ;
-host-atom    = "$" ident | label-sel | name | "*" ;
-label-sel    = "{" label-eq { "," label-eq } [ "," ] "}" ;
-label-eq     = key "=" value ;
+user-expr    = "$" ident | "*" | user-kind ":" value | user-kind filter ;
+user-kind    = "user" | "group" ;
+acct-expr    = "$" ident | name | "*" ;
+host-expr    = "$" ident | "*" | filter | name [ filter ] ;
+filter       = "{" [ predicate { "," predicate } [ "," ] ] "}" ;
+predicate    = key ":" value ;
 
 name-list    = name | "[" name { "," name } [ "," ] "]" ;
 string-list  = string | "[" string { "," string } [ "," ] "]" ;
@@ -310,87 +259,48 @@ and `duration` are ordinary `string` and `bare` tokens with post-parse
 validation, not lexer modes. Newlines are permitted freely inside `[]`
 and `{}`.
 
-This EBNF is normative. `prototype/src/grammar.pest` is the reference
-implementation; it additionally parses several *forbidden* forms as
-"poison" productions so they can be rejected with pointed diagnostics
-instead of a generic expectation list (a negated allow head, a headless
-rule, an allow-only clause on a deny, `!` on a list atom).
+This EBNF and the Go implementation define current behavior. The Rust prototype
+is historical. Selector lists and predicate-level negation are invalid. Bracketed
+lists remain available for clauses such as `require [oncall, approval]`.
+`*{...}` in host position is rejected; use the attribute-only `{...}` form.
 
-Notes:
+## 5. Selectors and macros
 
-- **Singleton lists may omit brackets.** `require approval` ≡
-  `require [approval]`.
-- **`[]` is always a list; `{}` is always a label selector.** Each sigil
-  has exactly one meaning. `[]` reads as union in match positions and as
-  conjunction in `require`/`when` — a deliberate asymmetry English also
-  carries ("as ubuntu or deploy"; "require oncall and approval").
-- **`{}` entries AND**; union of selectors is a list of selectors.
-- **`*` is legal in every match position**, including user position
-  (visible and intentional, where `!` on an allow would be neither).
+Each position selects one object. Every predicate in its filter must match that
+same object. For groups, one membership must satisfy the entire filter; attributes
+from different groups cannot be combined. Repeated keys retain conjunction:
+`group{role:admin, role:oncall}` needs one group containing both role values.
+Identical repeated predicates are redundant. An empty filter matches any existing
+candidate; `group{}` still needs a membership. `user{}` is equivalent to `*` in
+user position, and `root@{}` is equivalent to `root@*`.
 
-### Rules with an inferred effect are gone
+`user:alice` equals `user{name:alice}`; `group:ops` equals `group{name:ops}`.
+In host position, `web{env:prod}` means `{name:web, env:prod}`. There is no host
+kind marker: `root@host{env:prod}` requires the literal hostname `host`.
+Multiple predicates narrow a match. Alternatives require separate rules.
 
-An earlier revision of the language inferred `allow` from a rule with no
-keyword. Every rule now leads with `allow` or `deny`. A headless rule is
-rejected with a migration message.
+Macros name one positive selector or another already-defined macro of the same
+kind. A user macro may select a user or one of their groups. References cannot
+extend filters or introduce unions, clauses, or negation:
 
-## 5. Match expressions and macros
-
-A match expression denotes a **set of matchers** — order carries no
-meaning and duplicates collapse. `[a, b]` matches anything `a` or `b`
-matches.
-
-**Macros** bind a name to a match expression of a declared kind:
-
-```
-user    sre        = group:SRE
-host    staging_db = {env=staging, role=db}
-account admin      = [root, postgres]
+```writ
+user admins = group:ops
+user deployers = $admins
+host production = {env:prod}
+allow $deployers -> deploy@$production
 ```
 
-- A macro is a named disjunction of matchers, not text. `$sre` in a rule
-  is a splice, not a substitution — and splices **flatten**: with
-  `user sre = [group:SRE, group:Infra]`, the expression `[$sre, group:X]`
-  is a three-element set, not a nested one.
-- Kind is declared, never inferred, and checked at every reference site.
-- Composition is **union only**: a macro body may reference same-kind
-  macros inside a `[]` list, nothing else. No intersection, no
-  refinement.
-- **Define before use.** Cycles are impossible by construction.
-  Redefinition is an error, not last-wins.
-- **Macro bodies are purely positive**: `!` in a macro body is an error.
-  The macro layer must not express anything the rule layer forbids.
-- There are no macros for tail clauses. Whatever the macro layer does,
-  it must never hide what a rule requires.
+`!` is legal only on a whole user, account, or host selector in a **deny head**,
+independently in each position. It complements the complete selector result,
+after considering all group objects or host names. A missing attribute does not
+match, so its whole-selector negation does match. Lookup failures and malformed
+facts are errors, not missing attributes that can be negated.
 
-**Negation** (`!`) exists only in `deny` heads, applies to a whole
-position's expression (never an atom inside a list), and is legal in all
-three positions independently. `![$a, $b]` means "in neither"; `[!$a,
-!$b]` is an error (the De Morgan footgun — it would mean "everyone"). A
-negated allow is a syntax error. The reason is drift: a negated set
-*grows* as the world grows, which is fail-safe on a deny and fail-open
-on an allow.
-
-**Globs match names, never attribute values.** Account names and host
-names may glob; a standalone `*` is legal anywhere and means every value in
-that position. Tag values
-(`group:`, `userName:`, `id:`, …), label keys, and label values are exact. A bare `*`
-or `?` in an attribute-value position is an error; a **quoted attribute
-value is always a literal** (`group:"weird*name"` matches a group with a
-star in its name). The grouping that value-globs would provide belongs
-in a macro (`user infra = [group:infra-core, group:infra-net]`), where
-it is visible in review and lintable against the inventory.
-
-**Comparison is byte-exact everywhere.** No matcher carries a
-case-sensitivity mode. The one normalization: host names are
-**ASCII-lowercased** (`A-Z` → `a-z` only — not Unicode folding, which is
-locale- and version-dependent) at three ingress boundaries —
-registration, request resolution, and policy compilation — so the
-matcher itself stays a byte compare. Hosts get this because a host name
-is a lookup key into writ's own namespace arriving from three directions
-that disagree about case; an account name, by contrast, is a value writ
-signs into the certificate, and folding it would issue certs for
-principals that do not exist.
+Comparisons are byte-exact and case-sensitive, except host names are normalized
+with ASCII lowercasing. User/group names and arbitrary attributes use equality.
+Account names retain flat globs; host `name` predicates retain the label-aware
+patterns from §3. Bare wildcards in other attribute values are rejected; quoted
+wildcards are literal strings. Writ has no array, numeric, or boolean predicates.
 
 ## 6. Clauses
 
@@ -428,16 +338,14 @@ writ's registries and inventory):
    `allow`/`deny` rule — including the retired headless-rule form, which
    gets a migration message.
 2. `!` anywhere in an allow rule.
-3. `!` on an atom inside a list rather than on the whole expression.
-   The diagnostic says "negation applies to the whole expression:
-   `![$a, $b]`", not "unexpected `!`".
+3. Selector lists or predicate-level negation.
 4. An allow-only clause (`require`, `until`, `ttl`) on a deny rule.
 5. Macro referenced before definition.
 6. Macro redefined (the diagnostic names the first definition).
 7. Macro kind mismatch at a reference site.
 8. `!` in a macro body.
 9. A clause appearing more than once in one rule.
-10. Duplicate key within one `{}` selector.
+10. An object kind in an invalid position or extending a macro reference with a filter.
 11. A bare `*` or `?` in an attribute-value position — a tag value, a
     label key, or a label value.
 12. A trailing comma at bracket depth zero immediately before EOF.
@@ -449,8 +357,6 @@ writ's registries and inventory):
 ### Warnings
 
 1. A macro that is defined but never referenced.
-2. A duplicate atom within one *authored* list. (Duplicates arising from
-   macro expansion are ordinary composition and collapse silently.)
 3. Two rules with identical content ids (§11) — usually an unfinished
    copy-paste. The warning names both source lines; apply proceeds and
    the rules collapse to one.
@@ -470,8 +376,8 @@ Evaluation is **order-independent**: file order never matters. For a
 request `(user, host, account)`:
 
 1. **Structural gates.** The user resolves via the identity binding and
-   is `active`; the host is registered; the account is in the host's
-   reported inventory. Any failure → 403.
+   is eligible; the host resolves; the account satisfies the host's
+   account filter. Any failure → 403.
 2. **Collect matching rules** — authored rules plus unexpired grants. A
    rule matches when its user, account, and host expressions all match.
 3. **Deny wins.** Any matching deny whose `when` flags (if any)
@@ -534,7 +440,7 @@ the compiled IL** — the test suite asserts this directly.
   make error 11 disappear — a formatter that silently repairs an
   ill-formed security policy is worse than one that leaves it ugly.
 - Host names and host-position globs are ASCII-lowercased. Account
-  names, label keys and values, and tag values are untouched.
+  names, attribute keys and non-host-name values are untouched.
 - Singleton lists unbracketed. One space after commas inside `[]` and
   `{}`, none before. Lists are never reordered and never emitted with a
   trailing comma.
@@ -557,69 +463,36 @@ JSON of §11 is the interchange and hash encoding, used wherever IL
 crosses a process or language boundary. The JSON below illustrates
 shapes.
 
-An allow rule:
-
-```json
-{
-  "schema":   2,
-  "id":       "a3f9c1d2e8b4",
-  "effect":   "allow",
-  "label":    "sre-prod-root",
-  "users":    {"or": [{"group": "SRE"}]},
-  "accounts": {"or": [{"name": "root"}]},
-  "hosts":    {"or": [{"labels": {"env": "prod"}}]},
-  "require":  ["oncall", "approval"]
-}
-```
-
-A deny rule — `not` sits on the whole expression, never on a matcher:
-
-```json
-{
-  "schema":   2,
-  "id":       "7c1e0b93a5df",
-  "effect":   "deny",
-  "label":    "prod-freeze",
-  "users":    {"not": true, "or": [{"group": "Infrastructure"}]},
-  "accounts": {"or": [{"any": true}]},
-  "hosts":    {"or": [{"labels": {"env": "prod"}}]},
-  "when":     ["freeze"]
-}
-```
-
-**Negation is a type distinction, not a validated field.** Allow rules
-carry a plain match set in all three positions; deny rules carry a
-negatable match set (the same set plus a `not` bit):
+Schema 3 uses a single selector per position. A selector contains a kind and
+an ordered list of attribute/value predicates, interpreted conjunctively:
 
 ```go
-type MatchSet struct { Or []Matcher }
+type Predicate struct { Attribute, Value string }
+type Selector struct { Kind Kind; Predicates []Predicate }
+type NegatableSelector struct { Not bool; Selector }
+```
 
-type NegatableMatchSet struct {
-    Not bool
-    MatchSet
+Allows contain plain selectors; denies contain negatable selectors. Negation
+cannot be represented on an allow or an individual predicate. User positions
+accept `user` or `group`; host positions accept `host`; account positions accept
+`account` with at most one `name` predicate. All consumers validate schema and
+selector kinds/positions before evaluating any rules.
+
+Canonical selector JSON uses `kind` and `and`. An empty `and` array is an
+unconstrained selector. A deny adds `not: true` only when negated. For example:
+
+```json
+{
+  "effect": "allow",
+  "users": {"kind":"group","and":[{"attribute":"name","value":"SRE"}]},
+  "accounts": {"kind":"account","and":[{"attribute":"name","value":"root"}]},
+  "hosts": {"kind":"host","and":[{"attribute":"env","value":"prod"}]},
+  "require": ["oncall","approval"]
 }
 ```
 
-A negated allow has no field to set — unrepresentable rather than
-rejected, so every IL producer (compiler, grants CLI, future UI) gets
-the restriction structurally, and no validator has to stay correct
-forever. A per-matcher negation flag is rejected outright: it could
-express the `[!$a, !$b]` footgun the grammar forbids.
-
-### Matcher taxonomy
-
-| Position | Kinds |
-|---|---|
-| `users` | `{"userName": s}` `{"id": s}` `{"group": s}` `{"userType": s}` `{"department": s}` `{"organization": s}` `{"any": true}` |
-| `accounts` | `{"name": s}` `{"glob": s}` `{"any": true}` |
-| `hosts` | `{"name": s}` `{"glob": s}` `{"labels": {k: v}}` `{"any": true}` |
-
-All literal string values compare byte-exact. Account `glob` supports flat
-`*` and `?`; host `glob` uses the label-aware syntax defined in section 3.
-Host `name` and `glob` values are stored ASCII-lowercased. A standalone
-`*`, quoted or bare, compiles to `{"any": true}` in every position, never to
-`{"glob": "*"}` — it is semantically distinct, skips the glob engine,
-and gives the "grants to everyone" lint a token to recognize.
+The universal source selector lowers to the position's kind with no predicates.
+Repeated predicate keys remain a list, never a map that overwrites earlier values.
 
 Allow-only clauses (`require`, `until`, `ttl`) exist only on the allow
 shape. `until` is stored as an absolute RFC 3339 UTC instant; `ttl` as
@@ -645,11 +518,10 @@ preserves authored order:
 - Canonical JSON: object keys sorted, no insignificant whitespace, empty
   and null fields omitted, `ttl` as integer seconds, timestamps RFC 3339
   UTC with `Z`.
-- **Every list is sorted and deduplicated** — match sets, `require`,
-  `when`, `notify`. Lists are sets, and union and conjunction are both
-  commutative and idempotent, so the sort is semantics-preserving;
-  `[$sre, $dba]` and `[$dba, $sre]` are correctly one rule. Matchers
-  sort bytewise by their own canonical encoding.
+- Predicate lists, `require`, `when`, and `notify` are sorted and deduplicated
+  in the hash projection. Conjunction is commutative and idempotent. Predicates
+  sort by their canonical JSON encoding, preserving distinct values for one key.
+  Empty selector `and` arrays remain explicit.
 
 Consequences:
 

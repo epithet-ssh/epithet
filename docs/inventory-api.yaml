@@ -47,9 +47,10 @@ components:
       description: Optional opaque logging metadata, at most 256 UTF-8 bytes; never used for authorization or caching
     Host:
       type: object
-      required: [names, accounts, principal]
+      required: [name, accounts, principal]
       properties:
-        names:
+        id: {type: string, description: Optional provider identity}
+        name:
           type: array
           minItems: 1
           uniqueItems: true
@@ -60,9 +61,7 @@ components:
           nullable: true
           items: {type: string}
           description: Required; null is unrestricted, empty permits none, a list restricts accounts
-        labels:
-          type: object
-          additionalProperties: {type: string}
+        attributes: {$ref: '#/components/schemas/Attributes'}
         principal:
           oneOf:
             - type: object
@@ -78,3 +77,11 @@ components:
                   minLength: 1
                   description: Opaque principal realm, not a hostname
         revision: {$ref: '#/components/schemas/Revision'}
+    Attributes:
+      type: object
+      description: Flat selectable fields; name and id are reserved for defined fields
+      additionalProperties:
+        oneOf:
+          - {type: string, nullable: true}
+          - type: array
+            items: {type: string}

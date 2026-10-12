@@ -54,6 +54,7 @@ type ResolvedHost struct {
 
 // Host contains authorization attributes, separate from principal metadata.
 type Host struct {
+	ID       string
 	Names    []string
 	Labels   map[string]string
 	Accounts []string

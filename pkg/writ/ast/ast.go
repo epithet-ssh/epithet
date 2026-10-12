@@ -1,8 +1,5 @@
-// Package ast is the parsed form of a writ policy file, a direct port
-// of the retired Rust spike's ast.rs (the porting reference named by
-// SPEC §12.11). It preserves the shape the spec's IL depends on: allow
-// rules carry plain expressions, deny rules carry negatable ones, so a
-// negated allow is unrepresentable rather than validated away.
+// Package ast is the parsed form of a Writ policy file. It retains predicates
+// in authored order and keeps negation confined to deny selectors.
 package ast
 
 import "github.com/epithet-ssh/epithet/pkg/writ/diag"
@@ -22,7 +19,7 @@ func (*AllowRule) isItem() {}
 func (*DenyRule) isItem()  {}
 
 // Kind is one of the three matcher kinds. A macro declares one; every
-// expression position implies one.
+// selector position implies one.
 type Kind int
 
 const (
@@ -51,7 +48,7 @@ type MacroDef struct {
 }
 
 // AllowRule carries plain expressions: negation on the allow path is
-// unrepresentable, mirroring the IL's MatchSet / NegatableMatchSet split.
+// unrepresentable, mirroring the IL's Selector / NegatableSelector split.
 type AllowRule struct {
 	Users    Expr
 	Accounts Expr
@@ -70,28 +67,18 @@ type DenyRule struct {
 }
 
 // NegExpr is an expression plus a bit; `!` applies to the whole
-// expression, never to an atom inside a list.
+// expression, never to a predicate within a filter.
 type NegExpr struct {
 	Not bool
 	Expr
 }
 
-// Expr is a union of atoms. Singletons parse to a one-element list;
-// Bracketed records whether the author wrote `[...]` (for the formatter,
-// later).
+// Expr is one selector or macro reference.
 type Expr struct {
-	Atoms     []Atom
-	Bracketed bool
-	Pos       diag.Pos
+	Atom Atom
+	Pos  diag.Pos
 }
-
-// Atom is one matcher in an expression: *MacroRef, *TagMatcher, *Name,
-// *Labels, or *Any.
-type Atom interface {
-	Pos() diag.Pos
-}
-
-// MacroRef is `$name` — a splice of a same-kind macro.
+type Atom interface{ Pos() diag.Pos }
 type MacroRef struct {
 	Name string
 	P    diag.Pos
@@ -99,90 +86,29 @@ type MacroRef struct {
 
 func (a *MacroRef) Pos() diag.Pos { return a.P }
 
-// TagMatcher is `tag:value` — user position only.
-type TagMatcher struct {
-	Tag   Tag
-	Value Value
+// Filter is a conjunction on a user, group, or host object.
+type Filter struct {
+	Object string
+	Pairs  []Pair
+	P      diag.Pos
 }
 
-func (a *TagMatcher) Pos() diag.Pos { return a.Value.Pos }
+func (a *Filter) Pos() diag.Pos { return a.P }
 
-// Name is a bare or quoted account/host name; bare names may glob (`*`, `?`).
-type Name struct {
-	Value Value
-}
-
-func (a *Name) Pos() diag.Pos { return a.Value.Pos }
-
-// Labels is `{k=v, ...}` — host position only; entries AND.
-type Labels struct {
-	Pairs []LabelPair
-	P     diag.Pos
-}
-
-func (a *Labels) Pos() diag.Pos { return a.P }
-
-// LabelPair is one `key=value` entry in a label selector.
-type LabelPair struct {
+type Pair struct {
 	Key   Value
 	Value Value
 }
 
-// Any is `*` — matches everything; kept distinct from a glob per the
-// spec (a surface `*` compiles to {"any": true}, never {"glob": "*"}).
-type Any struct {
-	P diag.Pos
-}
+// Name is an account selector; its established glob semantics are retained.
+type Name struct{ Value Value }
+
+func (a *Name) Pos() diag.Pos { return a.Value.Pos }
+
+// Any is the universal selector in its rule position.
+type Any struct{ P diag.Pos }
 
 func (a *Any) Pos() diag.Pos { return a.P }
-
-// Tag is one of the six user-matcher prefixes.
-type Tag int
-
-const (
-	TagUserName Tag = iota
-	TagID
-	TagGroup
-	TagUserType
-	TagDepartment
-	TagOrganization
-)
-
-func (t Tag) String() string {
-	switch t {
-	case TagUserName:
-		return "userName"
-	case TagID:
-		return "id"
-	case TagGroup:
-		return "group"
-	case TagUserType:
-		return "userType"
-	case TagDepartment:
-		return "department"
-	default:
-		return "organization"
-	}
-}
-
-// TagOf maps a tag word to its Tag, reporting whether s names one.
-func TagOf(s string) (Tag, bool) {
-	switch s {
-	case "userName":
-		return TagUserName, true
-	case "id":
-		return TagID, true
-	case "group":
-		return TagGroup, true
-	case "userType":
-		return TagUserType, true
-	case "department":
-		return TagDepartment, true
-	case "organization":
-		return TagOrganization, true
-	}
-	return 0, false
-}
 
 // Value is a scalar. Quoted matters for well-formedness: a quoted
 // attribute value is always a literal, while a bare `*`/`?` in an

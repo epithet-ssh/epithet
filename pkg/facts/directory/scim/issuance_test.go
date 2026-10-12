@@ -1,6 +1,7 @@
 package scim_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,7 +30,7 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	userKey, _, e := sshcert.GenerateKeys()
 	require.NoError(t, e)
 	path := filepath.Join(t.TempDir(), "hosts.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("hosts:\n - names: [host]\n   accounts: [root]\nusers:\n - id: subject:missing\n   userName: static-fallback\n   groups: [ops]\n"), 0600))
+	require.NoError(t, os.WriteFile(path, []byte("hosts:\n - names: [host]\n   accounts: [root]\nusers:\n - id: subject:missing\n   userName: static-fallback\n   groups: [{name: [ops]}]\n"), 0600))
 	inv, e := inventorytest.NewStatic([]string{path}, inventorytest.WithoutUsers())
 	require.NoError(t, e)
 	validator, e := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
@@ -72,48 +73,22 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	b := f.request("POST", "Users", user("subject:bob", "bob", true), "", 201).Text("id")
 	g := f.request("POST", "Groups", group("ops", a), "", 201).Text("id")
 	duplicate := f.request("POST", "Groups", group("ops", b), "", 201).Text("id")
+	require.NotEqual(t, g, duplicate)
 	check("alice", true)
-	check("bob", false)
-	check("missing", false)
-	// Rebinding uses the human OIDC identity and authorizing directory snapshot.
-	bind := func(actor, target string, stale bool) {
-		t.Helper()
-		snapshot, e := f.store.Bindings(t.Context())
-		require.NoError(t, e)
-		revision := snapshot.Revision
-		if stale {
-			revision--
-		}
-		_, status, e := client.Control(t.Context(), idp.MintIDToken(actor, time.Now().Add(time.Hour)), facts.ControlRequest{Action: "directory-bind", Alias: "ops", ID: target, Revision: revision})
-		if stale {
-			require.Error(t, e)
-			require.Equal(t, 409, status)
-		} else {
-			require.NoError(t, e)
-			require.Equal(t, 200, status)
-		}
-	}
-	bind("alice", duplicate, true)
-	check("alice", true)
-	bind("alice", duplicate, false)
-	check("alice", false)
 	check("bob", true)
-	bind("bob", g, false)
-	check("alice", true)
-	check("bob", false)
-	events, e := f.store.Audit(t.Context(), 0, 0)
-	require.NoError(t, e)
-	require.Equal(t, "subject:bob", events[len(events)-1].Actor)
+	check("missing", false)
 	f.request("PUT", "Users/"+a, user("subject:alice", "renamed", false), "", 200)
 	check("alice", false)
 	f.request("PUT", "Users/"+a, user("subject:alice", "renamed", true), "", 200)
 	check("alice", true)
 	f.request("PUT", "Groups/"+g, group("renamed", a), "", 200)
+	check("alice", false)
+	f.request("POST", "Groups", group("ops", a), "", 201)
 	check("alice", true)
 	f.request("PUT", "Users/"+a, user("subject:new", "renamed", true), "", 200)
 	check("alice", false)
 	check("new", true)
-	// Neither provisioning credentials nor CA credentials can administer aliases.
+	// Neither provisioning credentials nor CA credentials can administer groups.
 	_, status, e := client.Control(t.Context(), "provisioning-secret", facts.ControlRequest{Action: "directory-groups"})
 	require.Error(t, e)
 	require.Equal(t, 401, status)
@@ -123,7 +98,7 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	check("new", false)
 }
 
-func TestBoundGroupsPreserveDenyAndNegatedSelectorSemantics(t *testing.T) {
+func TestCurrentGroupsPreserveDenyAndNegatedSelectorSemantics(t *testing.T) {
 	f := newFixture(t)
 	a := f.request("POST", "Users", user("alice", "alice", true), "", 201).Text("id")
 	b := f.request("POST", "Users", user("bob", "bob", true), "", 201).Text("id")
@@ -137,8 +112,10 @@ func TestBoundGroupsPreserveDenyAndNegatedSelectorSemantics(t *testing.T) {
 			rule       string
 			alice, bob bool
 		}{
-			{"allow * -> root@host\ndeny group:ops -> root@host\n", false, true},
-			{"allow * -> root@host\ndeny !group:ops -> root@host\n", true, false},
+			{fmt.Sprintf("allow group{id:%s} -> root@host", g), true, false},
+			{fmt.Sprintf("allow group{id:%s, name:ops} -> root@host", g), !renamed, false},
+			{"allow * -> root@host\ndeny group:ops -> root@host\n", renamed, false},
+			{"allow * -> root@host\ndeny !group:ops -> root@host\n", !renamed, true},
 		} {
 			pol, diags := writ.Load(tc.rule)
 			require.NotNil(t, pol, "%v", diags)
@@ -146,8 +123,8 @@ func TestBoundGroupsPreserveDenyAndNegatedSelectorSemantics(t *testing.T) {
 			require.NoError(t, e)
 			for _, id := range []string{"alice", "bob"} {
 				u := f.facts(id)
-				active := u.Active
-				facts := &wire.PolicyFacts{Authentication: wire.Authentication{ID: id, ExpiresAt: time.Now().Add(time.Hour)}, Target: "host", User: &wire.User{ID: id, UserName: u.UserName, Groups: u.Groups, Active: &active}, Host: &wire.HostResource{Names: []string{"host"}, Accounts: []string{"root"}}}
+				uf := u.Facts()
+				facts := &wire.PolicyFacts{Authentication: wire.Authentication{ID: id, ExpiresAt: time.Now().Add(time.Hour)}, Target: "host", User: &uf, Host: &wire.HostResource{Names: []string{"host"}, Accounts: []string{"root"}}}
 				_, e = evaluator.Evaluate(t.Context(), wire.Connection{RemoteHost: "host", RemoteUser: "root"}, facts)
 				allowed := tc.alice
 				if id == "bob" {

@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"maps"
 	"os"
 	"slices"
 
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"gopkg.in/yaml.v3"
 )
 
@@ -48,13 +50,31 @@ type staticDoc struct {
 	Hosts  []hostEntry `yaml:"hosts"`
 }
 type userEntry struct {
-	UserName     string   `yaml:"userName"`
-	ID           string   `yaml:"id"`
-	Active       *bool    `yaml:"active"` // default true
-	Groups       []string `yaml:"groups"`
-	UserType     string   `yaml:"userType"`
-	Department   string   `yaml:"department"`
-	Organization string   `yaml:"organization"`
+	UserName     string            `yaml:"userName"`
+	ID           string            `yaml:"id"`
+	Active       *bool             `yaml:"active"` // default true
+	Groups       groupEntries      `yaml:"groups"`
+	Names        object.Strings    `yaml:"name"`
+	Attributes   object.Attributes `yaml:"attributes"`
+	UserType     string            `yaml:"userType"`
+	Department   string            `yaml:"department"`
+	Organization string            `yaml:"organization"`
+}
+
+// Decode memberships through the shared object contract so null entries and
+// non-string facts cannot be silently turned into an empty group by YAML.
+type groupEntries []object.Object
+
+func (g *groupEntries) UnmarshalYAML(unmarshal func(any) error) error {
+	var raw any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, (*[]object.Object)(g))
 }
 
 type hostEntry struct {
@@ -90,13 +110,17 @@ func (s *Static) loadFile(path string) error {
 			return fmt.Errorf("%s: duplicate id %q for users %q and %q", path, u.ID, previous.UserName, u.UserName)
 		}
 		s.ids[u.ID] = &User{
-			UserName:     u.UserName,
-			ID:           u.ID,
-			Active:       u.Active == nil || *u.Active,
-			Groups:       u.Groups,
+			UserName: u.UserName,
+			ID:       u.ID,
+			Active:   u.Active == nil || *u.Active,
+			Groups:   u.Groups,
+			Names:    u.Names, Attributes: u.Attributes,
 			UserType:     u.UserType,
 			Department:   u.Department,
 			Organization: u.Organization,
+		}
+		if err := s.ids[u.ID].Facts().Validate(u.ID); err != nil {
+			return fmt.Errorf("%s: invalid user facts: %w", path, err)
 		}
 		if u.UserName != "" {
 			s.users[u.UserName] = s.ids[u.ID]
@@ -114,8 +138,13 @@ func (s *Static) ListUserFacts(_ context.Context) ([]User, Revision, error) {
 	users := make([]User, 0, len(s.ids))
 	for _, user := range s.ids {
 		u := *user
-		u.Groups = append([]string{}, user.Groups...)
-		slices.Sort(u.Groups)
+		u.Names = slices.Clone(user.Names)
+		u.Attributes = cloneAttributes(user.Attributes)
+		u.Groups = slices.Clone(user.Groups)
+		for i := range u.Groups {
+			u.Groups[i].Names = slices.Clone(user.Groups[i].Names)
+			u.Groups[i].Attributes = cloneAttributes(user.Groups[i].Attributes)
+		}
 		users = append(users, u)
 	}
 	slices.SortFunc(users, func(a, b User) int {
@@ -128,4 +157,12 @@ func (s *Static) ListUserFacts(_ context.Context) ([]User, Revision, error) {
 // configuration, preserving the existing static directory snapshot identity.
 func (s *Static) DirectoryRevision() string {
 	return fmt.Sprintf("sha256:%x", s.directoryHash.Sum(nil))
+}
+
+func cloneAttributes(attrs object.Attributes) object.Attributes {
+	out := maps.Clone(attrs)
+	for k, v := range out {
+		out[k] = slices.Clone(v)
+	}
+	return out
 }

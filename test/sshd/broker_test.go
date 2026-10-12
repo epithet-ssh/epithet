@@ -70,7 +70,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	// The policy authorizes the current OS user's account on any host; the
 	// default compatibility mode carries that account name as the cert
 	// principal.
-	policySrc := fmt.Sprintf("allow userName:%q -> %q@*\n", oidctest.TokenEmail, currentUser.Username)
+	policySrc := fmt.Sprintf("allow user:%q -> %q@*\n", oidctest.TokenEmail, currentUser.Username)
 	pol, diags := writ.Load(policySrc)
 	require.NotNil(t, pol, "policy failed to load: %v", diags)
 	invPath := filepath.Join(t.TempDir(), "inventory.yaml")
@@ -164,7 +164,7 @@ func TestBrokerEndToEnd(t *testing.T) {
 	}
 
 	resp := stack.broker.MatchWithUserOutput(ctx, conn, nil)
-	t.Logf("Match response: Allow=%v, Error=%s", resp.Allow, resp.Error)
+	t.Logf("Match response: Allow=%v, Error:%s", resp.Allow, resp.Error)
 	require.True(t, resp.Allow, "broker should allow connection: %s", resp.Error)
 
 	// Now try to SSH using the broker's agent.

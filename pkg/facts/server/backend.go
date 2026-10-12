@@ -123,9 +123,9 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		fail(400, "invalid control request")
 		return
 	}
-	req, authorizationRevision := envelope.Request, envelope.AuthorizationRevision
+	req := envelope.Request
 	isUserList := req.Action == "directory-users"
-	isManagedDirectory := req.Action == "directory-groups" || req.Action == "directory-bind" || req.Action == "directory-audit"
+	isManagedDirectory := req.Action == "directory-groups" || req.Action == "directory-audit"
 	isDirectory := isUserList || isManagedDirectory
 	if isUserList && !canListUsers || isManagedDirectory && c.ManagedDirectory == nil || !isDirectory && c.Store == nil {
 		fail(404, "requested inventory capability is not configured")
@@ -148,11 +148,9 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		userFacts, revision, err = users.ListUserFacts(r.Context())
 		resp.DirectoryUsers = &facts.UserSnapshot{Revision: string(revision), Users: controlSlice(userFacts, controlUser)}
 	case "directory-groups":
-		var snapshot directory.BindingSnapshot
-		snapshot, err = c.ManagedDirectory.Bindings(r.Context())
-		resp.Directory = controlBindings(snapshot)
-	case "directory-bind":
-		err = c.ManagedDirectory.Rebind(r.Context(), actor, req.Alias, req.ID, req.Revision, directory.Revision(authorizationRevision))
+		var snapshot directory.GroupSnapshot
+		snapshot, err = c.ManagedDirectory.Groups(r.Context())
+		resp.Directory = controlGroups(snapshot)
 	case "directory-audit":
 		var events []directory.AuditEvent
 		events, err = c.ManagedDirectory.Audit(r.Context(), directory.AuditSequence(req.AuditAfter), req.AuditLimit)

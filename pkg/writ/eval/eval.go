@@ -8,36 +8,24 @@ package eval
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/writ/il"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
-// User is the policy view of the independently authenticated inventory user.
-// UserName is mutable. ID is an optional immutable, non-reassignable inventory
-// ID within the configured provider/tenant. Inventory adapters and OIDC claim
-// mapping normalize provider identifiers to this same ID. Do not synthesize it
-// from UserName. Providers must preserve ID on rename and never reuse it.
-type User struct {
-	UserName     string
-	ID           string
-	Active       bool
-	Groups       []string
-	UserType     string
-	Department   string
-	Organization string
-}
+// User is a resolved, eligible user. Providers own eligibility.
+type User = object.User
 
-// Host is a resolved host. Names must already have passed il.HostName.
-// Accounts is the grounding list: nil means no account inventory was
-// reported and account expressions match the requested name directly
-// (ungrounded); non-nil means grounded matching — the requested account
-// must be in the list, and an empty list grounds nothing.
+// Host is one resolved host. Nil Accounts imposes no restriction; a non-nil
+// slice restricts requests to its members, and an empty slice permits none.
 type Host struct {
-	Names    []string
-	Labels   map[string]string
-	Accounts []string
+	ID         string
+	Names      []string
+	Attributes object.Attributes
+	Accounts   []string
 }
 
 // Request is one evaluation request. A nil User or Host is a structural
@@ -95,11 +83,11 @@ type FactFunc func(name string) (FactState, error)
 // returned as-is — the caller must fail closed (500), never treat it as
 // a non-match.
 func Decide(p *il.Policy, req Request, now time.Time, flags FlagFunc, facts FactFunc) (Decision, error) {
-	if err := p.ValidateUserSelectors(); err != nil {
+	if err := p.Validate(); err != nil {
 		return Decision{}, err
 	}
 	// Step 1: structural gates. Not expressible or bypassable in policy.
-	if req.User == nil || !req.User.Active {
+	if req.User == nil {
 		return Decision{Outcome: Deny, Reason: "user does not resolve to an active inventory user"}, nil
 	}
 	if req.Host == nil {
@@ -107,6 +95,13 @@ func Decide(p *il.Policy, req Request, now time.Time, flags FlagFunc, facts Fact
 	}
 	if req.Host.Accounts != nil && !slices.Contains(req.Host.Accounts, req.Account) {
 		return Decision{Outcome: Deny, Reason: fmt.Sprintf("account %q is not in the host's account inventory", req.Account)}, nil
+	}
+
+	if err := req.User.Validate(req.User.ID); err != nil {
+		return Decision{}, err
+	}
+	if err := req.Host.Attributes.Validate(); err != nil {
+		return Decision{}, err
 	}
 
 	// Steps 2–4: collect matching rules, deny wins, sync conditions.
@@ -250,91 +245,50 @@ func allFlagsHold(names []string, flags FlagFunc) (bool, error) {
 // ── head matching ───────────────────────────────────────────────────
 
 func allowHeadMatches(a *il.AllowRule, req Request) bool {
-	return matchSet(a.Users, userMatcher(req.User)) &&
-		matchSet(a.Accounts, accountMatcher(req.Account)) &&
-		matchSet(a.Hosts, hostMatcher(req.Host))
+	return userMatches(a.Users, req.User) && accountMatches(a.Accounts, req.Account) && hostMatches(a.Hosts, req.Host)
 }
-
 func denyHeadMatches(d *il.DenyRule, req Request) bool {
-	return negSet(d.Users, userMatcher(req.User)) &&
-		negSet(d.Accounts, accountMatcher(req.Account)) &&
-		negSet(d.Hosts, hostMatcher(req.Host))
+	return (userMatches(d.Users.Selector, req.User) != d.Users.Not) &&
+		(accountMatches(d.Accounts.Selector, req.Account) != d.Accounts.Not) &&
+		(hostMatches(d.Hosts.Selector, req.Host) != d.Hosts.Not)
 }
 
-func matchSet(s il.MatchSet, match func(il.Matcher) bool) bool {
-	for _, m := range s.Or {
-		if match(m) {
+func objectMatches(s il.Selector, values func(string) []string) bool {
+	for _, p := range s.Predicates {
+		matched := false
+		for _, v := range values(p.Attribute) {
+			if s.Kind == il.Host && p.Attribute == "name" {
+				matched = p.Value == v || p.Value == "*" || (strings.ContainsAny(p.Value, "*?") && hostpattern.Match(p.Value, v))
+			} else {
+				matched = p.Value == v
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+func userMatches(s il.Selector, u *User) bool {
+	if s.Kind == il.User {
+		return objectMatches(s, u.Values)
+	}
+	for _, g := range u.Groups {
+		if objectMatches(s, g.Values) {
 			return true
 		}
 	}
 	return false
 }
-
-// negSet applies a deny position's negation bit to the whole set: the
-// position matches iff the inner set does not.
-func negSet(s il.NegatableMatchSet, match func(il.Matcher) bool) bool {
-	matched := matchSet(s.MatchSet, match)
-	if s.Not {
-		return !matched
+func accountMatches(s il.Selector, account string) bool {
+	if len(s.Predicates) == 0 {
+		return true
 	}
-	return matched
+	return flatGlobMatch(s.Predicates[0].Value, account)
 }
-
-func userMatcher(u *User) func(il.Matcher) bool {
-	return func(m il.Matcher) bool {
-		switch m.Kind {
-		case il.MatchAny:
-			return true
-		case il.MatchUserName:
-			return u.UserName != "" && m.Value == u.UserName
-		case il.MatchID:
-			return u.ID != "" && m.Value == u.ID
-		case il.MatchGroup:
-			return slices.Contains(u.Groups, m.Value)
-		case il.MatchUserType:
-			return u.UserType != "" && m.Value == u.UserType
-		case il.MatchDepartment:
-			return u.Department != "" && m.Value == u.Department
-		case il.MatchOrganization:
-			return u.Organization != "" && m.Value == u.Organization
-		}
-		return false
-	}
-}
-
-func accountMatcher(account string) func(il.Matcher) bool {
-	return func(m il.Matcher) bool {
-		switch m.Kind {
-		case il.MatchAny:
-			return true
-		case il.MatchName:
-			return m.Value == account
-		case il.MatchGlob:
-			return flatGlobMatch(m.Value, account)
-		}
-		return false
-	}
-}
-
-func hostMatcher(h *Host) func(il.Matcher) bool {
-	return func(m il.Matcher) bool {
-		switch m.Kind {
-		case il.MatchAny:
-			return true
-		case il.MatchName:
-			return slices.Contains(h.Names, m.Value)
-		case il.MatchGlob:
-			return slices.ContainsFunc(h.Names, func(name string) bool {
-				return hostpattern.Match(m.Value, name)
-			})
-		case il.MatchLabels:
-			for k, v := range m.Labels {
-				if h.Labels[k] != v {
-					return false
-				}
-			}
-			return true
-		}
-		return false
-	}
+func hostMatches(s il.Selector, h *Host) bool {
+	return objectMatches(s, func(k string) []string { return object.ValuesFor(h.ID, h.Names, h.Attributes, k) })
 }

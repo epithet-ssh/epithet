@@ -33,7 +33,7 @@ func TestIssuanceMatchesHostNamesIndependentlyOfPrincipalRealm(t *testing.T) {
 		{"named_realm_accepts_exact_hostname_allow", "fleet", "allow * -> root@prod.example.com\n", true},
 		{"generated_realm_accepts_exact_hostname_allow", generated, "allow * -> root@prod.example.com\n", true},
 		{"named_realm_does_not_match_unrelated_hostname_allow", "dev.example.com", "allow * -> root@dev.example.com\n", false},
-		{"named_realm_honors_label_deny", "fleet", "allow * -> root@*\ndeny * -> root@{env=prod}\n", false},
+		{"named_realm_honors_label_deny", "fleet", "allow * -> root@*\ndeny * -> root@{env:prod}\n", false},
 		{"named_realm_does_not_match_realm_named_deny", "fleet", "allow * -> root@*\ndeny * -> root@fleet\n", true},
 	}
 	for _, tc := range cases {

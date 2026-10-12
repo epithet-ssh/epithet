@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/epithet-ssh/epithet/pkg/principal"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
 // Principal tells the CA how the resolved host expects its certificate
@@ -38,9 +39,11 @@ func (h *Host) UnmarshalJSON(data []byte) error {
 	if len(raw.Accounts) == 0 {
 		return fmt.Errorf("inventory host accounts field is required")
 	}
-	if err := json.Unmarshal(raw.Accounts, &raw.resource.Accounts); err != nil {
+	var accounts object.Strings
+	if err := json.Unmarshal(raw.Accounts, &accounts); err != nil {
 		return fmt.Errorf("invalid inventory host accounts: %w", err)
 	}
+	raw.resource.Accounts = accounts
 	*h = Host{HostResource: HostResource(raw.resource), Principal: raw.Principal}
 	return nil
 }

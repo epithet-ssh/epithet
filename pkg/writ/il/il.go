@@ -10,13 +10,14 @@ package il
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 )
 
 // Schema is the IL schema version carried by every policy.
-const Schema = 2
+const Schema = 3
 
 // Policy is a compiled rule set. Rule order is preserved from the
 // source for reporting, but evaluation is order-independent.
@@ -26,79 +27,102 @@ type Policy struct {
 	Denies []DenyRule
 }
 
-// ValidateUserSelectors rejects incompatible IL before any rule can grant
-// access. In particular, ignoring a legacy matcher in a deny would fail open.
-func (p *Policy) ValidateUserSelectors() error {
+// Validate rejects unsupported schemas, kinds, positions, and malformed
+// selectors before any rule (including a deny) can be evaluated.
+func (p *Policy) Validate() error {
 	if p == nil {
 		return fmt.Errorf("nil Writ policy")
 	}
 	if p.Schema != Schema {
-		return fmt.Errorf("unsupported Writ IL schema %d (want %d); migrate legacy name selectors to userName: and recompile the policy", p.Schema, Schema)
+		return fmt.Errorf("unsupported Writ IL schema %d (want %d); recompile the policy", p.Schema, Schema)
 	}
-	check := func(users MatchSet) error {
-		for _, m := range users.Or {
-			switch m.Kind {
-			case MatchUserName, MatchID, MatchGroup, MatchUserType, MatchDepartment, MatchOrganization, MatchAny:
-			default:
-				return fmt.Errorf("unsupported Writ user matcher %q; use user selectors: userName, id, group, userType, department, organization", m.Kind)
+	check := func(s Selector, position string) error {
+		switch position {
+		case "user":
+			if s.Kind != User && s.Kind != Group {
+				return fmt.Errorf("invalid user selector kind %q", s.Kind)
 			}
+		case "host":
+			if s.Kind != Host {
+				return fmt.Errorf("invalid host selector kind %q", s.Kind)
+			}
+		case "account":
+			if s.Kind != Account {
+				return fmt.Errorf("invalid account selector kind %q", s.Kind)
+			}
+		}
+		for _, pred := range s.Predicates {
+			if position == "account" && pred.Attribute != "name" {
+				return fmt.Errorf("accounts support only name matching")
+			}
+			if pred.Attribute == "name" && s.Kind == Host {
+				if pred.Value != HostName(pred.Value) {
+					return fmt.Errorf("host predicate is not normalized")
+				}
+				if _, err := hostpattern.Parse(pred.Value); strings.ContainsAny(pred.Value, "*?") && err != nil {
+					return fmt.Errorf("invalid host name predicate: %w", err)
+				}
+			}
+		}
+		if position == "account" && len(s.Predicates) > 1 {
+			return fmt.Errorf("account selector must contain at most one name predicate")
 		}
 		return nil
 	}
-	for _, a := range p.Allows {
-		if err := check(a.Users); err != nil {
-			return err
+	for _, r := range p.Allows {
+		for _, s := range []struct {
+			s Selector
+			p string
+		}{{r.Users, "user"}, {r.Accounts, "account"}, {r.Hosts, "host"}} {
+			if err := check(s.s, s.p); err != nil {
+				return err
+			}
 		}
 	}
-	for _, d := range p.Denies {
-		if err := check(d.Users.MatchSet); err != nil {
-			return err
+	for _, r := range p.Denies {
+		for _, s := range []struct {
+			s Selector
+			p string
+		}{{r.Users.Selector, "user"}, {r.Accounts.Selector, "account"}, {r.Hosts.Selector, "host"}} {
+			if err := check(s.s, s.p); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-// MatcherKind discriminates Matcher values.
-type MatcherKind string
+// Kind identifies the object selected at one rule position.
+type Kind string
 
 const (
-	// User position.
-	MatchUserName     MatcherKind = "userName"
-	MatchID           MatcherKind = "id"
-	MatchGroup        MatcherKind = "group"
-	MatchUserType     MatcherKind = "userType"
-	MatchDepartment   MatcherKind = "department"
-	MatchOrganization MatcherKind = "organization"
-	// Account and host positions.
-	MatchName MatcherKind = "name"
-	MatchGlob MatcherKind = "glob"
-	// Host position only.
-	MatchLabels MatcherKind = "labels"
-	// Every position. A surface `*` compiles to MatchAny, never to a
-	// glob — it is semantically distinct and skips the glob engine.
-	MatchAny MatcherKind = "any"
+	User    Kind = "user"
+	Group   Kind = "group"
+	Host    Kind = "host"
+	Account Kind = "account"
 )
 
-// Matcher is one matcher. Value carries the scalar for every kind but
-// MatchLabels and MatchAny; host name/glob values are stored
-// ASCII-lowercased. Labels is set only for MatchLabels; entries AND.
-type Matcher struct {
-	Kind   MatcherKind
-	Value  string
-	Labels map[string]string
+// Predicate requires one string value. Repeated attributes remain separate
+// conjuncts, so a map cannot represent a filter. Host/account name predicates
+// use their established name-pattern languages; all other comparisons are exact.
+type Predicate struct {
+	Attribute string
+	Value     string
 }
 
-// MatchSet is a disjunction of matchers (an allow-rule position).
-type MatchSet struct {
-	Or []Matcher
+// Selector matches one object satisfying every predicate. An empty predicate
+// list accepts every candidate; a group selector still requires a membership.
+// There is no representation for selector alternatives.
+type Selector struct {
+	Kind       Kind
+	Predicates []Predicate
 }
 
-// NegatableMatchSet is a match set plus a negation bit (a deny-rule
-// position). Not applies to the whole set: the position matches iff the
-// inner set does not.
-type NegatableMatchSet struct {
+// NegatableSelector is available only in deny rules. Not complements the whole
+// selector, after matching all candidate names or memberships.
+type NegatableSelector struct {
 	Not bool
-	MatchSet
+	Selector
 }
 
 // AllowRule grants access when all three positions match and every
@@ -106,9 +130,9 @@ type NegatableMatchSet struct {
 // Until nil means no expiry; TTL zero means the deployment default.
 type AllowRule struct {
 	Label    string
-	Users    MatchSet
-	Accounts MatchSet
-	Hosts    MatchSet
+	Users    Selector
+	Accounts Selector
+	Hosts    Selector
 	Require  []string
 	When     []string
 	Until    *time.Time
@@ -120,9 +144,9 @@ type AllowRule struct {
 // `when` flags (if any) hold. Deny always wins.
 type DenyRule struct {
 	Label    string
-	Users    NegatableMatchSet
-	Accounts NegatableMatchSet
-	Hosts    NegatableMatchSet
+	Users    NegatableSelector
+	Accounts NegatableSelector
+	Hosts    NegatableSelector
 	When     []string
 	Notify   []string
 }

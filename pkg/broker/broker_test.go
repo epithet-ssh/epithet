@@ -312,7 +312,7 @@ func TestMatchFanOut_ThreeHostsThreeCAHits(t *testing.T) {
 	idp := oidctest.New(t)
 
 	eval := writEvaluator(t,
-		"allow userName:\"test@example.com\" -> [alice, bob, carol]@*\n",
+		"allow user{name:\"test@example.com\"} -> alice@*\nallow user{name:\"test@example.com\"} -> bob@*\nallow user{name:\"test@example.com\"} -> carol@*\n",
 		"users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 
@@ -367,7 +367,7 @@ func TestKillForcesFreshCertificateAndLeavesOtherAgentAlone(t *testing.T) {
 	idp := oidctest.New(t)
 
 	eval := writEvaluator(t,
-		"allow userName:\"test@example.com\" -> root@*\n",
+		"allow user{name:\"test@example.com\"} -> root@*\n",
 		"users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 

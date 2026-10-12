@@ -30,7 +30,7 @@ func newIntegrationHandler(t *testing.T) (*ca.CA, *oidctest.IdP) {
 	tmpDir := t.TempDir()
 	policyPath := filepath.Join(tmpDir, "policy.writ")
 	require.NoError(t, os.WriteFile(policyPath,
-		[]byte("allow userName:\"alice@example.com\" -> root@*\n"), 0644))
+		[]byte("allow user{name:\"alice@example.com\"} -> root@*\n"), 0644))
 	invPath := filepath.Join(tmpDir, "inventory.yaml")
 	require.NoError(t, os.WriteFile(invPath,
 		[]byte("users:\n  - userName: alice@example.com\n    id: subject:alice@example.com\nhosts:\n  - pattern: \"*\"\n"), 0644))

@@ -1,18 +1,64 @@
 package parser
 
 import (
-	"os"
-	"strings"
-	"testing"
-
 	"github.com/epithet-ssh/epithet/pkg/writ/ast"
 	"github.com/epithet-ssh/epithet/pkg/writ/diag"
 	"github.com/stretchr/testify/require"
+	"os"
+	"strings"
+	"testing"
 )
 
-// Ported from the reference implementation's parse.rs. The check-level
-// cases (macro resolution, duplicate clauses/keys, warnings) live in
-// the compile package; everything here is parse-time behavior.
+func TestObjectSelectors(t *testing.T) {
+	for _, src := range []string{
+		`allow user:alice -> root@web`,
+		`allow user{name:alice, department:engineering} -> root@web{region:eu-west-1}`,
+		`allow group{id:abc, role:admin, role:oncall} -> root@{}`,
+		`allow group{} -> *@*`,
+		"user a = group:admins\nuser b = $a\nallow $b -> root@*",
+		`deny !group{name:admins} -> !root@!{environment:production}, when freeze`,
+		`allow user{"flat/key":"a:b", name:"alice@example.com"} -> "ub*"@**.example.com`,
+		`allow user{name:""} -> root@host{environment:production}`,
+		"allow user{\n name:alice, # comment\n department:engineering\n} -> root@*",
+		`allow user:alice -> root@*, require [oncall, approval], ttl 2m, notify "alerts", label "access"`,
+	} {
+		t.Run(src, func(t *testing.T) { _, ds := Parse(src); require.Empty(t, diag.Errors(ds)) })
+	}
+}
+func TestForbiddenForms(t *testing.T) {
+	for _, src := range []string{
+		`allow [user:alice, user:bob] -> root@*`, `allow user:alice -> [root,ubuntu]@*`,
+		`allow user:alice -> root@[a,b]`, `user a = [group:a,group:b]`,
+		`allow !user:alice -> root@*`, `user a = !group:a`, `deny !!group:a -> root@*`,
+		`allow user{!name:alice} -> root@*`, `allow user{name:!alice} -> root@*`,
+		`allow userName:alice -> root@*`, `allow id:a -> root@*`,
+		`allow device{name:a} -> root@*`, `allow {name:alice} -> root@*`,
+		`allow user:alice -> root@*{env:prod}`, `allow user:alice -> {name:root}@*`,
+		`allow user:alice -> root@{env=prod}`, `allow user{env:[prod,dev]} -> root@*`,
+		`allow user{env:{nested:value}} -> root@*`, `allow user:name* -> root@*`,
+		`allow user {name:alice -> root@*`, `allow user{name:"bad\n"} -> root@*`,
+		`deny * -> *@*, require approval`, `deny * -> *@*, ttl 2m`, `deny * -> *@*, until "2026-01-01T00:00Z"`,
+	} {
+		t.Run(src, func(t *testing.T) { _, ds := Parse(src); require.NotEmpty(t, diag.Errors(ds)) })
+	}
+}
+func TestHostPrefixIsNamePredicate(t *testing.T) {
+	f, ds := Parse(`allow group:admins -> root@host{role:db}`)
+	require.Empty(t, diag.Errors(ds))
+	r := f.Items[0].(*ast.AllowRule)
+	h := r.Hosts.Atom.(*ast.Filter)
+	require.Equal(t, "host", h.Object)
+	require.Len(t, h.Pairs, 2)
+	require.Equal(t, "name", h.Pairs[0].Key.Text)
+	require.Equal(t, "host", h.Pairs[0].Value.Text)
+}
+func TestRecoveryAndStringEscapes(t *testing.T) {
+	f, ds := Parse("allow !user:a -> root@*\nallow user{name:\"a\\\"b\\\\c\"} -> root@*\n")
+	require.NotEmpty(t, diag.Errors(ds))
+	require.Len(t, f.Items, 1)
+	u := f.Items[0].(*ast.AllowRule).Users.Atom.(*ast.Filter)
+	require.Equal(t, "a\"b\\c", u.Pairs[0].Value.Text)
+}
 
 func parseErrors(t *testing.T, src string) []string {
 	t.Helper()
@@ -42,8 +88,6 @@ func assertErr(t *testing.T, src, needle string) {
 	t.Fatalf("no error containing %q in %#v", needle, msgs)
 }
 
-// ── the scenario corpus ─────────────────────────────────────────────
-
 func TestScenarioFileParsesClean(t *testing.T) {
 	src, err := os.ReadFile("../testdata/scenarios.writ")
 	require.NoError(t, err)
@@ -57,64 +101,8 @@ func TestScenarioFileParsesClean(t *testing.T) {
 		}
 	}
 	require.Equal(t, 8, macros)
-	require.Equal(t, 10, rules)
+	require.Equal(t, 13, rules)
 }
-
-func TestSimpleRuleShape(t *testing.T) {
-	file := parseOK(t, "user sre = group:SRE\nallow $sre -> ubuntu@{env=prod}\n")
-	require.Len(t, file.Items, 2)
-	rule, ok := file.Items[1].(*ast.AllowRule)
-	require.True(t, ok, "expected allow rule")
-
-	require.Len(t, rule.Users.Atoms, 1)
-	ref, ok := rule.Users.Atoms[0].(*ast.MacroRef)
-	require.True(t, ok)
-	require.Equal(t, "sre", ref.Name)
-
-	name, ok := rule.Accounts.Atoms[0].(*ast.Name)
-	require.True(t, ok)
-	require.Equal(t, "ubuntu", name.Value.Text)
-	require.False(t, name.Value.Quoted)
-
-	sel, ok := rule.Hosts.Atoms[0].(*ast.Labels)
-	require.True(t, ok, "expected selector")
-	require.Len(t, sel.Pairs, 1)
-	require.Equal(t, "env", sel.Pairs[0].Key.Text)
-	require.Equal(t, "prod", sel.Pairs[0].Value.Text)
-}
-
-func TestDenyNegationAndTags(t *testing.T) {
-	file := parseOK(t, "user infra = group:Infrastructure\ndeny !$infra -> *@{env=prod}, when freeze\n")
-	rule, ok := file.Items[1].(*ast.DenyRule)
-	require.True(t, ok, "expected deny rule")
-	require.True(t, rule.Users.Not)
-	require.False(t, rule.Accounts.Not)
-	_, isAny := rule.Accounts.Atoms[0].(*ast.Any)
-	require.True(t, isAny)
-	require.Len(t, rule.Clauses, 1)
-	when, ok := rule.Clauses[0].(*ast.When)
-	require.True(t, ok)
-	require.Equal(t, "freeze", when.Names[0].Text)
-}
-
-func TestStarIsLegalInUserPosition(t *testing.T) {
-	file := parseOK(t, "allow * -> ubuntu@{env=dev}\n")
-	rule := file.Items[0].(*ast.AllowRule)
-	_, isAny := rule.Users.Atoms[0].(*ast.Any)
-	require.True(t, isAny)
-}
-
-func TestTagMatcherShape(t *testing.T) {
-	file := parseOK(t, "allow userName:\"carol@example.com\" -> postgres@db-1\n")
-	rule := file.Items[0].(*ast.AllowRule)
-	tag, ok := rule.Users.Atoms[0].(*ast.TagMatcher)
-	require.True(t, ok, "expected tag")
-	require.Equal(t, ast.TagUserName, tag.Tag)
-	require.Equal(t, "carol@example.com", tag.Value.Text)
-	require.True(t, tag.Value.Quoted)
-}
-
-// ── statement termination and continuation ──────────────────────────
 
 func TestAdjacentRulesAreSeparateStatements(t *testing.T) {
 	file := parseOK(t, "allow group:A -> a@b\nallow group:B -> c@d\n")
@@ -122,7 +110,7 @@ func TestAdjacentRulesAreSeparateStatements(t *testing.T) {
 }
 
 func TestTrailingCommaContinuesToNextLine(t *testing.T) {
-	src := "allow userName:\"carol@example.com\" -> postgres@prod-db-1,\n    require approval,\n    until \"2026-08-31T22:00Z\",\n    label \"carol\"\n"
+	src := "allow user:\"carol@example.com\" -> postgres@prod-db-1,\n    require approval,\n    until \"2026-08-31T22:00Z\",\n    label \"carol\"\n"
 	file := parseOK(t, src)
 	require.Len(t, file.Items, 1)
 	rule := file.Items[0].(*ast.AllowRule)
@@ -140,83 +128,19 @@ func TestTrailingCommaAtEOFIsError(t *testing.T) {
 	require.NotEmpty(t, parseErrors(t, "allow group:A -> a@b,"))
 }
 
-func TestTrailingCommaInsideListIsLegal(t *testing.T) {
-	parseOK(t, "allow group:A -> [a, b,]@c\n")
-}
-
-func TestNewlinesInsideBracketsAreWhitespace(t *testing.T) {
-	parseOK(t, "allow group:A -> [\n  a,\n  b\n]@{\n  env=prod,\n}\n")
-}
-
 func TestArrowMunchesWithoutWhitespace(t *testing.T) {
 	file := parseOK(t, "user sre = group:SRE\nallow $sre->root@db-1\n")
 	rule := file.Items[1].(*ast.AllowRule)
-	name := rule.Accounts.Atoms[0].(*ast.Name)
+	name := rule.Accounts.Atom.(*ast.Name)
 	require.Equal(t, "root", name.Value.Text)
-	host := rule.Hosts.Atoms[0].(*ast.Name)
-	require.Equal(t, "db-1", host.Value.Text)
+	host := rule.Hosts.Atom.(*ast.Filter)
+	require.Equal(t, "db-1", host.Pairs[0].Value.Text)
 }
 
 func TestEmptyAndCommentOnlyFiles(t *testing.T) {
 	require.Empty(t, parseOK(t, "").Items)
 	require.Empty(t, parseOK(t, "# just a comment\n\n# another\n").Items)
 }
-
-// ── negation restrictions ───────────────────────────────────────────
-
-func TestNegatedAllowIsRejected(t *testing.T) {
-	assertErr(t, "!group:A -> root@h\n", "deny")
-}
-
-func TestNegationMidAllowHeadIsRejected(t *testing.T) {
-	assertErr(t, "allow group:A -> !root@h\n", "only legal on deny")
-}
-
-func TestNegationInsideListIsDeMorganError(t *testing.T) {
-	assertErr(t, "deny [!group:A, group:B] -> *@*\n", "whole expression")
-}
-
-func TestNegationInMacroBodyIsRejected(t *testing.T) {
-	assertErr(t, "user notinfra = !group:Infrastructure\n", "macro bodies")
-}
-
-// ── deny-only clause restrictions ───────────────────────────────────
-
-func TestRequireOnDenyIsRejected(t *testing.T) {
-	assertErr(t, "deny group:A -> *@*, require mfa\n", "not legal on a deny")
-}
-
-func TestUntilOnDenyIsRejected(t *testing.T) {
-	assertErr(t, "deny group:A -> *@*, until \"2026-08-31T22:00Z\"\n", "allow-only")
-}
-
-func TestTTLOnDenyIsRejected(t *testing.T) {
-	assertErr(t, "deny group:A -> *@*, ttl 5m\n", "allow-only")
-}
-
-// ── globs match names, never attribute values ───────────────────────
-
-func TestGlobInTagValueIsRejected(t *testing.T) {
-	assertErr(t, "allow group:SRE* -> root@h1\n", "never attribute values")
-}
-
-func TestGlobInLabelValueIsRejected(t *testing.T) {
-	assertErr(t, "allow group:A -> root@{env=prod*}\n", "never attribute values")
-}
-
-func TestGlobInLabelKeyIsRejected(t *testing.T) {
-	assertErr(t, "allow group:A -> root@{env*=prod}\n", "label keys")
-}
-
-func TestQuotedGlobIsALiteral(t *testing.T) {
-	parseOK(t, "allow group:\"weird*name\" -> root@h1\n")
-}
-
-func TestNameGlobsStayLegal(t *testing.T) {
-	parseOK(t, "allow group:A -> ub*@db-?\n")
-}
-
-// ── keyword and shape errors ────────────────────────────────────────
 
 func TestKeywordMacroNameIsError(t *testing.T) {
 	assertErr(t, "user deny = group:A\n", "keyword")
@@ -245,13 +169,6 @@ func TestLabelRequiresQuotes(t *testing.T) {
 func TestUnterminatedStringIsError(t *testing.T) {
 	require.NotEmpty(t, parseErrors(t, "group:\"A -> a@b\n"))
 }
-
-func TestLabelSelectorOutsideHostPositionIsError(t *testing.T) {
-	require.NotEmpty(t, parseErrors(t, "{env=prod} -> a@b\n"))
-	assertErr(t, "allow group:A -> {env=prod}@h\n", "host position")
-}
-
-// ── token validators ────────────────────────────────────────────────
 
 func TestDurations(t *testing.T) {
 	for _, tc := range []struct {
@@ -308,28 +225,5 @@ func TestTimestamps(t *testing.T) {
 		"not-a-time",
 	} {
 		require.Error(t, ValidateTimestamp(in), in)
-	}
-}
-
-func TestShorthandSelectorsAreRejected(t *testing.T) {
-	for _, tag := range []string{"username", "uid", "groups", "type", "dept", "org", "UserName", "subject", "externalId"} {
-		for _, src := range []string{
-			"allow " + tag + ":alice -> root@*\n",
-			"deny !" + tag + ":alice -> root@*\n",
-			"user old = [group:SRE, " + tag + ":alice]\nallow $old -> root@*\n",
-		} {
-			assertErr(t, src, "use `userName:")
-		}
-	}
-}
-
-func TestSCIMFieldMatchers(t *testing.T) {
-	file := parseOK(t, "allow [userName:alice, id:\"resource:123\"] -> root@*\n")
-	rule := file.Items[0].(*ast.AllowRule)
-	require.Equal(t, ast.TagUserName, rule.Users.Atoms[0].(*ast.TagMatcher).Tag)
-	require.Equal(t, ast.TagID, rule.Users.Atoms[1].(*ast.TagMatcher).Tag)
-	for _, tag := range []string{"userName", "id", "group", "userType", "department", "organization"} {
-		assertErr(t, "allow "+tag+":a* -> root@*\n", "glob")
-		parseOK(t, "allow "+tag+":\"a*\" -> root@*\n")
 	}
 }

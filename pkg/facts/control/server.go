@@ -22,6 +22,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
 type TokenValidator interface {
@@ -244,9 +245,7 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth fac
 	case "directory-users":
 		result.DirectoryUsers, err = s.control.Users(ctx, auth)
 	case "directory-groups":
-		result.Directory, err = s.control.Bindings(ctx, auth)
-	case "directory-bind":
-		err = s.control.BindGroup(ctx, auth, req.Alias, req.ID, req.Revision)
+		result.Directory, err = s.control.Groups(ctx, auth)
 	case "directory-audit":
 		result.DirectoryAudit, err = s.control.DirectoryAudit(ctx, auth, req.AuditAfter, req.AuditLimit)
 	default:
@@ -262,7 +261,7 @@ func (s *Server) actor(ctx context.Context, id string) (*facts.Actor, string, er
 	if err != nil || u == nil {
 		return nil, "", err
 	}
-	return &facts.Actor{ID: u.ID, UserName: u.UserName, Active: true, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}, "", nil
+	return &facts.Actor{ID: u.ID, UserName: u.UserName, Active: true, Groups: object.GroupNames(u.Groups)}, "", nil
 }
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	result, err := s.control.Capabilities(r.Context())

@@ -36,10 +36,9 @@ A fuller response is:
 {
   "id": "opaque-user-id",
   "userName": "alice",
-  "groups": ["operators"],
-  "userType": "employee",
-  "department": "engineering",
-  "organization": "example",
+  "name": ["alice", "alice@example.com"],
+  "groups": [{"id":"scim-group-id", "name":["operators"], "attributes":{"externalId":"upstream-id"}}],
+  "attributes": {"userType":"employee", "department":"engineering", "organization":"example"},
   "revision": "provider-defined"
 }
 ```
@@ -47,25 +46,32 @@ A fuller response is:
 `id` is required and must match the requested ID. All other fields are optional.
 Omitted groups mean no memberships; omitted attributes have no value. There is no
 `active` field: returning the object asserts that this user is active. CA uses the
-ID for policy identity. A missing username does not match a `userName` selector;
-ID is used only as a display/certificate Key ID fallback.
+ID for policy identity. The `name` collection controls name selectors. `userName` is presentation only,
+with ID as the certificate Key ID fallback; reordering names does not change it.
+Each group object is matched independently, even when names overlap. Group IDs
+are optional; SCIM providers expose their server-issued resource ID.
+
+Additional attributes are flat string values or arrays of strings. Missing, null,
+and empty arrays have no values; an empty string is a value. Other types or
+non-string array members invalidate the response. The map cannot contain `name`
+or `id`, which use the explicit object fields.
 
 ## Inventory
 
 ```json
 {
-  "names": ["host.example", "host.internal"],
+  "name": ["host.example", "host.internal"],
   "accounts": ["root", "deploy"],
-  "labels": {"env":"production"},
+  "attributes": {"env":"production"},
   "principal": {"mode":"epithet-principal-v1", "realm":"fleet-id"},
   "revision": "provider-defined"
 }
 ```
 
-`names`, `accounts`, and `principal` are required. Names contain every equivalent
+`name`, `accounts`, and `principal` are required. Names contain every equivalent
 normalized host name, including the requested name. Writ evaluates the entire
-list, including denies. Names must be nonempty and unique. Optional `labels`
-default to no labels.
+list, including denies. Names must be nonempty and unique. Optional `attributes` default to no additional values. A provider may also
+return an optional `id`.
 
 Accounts must be explicit: `null` imposes no inventory restriction, `[]` permits
 no accounts, and an array of names restricts issuance to those accounts. Writ
@@ -74,7 +80,7 @@ still decides whether access is allowed.
 Principal modes are `{"mode":"account-name"}` or
 `{"mode":"epithet-principal-v1","realm":"..."}`. The latter requires a valid,
 nonempty opaque principal realm. The realm is credential scope, not a hostname
-or a policy selector. Do not substitute it into `names`. Multiple hosts can share
+or a policy selector. Do not substitute it into `name`. Multiple hosts can share
 a realm intentionally; all then accept the same principal for a given account.
 
 Both response types may include `revision`, an opaque string of at most 256 UTF-8
@@ -232,3 +238,6 @@ Named realms need no separate declaration. They are case-sensitive attributes
 of records, and may include uppercase ASCII letters. All active records sharing
 the same named realm must have identical labels and account sets; account order
 does not matter, while `null` and `[]` remain distinct.
+
+The built-in directory's [mapping and database upgrade procedure](../pkg/facts/directory/README.md)
+explain current SCIM group names, optional static group IDs, and removal of historical bindings.

@@ -2,13 +2,18 @@
 // group facts supplied to authorization.
 package directory
 
-import "context"
+import (
+	"context"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
+)
 
 type User struct {
 	UserName     string
 	ID           string
 	Active       bool
-	Groups       []string
+	Groups       []object.Object
+	Names        []string
+	Attributes   object.Attributes
 	UserType     string
 	Department   string
 	Organization string
@@ -32,4 +37,23 @@ type Directory interface {
 // name. Authorization consumers need only Directory.LookupUser.
 type UserLister interface {
 	ListUserFacts(context.Context) ([]User, Revision, error)
+}
+
+// Facts projects this built-in directory record onto the provider contract.
+// The source schema owns its field mapping; the matcher does not know SCIM.
+func (u User) Facts() object.User {
+	names := u.Names
+	if names == nil && u.UserName != "" {
+		names = []string{u.UserName}
+	}
+	attrs := make(object.Attributes, len(u.Attributes)+3)
+	for k, v := range u.Attributes {
+		attrs[k] = v
+	}
+	for k, v := range map[string]string{"userType": u.UserType, "department": u.Department, "organization": u.Organization} {
+		if v != "" {
+			attrs[k] = object.Values{v}
+		}
+	}
+	return object.User{ID: u.ID, Names: names, UserName: u.UserName, Attributes: attrs, Groups: u.Groups}
 }

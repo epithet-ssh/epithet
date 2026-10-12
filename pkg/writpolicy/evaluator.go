@@ -44,7 +44,7 @@ type Evaluator struct {
 // already past matches nothing, which is safe, so it warns rather than
 // bricking a restart.
 func New(pol *il.Policy, reg *Registry, opts Options) (*Evaluator, []string, error) {
-	if err := pol.ValidateUserSelectors(); err != nil {
+	if err := pol.Validate(); err != nil {
 		return nil, nil, err
 	}
 	if reg == nil {
@@ -93,14 +93,10 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn wire.Connection, facts *w
 	if u == nil {
 		return nil, forbidden("OIDC user ID is not bound to an inventory user")
 	}
-	if u.ID != facts.Authentication.ID || u.Active == nil {
-		return nil, fmt.Errorf("inventory user does not match authenticated identity")
+	if err := u.Validate(facts.Authentication.ID); err != nil {
+		return nil, err
 	}
-	user := &eval.User{
-		ID: u.ID, UserName: u.UserName, Active: *u.Active,
-		Groups: u.Groups, UserType: u.UserType,
-		Department: u.Department, Organization: u.Organization,
-	}
+	user := u
 	identity := user.UserName
 	if identity == "" {
 		identity = user.ID
@@ -108,7 +104,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, conn wire.Connection, facts *w
 	host := facts.Host
 	var policyHost *eval.Host
 	if host != nil {
-		policyHost = &eval.Host{Names: host.Names, Labels: host.Labels, Accounts: host.Accounts}
+		policyHost = &eval.Host{ID: host.ID, Names: host.Names, Attributes: host.Attributes, Accounts: host.Accounts}
 	}
 	req := eval.Request{User: user, Host: policyHost, Account: conn.RemoteUser}
 	decision, err := eval.Decide(e.pol, req, e.opts.Clock(),

@@ -64,7 +64,7 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 ## Documentation
 
 - [Architecture](docs/architecture.md) - How epithet works under the hood
-- [SCIM Provisioning](docs/scim.md) - Pocket ID setup, directory lifecycle, and group bindings
+- [Directory and SCIM groups](pkg/facts/directory/README.md) - identities, current group names, and database upgrades
 - [Writ Policy Guide](docs/policy-server.md) - Authorization rules and configuration
 - [Fact Provider API](docs/fact-services.md) - Implement a custom directory or inventory
 - [Destination-bound Principals](docs/principals.md) - Interoperable principal derivation protocol

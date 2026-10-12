@@ -60,7 +60,7 @@ func TestServerEndToEnd(t *testing.T) {
 
 	// User configuration and managed host storage are independent.
 	policyPath := filepath.Join(tmpDir, "policy.writ")
-	if err := os.WriteFile(policyPath, []byte("allow userName:\"test@example.com\" -> root@*\n"), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte("allow user{name:\"test@example.com\"} -> root@*\n"), 0644); err != nil {
 		t.Fatalf("failed to write policy: %v", err)
 	}
 	seedManagedPattern(t, filepath.Join(tmpDir, "state"), nil)

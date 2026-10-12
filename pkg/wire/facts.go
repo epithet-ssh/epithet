@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
 // Authentication contains CA's verified identity and session bound.
@@ -16,22 +17,14 @@ type Authentication struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// User contains the directory attributes used by policy. External directory
-// protocols are translated into facts by the directory service.
-type User struct {
-	ID           string   `json:"id"`
-	UserName     string   `json:"userName"`
-	Active       *bool    `json:"active"`
-	Groups       []string `json:"groups"`
-	UserType     string   `json:"userType,omitempty"`
-	Department   string   `json:"department,omitempty"`
-	Organization string   `json:"organization,omitempty"`
-}
+// User is an eligible, identity-bound user returned by a directory provider.
+type User = object.User
+
 type HostResource struct {
-	Names  []string          `json:"names"`
-	Labels map[string]string `json:"labels"`
-	// Nil means ungrounded; a non-nil slice restricts accounts to its members.
-	// An empty slice permits no accounts. JSON decoding rejects omission.
+	ID         string            `json:"id,omitempty"`
+	Names      object.Strings    `json:"name"`
+	Attributes object.Attributes `json:"attributes,omitempty"`
+	// Accounts must be explicit: null is unrestricted and [] permits none.
 	Accounts []string `json:"accounts"`
 }
 
@@ -52,9 +45,11 @@ func (h *HostResource) UnmarshalJSON(data []byte) error {
 	if len(raw.Accounts) == 0 {
 		return fmt.Errorf("inventory host accounts field is required")
 	}
-	if err := json.Unmarshal(raw.Accounts, &raw.plain.Accounts); err != nil {
+	var accounts object.Strings
+	if err := json.Unmarshal(raw.Accounts, &accounts); err != nil {
 		return fmt.Errorf("invalid inventory host accounts: %w", err)
 	}
+	raw.plain.Accounts = accounts
 	*h = HostResource(raw.plain)
 	return nil
 }
@@ -67,22 +62,11 @@ func (a Authentication) Validate() error {
 	return nil
 }
 
-// Validate checks identity binding and required user fields. Inactivity is a
-// structural denial evaluated by policy, not a malformed fact.
-func (u *User) Validate(authenticatedID string) error {
-	if u.ID != authenticatedID || u.Active == nil {
-		return fmt.Errorf("invalid inventory user")
-	}
-	for _, group := range u.Groups {
-		if group == "" {
-			return fmt.Errorf("empty inventory group ID")
-		}
-	}
-	return nil
-}
-
 // Validate checks host fields whose omission could broaden authorization.
 func (h HostResource) Validate() error {
+	if err := h.Attributes.Validate(); err != nil {
+		return err
+	}
 	if len(h.Names) == 0 {
 		return fmt.Errorf("inventory host names are required")
 	}

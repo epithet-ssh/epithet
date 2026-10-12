@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
 // Revision is optional opaque logging metadata, never a concurrency token.
@@ -42,13 +43,17 @@ func (r *Revision) UnmarshalJSON(data []byte) error {
 }
 
 type User struct {
-	ID           string   `json:"id"`
-	UserName     string   `json:"userName,omitempty"`
-	Groups       []string `json:"groups,omitempty"`
-	UserType     string   `json:"userType,omitempty"`
-	Department   string   `json:"department,omitempty"`
-	Organization string   `json:"organization,omitempty"`
-	Revision     Revision `json:"revision,omitzero"`
+	ID         string            `json:"id"`
+	Names      object.Strings    `json:"name"`
+	UserName   string            `json:"userName,omitempty"`
+	Attributes object.Attributes `json:"attributes,omitempty"`
+	Groups     []object.Object   `json:"groups"`
+	Revision   Revision          `json:"revision,omitzero"`
+}
+
+// PolicyUser retains the validated authorization facts and drops logging metadata.
+func (u User) PolicyUser() wire.User {
+	return wire.User{ID: u.ID, Names: u.Names, UserName: u.UserName, Attributes: u.Attributes, Groups: u.Groups}
 }
 
 // Host keeps the inventory account and principal validation contract while

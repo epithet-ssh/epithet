@@ -3,6 +3,7 @@ package scim_test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -80,7 +81,7 @@ func (f *fixture) facts(id string) *directory.User {
 	return u
 }
 
-func TestProvisioningLifecycleAndGroupBindings(t *testing.T) {
+func TestProvisioningLifecycleAndCurrentGroups(t *testing.T) {
 	f := newFixture(t)
 	a := f.request("POST", "Users", user("sub-alice", "alice", true), "", 201).Text("id")
 	b := f.request("POST", "Users", user("sub-bob", "bob", true), "", 201).Text("id")
@@ -89,44 +90,29 @@ func TestProvisioningLifecycleAndGroupBindings(t *testing.T) {
 	require.Nil(t, f.facts("alice"))
 	g := f.request("POST", "Groups", group("ops", a), "", 201).Text("id")
 	duplicate := f.request("POST", "Groups", group("ops", b), "", 201).Text("id")
-	require.Equal(t, []string{"ops"}, f.facts("sub-alice").Groups)
-	require.Empty(t, f.facts("sub-bob").Groups)
-	snapshot, e := f.store.Bindings(t.Context())
+	require.Equal(t, []object.Object{{ID: g, Names: []string{"ops"}}}, f.facts("sub-alice").Groups)
+	require.Equal(t, []object.Object{{ID: duplicate, Names: []string{"ops"}}}, f.facts("sub-bob").Groups)
+	snapshot, e := f.store.Groups(t.Context())
 	require.NoError(t, e)
 	require.Len(t, snapshot.Groups, 2)
-	for _, v := range snapshot.Groups {
-		if v.ID == duplicate {
-			require.Equal(t, "conflict", v.Status)
-		}
-	}
 	f.request("PUT", "Groups/"+g, group("renamed", a), "", 200)
-	require.Equal(t, []string{"ops"}, f.facts("sub-alice").Groups)
-	// Deactivation retains membership; a trusted identity change transfers that same resource.
+	require.Equal(t, []object.Object{{ID: g, Names: []string{"renamed"}}}, f.facts("sub-alice").Groups)
 	f.request("PUT", "Users/"+a, user("sub-new", "renamed-alice", false), "", 200)
 	require.Nil(t, f.facts("sub-alice"))
 	require.False(t, f.facts("sub-new").Active)
-	require.Equal(t, []string{"ops"}, f.facts("sub-new").Groups)
+	require.Equal(t, g, f.facts("sub-new").Groups[0].ID)
 	f.request("PUT", "Users/"+a, user("sub-new", "renamed-alice", true), "", 200)
 	f.request("DELETE", "Groups/"+g, "", "", 204)
-	replacement := f.request("POST", "Groups", group("ops", a), "", 201).Text("id")
 	require.Empty(t, f.facts("sub-new").Groups)
-	require.ErrorIs(t, f.store.Rebind(t.Context(), "admin-sub", "ops", replacement, snapshot.Revision, f.revision()), directory.ErrVersion)
-	snapshot, e = f.store.Bindings(t.Context())
-	require.NoError(t, e)
-	require.NoError(t, f.store.Rebind(t.Context(), "admin-sub", "ops", replacement, snapshot.Revision, f.revision()))
-	require.Equal(t, []string{"ops"}, f.facts("sub-new").Groups)
-	require.Empty(t, f.facts("sub-bob").Groups)
+	replacement := f.request("POST", "Groups", group("ops", a), "", 201).Text("id")
+	require.NotEqual(t, g, replacement)
+	require.Equal(t, []object.Object{{ID: replacement, Names: []string{"ops"}}}, f.facts("sub-new").Groups)
+	require.Equal(t, duplicate, f.facts("sub-bob").Groups[0].ID)
 	events, e := f.store.Audit(t.Context(), 0, 0)
 	require.NoError(t, e)
-	last := events[len(events)-1]
-	require.Equal(t, "admin-sub", last.Actor)
-	require.Equal(t, g, last.PreviousID)
-	require.Equal(t, "rebind", last.Action)
-	found := false
-	for _, v := range events {
-		found = found || v.Action == "name-conflict"
+	for _, event := range events {
+		require.Contains(t, []string{"create", "replace", "delete"}, event.Action)
 	}
-	require.True(t, found)
 	before, e := f.store.GetGroup(t.Context(), replacement)
 	require.NoError(t, e)
 	f.request("DELETE", "Users/"+a, "", "", 204)
@@ -160,10 +146,10 @@ func TestProtocolValidationPreconditionsAndPagination(t *testing.T) {
 	f.request("PUT", "Users/"+a, user("alice-sub", "stale", true), old.ETag(), 412)
 	f.request("DELETE", "Users/"+a, "", old.ETag(), 412)
 	require.Equal(t, "Renamed", f.facts("alice-sub").UserName)
-	snapshot, e := f.store.Bindings(t.Context())
+	snapshot, e := f.store.Groups(t.Context())
 	require.NoError(t, e)
 	f.request("POST", "Groups", group("bad", a, "missing"), "", 400)
-	next, e := f.store.Bindings(t.Context())
+	next, e := f.store.Groups(t.Context())
 	require.NoError(t, e)
 	require.Equal(t, snapshot, next)
 	f.request("POST", "Users", user("bob-sub", "Bob", true), "", 201)
@@ -227,7 +213,7 @@ func TestCaseInsensitiveProvisioningAttributes(t *testing.T) {
 	require.Equal(t, "Example", f.facts("subject").Organization)
 	groupBody := fmt.Sprintf(`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"DISPLAYNAME":"ops","MEMBERS":[{"VALUE":%q,"TYPE":"User"}]}`, u.Text("id"))
 	f.request("POST", "Groups", groupBody, "", 201)
-	require.Equal(t, []string{"ops"}, f.facts("subject").Groups)
+	require.Equal(t, []string{"ops"}, object.GroupNames(f.facts("subject").Groups))
 }
 
 func TestMinimalStoredProfileAndDiscovery(t *testing.T) {

@@ -110,7 +110,7 @@ hosts:
 	require.NoError(t, os.WriteFile(invPath, []byte(inventoryYAML), 0600))
 	inv, err := inventorytest.NewStatic([]string{invPath})
 	require.NoError(t, err)
-	pol, diags := writ.Load("allow id:\"" + inventoryID + "\" -> root@prod.example.com\nallow userName:\"inactive@example.com\" -> root@prod.example.com\n")
+	pol, diags := writ.Load("allow user{id:\"" + inventoryID + "\"} -> root@prod.example.com\nallow user{name:\"inactive@example.com\"} -> root@prod.example.com\n")
 	require.NotNil(t, pol, "%v", diags)
 	evaluator, _, err := writpolicy.New(pol, nil, writpolicy.Options{})
 	require.NoError(t, err)

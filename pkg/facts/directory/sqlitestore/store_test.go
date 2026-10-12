@@ -2,6 +2,7 @@ package sqlitestore
 
 import (
 	"fmt"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -78,7 +79,7 @@ func TestRollbackRestartAndCoherentReads(t *testing.T) {
 		require.NoError(t, e)
 	}
 }
-func TestFirstAliasClaimIsAtomicAcrossConnections(t *testing.T) {
+func TestSameNameGroupsRemainDistinctAcrossConnections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "directory.db")
 	a, e := Open(path)
 	require.NoError(t, e)
@@ -99,41 +100,13 @@ func TestFirstAliasClaimIsAtomicAcrossConnections(t *testing.T) {
 	for e := range errs {
 		require.NoError(t, e)
 	}
-	bindings, e := a.Bindings(t.Context())
+	bindings, e := a.Groups(t.Context())
 	require.NoError(t, e)
 	require.Len(t, bindings.Groups, 2)
-	counts := map[string]int{}
 	for _, g := range bindings.Groups {
-		counts[g.Status]++
+		require.Equal(t, "ops", g.DisplayName)
 	}
-	require.Equal(t, map[string]int{"bound": 1, "conflict": 1}, counts)
-}
-
-func TestRebindRejectsChangedAuthorizationSnapshot(t *testing.T) {
-	s, e := Open(filepath.Join(t.TempDir(), "directory.db"))
-	require.NoError(t, e)
-	defer s.Close()
-	admin, e := s.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "admin", UserName: "admin", Active: true})
-	require.NoError(t, e)
-	first, e := s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
-	require.NoError(t, e)
-	second, e := s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
-	require.NoError(t, e)
-	_, authorized, e := s.LookupUser(t.Context(), "admin")
-	require.NoError(t, e)
-	_, e = s.ReplaceUser(t.Context(), admin.ID, directory.ManagedUser{ExternalID: "admin", UserName: "admin", Active: false}, "")
-	require.NoError(t, e)
-	snapshot, e := s.Bindings(t.Context())
-	require.NoError(t, e)
-	require.ErrorIs(t, s.Rebind(t.Context(), "admin", "ops", second.ID, snapshot.Revision, authorized), directory.ErrVersion)
-	actual, e := s.Bindings(t.Context())
-	require.NoError(t, e)
-	require.Equal(t, snapshot, actual)
-	for _, g := range actual.Groups {
-		if g.ID == first.ID {
-			require.Equal(t, "ops", g.Alias)
-		}
-	}
+	require.NotEqual(t, bindings.Groups[0].ID, bindings.Groups[1].ID)
 }
 
 func TestGroupAndDeleteFailuresRollBackProjections(t *testing.T) {
@@ -164,7 +137,7 @@ func TestGroupAndDeleteFailuresRollBackProjections(t *testing.T) {
 	after, e := s.Audit(t.Context(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, history, after)
-	snapshot, e := s.Bindings(t.Context())
+	snapshot, e := s.Groups(t.Context())
 	require.NoError(t, e)
 	require.Len(t, snapshot.Groups, 1)
 	_, e = s.db.Exec("DROP TRIGGER interrupt")
@@ -185,14 +158,16 @@ func TestAuditCursorDoesNotSkipEventsSharingARevision(t *testing.T) {
 	defer s.Close()
 	_, err = s.CreateGroup(t.Context(), directory.Group{DisplayName: "ops"})
 	require.NoError(t, err)
+	_, err = s.db.Exec(`INSERT INTO audit (revision,time,actor,action,resource_id,alias,previous_id) SELECT revision,time,actor,'bind',resource_id,'ops','' FROM audit LIMIT 1`)
+	require.NoError(t, err)
 	first, err := s.Audit(t.Context(), 0, 1)
 	require.NoError(t, err)
 	require.Len(t, first, 1)
-	require.Equal(t, "bind", first[0].Action)
+	require.Equal(t, "create", first[0].Action)
 	second, err := s.Audit(t.Context(), first[0].Sequence, 1)
 	require.NoError(t, err)
 	require.Len(t, second, 1)
-	require.Equal(t, "create", second[0].Action)
+	require.Equal(t, "bind", second[0].Action)
 	require.Equal(t, first[0].Revision, second[0].Revision)
 	require.Greater(t, second[0].Sequence, first[0].Sequence)
 	empty, err := s.Audit(t.Context(), second[0].Sequence, 1)
@@ -203,7 +178,7 @@ func TestAuditCursorDoesNotSkipEventsSharingARevision(t *testing.T) {
 	require.NoError(t, err)
 	next, err := s.Audit(t.Context(), second[0].Sequence, 0)
 	require.NoError(t, err)
-	require.Len(t, next, 2)
+	require.Len(t, next, 1)
 	require.Greater(t, next[0].Sequence, second[0].Sequence)
 	for _, limit := range []int{-1, directory.MaxAuditLimit + 1} {
 		_, err = s.Audit(t.Context(), 0, limit)
@@ -261,13 +236,13 @@ func TestReadersSeeCommittedSnapshotWhileAnotherConnectionWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, facts)
 	require.Equal(t, revision, gotRevision)
-	bindings, err := reader.Bindings(t.Context())
+	bindings, err := reader.Groups(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, g.Version, bindings.Revision)
 	require.Len(t, bindings.Groups, 1)
 	events, err := reader.Audit(t.Context(), 0, 0)
 	require.NoError(t, err)
-	require.Len(t, events, 3)
+	require.Len(t, events, 2)
 }
 
 func TestListUserFactsMatchesAuthorization(t *testing.T) {
@@ -299,7 +274,7 @@ func TestListUserFactsMatchesAuthorization(t *testing.T) {
 	require.Equal(t, []string{"alice", "bob", "zed"}, []string{users[0].UserName, users[1].UserName, users[2].UserName})
 	require.Equal(t, "provider-a", users[0].ID)
 	require.NotEqual(t, alice.ID, users[0].ID)
-	require.Equal(t, []string{"ops", "wheel"}, users[0].Groups)
+	require.Equal(t, []string{"ops", "renamed", "wheel"}, object.GroupNames(users[0].Groups))
 	require.Empty(t, users[1].Groups)
 	require.False(t, users[2].Active)
 	for _, user := range users {
@@ -308,10 +283,10 @@ func TestListUserFactsMatchesAuthorization(t *testing.T) {
 		require.Equal(t, user, *fact)
 		require.Equal(t, revision, lookupRevision)
 	}
-	users[0].Groups[0] = "mutated"
+	users[0].Groups[0].Names[0] = "mutated"
 	again, _, err := s.ListUserFacts(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []string{"ops", "wheel"}, again[0].Groups)
+	require.Equal(t, []string{"ops", "renamed", "wheel"}, object.GroupNames(again[0].Groups))
 	require.NoError(t, s.Close())
 	_, _, err = s.ListUserFacts(t.Context())
 	require.Error(t, err, "storage errors must not produce an empty listing")

@@ -2,6 +2,7 @@ package wire_test
 
 import (
 	"encoding/json"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -21,7 +22,7 @@ func TestHostDecodingPreservesPrincipalAndAccountRestrictions(t *testing.T) {
 		{`,"accounts":"deploy"`, nil, true},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
-			data := []byte(`{"names":["host.example.com"],"labels":{"env":"prod"},"principal":{"mode":"epithet-principal-v1","realm":"production"}` + tc.field + `}`)
+			data := []byte(`{"name":["host.example.com"],"attributes":{"env":["prod"]},"principal":{"mode":"epithet-principal-v1","realm":"production"}` + tc.field + `}`)
 			var host wire.Host
 			err := json.Unmarshal(data, &host)
 			if tc.invalid {
@@ -30,8 +31,8 @@ func TestHostDecodingPreservesPrincipalAndAccountRestrictions(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tc.want, host.Accounts)
-			require.Equal(t, []string{"host.example.com"}, host.Names)
-			require.Equal(t, map[string]string{"env": "prod"}, host.Labels)
+			require.Equal(t, []string{"host.example.com"}, []string(host.Names))
+			require.Equal(t, object.Attributes{"env": {"prod"}}, host.Attributes)
 			require.Equal(t, wire.Principal{Mode: "epithet-principal-v1", Realm: "production"}, host.Principal)
 			encoded, err := json.Marshal(host)
 			require.NoError(t, err)

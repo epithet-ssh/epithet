@@ -15,6 +15,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -89,7 +90,10 @@ func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, cont
 			u, revision, e := users.LookupUser(r.Context(), value)
 			err = e
 			if err == nil && u != nil && u.Active {
-				response = &userFacts{User: facts.User{ID: u.ID, UserName: u.UserName, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}, Revision: string(revision)}
+				f := u.Facts()
+				if err = f.Validate(value); err == nil {
+					response = &userFacts{User: facts.User{ID: f.ID, Names: f.Names, UserName: f.UserName, Groups: f.Groups, Attributes: f.Attributes}, Revision: string(revision)}
+				}
 			}
 		} else {
 			if value != hostpattern.NormalizeName(value) {
@@ -99,7 +103,7 @@ func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, cont
 			h, revision, e := hosts.LookupHost(r.Context(), value)
 			err = e
 			if err == nil && h != nil {
-				response = &hostFacts{Host: wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Labels: h.Policy.Labels, Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}, Revision: string(revision)}
+				response = &hostFacts{Host: wire.Host{HostResource: wire.HostResource{ID: h.Policy.ID, Names: h.Policy.Names, Attributes: object.FromStrings(h.Policy.Labels), Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}, Revision: string(revision)}
 			}
 		}
 		if err != nil {

@@ -39,8 +39,8 @@ type ManagedUser struct {
 	Organization string
 }
 
-// Group owns direct user memberships. DisplayName can change independently of
-// the stable policy alias, whose binding is managed separately by the store.
+// Group owns direct user memberships. DisplayName changes affect name selectors;
+// the stable resource ID continues to select the same group.
 type Group struct {
 	Metadata
 	ExternalID  string
@@ -48,18 +48,16 @@ type Group struct {
 	MemberIDs   []string // Stored user IDs, not provider ExternalIDs.
 }
 
-type GroupBinding struct {
+type GroupSummary struct {
 	ID          string
 	DisplayName string
-	Alias       string
-	Status      string
+	ExternalID  string
 }
 
-// BindingSnapshot lets administrators bind a review to the exact directory
-// revision they inspected. Deleted bindings retain the former group ID.
-type BindingSnapshot struct {
+// GroupSnapshot contains current groups from one coherent revision.
+type GroupSnapshot struct {
 	Revision uint64
-	Groups   []GroupBinding
+	Groups   []GroupSummary
 }
 
 // AuditSequence identifies one audit event, independently of directory revisions:
@@ -81,16 +79,14 @@ type AuditEvent struct {
 }
 
 // Store owns directory persistence and all changes to authorization indexes.
-// Each mutation commits the user or group, memberships, aliases, audit and revision
+// Each mutation commits the user or group, memberships, audit and revision
 // together. No database handles or multi-call transaction protocol escape here.
 // Get methods return independent snapshots; each List returns a typed slice and
 // total count from one snapshot (start is one-based). LookupUser resolves identity,
-// memberships and aliases in a single read. Backend failures stay errors.
+// memberships and current group facts in a single read. Backend failures stay errors.
 //
 // Replace/Delete accept an optional resource ETag ("*" requires existence).
-// A stale precondition never changes state. Rebind requires an exact directory
-// revision and the snapshot revision used to authorize the administrator. A
-// concurrent change to that authorization snapshot also invalidates the write.
+// A stale precondition leaves state unchanged.
 type Store interface {
 	Directory
 	UserLister
@@ -104,8 +100,7 @@ type Store interface {
 	DeleteGroup(ctx context.Context, id, match string) error
 	GetGroup(context.Context, string) (Group, error)
 	ListGroups(ctx context.Context, start, count int) ([]Group, int, error)
-	Bindings(context.Context) (BindingSnapshot, error)
-	Rebind(ctx context.Context, actor, alias, id string, expected uint64, authorizationRevision Revision) error
+	Groups(context.Context) (GroupSnapshot, error)
 	// Audit returns at most limit events after the exclusive sequence cursor,
 	// in sequence order. Zero limit uses DefaultAuditLimit; limits above
 	// MaxAuditLimit are invalid. An empty result means the cursor is caught up.

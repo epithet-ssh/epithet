@@ -4,6 +4,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
 // Projections from storage types onto the control API. Host records convert
@@ -30,17 +31,17 @@ func controlSlice[S, T any](in []S, f func(S) T) []T {
 	return out
 }
 
-func controlBindings(s directory.BindingSnapshot) *facts.BindingSnapshot {
-	return &facts.BindingSnapshot{Revision: s.Revision, Groups: controlSlice(s.Groups, controlGroupBinding)}
+func controlGroups(s directory.GroupSnapshot) *facts.GroupSnapshot {
+	return &facts.GroupSnapshot{Revision: s.Revision, Groups: controlSlice(s.Groups, controlGroupSummary)}
 }
 
 func controlUser(u directory.User) facts.DirectoryUser {
 	return facts.DirectoryUser{UserName: u.UserName, ID: u.ID, Active: u.Active,
-		Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
+		Groups: object.GroupNames(u.Groups), UserType: u.UserType, Department: u.Department, Organization: u.Organization}
 }
 
-func controlGroupBinding(g directory.GroupBinding) facts.GroupBinding {
-	return facts.GroupBinding{ID: g.ID, DisplayName: g.DisplayName, Alias: g.Alias, Status: g.Status}
+func controlGroupSummary(g directory.GroupSummary) facts.GroupSummary {
+	return facts.GroupSummary{ID: g.ID, DisplayName: g.DisplayName, ExternalID: g.ExternalID}
 }
 
 func controlDirectoryEvent(e directory.AuditEvent) facts.DirectoryAuditEvent {
@@ -60,5 +61,5 @@ func controlActor(u *directory.User) *facts.Actor {
 	if u == nil {
 		return nil
 	}
-	return &facts.Actor{UserName: u.UserName, ID: u.ID, Active: u.Active, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
+	return &facts.Actor{UserName: u.UserName, ID: u.ID, Active: u.Active, Groups: object.GroupNames(u.Groups), UserType: u.UserType, Department: u.Department, Organization: u.Organization}
 }

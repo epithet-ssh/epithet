@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"hash"
 	"io"
 	"maps"
@@ -104,13 +105,15 @@ type staticDoc struct {
 }
 
 type userEntry struct {
-	UserName     string   `yaml:"userName"`
-	ID           string   `yaml:"id"`
-	Active       *bool    `yaml:"active"` // default true
-	Groups       []string `yaml:"groups"`
-	UserType     string   `yaml:"userType"`
-	Department   string   `yaml:"department"`
-	Organization string   `yaml:"organization"`
+	Names        []string          `yaml:"name"`
+	Attributes   object.Attributes `yaml:"attributes"`
+	UserName     string            `yaml:"userName"`
+	ID           string            `yaml:"id"`
+	Active       *bool             `yaml:"active"` // default true
+	Groups       []object.Object   `yaml:"groups"`
+	UserType     string            `yaml:"userType"`
+	Department   string            `yaml:"department"`
+	Organization string            `yaml:"organization"`
 }
 
 type hostEntry struct {

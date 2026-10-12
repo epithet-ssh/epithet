@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design fact provider management operations and discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-12T09:17:51.205352Z
+updated: 2026-10-12T13:16:07.500337Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -16,11 +16,11 @@ blocked_by:
 
 # Fact provider management API exploration
 
-Design proposal for discussion. Implementation is not authorized by this task. The working application remains unchanged.
+Design proposal for discussion. Implementation is not authorized by this task. Provider-management discovery remains unimplemented; ADR 0001 selector and fact changes are now complete.
 
-## Deferred pending Writ semantics
+## Ready for further design after ADR 0001
 
-Control-plane API design is deferred until the Writ selector and fact semantics refinement lands. Do not freeze the fact-service APIs against the current name-only group model or SCIM reconciliation workflows.
+ADR 0001 is implemented. Resume this design against structured memberships, flat string attributes, and current group names; historical bindings and reconciliation no longer exist.
 
 The earlier preference for Proposal A below was based on preserving existing workflows. That is no longer a requirement: the user explicitly permits reconsidering those workflows, particularly SCIM reconciliation. The three proposals remain useful exploration, but A is not an agreed final design.
 
@@ -28,14 +28,14 @@ Direction established in discussion:
 
 - Trust the IdP's current group names, including deletion and recreation under the same name. Historical ownership of a name need not be preserved through aliases, tombstones, or manual rebinding.
 - Preserve the ability to select a particular group identity when multiple groups share a name. Group membership facts should retain structured identity and attribute information.
-- Use object filters such as `group{id:abc123}` and `user{employmentType:contractor, department:engineering}`; the parallel host form is `host{environment:sandbox, region:eu-west-1}`.
+- Use object filters such as `group{id:abc123}` and `user{employmentType:contractor, department:engineering}`; the parallel host form is `root@{environment:sandbox, region:eu-west-1}`.
 - Filters use colons, and comma-separated predicates are AND on the same object. A group filter must be satisfied by one membership, not by distributing predicates across different groups.
 - Express OR through repeated rules, rather than inline alternatives. This revisits existing outer selector-set alternatives as well as defining the new filters; deny precedence must remain explicit.
-- Permit provider-defined attributes instead of a fixed vocabulary tied to SCIM or the built-in inventory. Path notation for nested attributes remains a candidate.
+- Permit provider-defined attributes instead of a fixed vocabulary tied to SCIM or the built-in inventory. Nested paths are excluded by ADR 0001.
 - The short form selects the `name` attribute. The fact-service reply contains the mapped names; Writ has no provider-controlled default-attribute configuration.
 - `name` is multi-valued for users, groups, and hosts. A name selector matches any supplied name. Users will commonly have one username but may have aliases; adding an alias is authorization-relevant.
 
-Still resolve in the Writ work: precise fact shapes and group identity source/scope, typed values and collection matching beyond names, missing-attribute and negation semantics, nested paths, and hostname-pattern behavior. These are discussion points, not authorization for speculative features.
+The Writ work settled the fact shapes, SCIM group resource IDs, string-only values, same-object conjunction, missing-value and negation semantics, flat keys, and retained hostname patterns. See ADR 0001 for the implemented contracts.
 
 Resume control-plane design after those semantics land: identify the administrator operations still needed, reconsider directory binding/reconciliation operations, then settle operation schemas and OPTIONS/Link capability discovery. Preserve the agreed direction that the data-plane endpoint is an arbitrary configured URL with query parameters as its contract; discovery should advertise optional management support without requiring a fixed lookup path.
 
@@ -62,7 +62,7 @@ The proposals concern the existing feature set. They do not add suspension, reac
 
 ## What the existing implementation actually promises
 
-The current public action catalogue contains **12 inventory operations and 4 directory administration operations**. There is also a private actor lookup and a separate SCIM tunnel. The large request structure makes this look like one API operation with many optional fields, but the backend must already understand all those distinct actions.
+The current public action catalogue contains **12 inventory operations and 3 directory administration operations**. There is also a private actor lookup and a separate SCIM tunnel. The large request structure makes this look like one API operation with many optional fields, but the backend must already understand all those distinct actions.
 
 Several less obvious behaviors affect the design:
 
@@ -405,3 +405,8 @@ Writ evolution work is tracked in rv3znarg. Keep open questions, implementation 
 # Log: 2026-10-12T09:17:51Z Brian McCallister
 
 Added blocker: rv3znarg
+
+---
+# Log: 2026-10-12T13:16:07Z Brian McCallister
+
+ADR 0001 implementation is complete: flat string predicates, explicit name/id, structured groups, provider-owned eligibility, and unchanged account filters. Historical group bindings and directory-bind are removed. Reassess the management proposal against these implemented semantics; discovery and broader workflows remain design-only.

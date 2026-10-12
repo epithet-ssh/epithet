@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"net/http"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.Resolve
 func testInv() *fakeInv {
 	return &fakeInv{
 		users: map[string]*directory.User{
-			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []string{"SRE"}, UserType: "employee"},
+			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []object.Object{{Names: []string{"SRE"}}}, UserType: "employee"},
 		},
 		hosts: map[string]*inventory.ResolvedHost{
 			"prod-db-1": {Policy: inventory.Host{Names: []string{"prod-db-1"}, Labels: map[string]string{"env": "prod"}}},
@@ -58,7 +59,7 @@ func conn(account, host string) wire.Connection {
 }
 
 func TestIssueReturnsPolicyLimits(t *testing.T) {
-	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	pol := mustPolicy(t, "allow group:SRE -> root@{env:prod}\n")
 	e := NewForTesting(pol, testInv())
 	expiry := time.Now().Add(2 * time.Minute)
 
@@ -77,8 +78,8 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 		rule    string
 		allowed bool
 	}{
-		{"allow userName:\"alice@example.com\" -> root@*\n", false},
-		{"allow userName:\"renamed-user\" -> root@*\n", true},
+		{"allow user{name:\"alice@example.com\"} -> root@*\n", false},
+		{"allow user{name:\"renamed-user\"} -> root@*\n", true},
 		{"allow group:SRE -> root@*\n", true},
 	} {
 		t.Run(tc.rule, func(t *testing.T) {
@@ -97,7 +98,7 @@ func TestInventoryRenameChangesUsernameRulesButPreservesIDAndGroups(t *testing.T
 }
 
 func TestIssueAuthorizesHostWithPrincipalRealm(t *testing.T) {
-	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	pol := mustPolicy(t, "allow group:SRE -> root@{env:prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	inv.hosts["prod-db-1"].Realm = evaluatorRealm
@@ -109,7 +110,7 @@ func TestIssueAuthorizesHostWithPrincipalRealm(t *testing.T) {
 }
 
 func TestIssueHashedPrincipalWithoutRealmFailsClosed(t *testing.T) {
-	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	pol := mustPolicy(t, "allow group:SRE -> root@{env:prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = inventory.EpithetPrincipalV1
 	e := NewForTesting(pol, inv)
@@ -121,7 +122,7 @@ func TestIssueHashedPrincipalWithoutRealmFailsClosed(t *testing.T) {
 }
 
 func TestIssueUnknownPrincipalModeFailsClosed(t *testing.T) {
-	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	pol := mustPolicy(t, "allow group:SRE -> root@{env:prod}\n")
 	inv := testInv()
 	inv.hosts["prod-db-1"].PrincipalMode = "mystery"
 	e := NewForTesting(pol, inv)
@@ -131,7 +132,7 @@ func TestIssueUnknownPrincipalModeFailsClosed(t *testing.T) {
 }
 
 func TestRuleTTLOverridesDefault(t *testing.T) {
-	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}, ttl 2m\n")
+	pol := mustPolicy(t, "allow group:SRE -> root@{env:prod}, ttl 2m\n")
 	e := NewForTesting(pol, testInv())
 	resp, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	require.NoError(t, err)
@@ -139,7 +140,7 @@ func TestRuleTTLOverridesDefault(t *testing.T) {
 }
 
 func TestOptionsOverrideDeploymentDefaults(t *testing.T) {
-	pol := mustPolicy(t, "allow group:SRE -> root@{env=prod}\n")
+	pol := mustPolicy(t, "allow group:SRE -> root@{env:prod}\n")
 	e, warnings, err := newWithInventory(pol, testInv(), nil, Options{
 		DefaultTTL: 10 * time.Minute,
 		Extensions: map[string]string{"permit-pty": ""},
@@ -179,7 +180,7 @@ func TestHostNameLowercasedAtRequest(t *testing.T) {
 }
 
 func TestDenyRuleNamesItselfInMessage(t *testing.T) {
-	pol := mustPolicy(t, "allow * -> *@*\ndeny userType:employee -> root@{env=prod}, label \"no-emp-root\"\n")
+	pol := mustPolicy(t, "allow * -> *@*\ndeny user{userType:employee} -> root@{env:prod}, label \"no-emp-root\"\n")
 	e := NewForTesting(pol, testInv())
 	_, err := e.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 	var perr *wire.PolicyError
@@ -253,7 +254,7 @@ func (s *staticFact) Check(_ context.Context, req FactRequest) (FactResult, erro
 }
 
 func TestRegisteredFlagGatesDeny(t *testing.T) {
-	pol := mustPolicy(t, "allow * -> *@*\ndeny * -> *@{env=prod}, when freeze\n")
+	pol := mustPolicy(t, "allow * -> *@*\ndeny * -> *@{env:prod}, when freeze\n")
 	frozen, _, err := newWithInventory(pol, testInv(), &Registry{Flags: map[string]FlagSource{"freeze": staticFlag(true)}}, Options{})
 	require.NoError(t, err)
 	_, err = frozen.Evaluate(context.Background(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
@@ -294,7 +295,7 @@ func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
 	ctx := context.Background()
 	inv := testInv()
 	const id = "alice-id"
-	e := NewForTesting(mustPolicy(t, "allow id:alice-id -> root@*\n"), inv)
+	e := NewForTesting(mustPolicy(t, "allow user{id:alice-id} -> root@*\n"), inv)
 	for _, name := range []string{"alice@example.com", "renamed-user"} {
 		inv.users[id].UserName = name
 		resp, err := e.Evaluate(ctx, id, time.Now().Add(time.Minute), conn("root", "prod-db-1"))
@@ -320,14 +321,14 @@ func TestIDRulesUseBoundRecordAcrossRenameAndReplacement(t *testing.T) {
 }
 
 func TestNewRejectsLegacyIL(t *testing.T) {
-	p := mustPolicy(t, "allow * -> root@*\ndeny userName:alice -> root@*\n")
+	p := mustPolicy(t, "allow * -> root@*\ndeny user{name:alice} -> root@*\n")
 	p.Schema = 1
 	_, _, err := newWithInventory(p, testInv(), nil, Options{})
 	require.ErrorContains(t, err, "recompile")
 	p.Schema = il.Schema
-	p.Denies[0].Users.Or[0].Kind = il.MatcherKind("uid")
+	p.Denies[0].Users.Kind = il.Kind("uid")
 	_, _, err = newWithInventory(p, testInv(), nil, Options{})
-	require.ErrorContains(t, err, "user selectors")
+	require.ErrorContains(t, err, "user selector")
 }
 
 // Resolve test fixtures before invoking the production fact-only evaluator.
@@ -358,11 +359,12 @@ func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.
 		return nil, err
 	}
 	input := &wire.PolicyFacts{Authentication: wire.Authentication{ID: id, ExpiresAt: expiry}, Target: conn.RemoteHost}
-	if u != nil {
-		input.User = &wire.User{ID: u.ID, UserName: u.UserName, Active: &u.Active, Groups: u.Groups, UserType: u.UserType, Department: u.Department, Organization: u.Organization}
+	if u != nil && u.Active {
+		uf := u.Facts()
+		input.User = &uf
 	}
 	if h != nil {
-		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Labels: h.Policy.Labels}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
+		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Attributes: object.FromStrings(h.Policy.Labels)}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
 		if err := host.Validate(conn.RemoteHost); err != nil {
 			return nil, err
 		}
@@ -444,19 +446,19 @@ func TestUserFactsPreserveAuthorization(t *testing.T) {
 		name, selector            string
 		inactive, absent, allowed bool
 	}{
-		{name: "ID", selector: "id:alice-id", allowed: true},
-		{name: "ID case differs", selector: "id:Alice-id"},
-		{name: "username", selector: "userName:\"Alice Example\"", allowed: true},
-		{name: "username case differs", selector: "userName:\"alice example\""},
+		{name: "ID", selector: "user{id:alice-id}", allowed: true},
+		{name: "ID case differs", selector: "user{id:Alice-id}"},
+		{name: "username", selector: "user{name:\"Alice Example\"}", allowed: true},
+		{name: "username case differs", selector: "user{name:\"alice example\"}"},
 		{name: "group", selector: "group:\" Platform \"", allowed: true},
 		{name: "group whitespace differs", selector: "group:Platform"},
 		{name: "group case differs", selector: "group:\" platform \""},
-		{name: "user type", selector: "userType:employee", allowed: true},
-		{name: "other user type", selector: "userType:contractor"},
-		{name: "department", selector: "department:Engineering", allowed: true},
-		{name: "other department", selector: "department:Sales"},
-		{name: "organization", selector: "organization:Example", allowed: true},
-		{name: "other organization", selector: "organization:Other"},
+		{name: "user type", selector: "user{userType:employee}", allowed: true},
+		{name: "other user type", selector: "user{userType:contractor}"},
+		{name: "department", selector: "user{department:Engineering}", allowed: true},
+		{name: "other department", selector: "user{department:Sales}"},
+		{name: "organization", selector: "user{organization:Example}", allowed: true},
+		{name: "other organization", selector: "user{organization:Other}"},
 		{name: "inactive", selector: "*", inactive: true},
 		{name: "absent", selector: "*", absent: true},
 	} {
@@ -464,7 +466,7 @@ func TestUserFactsPreserveAuthorization(t *testing.T) {
 			inv := testInv()
 			user := inv.users["alice-id"]
 			user.UserName = "Alice Example"
-			user.Groups = []string{" Platform "}
+			user.Groups = []object.Object{{Names: []string{" Platform "}}}
 			user.Department = "Engineering"
 			user.Organization = "Example"
 			user.Active = !tc.inactive

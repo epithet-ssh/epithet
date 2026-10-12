@@ -168,9 +168,9 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 			c.logger.Info("inventory lookup", "host", name, "revision", host.Revision.String())
 		}
 	}
-	active := true
+	policyUser := user.PolicyUser()
 	facts := &wire.PolicyFacts{Authentication: wire.Authentication{ID: claims.UserID, ExpiresAt: claims.ExpiresAt}, Target: name,
-		User: &wire.User{ID: user.ID, UserName: user.UserName, Active: &active, Groups: user.Groups, UserType: user.UserType, Department: user.Department, Organization: user.Organization}, Host: &host.HostResource}
+		User: &policyUser, Host: &host.HostResource}
 	response, err := c.evaluator.Evaluate(ctx, conn, facts)
 	if err != nil {
 		kind := ErrDependency

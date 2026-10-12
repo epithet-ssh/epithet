@@ -19,7 +19,7 @@ import (
 func TestLogoutClearsAgentsAndStartsFreshAuthentication(t *testing.T) {
 	idp := oidctest.New(t)
 	eval := writEvaluator(t,
-		"allow userName:\"test@example.com\" -> root@*\n",
+		"allow user{name:\"test@example.com\"} -> root@*\n",
 		"users:\n  - userName: test@example.com\n    id: subject:test@example.com\nhosts:\n  - pattern: \"*\"\n")
 	caURL, hits := realCAAndPolicy(t, idp, eval)
 	var logins atomic.Int32

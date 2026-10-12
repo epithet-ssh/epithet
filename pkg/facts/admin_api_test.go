@@ -15,7 +15,7 @@ import (
 func TestControlResponseWireShape(t *testing.T) {
 	ts := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	resp := facts.ControlResponse{
-		Directory:      &facts.BindingSnapshot{Revision: 7, Groups: []facts.GroupBinding{{ID: "g1", DisplayName: "Ops", Alias: "ops", Status: "bound"}}},
+		Directory:      &facts.GroupSnapshot{Revision: 7, Groups: []facts.GroupSummary{{ID: "g1", DisplayName: "Ops"}}},
 		DirectoryAudit: []facts.DirectoryAuditEvent{{Sequence: 1, Revision: 7, Time: ts, Actor: "admin", Action: "rebind", ID: "g1", Alias: "ops", PreviousID: "g0"}},
 		Host: &facts.HostRecord{
 			ID: "h1", Revision: 3, Status: "active",
@@ -30,7 +30,7 @@ func TestControlResponseWireShape(t *testing.T) {
 	}
 	out, err := json.Marshal(resp)
 	require.NoError(t, err)
-	require.Equal(t, `{"directory":{"revision":7,"groups":[{"id":"g1","displayName":"Ops","alias":"ops","status":"bound"}]},`+
+	require.Equal(t, `{"directory":{"revision":7,"groups":[{"id":"g1","displayName":"Ops"}]},`+
 		`"directory-audit":[{"sequence":1,"revision":7,"time":"2026-09-18T12:00:00Z","actor":"admin","action":"rebind","id":"g1","alias":"ops","previous-id":"g0"}],`+
 		`"host":{"id":"h1","revision":3,"status":"active","host":{"names":null,"pattern":"*.example","labels":{"k":"v"},"accounts":[],"principal-mode":"account-name","realm":"d"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"},`+
 		`"hosts":[{"id":"h2","revision":1,"status":"pending","host":{"names":["c"],"labels":null,"accounts":null,"principal-mode":"account-name"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"}],`+
@@ -41,11 +41,11 @@ func TestControlResponseWireShape(t *testing.T) {
 }
 
 func TestControlRequestWireShape(t *testing.T) {
-	req := facts.ControlRequest{AuditAfter: 5, AuditLimit: 10, Alias: "ops", Action: "edit", ID: "h1", Revision: 3,
+	req := facts.ControlRequest{AuditAfter: 5, AuditLimit: 10, Action: "edit", ID: "h1", Revision: 3,
 		Host: &facts.Proposal{Names: []string{"a"}, Accounts: nil, PrincipalMode: "account-name"}, Token: "tok", LifetimeSeconds: 60}
 	out, err := json.Marshal(req)
 	require.NoError(t, err)
-	require.Equal(t, `{"audit-after":5,"audit-limit":10,"alias":"ops","action":"edit","id":"h1","revision":3,"host":{"names":["a"],"labels":null,"accounts":null,"principal-mode":"account-name"},"token":"tok","lifetime-seconds":60}`, string(out))
+	require.Equal(t, `{"audit-after":5,"audit-limit":10,"action":"edit","id":"h1","revision":3,"host":{"names":["a"],"labels":null,"accounts":null,"principal-mode":"account-name"},"token":"tok","lifetime-seconds":60}`, string(out))
 }
 
 func TestActorSnapshotWireShape(t *testing.T) {

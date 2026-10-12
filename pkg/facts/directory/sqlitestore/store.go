@@ -13,6 +13,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/storage"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -22,7 +23,8 @@ type Store struct{ db *sql.DB }
 var _ directory.Store = (*Store)(nil)
 
 // Open creates a private database if needed. Schema version mismatches fail
-// startup; opening a database never falls back to an empty in-memory directory.
+// startup; existing databases are never upgraded here. Opening a database never
+// falls back to an empty in-memory directory.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("directory database path is required")
@@ -49,7 +51,7 @@ func (s *Store) initialize() error {
 	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version != 0 && version != 1 {
+	if version != 0 && version != 2 {
 		return fmt.Errorf("unsupported directory database version %d", version)
 	}
 	if version == 0 {
@@ -59,9 +61,8 @@ CREATE TABLE users (id TEXT PRIMARY KEY, user_name TEXT NOT NULL, name_key TEXT 
 CREATE TABLE groups (id TEXT PRIMARY KEY, external_id TEXT NOT NULL, display_name TEXT NOT NULL, version INTEGER NOT NULL, created TEXT NOT NULL, modified TEXT NOT NULL);
 CREATE TABLE members (group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(group_id,user_id));
 CREATE INDEX user_memberships ON members(user_id);
-CREATE TABLE aliases (name TEXT PRIMARY KEY, group_id TEXT NOT NULL UNIQUE);
 CREATE TABLE audit (sequence INTEGER PRIMARY KEY, revision INTEGER NOT NULL, time TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, resource_id TEXT NOT NULL, alias TEXT NOT NULL, previous_id TEXT NOT NULL);
-PRAGMA user_version=1;`)
+PRAGMA user_version=2;`)
 		if err != nil {
 			return err
 		}
@@ -307,8 +308,8 @@ func (s *Store) ReplaceGroup(ctx context.Context, id string, group directory.Gro
 	return s.writeGroup(ctx, id, group, match)
 }
 
-// writeGroup owns membership replacement and the first claim of a policy alias.
-// A display-name collision is an audited binding conflict, not a failed create.
+// writeGroup owns a group and its direct membership replacement.
+// Display names need not be unique; resource IDs distinguish the groups.
 func (s *Store) writeGroup(ctx context.Context, id string, group directory.Group, match string) (directory.Group, error) {
 	if strings.TrimSpace(group.DisplayName) == "" {
 		return directory.Group{}, fmt.Errorf("%w: displayName is required", directory.ErrInvalid)
@@ -352,22 +353,6 @@ func (s *Store) writeGroup(ctx context.Context, id string, group directory.Group
 	}
 	for _, userID := range group.MemberIDs {
 		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO members (group_id,user_id) VALUES (?,?)", m.ID, userID)
-		if err != nil {
-			return directory.Group{}, err
-		}
-	}
-	if id == "" {
-		var owner string
-		err = tx.QueryRowContext(ctx, "SELECT group_id FROM aliases WHERE name=?", group.DisplayName).Scan(&owner)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			_, err = tx.ExecContext(ctx, "INSERT INTO aliases VALUES (?,?)", group.DisplayName, m.ID)
-			if err == nil {
-				err = audit(ctx, tx, m.Version, "scim", "bind", m.ID, group.DisplayName, "")
-			}
-		case err == nil:
-			err = audit(ctx, tx, m.Version, "scim", "name-conflict", m.ID, group.DisplayName, owner)
-		}
 		if err != nil {
 			return directory.Group{}, err
 		}
@@ -449,7 +434,7 @@ func (s *Store) DeleteGroup(ctx context.Context, id, match string) error {
 	if err != nil {
 		return err
 	}
-	// Aliases intentionally survive deletion, reserving their policy names.
+	// Memberships are removed by the foreign-key cascade. Names are not reserved.
 	if _, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE id=?", id); err != nil {
 		return err
 	}
@@ -484,14 +469,14 @@ func (s *Store) userFacts(ctx context.Context, externalID *string) ([]directory.
 	if err != nil {
 		return nil, "", err
 	}
-	query := `SELECT u.external_id,u.user_name,u.active,u.user_type,u.department,u.organization,a.name
-FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN aliases a ON a.group_id=m.group_id`
+	query := `SELECT u.external_id,u.user_name,u.active,u.user_type,u.department,u.organization,g.id,g.display_name,g.external_id
+FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN groups g ON g.id=m.group_id`
 	var args []any
 	if externalID != nil {
 		query += " WHERE u.external_id=?"
 		args = append(args, *externalID)
 	}
-	query += " ORDER BY u.user_name,u.external_id,a.name"
+	query += " ORDER BY u.user_name,u.external_id,g.display_name,g.id"
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", err
@@ -500,17 +485,21 @@ FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN aliases a ON a.grou
 	users := []directory.User{}
 	for rows.Next() {
 		var u directory.User
-		var group sql.NullString
-		if err = rows.Scan(&u.ID, &u.UserName, &u.Active, &u.UserType, &u.Department, &u.Organization, &group); err != nil {
+		var groupID, groupName, groupExternalID sql.NullString
+		if err = rows.Scan(&u.ID, &u.UserName, &u.Active, &u.UserType, &u.Department, &u.Organization, &groupID, &groupName, &groupExternalID); err != nil {
 			return nil, "", err
 		}
 		if len(users) == 0 || users[len(users)-1].ID != u.ID {
-			u.Groups = []string{}
+			u.Groups = []object.Object{}
 			users = append(users, u)
 		}
-		if group.Valid {
+		if groupID.Valid {
 			last := &users[len(users)-1]
-			last.Groups = append(last.Groups, group.String)
+			g := object.Object{ID: groupID.String, Names: []string{groupName.String}}
+			if groupExternalID.String != "" {
+				g.Attributes = object.Attributes{"externalId": {groupExternalID.String}}
+			}
+			last.Groups = append(last.Groups, g)
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -525,8 +514,10 @@ FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN aliases a ON a.grou
 	return users, directory.Revision(fmt.Sprintf("%s:%d", instance, n)), nil
 }
 
-func (s *Store) Bindings(ctx context.Context) (directory.BindingSnapshot, error) {
-	out := directory.BindingSnapshot{Groups: []directory.GroupBinding{}}
+// Groups returns current provisioned identities, including same-named groups,
+// from one snapshot. Historical alias ownership no longer affects this view.
+func (s *Store) Groups(ctx context.Context) (directory.GroupSnapshot, error) {
+	out := directory.GroupSnapshot{Groups: []directory.GroupSummary{}}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, err
@@ -536,16 +527,13 @@ func (s *Store) Bindings(ctx context.Context) (directory.BindingSnapshot, error)
 	if err != nil {
 		return out, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT g.id,g.display_name,COALESCE(a.name,''), CASE WHEN a.name IS NOT NULL THEN 'bound' WHEN EXISTS(SELECT 1 FROM aliases WHERE name=g.display_name) THEN 'conflict' ELSE 'unbound' END
-FROM groups g LEFT JOIN aliases a ON a.group_id=g.id
-UNION ALL SELECT a.group_id,'',a.name,'deleted' FROM aliases a WHERE NOT EXISTS(SELECT 1 FROM groups g WHERE g.id=a.group_id)
-ORDER BY 2,1`)
+	rows, err := tx.QueryContext(ctx, "SELECT id,display_name,external_id FROM groups ORDER BY display_name,id")
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
-		var g directory.GroupBinding
-		if err = rows.Scan(&g.ID, &g.DisplayName, &g.Alias, &g.Status); err != nil {
+		var g directory.GroupSummary
+		if err = rows.Scan(&g.ID, &g.DisplayName, &g.ExternalID); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -557,53 +545,6 @@ ORDER BY 2,1`)
 		return out, err
 	}
 	return out, tx.Commit()
-}
-func (s *Store) Rebind(ctx context.Context, actor, alias, id string, expected uint64, authorizationRevision directory.Revision) error {
-	if actor == "" || strings.TrimSpace(alias) == "" {
-		return fmt.Errorf("%w: actor and policy alias are required", directory.ErrInvalid)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	n, instance, err := revision(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if n != expected || authorizationRevision != directory.Revision(fmt.Sprintf("%s:%d", instance, n)) {
-		return directory.ErrVersion
-	}
-	if _, err = readGroup(ctx, tx, id); err != nil {
-		return err
-	}
-	var existing string
-	err = tx.QueryRowContext(ctx, "SELECT name FROM aliases WHERE group_id=?", id).Scan(&existing)
-	if err == nil && existing != alias {
-		return fmt.Errorf("%w: group already has policy alias %q", directory.ErrConflict, existing)
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	var previous string
-	err = tx.QueryRowContext(ctx, "SELECT group_id FROM aliases WHERE name=?", alias).Scan(&previous)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	if previous == id {
-		return tx.Commit()
-	}
-	n, err = next(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO aliases VALUES (?,?) ON CONFLICT(name) DO UPDATE SET group_id=excluded.group_id", alias, id); err != nil {
-		return err
-	}
-	if err = audit(ctx, tx, n, actor, "rebind", id, alias, previous); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 func (s *Store) Audit(ctx context.Context, after directory.AuditSequence, limit int) ([]directory.AuditEvent, error) {
 	if limit == 0 {

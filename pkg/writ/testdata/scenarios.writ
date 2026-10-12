@@ -5,9 +5,9 @@ user  dba   = group:DBA
 user  sec   = group:"Security Oncall"
 user  infra = group:Infrastructure
 
-host  prod       = {env=prod}
-host  dev        = {env=dev}
-host  staging_db = {env=staging, role=db}
+host  prod       = {env:prod}
+host  dev        = {env:dev}
+host  staging_db = {env:staging, role:db}
 
 # ── rules ───────────────────────────────────────────────
 
@@ -18,13 +18,13 @@ allow $sre -> ubuntu@$prod
 allow $sre -> root@$prod, require [oncall, approval], label "sre-prod-root"
 
 # S3 — authored form (the grants CLI is the preferred path)
-allow userName:"carol@example.com" -> postgres@prod-db-1,
+allow user{name:"carol@example.com"} -> postgres@prod-db-1,
     require approval,
     until "2026-08-31T22:00Z",
     label "carol-pgdb-incident-1234"
 
 # S4 — attribute guard
-deny userType:contractor -> *@$prod, label "no-contractors-in-prod"
+deny user{userType:contractor} -> *@$prod, label "no-contractors-in-prod"
 
 # S5 — dev wildcard
 allow $eng -> *@$dev
@@ -39,11 +39,14 @@ allow $dba -> postgres@$staging_db
 deny !$infra -> *@$prod, when freeze, label "prod-freeze"
 
 # stress test — worst-case clause pileup
-allow $sre -> root@{env=prod, role=db},
+allow $sre -> root@{env:prod, role:db},
     require [oncall, approval, mfa],
     ttl 2m,
     notify "security-alerts",
     label "db-root-breakglass"
 
-# unions, same sigil, same meaning
-allow [$sre, $dba] -> [ubuntu, deploy]@$prod
+# alternatives use separate rules
+allow $sre -> ubuntu@$prod
+allow $sre -> deploy@$prod
+allow $dba -> ubuntu@$prod
+allow $dba -> deploy@$prod

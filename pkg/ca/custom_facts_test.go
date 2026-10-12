@@ -47,16 +47,16 @@ func TestMinimalCustomFactsAndOptionalUserName(t *testing.T) {
 		require.NoError(t, hostVerifier.Verify(r, nil))
 		require.Equal(t, "host", r.URL.Query().Get("host"))
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write([]byte(`{"names":["host","alias"],"accounts":null,"principal":{"mode":"account-name"}}`))
+		w.Write([]byte(`{"name":["host","alias"],"accounts":null,"principal":{"mode":"account-name"}}`))
 	}))
 	defer inventory.Close()
 	for _, tc := range []struct {
 		policy  string
 		allowed bool
 	}{
-		{`allow id:"subject:alice" -> root@alias`, true},
-		{`allow userName:"subject:alice" -> root@host`, false},
-		{`allow userName:"" -> root@host`, false},
+		{`allow user{id:"subject:alice"} -> root@alias`, true},
+		{`allow user{name:"subject:alice"} -> root@host`, false},
+		{`allow user{name:""} -> root@host`, false},
 		{`allow group:ops -> root@host`, false},
 		{`allow * -> root@host`, true},
 	} {

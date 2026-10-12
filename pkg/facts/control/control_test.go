@@ -2,8 +2,8 @@ package control_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -68,13 +68,13 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
    userName: admin
  - id: directory-group
    userName: group-member
-   groups: [ops]
+   groups: [{name: [ops]}]
  - id: directory-user
    userName: ordinary
  - id: directory-disabled
    userName: disabled
    active: false
-   groups: [ops]
+   groups: [{name: [ops]}]
 `), 0600))
 	inv, err := inventorytest.NewStatic([]string{path})
 	require.NoError(t, err)
@@ -148,13 +148,13 @@ func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(`users:
  - id: subject:admin
    userName: admin
-   groups: [wheel]
+   groups: [{name: [wheel]}]
  - id: subject:ordinary
    userName: ordinary
  - id: subject:disabled
    userName: disabled
    active: false
-   groups: [wheel]
+   groups: [{name: [wheel]}]
 `), 0600))
 			static, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
@@ -224,17 +224,20 @@ func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
 }
 
 func TestDirectoryAuditCanBeReadBeyondControlResponseLimit(t *testing.T) {
-	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "directory.db"))
+	path := filepath.Join(t.TempDir(), "directory.db")
+	store, err := sqlitestore.Open(path)
 	require.NoError(t, err)
 	defer store.Close()
 	_, err = store.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:admin", UserName: "admin", Active: true})
 	require.NoError(t, err)
-	// Build a real audit history larger than the client allows in one response.
-	// Names are retained on bind events; create events share their revisions.
-	for n := 0; n < 500; n++ {
-		_, err = store.CreateGroup(t.Context(), directory.Group{DisplayName: fmt.Sprintf("group-%d-", n) + strings.Repeat("x", 18<<10)})
+	// Retained historical binding events can exceed a single response limit.
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	for range 1000 {
+		_, err = db.Exec(`INSERT INTO audit (revision,time,actor,action,resource_id,alias,previous_id) VALUES (1,?,'scim','bind','g',?,'')`, time.Now().UTC().Format(time.RFC3339Nano), strings.Repeat("x", 9<<10))
 		require.NoError(t, err)
 	}
+	require.NoError(t, db.Close())
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)

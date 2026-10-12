@@ -17,16 +17,15 @@ import (
 // preserves authored order. It drops schema, id, and label; sorts
 // object keys; omits empty and null fields; renders ttl as integer
 // seconds and until as RFC 3339 UTC with Z; and sorts + dedups every
-// list (match sets, require, when, notify) — lists are sets, and union
-// and conjunction are both commutative and idempotent.
+// list (predicates, require, when, notify). Conjunction is commutative and idempotent.
 
 // ContentID returns the rule's full content id: 64 lowercase hex chars.
 func (r *AllowRule) ContentID() string {
 	proj := map[string]any{
 		"effect":   "allow",
-		"users":    canonicalMatchSet(r.Users, false),
-		"accounts": canonicalMatchSet(r.Accounts, false),
-		"hosts":    canonicalMatchSet(r.Hosts, false),
+		"users":    canonicalSelector(r.Users, false),
+		"accounts": canonicalSelector(r.Accounts, false),
+		"hosts":    canonicalSelector(r.Hosts, false),
 	}
 	putList(proj, "require", r.Require)
 	putList(proj, "when", r.When)
@@ -47,9 +46,9 @@ func (r *AllowRule) ContentID() string {
 func (r *DenyRule) ContentID() string {
 	proj := map[string]any{
 		"effect":   "deny",
-		"users":    canonicalNegSet(r.Users),
-		"accounts": canonicalNegSet(r.Accounts),
-		"hosts":    canonicalNegSet(r.Hosts),
+		"users":    canonicalNegSelector(r.Users),
+		"accounts": canonicalNegSelector(r.Accounts),
+		"hosts":    canonicalNegSelector(r.Hosts),
 	}
 	putList(proj, "when", r.When)
 	putList(proj, "notify", r.Notify)
@@ -73,44 +72,26 @@ func putList(proj map[string]any, key string, vals []string) {
 	proj[key] = slices.Compact(sorted)
 }
 
-// canonicalMatchSet renders a match set as {"or": [...]} (plus "not"
-// when negated) with the matchers sorted bytewise by their own
-// canonical encoding and deduplicated.
-func canonicalMatchSet(s MatchSet, not bool) json.RawMessage {
-	encs := make([]string, 0, len(s.Or))
-	for _, m := range s.Or {
-		encs = append(encs, string(canonicalMatcher(m)))
+// Predicate order and identical repetitions do not affect rule identity.
+func canonicalSelector(s Selector, not bool) json.RawMessage {
+	encs := make([]string, 0, len(s.Predicates))
+	for _, p := range s.Predicates {
+		encs = append(encs, string(mustMarshal(map[string]string{"attribute": p.Attribute, "value": p.Value})))
 	}
 	slices.Sort(encs)
 	encs = slices.Compact(encs)
-
 	raws := make([]json.RawMessage, len(encs))
 	for i, e := range encs {
 		raws[i] = json.RawMessage(e)
 	}
-	obj := map[string]any{"or": raws}
+	obj := map[string]any{"kind": s.Kind, "and": raws}
 	if not {
 		obj["not"] = true
 	}
 	return mustMarshal(obj)
 }
-
-func canonicalNegSet(s NegatableMatchSet) json.RawMessage {
-	return canonicalMatchSet(s.MatchSet, s.Not)
-}
-
-// canonicalMatcher renders one matcher as its canonical JSON object.
-// encoding/json sorts map keys, which is exactly the canonical-form
-// requirement.
-func canonicalMatcher(m Matcher) json.RawMessage {
-	switch m.Kind {
-	case MatchAny:
-		return json.RawMessage(`{"any":true}`)
-	case MatchLabels:
-		return mustMarshal(map[string]any{"labels": m.Labels})
-	default:
-		return mustMarshal(map[string]any{string(m.Kind): m.Value})
-	}
+func canonicalNegSelector(s NegatableSelector) json.RawMessage {
+	return canonicalSelector(s.Selector, s.Not)
 }
 
 func hashProjection(proj map[string]any) string {

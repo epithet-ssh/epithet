@@ -41,8 +41,8 @@ func TestManagedCombinedEnrollmentAdminCLIAndIssuance(t *testing.T) {
 	_, private, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.key"), []byte(private), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: admin\n   groups: [operators]\n"), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow userName:admin -> root@*\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: admin\n   groups: [{name: [operators]}]\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow user{name:admin} -> root@*\n"), 0600))
 	seedManagedPattern(t, filepath.Join(dir, "state"), []string{"root"})
 	controlPath := writeControlKey(t, dir)
 	config := fmt.Sprintf(`ca-key-file = "%s/ca.key"

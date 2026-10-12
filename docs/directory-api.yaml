@@ -51,10 +51,30 @@ components:
       properties:
         id: {type: string, minLength: 1, description: Opaque identity matching the request}
         userName: {type: string}
+        name:
+          type: array
+          nullable: true
+          items: {type: string}
         groups:
           type: array
-          items: {type: string, minLength: 1}
-        userType: {type: string}
-        department: {type: string}
-        organization: {type: string}
+          nullable: true
+          items: {$ref: '#/components/schemas/Group'}
+        attributes: {$ref: '#/components/schemas/Attributes'}
         revision: {$ref: '#/components/schemas/Revision'}
+    Attributes:
+      type: object
+      description: Flat selectable fields; name and id are reserved for defined fields
+      additionalProperties:
+        oneOf:
+          - {type: string, nullable: true}
+          - type: array
+            items: {type: string}
+    Group:
+      type: object
+      properties:
+        id: {type: string, description: Optional provider identity; SCIM resource ID when available}
+        name:
+          type: array
+          nullable: true
+          items: {type: string}
+        attributes: {$ref: '#/components/schemas/Attributes'}

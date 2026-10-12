@@ -22,7 +22,6 @@ type ControlRequest struct {
 	Pending         bool      `json:"pending,omitempty"`
 	AuditAfter      uint64    `json:"audit-after,omitempty"`
 	AuditLimit      int       `json:"audit-limit,omitempty"`
-	Alias           string    `json:"alias,omitempty"`
 	Action          string    `json:"action"`
 	ID              string    `json:"id,omitempty"`
 	Revision        uint64    `json:"revision,omitempty"`
@@ -35,7 +34,7 @@ type ControlRequest struct {
 // relevant to the requested action are set; Error accompanies a non-2xx status.
 type ControlResponse struct {
 	DirectoryUsers *UserSnapshot         `json:"directory-users,omitempty"`
-	Directory      *BindingSnapshot      `json:"directory,omitempty"`
+	Directory      *GroupSnapshot        `json:"directory,omitempty"`
 	DirectoryAudit []DirectoryAuditEvent `json:"directory-audit,omitempty"`
 	Host           *HostRecord           `json:"host,omitempty"`
 	Hosts          []HostRecord          `json:"hosts,omitempty"`
@@ -113,19 +112,17 @@ type HostAuditEvent struct {
 	Resource string    `json:"resource"`
 }
 
-// GroupBinding is one provisioned directory group and its policy alias.
-type GroupBinding struct {
+// GroupSummary exposes the current group name and identifiers.
+type GroupSummary struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
-	Alias       string `json:"alias,omitempty"`
-	Status      string `json:"status"`
+	ExternalID  string `json:"externalId,omitempty"`
 }
 
-// BindingSnapshot lets administrators bind a review to the exact directory
-// revision they inspected. Deleted bindings retain the former group ID.
-type BindingSnapshot struct {
+// GroupSnapshot is a coherent view of current provisioned groups.
+type GroupSnapshot struct {
 	Revision uint64         `json:"revision"`
-	Groups   []GroupBinding `json:"groups"`
+	Groups   []GroupSummary `json:"groups"`
 }
 
 // UserSnapshot is the selected directory's authorization view. IDs identify

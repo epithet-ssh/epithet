@@ -59,20 +59,15 @@ func lookup(ctx context.Context, service *transport, param, value string, result
 }
 
 // User returns active user facts for the exact authentication subject, or nil
-// when absent or inactive. It validates identity and group names on every read.
+// when absent or inactive. It validates identity and object attributes on every read.
 func (c *DataClient) User(ctx context.Context, id string) (*User, error) {
 	var u User
 	found, err := lookup(ctx, c.directory, "id", id, &u)
 	if err != nil || !found {
 		return nil, err
 	}
-	if u.ID == "" || u.ID != id {
-		return nil, fmt.Errorf("directory user does not match requested id")
-	}
-	for _, g := range u.Groups {
-		if g == "" {
-			return nil, fmt.Errorf("empty group ID")
-		}
+	if err := u.PolicyUser().Validate(id); err != nil {
+		return nil, err
 	}
 	return &u, nil
 }

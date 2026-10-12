@@ -39,7 +39,7 @@ func TestDirectoryUsersCLIWithManagedInventory(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.key"), []byte(key), 0600))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow group:wheel -> root@*\n"), 0600))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: static-admin\n   groups: [wheel]\n"), 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: static-admin\n   groups: [{name: [wheel]}]\n"), 0600))
 			name := "static-admin"
 			if source == "scim" {
 				store, err := sqlitestore.Open(filepath.Join(dir, "state", "directory", "directory.db"))

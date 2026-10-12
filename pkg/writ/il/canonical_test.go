@@ -12,9 +12,9 @@ import (
 func specAllow() AllowRule {
 	return AllowRule{
 		Label:    "sre-prod-root",
-		Users:    MatchSet{Or: []Matcher{{Kind: MatchGroup, Value: "SRE"}}},
-		Accounts: MatchSet{Or: []Matcher{{Kind: MatchName, Value: "root"}}},
-		Hosts:    MatchSet{Or: []Matcher{{Kind: MatchLabels, Labels: map[string]string{"env": "prod"}}}},
+		Users:    Selector{Kind: Group, Predicates: []Predicate{{Attribute: "name", Value: "SRE"}}},
+		Accounts: Selector{Kind: Account, Predicates: []Predicate{{Attribute: "name", Value: "root"}}},
+		Hosts:    Selector{Kind: Host, Predicates: []Predicate{{Attribute: "env", Value: "prod"}}},
 		Require:  []string{"oncall", "approval"},
 	}
 }
@@ -22,9 +22,9 @@ func specAllow() AllowRule {
 func specDeny() DenyRule {
 	return DenyRule{
 		Label:    "prod-freeze",
-		Users:    NegatableMatchSet{Not: true, MatchSet: MatchSet{Or: []Matcher{{Kind: MatchGroup, Value: "Infrastructure"}}}},
-		Accounts: NegatableMatchSet{MatchSet: MatchSet{Or: []Matcher{{Kind: MatchAny}}}},
-		Hosts:    NegatableMatchSet{MatchSet: MatchSet{Or: []Matcher{{Kind: MatchLabels, Labels: map[string]string{"env": "prod"}}}}},
+		Users:    NegatableSelector{Not: true, Selector: Selector{Kind: Group, Predicates: []Predicate{{Attribute: "name", Value: "Infrastructure"}}}},
+		Accounts: NegatableSelector{Selector: Selector{Kind: Account}},
+		Hosts:    NegatableSelector{Selector: Selector{Kind: Host, Predicates: []Predicate{{Attribute: "env", Value: "prod"}}}},
 		When:     []string{"freeze"},
 	}
 }
@@ -35,8 +35,8 @@ func specDeny() DenyRule {
 func TestGoldenContentIDs(t *testing.T) {
 	allow := specAllow()
 	deny := specDeny()
-	require.Equal(t, "30832649653f8b9231bd5a3c31268bb89e08d8e59ac6c0b2d456968368070b3e", allow.ContentID())
-	require.Equal(t, "0f569d6d1a4ac431e4a397eb7e10d43c0957ee4825ce8317fe1ae25f23f1ebd3", deny.ContentID())
+	require.Equal(t, "6bdb0459a31963b5926c3a0616a427448f96da7cad313fe96f0f39972ae73922", allow.ContentID())
+	require.Equal(t, "8d36fcd60b83dcc44a281e7148b51d8f6cba3f952e79c863fdb44590dfb44db3", deny.ContentID())
 }
 
 func TestShortIDIsTwelveHex(t *testing.T) {
@@ -56,16 +56,16 @@ func TestListOrderDoesNotChangeID(t *testing.T) {
 
 func TestMatcherOrderDoesNotChangeID(t *testing.T) {
 	a := specAllow()
-	a.Users.Or = []Matcher{{Kind: MatchGroup, Value: "SRE"}, {Kind: MatchGroup, Value: "DBA"}}
+	a.Users.Predicates = []Predicate{{Attribute: "name", Value: "SRE"}, {Attribute: "name", Value: "DBA"}}
 	b := specAllow()
-	b.Users.Or = []Matcher{{Kind: MatchGroup, Value: "DBA"}, {Kind: MatchGroup, Value: "SRE"}}
+	b.Users.Predicates = []Predicate{{Attribute: "name", Value: "DBA"}, {Attribute: "name", Value: "SRE"}}
 	require.Equal(t, a.ContentID(), b.ContentID())
 }
 
 func TestDuplicateEntriesCollapseInHash(t *testing.T) {
 	a := specAllow()
 	b := specAllow()
-	b.Users.Or = []Matcher{{Kind: MatchGroup, Value: "SRE"}, {Kind: MatchGroup, Value: "SRE"}}
+	b.Users.Predicates = []Predicate{{Attribute: "name", Value: "SRE"}, {Attribute: "name", Value: "SRE"}}
 	b.Require = []string{"oncall", "approval", "oncall"}
 	require.Equal(t, a.ContentID(), b.ContentID())
 }
@@ -81,7 +81,7 @@ func TestSemanticEditsChangeID(t *testing.T) {
 	base := specAllow()
 
 	edited := specAllow()
-	edited.Accounts.Or[0].Value = "postgres"
+	edited.Accounts.Predicates[0].Value = "postgres"
 	require.NotEqual(t, base.ContentID(), edited.ContentID())
 
 	withTTL := specAllow()
@@ -102,14 +102,14 @@ func TestSemanticEditsChangeID(t *testing.T) {
 // different rules.
 func TestEffectIsHashed(t *testing.T) {
 	allow := AllowRule{
-		Users:    MatchSet{Or: []Matcher{{Kind: MatchGroup, Value: "SRE"}}},
-		Accounts: MatchSet{Or: []Matcher{{Kind: MatchAny}}},
-		Hosts:    MatchSet{Or: []Matcher{{Kind: MatchAny}}},
+		Users:    Selector{Kind: Group, Predicates: []Predicate{{Attribute: "name", Value: "SRE"}}},
+		Accounts: Selector{Kind: Account},
+		Hosts:    Selector{Kind: Host},
 	}
 	deny := DenyRule{
-		Users:    NegatableMatchSet{MatchSet: MatchSet{Or: []Matcher{{Kind: MatchGroup, Value: "SRE"}}}},
-		Accounts: NegatableMatchSet{MatchSet: MatchSet{Or: []Matcher{{Kind: MatchAny}}}},
-		Hosts:    NegatableMatchSet{MatchSet: MatchSet{Or: []Matcher{{Kind: MatchAny}}}},
+		Users:    NegatableSelector{Selector: Selector{Kind: Group, Predicates: []Predicate{{Attribute: "name", Value: "SRE"}}}},
+		Accounts: NegatableSelector{Selector: Selector{Kind: Account}},
+		Hosts:    NegatableSelector{Selector: Selector{Kind: Host}},
 	}
 	require.NotEqual(t, allow.ContentID(), deny.ContentID())
 }

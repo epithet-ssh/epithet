@@ -2,6 +2,7 @@ package wire_test
 
 import (
 	"encoding/json"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -24,7 +25,7 @@ func TestHostAccountsDecodeAtBoundary(t *testing.T) {
 		{"unknown field", `,"accounts":null,"principal":{}`, nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			data := []byte(`{"names":["host"],"labels":{"env":"prod"}` + tc.field + `}`)
+			data := []byte(`{"name":["host"],"attributes":{"env":["prod"]}` + tc.field + `}`)
 			// Reusing a destination must not retain restrictions from its last
 			// value, and malformed input must not replace that value.
 			host := wire.HostResource{Names: []string{"old"}, Accounts: []string{"old"}}
@@ -36,8 +37,8 @@ func TestHostAccountsDecodeAtBoundary(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tc.want, host.Accounts)
-			require.Equal(t, []string{"host"}, host.Names)
-			require.Equal(t, map[string]string{"env": "prod"}, host.Labels)
+			require.Equal(t, []string{"host"}, []string(host.Names))
+			require.Equal(t, object.Attributes{"env": {"prod"}}, host.Attributes)
 			encoded, err := json.Marshal(host)
 			require.NoError(t, err)
 			require.JSONEq(t, string(data), string(encoded))
