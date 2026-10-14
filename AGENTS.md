@@ -1,8 +1,5 @@
 # Repository guidelines
 
-## Version control
-This repository uses Jujutsu (`jj`), not git. Use commands such as `jj status`, `jj commit`, and `jj new` when manipulating history.
-
 ## Build and test
 Validate changes with `make build` and `make test`. Use `go test -race ./pkg/broker` for concurrency-sensitive paths.
 
