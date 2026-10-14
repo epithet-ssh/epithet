@@ -122,10 +122,9 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 **Components:**
 
 - **Agent** (`epithet agent`): Daemon managing OIDC authentication state and certificate lifecycle. Creates per-connection SSH agents.
-- **CA** (`epithet ca`): Authenticates users, reads facts, evaluates Writ locally, and signs SSH certificates.
-- **Control** (`epithet control`): Handles administration, SCIM provisioning, and host enrollment using its own signing key.
+- **CA** (`epithet ca`): Authenticates users, reads facts, evaluates Writ, and signs SSH certificates.
 - **Directory / Inventory** (`epithet directory`, `epithet inventory`): Independently replaceable user and host fact services. Backends own storage, mutation invariants, and audit.
-- **Combined launcher** (`epithet server`): Supervises these four separate services and the public router. See [deployment](docs/inventory.md).
+- **Control** (`epithet control`): Control plan, handles administration, SCIM provisioning, and host enrollment.
 
 ## Documentation
 
