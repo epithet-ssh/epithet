@@ -16,6 +16,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
+	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -50,13 +51,15 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			inv, err := inventorytest.NewStatic([]string{path})
 			require.NoError(t, err)
 			realInventory := inventorytest.ServeFacts(t, inv, idp.Issuer(), pub)
+			inventoryHandler, err := factserver.InventoryHandler(inv, pub, "")
+			require.NoError(t, err)
 			inventoryHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.inventoryStatus != 0 {
 					w.WriteHeader(tc.inventoryStatus)
 					fmt.Fprint(w, "private inventory diagnostic")
 					return
 				}
-				realInventory.Config.Handler.ServeHTTP(w, r)
+				inventoryHandler.ServeHTTP(w, r)
 			}))
 			defer inventoryHTTP.Close()
 			policyHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +67,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 				fmt.Fprint(w, "private policy diagnostic")
 			}))
 			defer policyHTTP.Close()
-			c, err := ca.New(priv, catest.HTTPPolicy{URL: policyHTTP.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, ca.WithFacts(inventoryHTTP.URL+"/directory/lookup", inventoryHTTP.URL+"/inventory/lookup", realInventory.Identity, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
+			c, err := ca.New(priv, catest.HTTPPolicy{URL: policyHTTP.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, ca.WithFacts(realInventory.DirectoryURL, inventoryHTTP.URL+"/lookup", realInventory.Identity, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
 			logger := slog.New(slog.DiscardHandler)
 			handler := caserver.New(c, logger, nil).Handler()

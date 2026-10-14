@@ -21,9 +21,10 @@ import (
 )
 
 type hostRegistration struct {
-	endpoint string
-	token    string
-	proposal inventory.Proposal
+	endpoint        string
+	token           string
+	enrollmentToken string
+	proposal        inventory.Host
 }
 
 func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnrollment, settings *sshdSettings, cfg tlsconfig.Config) (*hostRegistration, error) {
@@ -46,7 +47,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		}
 	}
 	if endpoint == "" {
-		if c.Token != "" || c.TokenFile != "" {
+		if c.Token != "" || c.TokenFile != "" || c.EnrollmentToken != "" || c.EnrollmentTokenFile != "" {
 			return nil, fmt.Errorf("CA does not advertise managed inventory enrollment")
 		}
 		return nil, nil
@@ -65,40 +66,47 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 			return nil, fmt.Errorf("token file is empty")
 		}
 	}
-	proposal := inventory.Proposal{
+	enrollmentToken, err := readBearerToken(c.EnrollmentToken, c.EnrollmentTokenFile, "enrollment")
+	if err != nil {
+		return nil, err
+	}
+	if token == "" && enrollmentToken == "" {
+		return nil, fmt.Errorf("managed enrollment requires --enrollment-token or --enrollment-token-file for pending approval, or --token or --token-file for single-use preapproval")
+	}
+	proposal := inventory.Host{
 		Names:         c.Names,
 		Accounts:      guessLoginAccounts(),
 		Labels:        map[string]string{},
 		PrincipalMode: inventory.PrincipalMode(settings.principalMode),
-		Realm:         string(result.Realm),
+		Realm:         result.Realm,
 	}
 	if len(proposal.Names) == 0 {
 		proposal.Names = guessHostNames(ctx)
 	}
-	validateLocal := func(p inventory.Proposal) error {
+	validateLocal := func(p inventory.Host) error {
 		if string(p.PrincipalMode) != settings.principalMode {
 			return fmt.Errorf("principal-mode must match this host's local enrollment settings; use --principal-mode to select the mode")
 		}
-		if _, err := principal.ParseRealm(p.Realm); err != nil {
+		if _, err := principal.ParseRealm(string(p.Realm)); err != nil {
 			return err
 		}
 		installed, err := readRealmIfPresent(result.RealmFile)
 		if err != nil {
 			return err
 		}
-		if installed != "" && p.Realm != string(installed) {
+		if installed != "" && p.Realm != installed {
 			return fmt.Errorf("realm conflicts with the installed realm in %s", result.RealmFile)
 		}
 		return nil
 	}
-	proposal, err = editProposal(proposal, bufio.NewReader(os.Stdin), validateLocal)
+	proposal, err = editInventory(proposal, bufio.NewReader(os.Stdin), inventory.ParseHost, validateLocal)
 	if err != nil {
 		return nil, err
 	}
 	// The reviewed proposal chooses the identity installed locally and submitted
 	// to inventory. No realm has been written before review completes.
 	result.Realm = principal.Realm(proposal.Realm)
-	return &hostRegistration{endpoint: endpoint, token: token, proposal: proposal}, nil
+	return &hostRegistration{endpoint: endpoint, token: token, enrollmentToken: enrollmentToken, proposal: proposal}, nil
 }
 
 func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, cfg tlsconfig.Config, logger *slog.Logger) error {
@@ -106,8 +114,8 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 	if err != nil {
 		return err
 	}
-	proposal := r.proposal.ControlProposal()
-	response, _, err := client.Control(ctx, "", facts.ControlRequest{
+	proposal := controlHost(r.proposal)
+	response, _, err := client.Control(ctx, r.enrollmentToken, facts.ControlRequest{
 		Action: "enroll",
 		Host:   &proposal,
 		Token:  r.token,

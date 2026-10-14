@@ -27,17 +27,17 @@ import (
 
 type users struct{ active bool }
 
-func (u *users) LookupUser(_ context.Context, id string) (*directory.User, directory.Revision, error) {
+func (u *users) LookupUser(_ context.Context, id string) (*directory.User, error) {
 	if id == "missing" {
-		return nil, "", nil
+		return nil, nil
 	}
-	return &directory.User{ID: id, Active: u.active}, "opaque-revision", nil
+	return &directory.User{ID: id, Active: u.active}, nil
 }
 func TestDirectoryLookupContract(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	source := &users{active: true}
-	handler, err := factserver.LookupHandler(source, nil, pub, "")
+	handler, err := factserver.DirectoryHandler(source, pub, "")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -49,7 +49,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	require.Equal(t, id, u.ID)
 	require.Empty(t, u.UserName)
 	require.Empty(t, u.Groups)
-	require.Equal(t, "opaque-revision", u.Revision.String())
+	require.True(t, u.Revision.IsZero())
 	source.active = false
 	u, err = client.User(t.Context(), id)
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestBespokeProviderResponseValidation(t *testing.T) {
 		{"missing principal", `{"name":["host"],"accounts":null}`, true, false},
 		{"no realm", `{"name":["host"],"accounts":null,"principal":{"mode":"epithet-principal-v1"}}`, true, false},
 		{"wrong names", `{"name":["other"],"accounts":null,"principal":{"mode":"account-name"}}`, true, false},
-		{"host revision null", `{"name":["host"],"accounts":null,"principal":{"mode":"account-name"},"revision":null}`, true, false},
+		{"ignored host revision", `{"name":["host"],"accounts":null,"principal":{"mode":"account-name"},"revision":null}`, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +172,7 @@ func TestProviderStatusAndNoRedirects(t *testing.T) {
 func TestUnixFactTransport(t *testing.T) {
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	handler, err := factserver.LookupHandler(&users{active: true}, nil, pub, "")
+	handler, err := factserver.DirectoryHandler(&users{active: true}, pub, "")
 	require.NoError(t, err)
 	// A short directory is required for the macOS Unix socket path limit.
 	dir := t.TempDir()
@@ -197,34 +197,25 @@ func TestUnixFactTransport(t *testing.T) {
 func TestFactReaderAndControlKeysMustDiffer(t *testing.T) {
 	pub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	_, err = factserver.LookupHandler(&users{active: true}, nil, pub, pub)
+	_, err = factserver.DirectoryHandler(&users{active: true}, pub, pub)
 	require.ErrorContains(t, err, "distinct signing keys")
 }
 
 func TestRevisionPreservesPresenceAndUTF8Bound(t *testing.T) {
-	for _, kind := range []string{"user", "host"} {
-		for _, revision := range []string{"", `,"revision":""`, `,"revision":"opaque"`} {
-			t.Run(kind+revision, func(t *testing.T) {
-				var value any
-				data := `{"id":"id"` + revision + `}`
-				if kind == "user" {
-					value = &facts.User{}
-				} else {
-					value = &facts.Host{}
-					data = `{"name":["host"],"accounts":null,"principal":{"mode":"account-name"}` + revision + `}`
-				}
-				require.NoError(t, json.Unmarshal([]byte(data), value))
-				encoded, err := json.Marshal(value)
-				require.NoError(t, err)
-				var fields map[string]any
-				require.NoError(t, json.Unmarshal(encoded, &fields))
-				if revision == "" {
-					require.NotContains(t, fields, "revision")
-				} else {
-					require.Contains(t, fields, "revision")
-				}
-			})
-		}
+	for _, revision := range []string{"", `,"revision":""`, `,"revision":"opaque"`} {
+		t.Run(revision, func(t *testing.T) {
+			var value facts.User
+			require.NoError(t, json.Unmarshal([]byte(`{"id":"id"`+revision+`}`), &value))
+			encoded, err := json.Marshal(value)
+			require.NoError(t, err)
+			var fields map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &fields))
+			if revision == "" {
+				require.NotContains(t, fields, "revision")
+			} else {
+				require.Contains(t, fields, "revision")
+			}
+		})
 	}
 	var r facts.Revision
 	require.Error(t, json.Unmarshal([]byte{'"', 0xff, '"'}, &r))
@@ -237,10 +228,11 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 	require.NoError(t, err)
 	defer hosts.Close()
 	for _, pattern := range []string{"*.example", "ci-*.*"} {
-		_, err = hosts.AddPattern(t.Context(), "admin", inventory.Proposal{Pattern: pattern, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
+		id1 := inventory.NewID()
+		_, err = hosts.AddHost(t.Context(), id1, inventory.Host{Names: []string{pattern}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
 		require.NoError(t, err)
 	}
-	handler, err := factserver.LookupHandler(nil, hosts, pub, "")
+	handler, err := factserver.InventoryHandler(hosts, pub, "")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -256,7 +248,7 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 	h, err := client.Host(t.Context(), "ci-one.example")
 	require.Nil(t, h)
 	require.ErrorContains(t, err, "inventory conflict")
-	require.ErrorContains(t, err, "ci-one.example matches pattern records")
+	require.ErrorContains(t, err, "ci-one.example matches wildcard names on hosts")
 	require.NoError(t, hosts.Close())
 	_, err = client.Host(t.Context(), "ci-one.example")
 	require.ErrorContains(t, err, "HTTP 503")

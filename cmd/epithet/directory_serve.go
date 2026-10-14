@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/epithet-ssh/epithet/pkg/config"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
+	"github.com/epithet-ssh/epithet/pkg/facts/directory/scim"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -19,7 +19,7 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 	var store *sqlitestore.Store
 	switch c.Mode {
 	case "", "static":
-		paths, err := config.ExpandGlobs(c.Static)
+		paths, err := expandGlobs(c.Static)
 		if err != nil {
 			return err
 		}
@@ -42,6 +42,11 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 			return err
 		}
 		defer store.Close()
+		if c.Check {
+			if _, err := scim.NewBackend(store, c.SCIMUserIDAttribute); err != nil {
+				return err
+			}
+		}
 		users = store
 	default:
 		return fmt.Errorf("unknown directory-mode %q", c.Mode)
@@ -66,7 +71,7 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 	}
 	var options []factserver.DirectoryOption
 	if store != nil {
-		options = append(options, factserver.WithDirectoryManagement(store))
+		options = append(options, factserver.WithDirectoryManagement(store), factserver.WithSCIMUserIDAttribute(c.SCIMUserIDAttribute))
 	}
 	handler, err := factserver.DirectoryHandler(users, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey), options...)
 	if err != nil {

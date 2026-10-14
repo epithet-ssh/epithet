@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 	require.NoError(t, err)
 	defer users.Close()
 	for _, id := range []string{"directory-admin", "inventory-admin"} {
-		_, err = users.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:" + id, UserName: id, Active: true})
+		_, err = users.CreateUser(t.Context(), directory.ManagedUser{Metadata: directory.Metadata{ID: "subject:" + id}, ExternalID: "subject:" + id, UserName: id, Active: true}, directory.NewAuditEvent(t.Context(), "create", "subject:"+id))
 		require.NoError(t, err)
 	}
 	hosts, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
@@ -43,9 +44,15 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 	require.NoError(t, err)
 	for _, id := range []string{"directory-admin", "inventory-admin"} {
 		token := idp.MintIDToken(id, time.Now().Add(time.Hour))
-		for _, action := range []string{"directory-users", "list"} {
-			_, status, err := client.Control(t.Context(), token, facts.ControlRequest{Action: action})
-			if (id == "directory-admin") == (action == "directory-users") {
+		for _, action := range []string{"scim-users", "list"} {
+			var status int
+			var err error
+			if action == "scim-users" {
+				_, status, err = client.ListUsers(t.Context(), token, 1)
+			} else {
+				_, status, err = client.Control(t.Context(), token, facts.ControlRequest{Action: action})
+			}
+			if (id == "directory-admin") == (action == "scim-users") {
 				require.NoError(t, err)
 				require.Equal(t, 200, status)
 			} else {
@@ -63,20 +70,25 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		require.Equal(t, 400, rec.Code)
 	}
 	for _, key := range []sshcert.RawPrivateKey{f.CAKey, f.ControlKey} {
-		private, err := facts.NewControlClient("", f.InventoryURL, key, tlsconfig.Config{Insecure: true})
+		signer, err := serviceauth.NewSignerFor(key, serviceauth.InventoryAudience)
 		require.NoError(t, err)
-		_, err = private.CreateToken(t.Context(), facts.Authorization{Actor: "subject:inventory-admin"}, 0)
+		body := []byte(`{"lifetimeSeconds":0}`)
+		endpoint := strings.TrimSuffix(f.InventoryURL, "/lookup") + "/inventory/tokens"
+		req, err := http.NewRequestWithContext(t.Context(), "POST", endpoint, bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		require.NoError(t, signer.AuthorizeActor(req, body, "subject:inventory-admin"))
+		response, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		response.Body.Close()
 		if key == f.CAKey {
-			require.ErrorIs(t, err, facts.ErrNotFound)
-			var rejected *facts.ServiceError
-			require.ErrorAs(t, err, &rejected)
-			require.Equal(t, 404, rejected.Status)
+			require.Equal(t, 403, response.StatusCode)
 		} else {
-			require.NoError(t, err)
+			require.Equal(t, 201, response.StatusCode)
 		}
 
 	}
-	events, err := hosts.Audit(t.Context(), 0, 0)
+	events, _, err := hosts.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, "subject:inventory-admin", events[len(events)-1].Actor)
 	// The provisioning bearer belongs to public control only, never the backend.
@@ -105,7 +117,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 	require.Equal(t, 201, resp.StatusCode)
 	var created map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
-	audit, err := users.Audit(t.Context(), 0, 0)
+	audit, _, err := users.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, "scim", audit[len(audit)-1].Actor)
 	// If-Match must survive the signed hop, so a stale write fails.
@@ -151,17 +163,17 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	created, status, err := client.Control(t.Context(), idp.MintIDToken("admin", time.Now().Add(time.Hour)), facts.ControlRequest{Action: "token-create"})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	record, err := hosts.Get(t.Context(), created.Token.ID)
+	record, err := hosts.GetHost(t.Context(), created.Token.ID)
 	require.NoError(t, err)
 	require.Equal(t, "pending", record.Status)
-	require.Empty(t, record.Proposal.Names)
-	proposal := facts.Proposal{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
+	require.Empty(t, record.Names)
+	proposal := facts.InventoryInput{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
 	enrolled, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Token: created.Token.ID, Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, record.ID, enrolled.Host.ID)
 	require.Equal(t, "active", enrolled.Host.Status)
-	events, err := hosts.Audit(t.Context(), 0, 0)
+	events, _, err := hosts.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, "host", events[len(events)-1].Actor)
 }

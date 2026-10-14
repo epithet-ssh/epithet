@@ -3,13 +3,9 @@ package inventorytest
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"github.com/epithet-ssh/epithet/pkg/writ/object"
-	"hash"
 	"io"
-	"maps"
 	"os"
 	"slices"
 
@@ -33,14 +29,11 @@ import (
 type Static struct {
 	ignoreUsers          bool
 	ignoreHosts          bool
-	directoryHash        hash.Hash
-	inventoryHash        hash.Hash
 	directory            *directory.Static
-	hosts                map[string]*inventory.ResolvedHost
+	hosts                map[string]*inventory.Host
 	patterns             []patternHost // file order; first match wins
 	realms               map[principal.Realm]struct{}
 	realmReferences      []realmReference
-	realmPolicies        map[principal.Realm]realmPolicy
 	defaultPrincipalMode inventory.PrincipalMode
 }
 
@@ -54,13 +47,6 @@ type patternHost struct {
 
 type realmReference struct {
 	realm     principal.Realm
-	path      string
-	hostIndex int
-}
-
-type realmPolicy struct {
-	labels    map[string]string
-	accounts  []string
 	path      string
 	hostIndex int
 }
@@ -141,12 +127,10 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 		}
 	}
 	s := &Static{
-		ignoreUsers:   opts.ignoreUsers,
-		ignoreHosts:   opts.ignoreHosts,
-		directoryHash: sha256.New(), inventoryHash: sha256.New(),
-		hosts:                map[string]*inventory.ResolvedHost{},
+		ignoreUsers:          opts.ignoreUsers,
+		ignoreHosts:          opts.ignoreHosts,
+		hosts:                map[string]*inventory.Host{},
 		realms:               map[principal.Realm]struct{}{},
-		realmPolicies:        map[principal.Realm]realmPolicy{},
 		defaultPrincipalMode: opts.defaultPrincipalMode,
 	}
 	if !opts.ignoreUsers {
@@ -156,7 +140,6 @@ func NewStatic(paths []string, options ...StaticOption) (*Static, error) {
 			return nil, err
 		}
 	}
-	s.inventoryHash.Write([]byte(opts.defaultPrincipalMode))
 	for _, path := range paths {
 		if err := s.loadFile(path); err != nil {
 			return nil, err
@@ -184,13 +167,6 @@ func (s *Static) loadFile(path string) error {
 	if s.ignoreUsers {
 		doc.Users = nil
 	}
-	usersJSON, _ := json.Marshal(doc.Users)
-	s.directoryHash.Write(usersJSON)
-	hostsJSON, _ := json.Marshal(struct {
-		Realms []string
-		Hosts  []hostEntry
-	}{doc.Realms, doc.Hosts})
-	s.inventoryHash.Write(hostsJSON)
 	for i, raw := range doc.Realms {
 		realm, err := principal.ParseNamedRealm(raw)
 		if err != nil {
@@ -220,9 +196,6 @@ func (s *Static) loadFile(path string) error {
 			s.realmReferences = append(s.realmReferences, realmReference{
 				realm: realm, path: path, hostIndex: i,
 			})
-			if err := s.recordRealmPolicy(realm, h.Labels, h.Accounts, path, i); err != nil {
-				return err
-			}
 		}
 		switch {
 		case h.Names != nil && h.Pattern != "":
@@ -239,8 +212,8 @@ func (s *Static) loadFile(path string) error {
 				}
 			}
 			slices.Sort(names)
-			host := &inventory.ResolvedHost{
-				Policy:        inventory.Host{Names: names, Labels: h.Labels, Accounts: h.Accounts},
+			host := &inventory.Host{
+				Names: names, Labels: h.Labels, Accounts: h.Accounts,
 				PrincipalMode: mode,
 				Realm:         realm,
 			}
@@ -251,9 +224,6 @@ func (s *Static) loadFile(path string) error {
 				s.hosts[name] = host
 			}
 		case h.Pattern != "":
-			if realm.IsGeneratedHost() {
-				return fmt.Errorf("%s: hosts[%d] pattern %q cannot use generated host realm %q", path, i, h.Pattern, realm)
-			}
 			pattern, err := hostpattern.Parse(hostpattern.NormalizeName(h.Pattern))
 			if err != nil {
 				return fmt.Errorf("%s: hosts[%d] pattern %q: %w", path, i, h.Pattern, err)
@@ -273,35 +243,29 @@ func (s *Static) loadFile(path string) error {
 }
 
 // LookupUser delegates directory semantics to the production static loader.
-func (s *Static) LookupUser(ctx context.Context, id string) (*directory.User, directory.Revision, error) {
+func (s *Static) LookupUser(ctx context.Context, id string) (*directory.User, error) {
 	if s.directory == nil {
-		return nil, directory.Revision(s.DirectoryRevision()), nil
+		return nil, nil
 	}
 	return s.directory.LookupUser(ctx, id)
-}
-func (s *Static) ListUserFacts(ctx context.Context) ([]directory.User, directory.Revision, error) {
-	if s.directory == nil {
-		return []directory.User{}, directory.Revision(s.DirectoryRevision()), nil
-	}
-	return s.directory.ListUserFacts(ctx)
 }
 
 // LookupHost implements Hosts: exact entries first, then pattern
 // entries in file order, first match wins.
-func (s *Static) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, string, error) {
+func (s *Static) LookupHost(_ context.Context, name string) (*inventory.Host, error) {
 	if h, ok := s.hosts[name]; ok {
-		return h, s.InventoryRevision(), nil
+		return h, nil
 	}
 	for _, p := range s.patterns {
 		if p.pattern.Match(name) {
-			return &inventory.ResolvedHost{
-				Policy:        inventory.Host{Names: []string{name}, Labels: p.labels, Accounts: p.accounts},
+			return &inventory.Host{
+				Names: []string{name}, Labels: p.labels, Accounts: p.accounts,
 				PrincipalMode: p.principalMode,
 				Realm:         p.realm,
-			}, s.InventoryRevision(), nil
+			}, nil
 		}
 	}
-	return nil, s.InventoryRevision(), nil
+	return nil, nil
 }
 
 func (s *Static) resolvePrincipalMode(override inventory.PrincipalMode) (inventory.PrincipalMode, error) {
@@ -330,22 +294,6 @@ func (s *Static) validateRealmReferences() error {
 	return nil
 }
 
-func (s *Static) recordRealmPolicy(realm principal.Realm, labels map[string]string, accounts []string, path string, hostIndex int) error {
-	previous, exists := s.realmPolicies[realm]
-	if !exists {
-		s.realmPolicies[realm] = realmPolicy{
-			labels: maps.Clone(labels), accounts: slices.Clone(accounts), path: path, hostIndex: hostIndex,
-		}
-		return nil
-	}
-	if sameAuthorization(previous.labels, previous.accounts, labels, accounts) {
-		return nil
-	}
-	return fmt.Errorf(
-		"%s: hosts[%d] realm %q has different authorization attributes from %s: hosts[%d]",
-		path, hostIndex, realm, previous.path, previous.hostIndex)
-}
-
 // strictUnmarshal decodes with KnownFields so an unknown field is an
 // error rather than a silently ignored typo. An empty document is an
 // empty inventory.
@@ -356,26 +304,4 @@ func strictUnmarshal(data []byte, target any) error {
 		return err
 	}
 	return nil
-}
-
-func (s *Static) DirectoryRevision() string {
-	if s.directory != nil {
-		return s.directory.DirectoryRevision()
-	}
-	return fmt.Sprintf("sha256:%x", s.directoryHash.Sum(nil))
-}
-func (s *Static) InventoryRevision() string {
-	return fmt.Sprintf("sha256:%x", s.inventoryHash.Sum(nil))
-}
-
-// sameAuthorization compares the authorization attributes shared by all realm members.
-// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
-func sameAuthorization(previousLabels map[string]string, previousAccounts []string, labels map[string]string, accounts []string) bool {
-	if !maps.Equal(previousLabels, labels) || (previousAccounts == nil) != (accounts == nil) {
-		return false
-	}
-	previous, proposed := slices.Clone(previousAccounts), slices.Clone(accounts)
-	slices.Sort(previous)
-	slices.Sort(proposed)
-	return slices.Equal(previous, proposed)
 }

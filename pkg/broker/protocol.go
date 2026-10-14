@@ -14,12 +14,13 @@ import (
 
 // Request is one line of JSON sent by the client. Exactly one field is set.
 type Request struct {
-	Inventory *facts.ControlRequest `json:"inventory,omitempty"`
-	Identity  *struct{}             `json:"identity,omitempty"`
-	Match     *wire.Connection      `json:"match,omitempty"`
-	Inspect   *InspectRequest       `json:"inspect,omitempty"`
-	Logout    *struct{}             `json:"logout,omitempty"`
-	Kill      *KillRequest          `json:"kill,omitempty"`
+	DirectoryList *DirectoryListRequest `json:"directory-list,omitempty"`
+	Inventory     *facts.ControlRequest `json:"inventory,omitempty"`
+	Identity      *struct{}             `json:"identity,omitempty"`
+	Match         *wire.Connection      `json:"match,omitempty"`
+	Inspect       *InspectRequest       `json:"inspect,omitempty"`
+	Logout        *struct{}             `json:"logout,omitempty"`
+	Kill          *KillRequest          `json:"kill,omitempty"`
 }
 
 // Event is one line of JSON sent by the broker in response to a Request.
@@ -28,15 +29,30 @@ type Request struct {
 // Inspect request: exactly one Inspect event. Identity requests stream auth
 // Output events followed by one Identity event. Inventory requests similarly
 // stream Output events followed by one Inventory event. Kill and Logout each
-// return one event of their respective type.
+// return one event of their respective type. DirectoryList streams auth Output events
+// followed by one DirectoryList event containing a single SCIM page.
 type Event struct {
-	Inventory *InventoryResponse `json:"inventory,omitempty"`
-	Identity  *IdentityResponse  `json:"identity,omitempty"`
-	Output    string             `json:"output,omitempty"`
-	Result    *MatchResponse     `json:"result,omitempty"`
-	Inspect   *InspectResponse   `json:"inspect,omitempty"`
-	Logout    *LogoutResponse    `json:"logout,omitempty"`
-	Kill      *KillResponse      `json:"kill,omitempty"`
+	DirectoryList *DirectoryListResponse `json:"directory-list,omitempty"`
+	Inventory     *InventoryResponse     `json:"inventory,omitempty"`
+	Identity      *IdentityResponse      `json:"identity,omitempty"`
+	Output        string                 `json:"output,omitempty"`
+	Result        *MatchResponse         `json:"result,omitempty"`
+	Inspect       *InspectResponse       `json:"inspect,omitempty"`
+	Logout        *LogoutResponse        `json:"logout,omitempty"`
+	Kill          *KillResponse          `json:"kill,omitempty"`
+}
+
+// DirectoryListRequest asks for one bounded SCIM page; Resource is Users or
+// Groups, and StartIndex is one-based.
+type DirectoryListRequest struct {
+	Resource   string `json:"resource"`
+	StartIndex int    `json:"startIndex"`
+}
+
+// DirectoryListResponse carries a SCIM page without exposing the agent's credential.
+type DirectoryListResponse struct {
+	Page  *facts.SCIMPage `json:"page,omitempty"`
+	Error string          `json:"error,omitempty"`
 }
 
 // InventoryResponse adds local agent context to the service result. CAURL comes
@@ -140,6 +156,9 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	case req.Match != nil:
 		result := b.MatchWithUserOutput(connCtx, *req.Match, w)
 		_ = w.writeEvent(Event{Result: &result})
+	case req.DirectoryList != nil:
+		response := b.listDirectoryWithUserOutput(connCtx, *req.DirectoryList, w)
+		_ = w.writeEvent(Event{DirectoryList: response})
 	case req.Inventory != nil:
 		resp := b.InventoryWithUserOutput(connCtx, *req.Inventory, w)
 		_ = w.writeEvent(Event{Inventory: resp})
@@ -165,7 +184,7 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 	default:
 		_ = w.writeEvent(Event{Result: &MatchResponse{
 			Allow: false,
-			Error: "request must set exactly one of match, inspect, identity, inventory, kill, or logout",
+			Error: "request must set exactly one of match, inspect, identity, inventory, directory-list, kill, or logout",
 		}})
 	}
 }

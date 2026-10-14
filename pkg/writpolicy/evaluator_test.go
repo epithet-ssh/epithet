@@ -24,25 +24,25 @@ const evaluatorRealm = principal.Realm("production-database")
 // fakeInv is an in-memory Inventory for unit tests.
 type fakeInv struct {
 	users map[string]*directory.User
-	hosts map[string]*inventory.ResolvedHost
+	hosts map[string]*inventory.Host
 	err   error
 }
 
-func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.User, directory.Revision, error) {
-	return f.users[identity], "d1", f.err
+func (f *fakeInv) LookupUser(_ context.Context, identity string) (*directory.User, error) {
+	return f.users[identity], f.err
 }
 
-func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.ResolvedHost, string, error) {
-	return f.hosts[name], "h1", f.err
+func (f *fakeInv) LookupHost(_ context.Context, name string) (*inventory.Host, error) {
+	return f.hosts[name], f.err
 }
 
 func testInv() *fakeInv {
 	return &fakeInv{
 		users: map[string]*directory.User{
-			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []object.Object{{Names: []string{"SRE"}}}, UserType: "employee"},
+			"alice-id": {ID: "alice-id", UserName: "alice@example.com", Active: true, Groups: []directory.Group{{Names: []string{"SRE"}}}, UserType: "employee"},
 		},
-		hosts: map[string]*inventory.ResolvedHost{
-			"prod-db-1": {Policy: inventory.Host{Names: []string{"prod-db-1"}, Labels: map[string]string{"env": "prod"}}},
+		hosts: map[string]*inventory.Host{
+			"prod-db-1": {Names: []string{"prod-db-1"}, Labels: map[string]string{"env": "prod"}},
 		},
 	}
 }
@@ -350,11 +350,11 @@ func NewForTesting(pol *il.Policy, inv *fakeInv) *fixtureEvaluator {
 }
 func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.Time, conn wire.Connection) (*wire.PolicyResponse, error) {
 	conn.RemoteHost = hostpattern.NormalizeName(conn.RemoteHost)
-	u, _, err := e.inv.LookupUser(ctx, id)
+	u, err := e.inv.LookupUser(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	h, _, err := e.inv.LookupHost(ctx, conn.RemoteHost)
+	h, err := e.inv.LookupHost(ctx, conn.RemoteHost)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +364,7 @@ func (e *fixtureEvaluator) Evaluate(ctx context.Context, id string, expiry time.
 		input.User = &uf
 	}
 	if h != nil {
-		host := wire.Host{HostResource: wire.HostResource{Names: h.Policy.Names, Accounts: h.Policy.Accounts, Attributes: object.FromStrings(h.Policy.Labels)}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
+		host := wire.Host{HostResource: wire.HostResource{Names: h.Names, Accounts: h.Accounts, Attributes: object.FromStrings(h.Labels)}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
 		if err := host.Validate(conn.RemoteHost); err != nil {
 			return nil, err
 		}
@@ -397,7 +397,7 @@ func TestProjectedHostPreservesAccountGrounding(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inv := testInv()
-			inv.hosts["prod-db-1"].Policy.Accounts = tc.accounts
+			inv.hosts["prod-db-1"].Accounts = tc.accounts
 			e := NewForTesting(mustPolicy(t, "allow group:SRE -> root@*\n"), inv)
 			response, err := e.Evaluate(t.Context(), "alice-id", time.Now().Add(time.Hour), conn("root", "prod-db-1"))
 			if tc.allowed {
@@ -466,7 +466,7 @@ func TestUserFactsPreserveAuthorization(t *testing.T) {
 			inv := testInv()
 			user := inv.users["alice-id"]
 			user.UserName = "Alice Example"
-			user.Groups = []object.Object{{Names: []string{" Platform "}}}
+			user.Groups = []directory.Group{{Names: []string{" Platform "}}}
 			user.Department = "Engineering"
 			user.Organization = "Example"
 			user.Active = !tc.inactive
@@ -492,7 +492,7 @@ func TestHostNamesAreEquivalentForAllowAndDeny(t *testing.T) {
 	for _, principalRealm := range []bool{false, true} {
 		inv := testInv()
 		host := inv.hosts["prod-db-1"]
-		host.Policy.Names = []string{"prod-db-1", "database.internal"}
+		host.Names = []string{"prod-db-1", "database.internal"}
 		inv.hosts["database.internal"] = host
 		if principalRealm {
 			host.PrincipalMode = inventory.EpithetPrincipalV1

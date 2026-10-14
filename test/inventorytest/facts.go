@@ -1,7 +1,6 @@
 package inventorytest
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -18,12 +17,12 @@ import (
 )
 
 type Facts struct {
-	*httptest.Server
-	Identity oidc.ValidatorConfig
+	DirectoryURL, InventoryURL string
+	Identity                   oidc.ValidatorConfig
 }
 
 func (f *Facts) CAOption() ca.Option {
-	return ca.WithFacts(f.URL+"/directory/lookup", f.URL+"/inventory/lookup", f.Identity, wire.AuthConfig{Issuer: f.Identity.Issuer, ClientID: f.Identity.ClientID}, tlsconfig.Config{Insecure: true})
+	return ca.WithFacts(f.DirectoryURL, f.InventoryURL, f.Identity, wire.AuthConfig{Issuer: f.Identity.Issuer, ClientID: f.Identity.ClientID}, tlsconfig.Config{Insecure: true})
 }
 func ServeFacts(t *testing.T, inv *Static, issuer string, key sshcert.RawPublicKey) *Facts {
 	return ServeFactsWithSources(t, inv, inv, oidc.ValidatorConfig{Issuer: issuer, ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, key)
@@ -33,14 +32,13 @@ func ServeFactsWithConfig(t *testing.T, inv *Static, cfg oidc.ValidatorConfig, k
 }
 func ServeFactsWithSources(t *testing.T, users directory.Directory, hosts inventory.Hosts, cfg oidc.ValidatorConfig, key sshcert.RawPublicKey) *Facts {
 	t.Helper()
-	dir, err := factserver.LookupHandler(users, nil, key, "")
+	dir, err := factserver.DirectoryHandler(users, key, "")
 	require.NoError(t, err)
-	inv, err := factserver.LookupHandler(nil, hosts, key, "")
+	inv, err := factserver.InventoryHandler(hosts, key, "")
 	require.NoError(t, err)
-	mux := http.NewServeMux()
-	mux.Handle("/directory/lookup", dir)
-	mux.Handle("/inventory/lookup", inv)
-	server := httptest.NewTLSServer(mux)
-	t.Cleanup(server.Close)
-	return &Facts{server, cfg}
+	ds := httptest.NewTLSServer(dir)
+	is := httptest.NewTLSServer(inv)
+	t.Cleanup(ds.Close)
+	t.Cleanup(is.Close)
+	return &Facts{DirectoryURL: ds.URL + "/lookup", InventoryURL: is.URL + "/lookup", Identity: cfg}
 }

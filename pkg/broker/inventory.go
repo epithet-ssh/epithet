@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -55,4 +56,40 @@ func (b *Broker) inventoryWithToken(ctx context.Context, token string, request f
 	response, status, err := b.inventoryClient.Control(ctx, token, request)
 	b.log.Debug("inventory HTTP request ended", "action", request.Action, "status", status, "elapsed", time.Since(started))
 	return response, status, err
+}
+
+// listDirectoryWithUserOutput authenticates one SCIM page request. The CLI advances
+// the cursor after consuming each page, so neither the broker nor control holds
+// an entire directory. Authentication refresh follows other admin operations.
+func (b *Broker) listDirectoryWithUserOutput(ctx context.Context, request DirectoryListRequest, out io.Writer) *DirectoryListResponse {
+	session, ctx, cancel := b.sessionRequest(ctx)
+	defer cancel()
+	fail := func(err error) *DirectoryListResponse { return &DirectoryListResponse{Error: err.Error()} }
+	list := b.inventoryClient.ListUsers
+	switch request.Resource {
+	case "Users":
+	case "Groups":
+		list = b.inventoryClient.ListGroups
+	default:
+		return fail(fmt.Errorf("unknown directory resource %q", request.Resource))
+	}
+	token, err := session.auth.Token(ctx, out)
+	if err != nil {
+		return fail(err)
+	}
+	page, status, err := list(ctx, token, request.StartIndex)
+	if status == 401 {
+		token, err = session.auth.ForceRefresh(ctx, out)
+		if err != nil {
+			return fail(err)
+		}
+		page, _, err = list(ctx, token, request.StartIndex)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	return &DirectoryListResponse{Page: page}
 }

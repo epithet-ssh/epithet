@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -36,40 +35,9 @@ func (i *AgentInspectCLI) Run(parent *AgentCLI, logger *slog.Logger) error {
 		return err
 	}
 
-	// Connect to the broker over its Unix socket and send one request line.
-	conn, err := net.Dial("unix", brokerSock)
+	resp, err := (brokerClient{socket: brokerSock}).inspect(context.Background(), i.ID)
 	if err != nil {
-		return fmt.Errorf("failed to connect to broker at %s: %w", brokerSock, err)
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(broker.Request{Inspect: &broker.InspectRequest{ID: i.ID}}); err != nil {
-		return fmt.Errorf("failed to send inspect request: %w", err)
-	}
-
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
-
-	var resp *broker.InspectResponse
-	for scanner.Scan() {
-		var ev broker.Event
-		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-			return fmt.Errorf("failed to parse broker event: %w", err)
-		}
-		if ev.Inspect != nil {
-			resp = ev.Inspect
-			break
-		}
-		if ev.Result != nil {
-			// Inspect lookup failures and malformed requests arrive as Result errors.
-			return fmt.Errorf("broker error: %s", ev.Result.Error)
-		}
-	}
-	if resp == nil {
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("broker connection error: %w", err)
-		}
-		return fmt.Errorf("no response received from broker")
+		return err
 	}
 
 	return i.writeOutput(os.Stdout, resp, time.Now())

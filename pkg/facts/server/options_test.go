@@ -1,8 +1,10 @@
 package server_test
 
 import (
+	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 
@@ -38,7 +40,7 @@ func TestDirectoryManagementOption(t *testing.T) {
 	writer, err := directorysqlite.Open(path)
 	require.NoError(t, err)
 	defer writer.Close()
-	_, err = writer.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "existing", UserName: "existing", Active: true})
+	_, err = writer.CreateUser(t.Context(), directory.ManagedUser{Metadata: directory.Metadata{ID: "existing"}, ExternalID: "existing", UserName: "existing", Active: true}, directory.NewAuditEvent(t.Context(), "create", "existing"))
 	require.NoError(t, err)
 	cfg := tlsconfig.Config{Insecure: true}
 	// Supplying a source that implements Store must not implicitly enable SCIM.
@@ -63,7 +65,7 @@ func TestDirectoryManagementOption(t *testing.T) {
 	response.Body.Close()
 	require.Equal(t, 404, response.StatusCode)
 
-	handler, err := factserver.DirectoryHandler(directoryDataView{reader}, caPublic, controlPublic, factserver.WithDirectoryManagement(directoryManagementView{writer}))
+	handler, err := factserver.DirectoryHandler(directoryDataView{reader}, caPublic, controlPublic, factserver.WithDirectoryManagement(directoryManagementView{writer}), factserver.WithSCIMUserIDAttribute("userName"))
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -75,7 +77,7 @@ func TestDirectoryManagementOption(t *testing.T) {
 	base, advertised := wire.FindLinkTarget(response.Header, wire.RelSCIM)
 	require.True(t, advertised)
 	require.Equal(t, "/scim/v2/", base)
-	response, err = provision.Do(t.Context(), "POST", base+"Users", nil, []byte(`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"externalId":"new","userName":"new","active":true}`), "admin")
+	response, err = provision.Do(t.Context(), "POST", base+"Users", nil, []byte(`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"externalId":"unrelated","userName":"new","active":true}`), "admin")
 	require.NoError(t, err)
 	created, err := io.ReadAll(response.Body)
 	response.Body.Close()
@@ -88,15 +90,20 @@ func TestDirectoryManagementOption(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, "new", user.UserName)
-	control, err := facts.NewControlClient(server.URL, "", controlKey, cfg)
+	response, err = provision.Do(t.Context(), "GET", base+"Users", url.Values{"startIndex": {"1"}, "count": {"100"}}, nil, "admin")
 	require.NoError(t, err)
-	// The data view lacks UserLister: administrative listing belongs to management.
-	snapshot, err := control.Users(t.Context(), facts.Authorization{Actor: "admin"})
+	defer response.Body.Close()
+	require.Equal(t, 200, response.StatusCode)
+	var snapshot facts.SCIMPage
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&snapshot))
+	require.Len(t, snapshot.Resources, 2)
+	response, err = provision.Do(t.Context(), "GET", "/actor", url.Values{"id": {"new"}}, nil, "")
 	require.NoError(t, err)
-	require.Len(t, snapshot.Users, 2)
-	actor, _, err := control.Actor(t.Context(), "new")
-	require.NoError(t, err)
-	require.Equal(t, "new", actor.ID)
+	defer response.Body.Close()
+	var actor facts.ActorSnapshot
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&actor))
+	require.Equal(t, "new", actor.User.ID)
+
 }
 
 func TestInventoryManagementOption(t *testing.T) {
@@ -111,7 +118,8 @@ func TestInventoryManagementOption(t *testing.T) {
 	writer, err := inventorysqlite.Open(path)
 	require.NoError(t, err)
 	defer writer.Close()
-	_, err = writer.AddPattern(t.Context(), "admin", inventory.Proposal{Pattern: "old-*.example", Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals})
+	id1 := inventory.NewID()
+	_, err = writer.AddHost(t.Context(), id1, inventory.Host{Names: []string{"old-*.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
 	require.NoError(t, err)
 	cfg := tlsconfig.Config{Insecure: true}
 	readonly, err := factserver.InventoryHandler(reader, caPublic, controlPublic)
@@ -123,19 +131,24 @@ func TestInventoryManagementOption(t *testing.T) {
 	host, err := data.Host(t.Context(), "old-host.example")
 	require.NoError(t, err)
 	require.NotNil(t, host)
-	control, err := facts.NewControlClient("", readServer.URL+"/lookup", controlKey, cfg)
+	management, err := newSignedTestClient(readServer.URL, controlKey, serviceauth.InventoryAudience)
 	require.NoError(t, err)
-	_, err = control.CreateToken(t.Context(), facts.Authorization{Actor: "admin"}, 60)
-	require.ErrorIs(t, err, facts.ErrNotFound)
+	response, err := management.Do(t.Context(), "POST", "/inventory/tokens", nil, []byte(`{"lifetimeSeconds":60}`), "admin")
+	require.NoError(t, err)
+	response.Body.Close()
+	require.Equal(t, 404, response.StatusCode)
 
 	handler, err := factserver.InventoryHandler(inventoryDataView{reader}, caPublic, controlPublic, factserver.WithInventoryManagement(inventoryManagementView{writer}))
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	control, err = facts.NewControlClient("", server.URL+"/lookup", controlKey, cfg)
+	management, err = newSignedTestClient(server.URL, controlKey, serviceauth.InventoryAudience)
 	require.NoError(t, err)
-	_, err = control.AddPattern(t.Context(), facts.Authorization{Actor: "admin"}, facts.Proposal{Pattern: "new-*.example", Accounts: []string{"deploy"}, PrincipalMode: "account-name"})
+	response, err = management.Do(t.Context(), "POST", "/inventory/records", nil, []byte(`{"host":{"name":["new-*.example"],"attributes":null,"accounts":["deploy"],"principal":{"mode":"account-name"}}}`), "admin")
 	require.NoError(t, err)
+	response.Body.Close()
+	require.Equal(t, 201, response.StatusCode)
+
 	data, err = facts.NewDataClient("", server.URL+"/lookup", caKey, cfg)
 	require.NoError(t, err)
 	host, err = data.Host(t.Context(), "new-host.example")

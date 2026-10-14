@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/stretchr/testify/require"
 )
@@ -44,15 +43,13 @@ hosts:
 
 const inventoryGeneratedRealm = "epithet-host-id-v1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
-func TestStaticLookupReturnsRevisionIncludingMissingHosts(t *testing.T) {
+func TestStaticLookupIncludingMissingHosts(t *testing.T) {
 	s, err := NewStatic([]string{writeInv(t, "inventory.yaml", basicInventory)})
 	require.NoError(t, err)
 	for _, name := range []string{"prod-db-1", "ci-runner-42", "missing"} {
 		t.Run(name, func(t *testing.T) {
-			host, revision, err := s.LookupHost(t.Context(), name)
+			host, err := s.LookupHost(t.Context(), name)
 			require.NoError(t, err)
-			require.NotEmpty(t, revision)
-			require.Equal(t, s.InventoryRevision(), revision)
 			if name == "missing" {
 				require.Nil(t, host)
 			} else {
@@ -68,15 +65,15 @@ func TestMultipleNamesResolveOneHost(t *testing.T) {
 			src := "realms: [fleet]\nhosts:\n  - names: [Freki.HOME, freki.tailca597.ts.net]\n    principal-mode: epithet-principal-v1\n    realm: " + realm + "\n    labels: {role: server}\n    accounts: [brianm]\n  - pattern: '**'\n    accounts: []\n"
 			s, err := NewStatic([]string{writeInv(t, "names.yaml", src)})
 			require.NoError(t, err)
-			var first *inventory.ResolvedHost
+			var first *inventory.Host
 			for _, name := range []string{"freki.home", "freki.tailca597.ts.net"} {
-				host, _, err := s.LookupHost(t.Context(), name)
+				host, err := s.LookupHost(t.Context(), name)
 				require.NoError(t, err)
 				require.NotNil(t, host)
-				require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Policy.Names)
+				require.Equal(t, []string{"freki.home", "freki.tailca597.ts.net"}, host.Names)
 				require.Equal(t, realm, host.Realm.String())
-				require.Equal(t, []string{"brianm"}, host.Policy.Accounts)
-				require.Equal(t, "server", host.Policy.Labels["role"])
+				require.Equal(t, []string{"brianm"}, host.Accounts)
+				require.Equal(t, "server", host.Labels["role"])
 				if first == nil {
 					first = host
 				} else {
@@ -118,13 +115,13 @@ func loadBasic(t *testing.T) *Static {
 
 func TestLookupUser(t *testing.T) {
 	s := loadBasic(t)
-	u, _, err := s.LookupUser(context.Background(), "subject:alice@example.com")
+	u, err := s.LookupUser(context.Background(), "subject:alice@example.com")
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	require.Equal(t, "alice@example.com", u.UserName)
 	require.Equal(t, "subject:alice@example.com", u.ID)
 	require.True(t, u.Active, "active defaults to true")
-	require.Equal(t, []string{"Engineering", "SRE"}, object.GroupNames(u.Groups))
+	require.Equal(t, []string{"Engineering", "SRE"}, object.GroupNames(u.Facts().Groups))
 	require.Equal(t, "employee", u.UserType)
 	require.Equal(t, "Platform", u.Department)
 	require.Equal(t, "Acme", u.Organization)
@@ -132,7 +129,7 @@ func TestLookupUser(t *testing.T) {
 
 func TestInactiveUserLoads(t *testing.T) {
 	s := loadBasic(t)
-	u, _, err := s.LookupUser(context.Background(), "subject:mallory@example.com")
+	u, err := s.LookupUser(context.Background(), "subject:mallory@example.com")
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	require.False(t, u.Active)
@@ -140,7 +137,7 @@ func TestInactiveUserLoads(t *testing.T) {
 
 func TestUnknownUserIsNilNil(t *testing.T) {
 	s := loadBasic(t)
-	u, _, err := s.LookupUser(context.Background(), "nobody@example.com")
+	u, err := s.LookupUser(context.Background(), "nobody@example.com")
 	require.NoError(t, err)
 	require.Nil(t, u)
 }
@@ -148,7 +145,7 @@ func TestUnknownUserIsNilNil(t *testing.T) {
 func TestLookupUserNeverFallsBackToUserName(t *testing.T) {
 	s := loadBasic(t)
 	for _, subject := range []string{"alice@example.com", "Subject:alice@example.com", ""} {
-		u, _, err := s.LookupUser(context.Background(), subject)
+		u, err := s.LookupUser(context.Background(), subject)
 		require.NoError(t, err)
 		require.Nil(t, u, "ID must match exactly, without fallback: %q", subject)
 	}
@@ -170,35 +167,35 @@ func TestDuplicateIDAcrossFilesIsError(t *testing.T) {
 
 func TestExactHostLowercasedAtLoad(t *testing.T) {
 	s := loadBasic(t)
-	h, _, err := s.LookupHost(context.Background(), "prod-db-1")
+	h, err := s.LookupHost(context.Background(), "prod-db-1")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Equal(t, []string{"prod-db-1"}, h.Policy.Names)
-	require.Equal(t, map[string]string{"env": "prod", "role": "db"}, h.Policy.Labels)
-	require.Equal(t, []string{"root", "postgres"}, h.Policy.Accounts)
+	require.Equal(t, []string{"prod-db-1"}, h.Names)
+	require.Equal(t, map[string]string{"env": "prod", "role": "db"}, h.Labels)
+	require.Equal(t, []string{"root", "postgres"}, h.Accounts)
 }
 
 func TestHostWithoutAccountsIsUngrounded(t *testing.T) {
 	s := loadBasic(t)
-	h, _, err := s.LookupHost(context.Background(), "dev-box")
+	h, err := s.LookupHost(context.Background(), "dev-box")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Nil(t, h.Policy.Accounts)
+	require.Nil(t, h.Accounts)
 }
 
 func TestPatternSynthesizesHost(t *testing.T) {
 	s := loadBasic(t)
-	h, _, err := s.LookupHost(context.Background(), "ci-runner-42")
+	h, err := s.LookupHost(context.Background(), "ci-runner-42")
 	require.NoError(t, err)
 	require.NotNil(t, h)
-	require.Equal(t, []string{"ci-runner-42"}, h.Policy.Names, "synthesized host adopts the requested name")
-	require.Equal(t, "ci", h.Policy.Labels["env"])
-	require.Nil(t, h.Policy.Accounts)
+	require.Equal(t, []string{"ci-runner-42"}, h.Names, "synthesized host adopts the requested name")
+	require.Equal(t, "ci", h.Labels["env"])
+	require.Nil(t, h.Accounts)
 }
 
 func TestPatternStarStopsAtLabelBoundary(t *testing.T) {
 	s := loadBasic(t)
-	h, _, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
+	h, err := s.LookupHost(context.Background(), "ci-runner-42.internal")
 	require.NoError(t, err)
 	require.Nil(t, h)
 }
@@ -209,7 +206,7 @@ func TestPatternDoublestarCrossesLabelBoundaries(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, name := range []string{"controlplane.internal", "api.controlplane.internal", "blue.api.controlplane.internal"} {
-		h, _, err := s.LookupHost(context.Background(), name)
+		h, err := s.LookupHost(context.Background(), name)
 		require.NoError(t, err)
 		require.NotNil(t, h, name)
 	}
@@ -240,7 +237,7 @@ func TestHashedDefaultRequiresAndLoadsExactRealm(t *testing.T) {
 		WithDefaultPrincipalMode(inventory.EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	h, _, err := s.LookupHost(context.Background(), "prod-1")
+	h, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
 	require.Equal(t, inventory.EpithetPrincipalV1, h.PrincipalMode)
 	require.Equal(t, inventoryGeneratedRealm, h.Realm.String())
@@ -258,10 +255,10 @@ hosts:
 		WithDefaultPrincipalMode(inventory.EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	h, _, err := s.LookupHost(context.Background(), "ci-42")
+	h, err := s.LookupHost(context.Background(), "ci-42")
 	require.NoError(t, err)
 	require.Equal(t, inventory.AccountNamePrincipals, h.PrincipalMode)
-	require.Equal(t, []string{"ubuntu"}, h.Policy.Accounts)
+	require.Equal(t, []string{"ubuntu"}, h.Accounts)
 	require.Empty(t, h.Realm)
 }
 
@@ -276,7 +273,7 @@ hosts:
 		WithDefaultPrincipalMode(inventory.EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	h, _, err := s.LookupHost(context.Background(), "legacy-1")
+	h, err := s.LookupHost(context.Background(), "legacy-1")
 	require.NoError(t, err)
 	require.Equal(t, inventory.AccountNamePrincipals, h.PrincipalMode)
 }
@@ -296,17 +293,17 @@ func TestHashedPatternLoadsDeclaredNamedRealm(t *testing.T) {
 		WithDefaultPrincipalMode(inventory.EpithetPrincipalV1))
 	require.NoError(t, err)
 
-	host, _, err := s.LookupHost(context.Background(), "prod-worker-1")
+	host, err := s.LookupHost(context.Background(), "prod-worker-1")
 	require.NoError(t, err)
 	require.Equal(t, inventory.EpithetPrincipalV1, host.PrincipalMode)
 	require.Equal(t, "production", host.Realm.String())
-	require.Equal(t, []string{"prod-worker-1"}, host.Policy.Names)
+	require.Equal(t, []string{"prod-worker-1"}, host.Names)
 }
 
-func TestPatternWithGeneratedHostRealmIsError(t *testing.T) {
+func TestPatternWithGeneratedHostRealm(t *testing.T) {
 	src := "hosts:\n  - pattern: 'prod-*'\n    principal-mode: account-name\n    realm: " + inventoryGeneratedRealm + "\n"
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "cannot use generated host realm")
+	require.NoError(t, err)
 }
 
 func TestMalformedRealmIsError(t *testing.T) {
@@ -341,7 +338,7 @@ func TestNamedRealmRequiresHashedPrincipalMode(t *testing.T) {
 	require.ErrorContains(t, err, string(inventory.EpithetPrincipalV1))
 }
 
-func TestNamedRealmEntriesMustShareAuthorizationAttributes(t *testing.T) {
+func TestNamedRealmEntriesMayHaveDifferentAuthorizationAttributes(t *testing.T) {
 	src := `
 realms: [production]
 hosts:
@@ -355,7 +352,7 @@ hosts:
     labels: {role: database}
 `
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "different authorization attributes")
+	require.NoError(t, err)
 }
 
 func TestNamedRealmEntriesPreserveHostNames(t *testing.T) {
@@ -374,14 +371,14 @@ hosts:
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
 
-	one, _, err := s.LookupHost(context.Background(), "prod-1")
+	one, err := s.LookupHost(context.Background(), "prod-1")
 	require.NoError(t, err)
-	two, _, err := s.LookupHost(context.Background(), "prod-2")
+	two, err := s.LookupHost(context.Background(), "prod-2")
 	require.NoError(t, err)
-	require.Equal(t, []string{"prod-1"}, one.Policy.Names)
-	require.Equal(t, []string{"prod-2"}, two.Policy.Names)
-	require.Equal(t, one.Policy.Labels, two.Policy.Labels)
-	require.Equal(t, one.Policy.Accounts, two.Policy.Accounts)
+	require.Equal(t, []string{"prod-1"}, one.Names)
+	require.Equal(t, []string{"prod-2"}, two.Names)
+	require.Equal(t, one.Labels, two.Labels)
+	require.Equal(t, one.Accounts, two.Accounts)
 	require.Equal(t, one.Realm, two.Realm)
 }
 
@@ -415,7 +412,7 @@ hosts:
     accounts: []
 `
 	_, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
-	require.ErrorContains(t, err, "different authorization attributes")
+	require.NoError(t, err)
 }
 
 func TestUnknownPrincipalModeIsError(t *testing.T) {
@@ -426,7 +423,7 @@ func TestUnknownPrincipalModeIsError(t *testing.T) {
 
 func TestUnknownHostIsNilNil(t *testing.T) {
 	s := loadBasic(t)
-	h, _, err := s.LookupHost(context.Background(), "unknown-host")
+	h, err := s.LookupHost(context.Background(), "unknown-host")
 	require.NoError(t, err)
 	require.Nil(t, h)
 }
@@ -441,9 +438,9 @@ hosts:
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
-	h, _, err := s.LookupHost(context.Background(), "ci-runner-1")
+	h, err := s.LookupHost(context.Background(), "ci-runner-1")
 	require.NoError(t, err)
-	require.Equal(t, "prod", h.Policy.Labels["env"])
+	require.Equal(t, "prod", h.Labels["env"])
 }
 
 func TestFirstMatchingPatternWins(t *testing.T) {
@@ -456,9 +453,9 @@ hosts:
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
-	h, _, err := s.LookupHost(context.Background(), "ci-runner-1")
+	h, err := s.LookupHost(context.Background(), "ci-runner-1")
 	require.NoError(t, err)
-	require.Equal(t, "broad", h.Policy.Labels["tier"], "pattern entries match in file order")
+	require.Equal(t, "broad", h.Labels["tier"], "pattern entries match in file order")
 }
 
 func TestEmptyAccountsListStaysNonNil(t *testing.T) {
@@ -469,10 +466,10 @@ hosts:
 `
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", src)})
 	require.NoError(t, err)
-	h, _, err := s.LookupHost(context.Background(), "locked-down")
+	h, err := s.LookupHost(context.Background(), "locked-down")
 	require.NoError(t, err)
-	require.NotNil(t, h.Policy.Accounts, "accounts: [] grounds nothing, which is different from absent")
-	require.Empty(t, h.Policy.Accounts)
+	require.NotNil(t, h.Accounts, "accounts: [] grounds nothing, which is different from absent")
+	require.Empty(t, h.Accounts)
 }
 
 func TestMultipleFilesConcatenate(t *testing.T) {
@@ -480,9 +477,9 @@ func TestMultipleFilesConcatenate(t *testing.T) {
 	hosts := "hosts:\n  - names: [web-1]\n"
 	s, err := NewStatic([]string{writeInv(t, "users.yaml", users), writeInv(t, "hosts.yaml", hosts)})
 	require.NoError(t, err)
-	u, _, _ := s.LookupUser(context.Background(), "subject:alice@example.com")
+	u, _ := s.LookupUser(context.Background(), "subject:alice@example.com")
 	require.NotNil(t, u)
-	h, _, _ := s.LookupHost(context.Background(), "web-1")
+	h, _ := s.LookupHost(context.Background(), "web-1")
 	require.NotNil(t, h)
 }
 
@@ -509,7 +506,7 @@ func TestUsersWithoutUserNames(t *testing.T) {
 	inv, err := NewStatic([]string{path})
 	require.NoError(t, err)
 	for _, id := range []string{"first", "second"} {
-		user, _, err := inv.LookupUser(t.Context(), id)
+		user, err := inv.LookupUser(t.Context(), id)
 		require.NoError(t, err)
 		require.Equal(t, id, user.ID)
 		require.Empty(t, user.UserName)
@@ -530,7 +527,7 @@ func TestNoFilesIsError(t *testing.T) {
 func TestEmptyFileIsEmptyInventory(t *testing.T) {
 	s, err := NewStatic([]string{writeInv(t, "inv.yaml", "")})
 	require.NoError(t, err)
-	u, _, err := s.LookupUser(context.Background(), "anyone")
+	u, err := s.LookupUser(context.Background(), "anyone")
 	require.NoError(t, err)
 	require.Nil(t, u)
 }
@@ -542,59 +539,4 @@ func TestLegacySubjectKeysAreRejected(t *testing.T) {
 			require.ErrorContains(t, err, key)
 		}
 	}
-}
-
-func TestDirectoryAndHostRevisionsAreIndependent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "inventory.yaml")
-	load := func(user, host string) *Static {
-		require.NoError(t, os.WriteFile(path, []byte("users:\n  - id: alice\n    userName: "+user+"\nhosts:\n  - names: ["+host+"]\n"), 0600))
-		inv, err := NewStatic([]string{path})
-		require.NoError(t, err)
-		return inv
-	}
-	original := load("alice@example.com", "host")
-	same := load("alice@example.com", "host")
-	renamed := load("alice-renamed@example.com", "host")
-	newHost := load("alice@example.com", "other")
-	require.Equal(t, original.DirectoryRevision(), same.DirectoryRevision())
-	require.Equal(t, original.InventoryRevision(), same.InventoryRevision())
-	require.NotEqual(t, original.DirectoryRevision(), renamed.DirectoryRevision())
-	require.Equal(t, original.InventoryRevision(), renamed.InventoryRevision())
-	require.Equal(t, original.DirectoryRevision(), newHost.DirectoryRevision())
-	require.NotEqual(t, original.InventoryRevision(), newHost.InventoryRevision())
-}
-
-func TestListUserFacts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`users:
- - id: z-id
-   userName: zed
-   active: false
- - id: a-id
-   userName: alice
-   groups: [{name: [wheel]}, {name: [ops]}]
-   department: engineering
-`), 0600))
-	inv, err := NewStatic([]string{path})
-	require.NoError(t, err)
-	users, revision, err := inv.ListUserFacts(t.Context())
-	require.NoError(t, err)
-	require.Len(t, users, 2)
-	require.Equal(t, "alice", users[0].UserName)
-	require.Equal(t, "a-id", users[0].ID)
-	require.Equal(t, "engineering", users[0].Department)
-	require.Equal(t, []string{"ops", "wheel"}, object.GroupNames(users[0].Groups))
-	require.False(t, users[1].Active)
-	require.Equal(t, directory.Revision(inv.DirectoryRevision()), revision)
-	users[0].UserName = "changed"
-	users[0].Groups[0].Names[0] = "changed"
-	fact, _, err := inv.LookupUser(t.Context(), "a-id")
-	require.NoError(t, err)
-	require.Equal(t, "alice", fact.UserName)
-	require.ElementsMatch(t, []string{"wheel", "ops"}, object.GroupNames(fact.Groups))
-	hostsOnly, err := NewStatic([]string{path}, WithoutUsers())
-	require.NoError(t, err)
-	users, _, err = hostsOnly.ListUserFacts(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, []directory.User{}, users)
 }

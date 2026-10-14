@@ -12,10 +12,47 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	"github.com/epithet-ssh/epithet/pkg/principal"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
+
+// InventoryOption configures optional inventory management.
+type InventoryOption func(*inventoryOptions)
+type inventoryOptions struct{ managed inventory.Store }
+
+// WithInventoryManagement adds the inventory management API. The data source
+// and management implementation must describe the same logical inventory;
+// they may be separate instances. The caller owns both lifetimes.
+func WithInventoryManagement(managed inventory.Store) InventoryOption {
+	return func(options *inventoryOptions) { options.managed = managed }
+}
+
+// InventoryHandler serves inventory facts. Management is opt-in, even when hosts
+// also implements Store. An empty control key disables management; the CA reader
+// key never confers mutation authority. The caller owns the source's lifetime.
+func InventoryHandler(hosts inventory.Hosts, caKey, controlKey sshcert.RawPublicKey, options ...InventoryOption) (http.Handler, error) {
+	var config inventoryOptions
+	for _, option := range options {
+		option(&config)
+	}
+	lookup, err := lookupHandler(nil, hosts, caKey, controlKey)
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	if config.managed != nil && controlKey != "" {
+		management, err := inventoryHandler(config.managed, controlKey)
+		if err != nil {
+			return nil, err
+		}
+		mux.Handle("OPTIONS /lookup", management)
+		mux.Handle("/inventory/", management)
+	}
+	mux.Handle("/lookup", lookup)
+	return mux, nil
+}
 
 // inventoryHTTP owns the inventory protocol; storage adapters implement complete
 // atomic domain operations, with no HTTP, authentication, or JSON knowledge.
@@ -52,7 +89,7 @@ func (h *inventoryHTTP) discovery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", "GET, OPTIONS")
 	w.Header().Add("Link-Template", `"/inventory/records{/id}{?after,limit,pending}"; rel="`+facts.InventoryRecordsRelation+`"`)
 	w.Header().Add("Link-Template", `"/inventory/tokens{?token}"; rel="`+facts.InventoryTokensRelation+`"`)
-	w.Header().Add("Link-Template", `"/inventory/audit{?after,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
+	w.Header().Add("Link-Template", `"/inventory/audit{?cursor,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
 	w.WriteHeader(204)
 }
 func inventoryJSON(w http.ResponseWriter, status int, value any) {
@@ -86,10 +123,10 @@ func inventoryFailure(w http.ResponseWriter, err error) {
 		Error string `json:"error"`
 	}{message})
 }
-func writeInventoryRecord(w http.ResponseWriter, status int, h *inventory.HostRecord) {
-	w.Header().Set("ETag", facts.InventoryETag(h.Revision))
-	w.Header().Set("Location", "/inventory/records/"+url.PathEscape(h.ID))
-	inventoryJSON(w, status, h.ControlRecord().InventoryRecord())
+func writeInventoryRecord(w http.ResponseWriter, status int, record facts.InventoryRecord, revision uint64) {
+	w.Header().Set("ETag", facts.InventoryETag(revision))
+	w.Header().Set("Location", "/inventory/records/"+url.PathEscape(record.ID))
+	inventoryJSON(w, status, record)
 }
 func (h *inventoryHTTP) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -105,7 +142,7 @@ func (h *inventoryHTTP) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Actor presence is trusted only after signature verification. Enrollment
-	// has no actor; a signed administrator may create active patterns only.
+	// has no actor; a signed administrator may create active hosts.
 	enrollment := r.Method == "POST" && r.URL.Path == "/inventory/records" && actor == ""
 	if !enrollment && actor == "" {
 		inventoryFailure(w, &facts.ServiceError{Status: 403, Message: "authenticated actor is required"})
@@ -137,27 +174,36 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 			return err
 		}
 		if create.Host == nil {
-			return fmt.Errorf("host proposal is required")
+			return fmt.Errorf("host is required")
 		}
-		p := inventory.ProposalFromControl(create.Host.Proposal())
-		var record *inventory.HostRecord
-		var err error
 		status := 201
 		if actor == "" {
-			record, err = h.store.Enroll(ctx, p, create.Token)
+			host := inventoryHost(create.Host)
+			id := create.Token
+			if id == "" {
+				id = inventory.NewID()
+			}
+			result, err := inventory.Enroll(ctx, h.store, id, host, create.Token, inventory.NewAuditEvent("host", "enroll", id))
+			if err != nil {
+				return err
+			}
 			if create.Token != "" {
 				status = 200
 			}
+			writeInventoryRecord(w, status, hostRecord(result), result.Revision)
 		} else {
 			if create.Token != "" {
-				return fmt.Errorf("administrator pattern creation cannot use an enrollment token")
+				return fmt.Errorf("administrator host creation cannot use an enrollment token")
 			}
-			record, err = h.store.AddPattern(ctx, actor, p)
+			host := inventoryHost(create.Host)
+			host.Status = inventory.StatusActive
+			id := inventory.NewID()
+			result, err := h.store.CreateHost(ctx, id, host, inventory.NewAuditEvent(actor, "add", id))
+			if err != nil {
+				return err
+			}
+			writeInventoryRecord(w, status, hostRecord(result), result.Revision)
 		}
-		if err != nil {
-			return err
-		}
-		writeInventoryRecord(w, status, record)
 		return nil
 	case r.URL.Path == "/inventory/records" && r.Method == "GET":
 		limit, err := pageLimit(r)
@@ -171,22 +217,22 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 				return fmt.Errorf("invalid pending filter")
 			}
 		}
-		records, err := h.store.List(ctx, query.Get("after"), limit, pending)
+		hosts, err := h.store.ListHosts(ctx, query.Get("after"), limit, pending)
 		if err != nil {
 			return err
 		}
-		result := make([]facts.InventoryRecord, len(records))
-		for i, record := range records {
-			result[i] = record.ControlRecord().InventoryRecord()
+		result := make([]facts.InventoryRecord, 0, len(hosts))
+		for i := range hosts {
+			result = append(result, hostRecord(&hosts[i]))
 		}
 		inventoryJSON(w, 200, result)
 		return nil
 	case id != "" && r.Method == "GET":
-		record, err := h.store.Get(ctx, id)
+		host, err := h.store.GetHost(ctx, id)
 		if err != nil {
 			return err
 		}
-		writeInventoryRecord(w, 200, record)
+		writeInventoryRecord(w, 200, hostRecord(host), host.Revision)
 		return nil
 	case id != "" && (r.Method == "PUT" || r.Method == "DELETE"):
 		if r.Header.Get("If-Match") == "" {
@@ -197,7 +243,9 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 			return err
 		}
 		if r.Method == "DELETE" {
-			if err = h.store.Remove(ctx, actor, id, version); err != nil {
+			event := inventory.NewAuditEvent(actor, "remove", id)
+			err = h.store.RemoveHost(ctx, id, version, event)
+			if err != nil {
 				return err
 			}
 			w.WriteHeader(204)
@@ -218,12 +266,23 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if record.ID != id {
 			return fmt.Errorf("record id must match its URL")
 		}
-		proposed := inventory.HostRecord{ID: record.ID, Status: record.Status, Proposal: inventory.ProposalFromControl(record.Host.Proposal()), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
-		result, err := h.store.Replace(ctx, actor, proposed, version)
+		current, err := h.store.GetHost(ctx, id)
 		if err != nil {
 			return err
 		}
-		writeInventoryRecord(w, 200, result)
+		proposed := inventoryHost(record.Host)
+		proposed.ID, proposed.Status, proposed.CreatedAt, proposed.UpdatedAt = record.ID, record.Status, record.CreatedAt, record.UpdatedAt
+		event := inventory.NewAuditEvent(actor, "", id)
+		_, action, err := inventory.Review(*current, proposed, version, event.At)
+		if err != nil {
+			return err
+		}
+		event.Action = action
+		result, err := h.store.ReplaceHost(ctx, proposed, version, event)
+		if err != nil {
+			return err
+		}
+		writeInventoryRecord(w, 200, hostRecord(result), result.Revision)
 		return nil
 	case r.URL.Path == "/inventory/tokens" && r.Method == "POST":
 		var create facts.InventoryTokenCreate
@@ -237,7 +296,8 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if seconds < 1 || seconds > 86400 {
 			return fmt.Errorf("token lifetime must be between 1s and 24h")
 		}
-		token, err := h.store.CreateToken(ctx, actor, time.Duration(seconds)*time.Second)
+		id := inventory.NewID()
+		token, err := h.store.CreateToken(ctx, id, time.Duration(seconds)*time.Second, inventory.NewAuditEvent(actor, "token-create", id))
 		if err != nil {
 			return err
 		}
@@ -247,7 +307,7 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if query.Get("token") == "" {
 			return fmt.Errorf("token is required")
 		}
-		if err := h.store.RevokeToken(ctx, actor, query.Get("token")); err != nil {
+		if err := h.store.RevokeToken(ctx, query.Get("token"), inventory.NewAuditEvent(actor, "token-revoke", query.Get("token"))); err != nil {
 			return err
 		}
 		w.WriteHeader(204)
@@ -257,23 +317,31 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if err != nil {
 			return err
 		}
-		var after uint64
-		if raw := query.Get("after"); raw != "" {
-			after, err = strconv.ParseUint(raw, 10, 64)
-			if err != nil {
-				return fmt.Errorf("invalid audit cursor")
-			}
-		}
-		events, err := h.store.Audit(ctx, inventory.AuditSequence(after), limit)
+		events, next, err := h.store.Audit(ctx, query.Get("cursor"), limit)
 		if err != nil {
 			return err
 		}
 		result := make([]facts.HostAuditEvent, len(events))
 		for i, event := range events {
-			result[i] = event.ControlEvent()
+			result[i] = facts.HostAuditEvent{At: event.At, Actor: event.Actor, Action: event.Action, Resource: event.Resource}
 		}
-		inventoryJSON(w, 200, result)
+		inventoryJSON(w, 200, facts.AuditPage[facts.HostAuditEvent]{Events: result, Next: next})
 		return nil
 	}
 	return &facts.ServiceError{Status: 405, Message: "method not allowed"}
+}
+
+// The HTTP document keeps lifecycle metadata separate from editable host facts.
+func hostRecord(h *inventory.Host) facts.InventoryRecord {
+	var fields *facts.InventoryHost
+	if !inventory.EmptyHost(*h) {
+		fields = &facts.InventoryHost{Name: h.Names, Attributes: h.Labels, Accounts: h.Accounts, Principal: facts.InventoryPrincipal{Mode: string(h.PrincipalMode), Realm: string(h.Realm)}}
+	}
+	return facts.InventoryRecord{ID: h.ID, Status: h.Status, CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt, Host: fields}
+}
+func inventoryHost(p *facts.InventoryHost) inventory.Host {
+	if p == nil {
+		return inventory.Host{}
+	}
+	return inventory.Host{Names: p.Name, Labels: p.Attributes, Accounts: p.Accounts, PrincipalMode: inventory.PrincipalMode(p.Principal.Mode), Realm: principal.Realm(p.Principal.Realm)}
 }

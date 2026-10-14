@@ -40,10 +40,10 @@ review remain separate operations; PUT cannot combine a proposal change with a
 status transition. Server-owned identity and timestamps must be echoed unchanged.
 
 Enrollment POST carries a host and optional enrollment credential. Status derives
-from authority: unauthenticated enrollment through control creates pending state;
+from authority: enrollment authenticated by control's shared enrollment bearer creates pending state;
 a valid single-use credential activates its reservation; an authorized admin can
 create an active pattern. A pattern alone never conveys administrative authority.
-Existing lifecycle, name/realm constraints and deletion semantics remain.
+Existing lifecycle, name constraints and deletion semantics remain.
 
 Human CLI administration uses OIDC through the agent and control's inventory-admin
 grant. An optional, separately configured inventory shared secret supports
@@ -64,7 +64,9 @@ identities. Human identity survives the signed hop into audit; secret provisioni
 retains the `scim` actor. Standard SCIM resource references into the discovered
 provider base are rebased to control's public path; extension attributes and
 external references remain untouched. The reusable directory HTTP adapter owns
-SCIM protocol handling, and directory stores own atomic mutations and audit.
+SCIM protocol handling, and directory stores implement complete operations and
+persist audit history. Directory consistency guarantees are backend-specific
+(see the amendment below).
 Directory CLI design remains deferred in YATL `ywxp1g89`. Existing built-in actor,
 listing and audit endpoints remain separate; this change does not redesign them.
 
@@ -116,9 +118,138 @@ The Firebase storage product is not selected by this decision.
 
 Whole-record PUT makes the reviewed state explicit and reuses existing revision
 checks. List results omit per-record versions, so selection requires an item GET
-before review. Pagination retains bounded ID/sequence continuation without adding
+before review. Pagination retains bounded record-ID and backend-cursor continuation without adding
 cross-page snapshot semantics. The SQLite schema remains unchanged.
 
 The [inventory package contract](../../pkg/facts/inventory/README.md) documents
 wire shapes and adapter responsibilities. YATL `s9cqey45` retains planning and
 discussion history; this ADR records the reasons for the design.
+
+## Amendment: directory consistency (2026-10-17)
+
+Keep complete-operation methods at the directory storage boundary. Do not expose
+transactions or require all backends to provide transactional mutations,
+concurrency control, coherent snapshots or immediate visibility. Eventually
+consistent implementations are valid; a failed call need not imply rollback.
+Version-precondition enforcement is backend-specific. The bundled SQLite store
+retains its stronger behavior and tests it within its own package.
+
+Shared storage tests exercise sequential operations with a fixture that makes
+completed writes readable; that fixture assumption does not define propagation
+behavior for production backends. Concurrency, version enforcement and rollback
+checks belong to the concrete backend's tests. This amendment applies to the
+directory; inventory admission and enrollment semantics are unchanged.
+
+
+### Group listing uses SCIM (2026-10-17)
+
+Remove the separate unpaginated group-summary operation and its GroupSnapshot
+wrapper. It duplicated SCIM group listing and required every storage backend to
+implement a second enumeration contract. The CLI consumes SCIM group pages via
+the agent and control, using the existing ListGroups storage operation. There is
+no directory-wide revision attached to a listing. Complete group resources include
+memberships, so pagination bounds group count rather than each group's size.
+
+## Amendment: directory audit ownership and global revisions
+
+Epithet constructs audit events above storage and passes each event with its
+mutation. Backends preserve the supplied actor, action, resource ID and timestamp,
+preserving every supplied field. This allows SQLite to persist both in one
+transaction without requiring transactions from every implementation.
+
+Directory lookup returns the user and an error, without a directory-wide revision.
+Audit events likewise have no global revision or sequence. Pagination uses
+backend-owned opaque cursors, separate from events. A global snapshot identifier imposes coordination on backends
+without serving a required behavior. Per-resource versions remain a separate
+contract; SQLite's internal version counter is an implementation detail.
+
+## Amendment: optional directory resource versions
+
+Resource versions support SCIM's optional ETag and If-Match behavior, but are not
+required from every storage provider. Store.SupportsVersioning declares the
+capability for users and groups. Providers without it return empty versions;
+SCIM omits ETag and meta.version and advertises etag.supported=false. SQLite
+retains conditional writes, and the in-memory example retains its resource versions.
+
+A capability method lets discovery describe support before any resource exists;
+inferring support from one resource's version would not do that. Epithet serves
+ServiceProviderConfig because the pinned SCIM library hardcodes ETag support to
+false. Per-resource versions remain independent of global directory revisions.
+
+## Amendment: inventory audit ownership and retention
+
+Epithet generates inventory resource IDs before storage and supplies complete
+audit events with every mutation. Token redemption retains the reservation ID.
+The storage adapter preserves every field of the supplied event and may
+commit it with the mutation. This follows directory's ownership model and avoids
+making adapters infer the actor, action, resource ID or operation time.
+
+Resource deletion retains audit history and records removal. SQLite schema
+version 2 removes the cascading foreign key from audit to hosts; older schemas
+are rejected without automatic migration. List and Audit keep their existing
+cursor pagination, now covered by the shared backend contract tests.
+
+## Amendment: audit timestamps and backend-owned continuation
+
+Directory and inventory audit events contain timestamps, without global sequence
+numbers or an ordering requirement. Audit reads take an opaque string cursor and
+return events plus the next cursor. Epithet forwards cursors unchanged. Empty input
+starts a read; empty next means no further page. Ordering, concurrent-write
+visibility, and cursor lifetime remain backend properties.
+
+The SQLite adapters use private row positions for continuation. The in-memory
+directory uses slice positions. Neither representation appears on audit events.
+This avoids pretending timestamps are unique, monotonic, or sufficient to resume
+bounded pages. Directory schema 4 and inventory schema 2 omit audit sequence
+columns; their resource-version mechanisms remain separate.
+
+### Inventory lookup revisions removed (2026-10-17)
+
+Inventory lookup returns host facts and an error, without global revision
+metadata. The revision served only issuance logging and imposed a global counter
+on storage with no authorization or conditional-write benefit. SQLite schema 3
+removes the global state table. Inventory responses and CA issuance logs no longer
+carry this metadata; per-resource revisions used for conditional writes remain.
+
+### Realm sharing imposes no cross-record constraints (2026-10-17)
+
+Realm sharing does not require matching labels or account restrictions. Generated
+realms also have no uniqueness constraint across hosts; random generation supplies
+collision resistance without an inventory-wide check. Exact hosts and patterns
+may use the same realm while retaining independent authorization facts. Removed
+the cross-record realm scans, equality checks, and generated-realm pattern ban.
+
+### Exact and wildcard names share one host model (2026-10-17)
+
+`Host` carries names, authorization facts, and enrollment metadata. Its names may
+be exact hostnames or wildcard expressions. The nested `Proposal` and domain
+`HostRecord` types are removed. A separate `Pattern` type and parallel storage
+operations were considered, but name syntax already identifies the distinction;
+they would duplicate the model and management interface.
+
+Storage owns indexing rather than exposing a separate resource kind. SQLite
+schema 4 indexes the exact/wildcard classification per name. Lookup checks active
+exact names first, then considers only wildcard names. Multiple matching names
+on one record supply the same facts; matching different records remains an
+ambiguity error. Wildcard lookup returns a host with the requested concrete name.
+
+Enrollment accepts exact names. Administrator creation accepts exact and wildcard
+names through the same host model and the `inventory add` command. Read, list,
+edit, and removal operations are shared. The provider and control API payloads
+use their existing name arrays for wildcard expressions too; the separate
+`pattern` field is removed.
+
+
+### Pending enrollment requires a scoped bearer credential (2026-10-18)
+
+Anonymous pending submissions expose storage and administrator attention to
+unsolicited enrollment. Control therefore requires a configured shared bearer
+credential for this operation. It authorizes submission only; activation still
+requires administrator approval. No configured credential means no pending
+submissions. Single-use preapproval credentials retain their separate path.
+
+Control is the sole owner of this authentication check. The bearer is never
+forwarded to inventory or stored with the host. Providers continue accepting
+control-signed enrollment requests. Control explicitly rejects the enrollment
+bearer for inventory administration and SCIM, without falling through to OIDC or
+other shared-credential authorization.

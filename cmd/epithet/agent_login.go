@@ -26,7 +26,7 @@ func (c *AgentLoginCLI) Run(parent *AgentCLI) error {
 }
 
 func (c *AgentLoginCLI) run(ctx context.Context, socket string, out, progress io.Writer) error {
-	if _, err := authenticateAgent(ctx, socket, progress); err != nil {
+	if _, err := (brokerClient{socket: socket}).identity(ctx, progress); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(out, "Logged in.")

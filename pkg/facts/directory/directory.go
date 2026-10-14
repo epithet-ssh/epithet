@@ -4,14 +4,24 @@ package directory
 
 import (
 	"context"
+
 	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
+
+// Group contains the group facts supplied to authorization. Names are aliases
+// for one group; ID is optional for sources without stable group identities.
+// ManagedGroup holds the provisioning record, including its member IDs.
+type Group struct {
+	ID         string
+	Names      []string
+	Attributes object.Attributes
+}
 
 type User struct {
 	UserName     string
 	ID           string
 	Active       bool
-	Groups       []object.Object
+	Groups       []Group
 	Names        []string
 	Attributes   object.Attributes
 	UserType     string
@@ -19,25 +29,14 @@ type User struct {
 	Organization string
 }
 
-// Revision identifies an opaque, coherent directory snapshot. Callers may compare
-// revisions for equality but must not interpret their contents.
-type Revision string
-
 // Directory resolves users within one configured identity provider. LookupUser
-// returns the user and revision from one coherent snapshot. Missing users return
-// nil with a nonempty revision; storage failure is an error, never a missing user.
-// Identity, memberships and current group facts come from that same snapshot.
+// returns user facts. Missing users return nil; storage failure is an error,
+// never a missing user.
+// Read consistency and visibility of user and membership changes are backend-specific.
+// The lookup key and returned User.ID are the stored user's ID. Mapping an OIDC
+// claim or provisioning attribute to that ID is Epithet's responsibility.
 type Directory interface {
-	LookupUser(context.Context, string) (*User, Revision, error)
-}
-
-// UserLister supplies administration with all users, including inactive users,
-// and their policy-visible groups from one snapshot. IDs are authentication
-// identities, not provisioning resource IDs. Results are ordered by userName
-// then ID; users and group slices are independent copies, with groups sorted by
-// name. Authorization consumers need only Directory.LookupUser.
-type UserLister interface {
-	ListUserFacts(context.Context) ([]User, Revision, error)
+	LookupUser(context.Context, string) (*User, error)
 }
 
 // Facts projects this built-in directory record onto the provider contract.
@@ -56,5 +55,12 @@ func (u User) Facts() object.User {
 			attrs[k] = object.Values{v}
 		}
 	}
-	return object.User{ID: u.ID, Names: names, UserName: u.UserName, Attributes: attrs, Groups: u.Groups}
+	var groups []object.Object
+	if u.Groups != nil {
+		groups = make([]object.Object, len(u.Groups))
+		for i, g := range u.Groups {
+			groups[i] = object.Object{ID: g.ID, Names: g.Names, Attributes: g.Attributes}
+		}
+	}
+	return object.User{ID: u.ID, Names: names, UserName: u.UserName, Attributes: attrs, Groups: groups}
 }

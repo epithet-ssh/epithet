@@ -17,7 +17,6 @@ type CertLogger interface {
 type CertEvent struct {
 	PolicyID             string
 	DirectoryRevision    string
-	InventoryRevision    string
 	Timestamp            time.Time
 	SerialNumber         string
 	ID                   string // Authenticated directory ID.
@@ -62,9 +61,6 @@ func (l *SlogCertLogger) LogCert(ctx context.Context, event *CertEvent) error {
 	}
 	if event.DirectoryRevision != "" {
 		attrs = append(attrs, slog.String("directoryRevision", event.DirectoryRevision))
-	}
-	if event.InventoryRevision != "" {
-		attrs = append(attrs, slog.String("inventoryRevision", event.InventoryRevision))
 	}
 	l.logger.LogAttrs(ctx, slog.LevelInfo, "certificate issued", attrs...)
 	return nil

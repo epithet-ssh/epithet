@@ -33,3 +33,33 @@ func TestControlTokenConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestEnrollmentTokenConfiguration(t *testing.T) {
+	for _, tc := range []struct{ name, literal, file, wantError string }{
+		{name: "literal", literal: "shared-secret"},
+		{name: "file", file: "shared-secret\n"},
+		{name: "disabled"},
+		{name: "both", literal: "shared-secret", file: "shared-secret", wantError: "use either enrollment-token or enrollment-token-file"},
+		{name: "empty file", file: "\n", wantError: "enrollment token file is empty"},
+		{name: "whitespace", literal: "not a token", wantError: "must not contain whitespace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := ""
+			if tc.file != "" {
+				path = filepath.Join(t.TempDir(), "enrollment-token")
+				require.NoError(t, os.WriteFile(path, []byte(tc.file), 0600))
+			}
+			token, err := readBearerToken(tc.literal, path, "enrollment")
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+			} else {
+				require.NoError(t, err)
+				if tc.name != "disabled" {
+					require.Equal(t, "shared-secret", token)
+				} else {
+					require.Empty(t, token)
+				}
+			}
+		})
+	}
+}

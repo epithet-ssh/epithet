@@ -16,12 +16,10 @@ func TestCreateAndReopenCurrentSchema(t *testing.T) {
 	require.NoError(t, err)
 	var version, aliases int
 	require.NoError(t, s.db.QueryRow("PRAGMA user_version").Scan(&version))
-	require.Equal(t, 2, version)
+	require.Equal(t, 4, version)
 	require.NoError(t, s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='aliases'").Scan(&aliases))
 	require.Zero(t, aliases)
-	user, err := s.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject", UserName: "alice", Active: true})
-	require.NoError(t, err)
-	_, revision, err := s.LookupUser(t.Context(), "subject")
+	user, err := s.CreateUser(t.Context(), directory.ManagedUser{Metadata: directory.Metadata{ID: "subject"}, ExternalID: "subject", UserName: "alice", Active: true}, directory.NewAuditEvent(t.Context(), "create", "subject"))
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
 
@@ -30,14 +28,12 @@ func TestCreateAndReopenCurrentSchema(t *testing.T) {
 	defer s.Close()
 	actual, err := s.GetUser(t.Context(), user.ID)
 	require.NoError(t, err)
-	require.Equal(t, user, actual)
-	_, actualRevision, err := s.LookupUser(t.Context(), "subject")
-	require.NoError(t, err)
-	require.Equal(t, revision, actualRevision)
+	require.Equal(t, &user, actual)
+
 }
 
 func TestRejectOtherSchemaVersionsWithoutChangingData(t *testing.T) {
-	for _, version := range []int{1, 3} {
+	for _, version := range []int{1, 2, 3, 5} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "directory.db")
 			db, err := sql.Open("sqlite", path)

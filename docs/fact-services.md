@@ -25,6 +25,9 @@ The response limit is 64 KiB.
 
 ## Directory
 
+For provider-specific research on aligning login identities with provisioned
+users, see [Mapping OIDC identities to SCIM users](oidc-scim-identity-mapping.md).
+
 The smallest response is:
 
 ```json
@@ -64,8 +67,7 @@ or `id`, which use the explicit object fields.
   "name": ["host.example", "host.internal"],
   "accounts": ["root", "deploy"],
   "attributes": {"env":"production"},
-  "principal": {"mode":"epithet-principal-v1", "realm":"fleet-id"},
-  "revision": "provider-defined"
+  "principal": {"mode":"epithet-principal-v1", "realm":"fleet-id"}
 }
 ```
 
@@ -84,11 +86,11 @@ nonempty opaque principal realm. The realm is credential scope, not a hostname
 or a policy selector. Do not substitute it into `name`. Multiple hosts can share
 a realm intentionally; all then accept the same principal for a given account.
 
-Both response types may include `revision`, an opaque string of at most 256 UTF-8
+Directory responses may include `revision`, an opaque string of at most 256 UTF-8
 bytes. It is logged only: no comparison, ordering, caching, or authorization
 semantics. Omission needs no replacement. Null, a non-string, or an oversized
 revision invalidates the response. This metadata is unrelated to control-plane
-mutation revisions.
+mutation revisions. The built-in directory lookup does not produce a revision.
 
 ## Request authentication
 
@@ -104,10 +106,10 @@ request-bound credentials. Providers using their own HTTP handlers can use
 the built-in handlers configure verification themselves.
 
 `pkg/facts.NewDataClient` configures directory and inventory lookup endpoints and
-exposes only validated `User` and `Host` lookups. `NewControlClient` configures
-private backend endpoints and exposes typed administration operations. SCIM
-forwarding is private to `pkg/facts/control`, alongside its discovery and resource
-URL rebasing. The shared `internal/servicehttp` package owns connections, TLS and
+exposes only validated `User` and `Host` lookups. `pkg/facts/control` owns private
+provider operations alongside public authentication and authorization. Its directory,
+inventory, and SCIM adapters keep provider discovery, protocol conversion, and
+resource URL rebasing inside control. The shared `internal/servicehttp` package owns connections, TLS and
 Unix sockets, signed exchanges and bounded response reads. It has no knowledge
 of fact resources or SCIM, and callers do not manage HTTP response bodies.
 
@@ -131,18 +133,18 @@ The optional management implementations satisfy `directory.Store` and
 `inventory.Store`, which do not embed the data interfaces. Each pair must describe
 the same logical service, but may use different instances. A store implementing
 both can be supplied in both positions. Omitting the option leaves management
-disabled even if the source implements Store. Directory's existing read-only
-actor and user-list operations remain available; with management configured,
-administrative user listing uses that implementation.
+disabled even if the source implements Store. Directory's read-only actor
+operation remains available. User enumeration uses
+the SCIM API and requires a provider with SCIM management support.
 
-`LookupHandler` is the lower-level adapter for serving just fact reads at a
-caller-owned route. The CLI owns all source lifetimes, key resolution, and listeners.
-`pkg/facts/control` owns public authentication and administrative authorization;
-it depends on the typed clients, without importing the built-in handlers or stores.
+Use the same constructors without a management option for lookup-only services.
+The lookup adapter is private to `pkg/facts/server`. The CLI owns all source
+lifetimes, key resolution, and listeners. Control does not import the built-in
+handlers or stores. Inventory REST conversion belongs to the HTTP adapter;
+the inventory domain has no dependency on the administration protocol.
 
-Human control operations receive the already authorized actor and directory
-revision explicitly. SCIM preserves the OIDC actor or uses `scim` for the
-optional provisioning secret. Enrollment retains its nonhuman credential semantics. Control results are domain records; rejected operations
+Human control operations receive the already authorized actor explicitly. SCIM
+preserves the OIDC actor or uses `scim` for the optional provisioning secret. Enrollment retains its nonhuman credential semantics. Control results are domain records; rejected operations
 return `ServiceError`, with categories available through `errors.Is`. SCIM results
 retain the provisioning status, response body, ETag, location, and response format.
 `facts.AdminClient` invokes the public administration endpoint using user bearer
@@ -197,13 +199,16 @@ The fact-service implementation lives under the same namespace:
 
 Directory and inventory contracts stay independent of their SQLite implementations,
 allowing alternative managed stores. `directory.Store` and `inventory.Store` expose
-complete management operations independently of the data-plane interfaces; each backend owns atomic changes, conflicts, audit history,
-and revisions. Every operation carries a request context. Service handlers accept
-these contracts and leave store lifetime to their caller. A backend can use an
+complete management operations independently of the data-plane interfaces.
+Directory consistency, concurrency and propagation semantics belong to each backend;
+the directory contract does not require transactions or coherent snapshots.
+Inventory retains its operation-specific atomicity requirements. Every operation
+carries a request context. Service handlers accept these contracts and leave store
+lifetime to their caller. A backend can use an
 external database without changing the control plane or fact clients.
 
 The SCIM adapter owns its protocol parsing and response
-semantics, separately from store transactions. Combined YAML host loading is
+semantics, separately from backend persistence. Combined YAML host loading is
 integration-test support in `test/inventorytest`; production inventory is
 managed only, and static directory loading supplies user facts only.
 
@@ -221,12 +226,13 @@ facts remain YAML configuration; the host proposal editor also continues to use 
 
 Managed inventory stores typed host records, names, labels, accounts, enrollment
 tokens, and audit events. Mutations check admission rules and commit the host,
-token state, audit, and inventory revision together. Lookups read current host
-facts and the revision in one snapshot. Pending and denied hosts supply no facts;
+token state and audit together. Lookups return current host facts without an
+inventory-wide revision. Pending and denied hosts supply no facts;
 exact records take precedence over pattern records. A pattern match exposes the
 requested hostname as its resource name. If multiple active patterns match, lookup
 fails with a conflict rather than selecting one by order.
-Removing a managed host also deletes its names, token metadata, and audit history.
+Removing a managed host deletes its names and token metadata, retains audit history,
+and appends the supplied removal event.
 
 Inventory administration returns bounded pages: 100 records by default, with a
 maximum of 1,000. `inventory list` accepts `--after FULL_ID`
@@ -236,19 +242,19 @@ prints its continuation ID to stderr, preserving the concise stdout table.
 Use the continuation ID rather than the last displayed name. Tokens have no
 retrieval operation; create returns a credential and revoke takes that credential.
 
-`inventory audit --after SEQUENCE --limit N` uses the same page bounds. Events
-include a stable, increasing `sequence`; timestamps do not define pagination.
-Sequences are never reused after deletion or restart. The last event's sequence
-is the next cursor. An empty page ends enumeration; separate pages may observe
-concurrent changes. A full page can be followed by an empty one.
+`inventory audit --cursor CURSOR --limit N` uses the same page bounds. Audit
+pages contain `events` and an optional `next` cursor. Events retain their supplied
+timestamps and have no sequence field. Pass `next` back unchanged; its format is
+owned by the backend. Empty `next` ends enumeration. Ordering, consistency during
+writes, and cursor lifetime are backend properties.
 
 CLI/control requests use `after`, `limit`, and `pending` for host lists,
-and `audit-after` and `audit-limit` for inventory or
-directory audit. Zero limits select the default; negative or oversized limits
-are rejected. Each database query applies its limit before loading the page.
+and `audit-cursor` and `audit-limit` for inventory or directory audit. Zero limits
+select the default; negative or oversized limits are rejected. Audit pagination
+does not require global ordering or unique timestamps.
 
-Host inventory has no static mode or file overlay. Each editable proposal contains
-either `names` (1–64 exact DNS names) or `pattern`, never both. Patterns use the
+Host inventory has no static mode or file overlay. Each host contains
+`names` (1–64 exact hostnames or wildcard expressions). Wildcard names use the
 same DNS-label matching language as Writ host selectors: `*` and `?` within a
 label, and whole-label `**` across labels. The standalone `*` matches any hostname.
 
@@ -259,17 +265,18 @@ database; schema or storage errors fail startup. The old `inventory-mode`,
 `inventory-static-file`, and server-wide `principal-mode` settings are removed.
 Principal mode is explicit on each managed record.
 
-Use `epithet inventory add-pattern 'ci-*.example'` to declare an active pattern
+Use `epithet inventory add 'ci-*.example'` to declare an active host with a wildcard name
 through the YAML editor. Creation requires inventory-admin authorization. Choose
 its labels, explicit accounts (`null`, `[]`, or a list), principal mode, and realm.
-Patterns cannot use a generated per-host realm. Existing `edit`, `show`, and
-`remove` commands operate on pattern records by ID or their pattern text. Pattern
-creation, editing, and removal update the inventory revision transactionally.
+Existing `edit`, `show`, and
+`remove` commands operate on the same host records by ID or name, including wildcard
+names. Creation, editing, and removal record their supplied audit events.
 
 Named realms need no separate declaration. They are case-sensitive attributes
-of records, and may include uppercase ASCII letters. All active records sharing
-the same named realm must have identical labels and account sets; account order
-does not matter, while `null` and `[]` remain distinct.
+of records, and may include uppercase ASCII letters. Any realm, including a
+generated realm, may be shared by exact hosts or patterns. Each record retains
+its own labels and account restrictions; sharing a realm imposes no equality or
+uniqueness constraint.
 
 The built-in directory's [mapping and database upgrade procedure](../pkg/facts/directory/README.md)
 explain current SCIM group names, optional static group IDs, and removal of historical bindings.
@@ -281,6 +288,13 @@ configured inventory fact endpoint. A 4xx discovery response means a lookup-only
 provider. See the [inventory provider contract](../pkg/facts/inventory/README.md)
 for resources, JSON, preconditions, automation credentials and backend integration.
 The inventory provider no longer exposes the private `/manage` action envelope.
+
+Pending enrollment requires a shared bearer token configured on control with
+`enrollment-token` or `enrollment-token-file`; omitting both disables pending
+submissions. `epithet host enroll --enrollment-token-file FILE` sends the credential
+to control, which accepts it only for pending enrollment and never forwards it to
+the inventory provider. Administrator approval remains necessary. Single-use
+preapproval tokens remain a separate enrollment path.
 
 ## Optional SCIM management
 
@@ -319,9 +333,9 @@ only control signatures, which cover the actor, method, target, body, Content-Ty
 and If-Match. User bearer tokens never reach the provider. Mutations record the
 human actor in audit, or `scim` for the provisioning secret.
 
-SCIM discovery uses `directory`, the complete fact endpoint URL. The optional
-`directory-backend` remains the built-in service root for existing actor snapshots,
-user/group listings and audit commands; it is not required by external SCIM
+SCIM discovery uses `inmemoryInventory`, the complete fact endpoint URL. The optional
+`directory-backend` remains the built-in service root for existing actor snapshots
+and audit commands; it is not required by external SCIM
 providers. The built-in adapter keeps its current supported SCIM subset, schema
 and storage. Directory CLI creation/editing remains deferred in YATL `ywxp1g89`.
 
@@ -330,3 +344,24 @@ just like inventory URLs. Add `/lookup` to existing built-in HTTP directory root
 URLs on CA and control. Unix socket configuration is unchanged. Update signed
 request implementations together to bind `content_type` as well as `if_match`.
 
+
+### Listing users and groups through control
+
+`epithet directory users list` and `epithet directory groups list` use the agent's
+OIDC session to request `GET /scim/v2/Users` or `GET /scim/v2/Groups` on control
+with `startIndex=1&count=100`, then consume each page before requesting the next
+offset. Control discovers and forwards to the provider's SCIM API. Lookup-only
+directories do not support enumeration. The built-in adapter uses `ListUsers`
+and `ListGroups`; storage has no separate group summary or snapshot operation.
+
+The user table shows `USERNAME`, SCIM resource `ID`, `EXTERNAL_ID`, and `ACTIVE`.
+The group table shows `ID` and `NAME`, with no directory revision column.
+`--json` emits one complete SCIM resource per line, including provider extensions.
+Groups include their complete membership lists; the built-in SCIM user
+representation does not include group memberships. Pagination bounds the number
+of groups per page, not the members of an individual group. Client response-size
+limits still apply.
+
+Pagination describes each page's current state; concurrent changes can affect an
+offset-based enumeration. If a later page fails, earlier output remains visible
+and the command exits unsuccessfully.

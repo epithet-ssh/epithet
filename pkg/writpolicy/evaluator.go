@@ -233,3 +233,22 @@ func issuedLabels(allowed []*il.AllowRule) map[string]string {
 	}
 	return targets
 }
+
+// defaultExtensions returns the default SSH certificate extensions
+func defaultExtensions() map[string]string {
+	return map[string]string{
+		"permit-pty":              "",
+		"permit-agent-forwarding": "",
+		"permit-user-rc":          "",
+	}
+}
+
+// defaultExpiration returns the default certificate expiration duration
+func defaultExpiration() string {
+	return "5m"
+}
+
+// forbidden returns an explicit policy denial.
+func forbidden(message string) error {
+	return &wire.PolicyError{StatusCode: http.StatusForbidden, Message: message}
+}

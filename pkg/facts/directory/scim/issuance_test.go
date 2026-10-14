@@ -53,15 +53,13 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 		t.Helper()
 		token := idp.MintIDToken(subject, time.Now().Add(time.Hour))
 		result, e := authority.Issue(t.Context(), token, wire.Connection{RemoteHost: "host", RemoteUser: "root"}, userKey)
-		_, status, adminErr := client.Control(t.Context(), token, facts.ControlRequest{Action: "directory-groups"})
+		_, status, adminErr := client.ListGroups(t.Context(), token, 1)
 		if allowed {
 			require.NoError(t, e)
 			require.NoError(t, adminErr)
 			require.Equal(t, 200, status)
 			require.Equal(t, "subject:"+subject, result.Audit.ID)
-			_, rev, e := f.store.LookupUser(t.Context(), "subject:"+subject)
-			require.NoError(t, e)
-			require.Equal(t, string(rev), result.Audit.DirectoryRevision)
+			require.Empty(t, result.Audit.DirectoryRevision)
 		} else {
 			require.Error(t, e)
 			require.Nil(t, result)
@@ -86,13 +84,15 @@ func TestProvisioningControlsCertificatesAndAdministration(t *testing.T) {
 	f.request("POST", "Groups", group("ops", a), "", 201)
 	check("alice", true)
 	f.request("PUT", "Users/"+a, user("subject:new", "renamed", true), "", 200)
-	check("alice", false)
-	check("new", true)
-	// Neither provisioning credentials nor CA credentials can administer groups.
-	_, status, e := client.Control(t.Context(), "provisioning-secret", facts.ControlRequest{Action: "directory-groups"})
+	// Replacing externalId does not transfer identity or grants to another login.
+	check("alice", true)
+	check("new", false)
+	// An unconfigured provisioning secret cannot list groups.
+	_, status, e := client.ListGroups(t.Context(), "provisioning-secret", 1)
 	require.Error(t, e)
 	require.Equal(t, 401, status)
 	f.request("DELETE", "Users/"+a, "", "", 204)
+	check("alice", false)
 	check("new", false)
 	f.request("POST", "Users", user("subject:new", "renamed", true), "", 201)
 	check("new", false)

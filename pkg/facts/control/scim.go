@@ -22,6 +22,10 @@ func (s *Server) scim(w http.ResponseWriter, r *http.Request) {
 	if len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
 		token = fields[1]
 	}
+	if matchesSecret(token, s.config.EnrollmentToken) {
+		scimError(w, http.StatusForbidden, "enrollment credential cannot authorize this operation")
+		return
+	}
 	actor := "scim"
 	if !matchesSecret(token, s.config.SCIMToken) {
 		auth, rejected := s.authorizeAdmin(r.Context(), token, s.config.DirectoryAdmins, "directory-admin")

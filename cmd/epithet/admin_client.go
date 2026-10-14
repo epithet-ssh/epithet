@@ -1,13 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
 	"time"
@@ -42,44 +37,9 @@ func (c *ManagementCLI) request(req facts.ControlRequest) (*broker.InventoryResp
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	logger.Debug("connecting to inventory agent", "socket", socket)
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
-	if err != nil {
-		return nil, fmt.Errorf("connect to agent: %w; start epithet agent for this profile", err)
+	response, err := (brokerClient{socket: socket}).manage(ctx, req, os.Stderr)
+	if err == nil {
+		logger.Debug("received inventory agent response", "elapsed", time.Since(started))
 	}
-	defer conn.Close()
-	after := context.AfterFunc(ctx, func() { conn.Close() })
-	defer after()
-	logger.Debug("sending inventory request to agent")
-	if err = json.NewEncoder(conn).Encode(broker.Request{Inventory: &req}); err != nil {
-		return nil, err
-	}
-	logger.Debug("waiting for inventory agent response")
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 4096), facts.MaxControlResponse)
-	for scanner.Scan() {
-		var event broker.Event
-		if err = json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, err
-		}
-		if event.Output != "" {
-			fmt.Fprint(os.Stderr, event.Output)
-		}
-		if event.Inventory != nil {
-			logger.Debug("received inventory agent response", "elapsed", time.Since(started))
-			if event.Inventory.Error != "" {
-				return nil, errors.New(event.Inventory.Error)
-			}
-			return event.Inventory, nil
-		}
-		if event.Result != nil {
-			return nil, fmt.Errorf("agent rejected inventory request: %s", event.Result.Error)
-		}
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if scanner.Err() != nil {
-		return nil, scanner.Err()
-	}
-	return nil, fmt.Errorf("agent closed without an inventory response")
+	return response, err
 }

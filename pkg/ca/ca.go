@@ -42,12 +42,11 @@ type certParams struct {
 	NotAfter time.Time
 }
 
-// AuditMetadata identifies the identity and source revisions used for issuance.
+// AuditMetadata identifies the identity and optional directory revision used for issuance.
 type AuditMetadata struct {
 	ID                string
 	PolicyID          string
 	DirectoryRevision string
-	InventoryRevision string
 }
 
 // IssuedCertificate contains a signed certificate and its private audit metadata.
@@ -164,9 +163,6 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 		if !user.Revision.IsZero() {
 			c.logger.Info("directory lookup", "id", user.ID, "revision", user.Revision.String())
 		}
-		if !host.Revision.IsZero() {
-			c.logger.Info("inventory lookup", "host", name, "revision", host.Revision.String())
-		}
 	}
 	policyUser := user.PolicyUser()
 	facts := &wire.PolicyFacts{Authentication: wire.Authentication{ID: claims.UserID, ExpiresAt: claims.ExpiresAt}, Target: name,
@@ -208,7 +204,7 @@ func (c *CA) requestPolicy(ctx context.Context, token string, conn wire.Connecti
 	if identity == "" {
 		identity = user.ID
 	}
-	return &authorization{audit: AuditMetadata{ID: user.ID, PolicyID: response.PolicyID, DirectoryRevision: user.Revision.String(), InventoryRevision: host.Revision.String()}, params: certParams{Identity: identity, Names: []string{expected}, Expiration: time.Duration(response.TTLSeconds) * time.Second, Extensions: response.Extensions, NotAfter: deadline}}, nil
+	return &authorization{audit: AuditMetadata{ID: user.ID, PolicyID: response.PolicyID, DirectoryRevision: user.Revision.String()}, params: certParams{Identity: identity, Names: []string{expected}, Expiration: time.Duration(response.TTLSeconds) * time.Second, Extensions: response.Extensions, NotAfter: deadline}}, nil
 }
 
 // signPublicKey signs a key to generate a certificate.
@@ -285,4 +281,22 @@ func WithFacts(directoryURL, inventoryURL string, identity oidc.ValidatorConfig,
 		c.discovery = &wire.Discovery{Auth: &discovery, CacheControl: "max-age=300"}
 		return nil
 	})
+}
+
+// Error classes carry CA semantics independently of a private service's HTTP
+// status. Wrapped diagnostics are for server logs, never public response bodies.
+var (
+	ErrInvalidAuthentication = errors.New("invalid user authentication")
+	ErrAccessDenied          = errors.New("access denied")
+	ErrAuthorizationPending  = errors.New("authorization pending")
+	ErrDependency            = errors.New("CA dependency failed")
+	ErrInvalidPublicKey      = errors.New("invalid public key")
+)
+
+// PolicyEvaluator decides access using validated CA-owned authentication and
+// current directory/host facts. It has no storage or transport responsibility.
+// It returns a positive TTL, extensions, and an optional tighter deadline.
+// CA always enforces the authentication lifetime as an additional ceiling.
+type PolicyEvaluator interface {
+	Evaluate(context.Context, wire.Connection, *wire.PolicyFacts) (*wire.PolicyResponse, error)
 }

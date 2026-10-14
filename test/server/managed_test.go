@@ -52,6 +52,7 @@ oidc-issuer = %q
 oidc-client-id = %q
 directory-static-file = ["%s/static.yaml"]
 inventory-admin-group = ["operators"]
+enrollment-token = "enrollment-secret"
 state-dir = "%s/state"
 `, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, dir, dir)
 
@@ -96,8 +97,8 @@ state-dir = "%s/state"
 	_, status, err := inventoryClient.Control(t.Context(), "", facts.ControlRequest{Action: "list"})
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
-	proposal := facts.Proposal{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	enrolled, status, err := inventoryClient.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Host: &proposal})
+	proposal := facts.InventoryInput{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
+	enrolled, status, err := inventoryClient.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
@@ -157,10 +158,10 @@ state-dir = "%s/state"
 	require.Equal(t, []string{"*", "managed.example", "second.example"}, listedNames)
 	// Declare a fleet rule through the real CLI and editor, then remove it.
 	patternYAML := filepath.Join(dir, "pattern.yaml")
-	require.NoError(t, os.WriteFile(patternYAML, []byte("pattern: 'ci-*.internal'\naccounts: [root]\nlabels: {role: ci}\nprincipal-mode: epithet-principal-v1\nrealm: CIRunners\n"), 0600))
+	require.NoError(t, os.WriteFile(patternYAML, []byte("names: ['ci-*.internal']\naccounts: [root]\nlabels: {role: ci}\nprincipal-mode: epithet-principal-v1\nrealm: CIRunners\n"), 0600))
 	editor := filepath.Join(dir, "editor")
 	require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\ncp \"$PATTERN_YAML\" \"$1\"\n"), 0700))
-	command := exec.Command(binary, "inventory", "--broker-socket", socket, "add-pattern", "ci-*.internal")
+	command := exec.Command(binary, "inventory", "--broker-socket", socket, "add", "ci-*.internal")
 	command.Env = append(os.Environ(), "EDITOR="+editor, "PATTERN_YAML="+patternYAML)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -170,10 +171,10 @@ state-dir = "%s/state"
 	require.Equal(t, 200, status)
 	var patternID string
 	for _, record := range declared.Hosts {
-		if record.Proposal.Pattern == "ci-*.internal" {
+		if len(record.Host.Names) == 1 && record.Host.Names[0] == "ci-*.internal" {
 			patternID = record.ID
 			require.Equal(t, "active", record.Status)
-			require.Equal(t, "CIRunners", record.Proposal.Realm)
+			require.Equal(t, "CIRunners", record.Host.Realm)
 		}
 	}
 	require.NotEmpty(t, patternID)

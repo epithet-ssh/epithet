@@ -11,28 +11,53 @@ turns off management. The shared packages have no cloud SDK dependencies.
 
 `Store` exposes complete operations rather than transactions or database rows.
 An adapter implements its database schema, queries, conditional writes and
-transactions. Every mutation commits records, token state, audit and inventory
-revision together. Run `storetest.Run` with two handles to one fresh database to
-exercise the contract against another backend. The factory returns two
-`storetest.Backend{Hosts: data, Store: management}` values, each pairing the
-independent data and management views. The factory owns their cleanup.
+transactions. Every mutation commits records, token state, and audit together. Run `storetest.Run` with one fresh inventory to exercise the
+contract against another backend. The factory returns one
+`storetest.Backend{Hosts: data, Store: management}` value pairing the independent
+data and management views. The factory owns its cleanup.
 
-The pure rules in this package are used *inside* the adapter's atomic operation:
+`Host` contains names, authorization facts, and enrollment metadata. Names may be
+exact hostnames or wildcard expressions in the same collection. There is no
+separate pattern resource or proposal object. `Enroll` accepts exact names and
+creates pending state (or redeems a token); `AddHost` lets administrators create
+active hosts with exact or wildcard names. All records use `GetHost`, `ListHosts`,
+`ReplaceHost`, and `RemoveHost`.
 
-- `Enrollment`, `PatternAdmission`, and `Reservation` construct admitted state.
+Storage owns the distinction between exact and wildcard names. SQLite indexes
+that distinction per name: lookup checks exact names first, then reads only
+wildcard names when there is no active exact match. A wildcard match supplies the
+requested hostname and the matching record's facts, without assigning that
+record's management identity to the synthesized host. Multiple matching names on
+one record are unambiguous; matching different records is a conflict.
+
+Epithet generates IDs with `inventory.NewID` before calling storage. Token
+redemption reuses the reservation ID. Each mutation receives an `AuditEvent`
+containing the authenticated actor, action, resource ID and operation timestamp.
+Storage preserves every field; it does not construct or
+complete audit events. Record timestamps use the supplied event time. Removal
+retains audit history and appends the supplied removal event.
+
+SQLite uses schema version 4, with indexed exact/wildcard names, retained audit
+history, and no inventory-wide revision counter. Older schema
+versions are rejected without modification; there is no automatic migration.
+
+The pure rules in this package are also used inside the adapter's atomic operation:
+
+- `Enrollment`, `Admission`, and `Reservation` construct admitted state.
 - `Replacement` validates the reviewed revision, immutable metadata, and allowed
   edit/review transition, and returns the new record and audit action.
-- `CheckRevision` protects removal; `CheckRealm` compares active realm members.
-- `MutationEvent` constructs audit events; removal deletes its audit history.
+- Removal checks the resource version before deleting.
+- `NewAuditEvent` constructs events before storage. For replacement, Epithet reads
+  the current record and uses `Replacement` to determine edit/approve/deny. Storage
+  repeats the state-dependent checks when applying the mutation.
 
-Adapters must also enforce active exact-name/pattern uniqueness and prevent
-concurrent transactions from invalidating realm checks. Generated realms belong
-to one host; named realms require matching attributes and account sets. Pending
-and denied records do not reserve names. Empty reservations may be denied or
+Adapters enforce active exact-name/pattern uniqueness. Realms may be shared
+across records with independent labels and account restrictions, including
+generated realms. Pending and denied records do not reserve names. Empty reservations may be denied or
 removed, but must be filled before approval. The existing pending enrollment
 queue bound is 1,000. Token creation does not count-check that queue.
 
-Lookups read facts and inventory revision from one snapshot. Exact names win
+Lookups return host facts without an inventory-wide revision. Exact names win
 over patterns; multiple matching active patterns are a conflict. Pattern facts
 use the requested hostname. Nil accounts mean unrestricted; an empty slice
 means no accounts. Preserve this distinction in storage and detached results.
@@ -52,7 +77,7 @@ Allow: GET, OPTIONS
 Cache-Control: no-store
 Link-Template: "/inventory/records{/id}{?after,limit,pending}"; rel="https://epithet.dev/rel/inventory-records"
 Link-Template: "/inventory/tokens{?token}"; rel="https://epithet.dev/rel/inventory-tokens"
-Link-Template: "/inventory/audit{?after,limit}"; rel="https://epithet.dev/rel/inventory-audit"
+Link-Template: "/inventory/audit{?cursor,limit}"; rel="https://epithet.dev/rel/inventory-audit"
 ```
 
 These paths belong to the provider. Clients expand RFC 6570 templates and resolve
@@ -62,17 +87,19 @@ relative results against the discovery URL. No resource-level OPTIONS is needed.
 | Template / target | Methods | Result |
 |---|---|---|
 | records, no id | GET | 200, JSON array of records |
-| records, no id | POST | 201 for pending enrollment/admin pattern; 200 for token redemption |
+| records, no id | POST | 201 for enrollment/admin creation; 200 for token redemption |
 | records, id | GET, PUT | 200, complete record plus ETag |
 | records, id | DELETE | 204 |
 | tokens, no token | POST | 201, new token and expiry |
 | tokens, token | DELETE | 204 |
-| audit | GET | 200, JSON array of events |
+| audit | GET | 200, audit page with `events` and optional `next` |
 
 There is no token retrieval. Record list uses `after` (exclusive record ID),
-`limit` (0/default 100, max 1000), and `pending`. Audit uses `after` (exclusive
-sequence) and `limit`. Empty pages end enumeration; separate pages may observe
-changes. List entries carry no version; GET the selected item before review.
+`limit` (0/default 100, max 1000), and `pending`. Audit uses an opaque `cursor` and `limit`. Empty cursor starts a read;
+pass the returned `next` back unchanged. Empty `next` means no further page.
+Ordering, consistency during writes, and cursor lifetime are backend properties.
+Event timestamps need not be unique or monotonic. The CLI accepts `--cursor` and
+prints the page including `next`. List entries carry no version; GET the selected item before review.
 
 GET and PUT share this representation:
 
@@ -91,7 +118,7 @@ GET and PUT share this representation:
 }
 ```
 
-Pattern hosts use `pattern` instead of `name`. An empty reservation has
+Exact and wildcard names use the same `name` array. An empty reservation has
 `"host": null`. Non-null hosts must include `accounts`. Attributes remain
 string-valued in managed inventory. Record revisions appear only in a strong
 `ETag`, for example `"7"`. PUT and DELETE require the exact reviewed tag in
@@ -101,14 +128,13 @@ The signed service JWT's `if_match` claim binds this header to the request.
 PUT echoes id and timestamps unchanged. It either replaces host attributes while
 retaining status or changes a pending record to active/denied without modifying
 host attributes. Combined edit and review is rejected. A successful mutation
-returns the committed record and new ETag. Name/realm conflicts return 409.
+returns the committed record and new ETag. Name/pattern conflicts return 409.
 
 POST records accepts `{"host": {...}}` with optional `"token": "credential"`.
 It does not accept status, id, timestamps or revision. A signed request with no
 actor enrolls: no token creates pending state, a valid token consumes and
 activates its reservation. A signed administrator request may add an active
-pattern; it cannot directly create an active exact-host record. Pattern proposals
-submitted by enrolling hosts still require review. Creation/redemption returns
+host with exact or wildcard names. Enrollment accepts exact names only. Creation/redemption returns
 the record, ETag and Location.
 
 POST tokens accepts `{"lifetimeSeconds": 3600}` (0 defaults to one hour; maximum
@@ -123,6 +149,31 @@ Providers accept request-bound service JWTs signed by control, with audience
 `epithet-inventory`. The signed subject carries the already authorized actor;
 CA reader credentials cannot mutate. Control owns OIDC and the `inventory-admin`
 grant. Human CLI operations continue through the agent.
+
+Pending host enrollment requires the control plane's shared bearer credential,
+configured with `--enrollment-token-file FILE` or `--enrollment-token SECRET`.
+Without it, pending enrollment is disabled. This credential permits only submitting
+pending hosts; it grants no inventory reads, edits, approval, token management, or
+SCIM access. Control validates it and sends the ordinary signed enrollment request
+to the provider. The shared secret never reaches inventory or its storage adapter.
+
+Configure the control service (including when launched by `epithet server`) with:
+
+```toml
+enrollment-token-file = "/etc/epithet/enrollment-token"
+```
+
+Supply the same secret on an enrolling host:
+
+```sh
+epithet host enroll --ca https://ca.example/ \
+  --enrollment-token-file /path/to/enrollment-token
+```
+
+The client sends this secret in `Authorization: Bearer ...` to control. The host
+remains pending until an administrator approves it. The existing `--token` and
+`--token-file` options carry a single-use preapproval credential instead; that
+path does not require the shared pending-enrollment secret.
 
 Control may configure `--inventory-token-file FILE` (or `--inventory-token`) for
 automation. This is separate from the SCIM credential and enrollment tokens.

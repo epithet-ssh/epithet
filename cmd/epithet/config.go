@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/alecthomas/kong"
-	"github.com/epithet-ssh/epithet/pkg/config"
 )
 
 // defaultConfigPatterns defines where to look for config files.
@@ -49,6 +51,32 @@ func loadCLIConfig(r io.Reader) (kong.Resolver, error) {
 // defaultConfigFiles keeps normal parsing and the launcher's child reparse on
 // the same file order. Kong adds an explicit --config file as the last resolver.
 func defaultConfigFiles() []string {
-	paths, _ := config.ExpandGlobs(defaultConfigPatterns)
+	paths, _ := expandGlobs(defaultConfigPatterns)
 	return paths
+}
+
+// expandGlobs expands configured patterns into existing file paths.
+// Patterns support ~ for home directory expansion.
+func expandGlobs(patterns []string) ([]string, error) {
+	var paths []string
+	for _, pattern := range patterns {
+		pattern = expandHome(pattern)
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid glob pattern %q: %w", pattern, err)
+		}
+		paths = append(paths, matches...)
+	}
+	return paths, nil
+}
+
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[1:])
 }

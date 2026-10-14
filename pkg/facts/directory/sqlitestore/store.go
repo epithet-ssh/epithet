@@ -8,12 +8,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/storage"
-	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -22,6 +21,12 @@ type Store struct{ db *sql.DB }
 
 var _ directory.Store = (*Store)(nil)
 var _ directory.Directory = (*Store)(nil)
+
+func (s *Store) SupportsVersioning() bool { return true }
+
+// Partial updates are not implemented yet.
+func (s *Store) SupportsPatchUser() bool  { return false }
+func (s *Store) SupportsPatchGroup() bool { return false }
 
 // Open creates a private database if needed. Schema version mismatches fail
 // startup; existing databases are never upgraded here. Opening a database never
@@ -52,18 +57,18 @@ func (s *Store) initialize() error {
 	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version != 0 && version != 2 {
+	if version != 0 && version != 4 {
 		return fmt.Errorf("unsupported directory database version %d", version)
 	}
 	if version == 0 {
 		_, err = tx.Exec(`
 CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), instance TEXT NOT NULL, revision INTEGER NOT NULL);
-CREATE TABLE users (id TEXT PRIMARY KEY, user_name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, external_id TEXT NOT NULL UNIQUE, active INTEGER NOT NULL CHECK(active IN (0,1)), user_type TEXT NOT NULL, department TEXT NOT NULL, organization TEXT NOT NULL, version INTEGER NOT NULL, created TEXT NOT NULL, modified TEXT NOT NULL);
+CREATE TABLE users (id TEXT PRIMARY KEY, user_name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, external_id TEXT NOT NULL, active INTEGER NOT NULL CHECK(active IN (0,1)), user_type TEXT NOT NULL, department TEXT NOT NULL, organization TEXT NOT NULL, version INTEGER NOT NULL, created TEXT NOT NULL, modified TEXT NOT NULL);
 CREATE TABLE groups (id TEXT PRIMARY KEY, external_id TEXT NOT NULL, display_name TEXT NOT NULL, version INTEGER NOT NULL, created TEXT NOT NULL, modified TEXT NOT NULL);
 CREATE TABLE members (group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(group_id,user_id));
 CREATE INDEX user_memberships ON members(user_id);
-CREATE TABLE audit (sequence INTEGER PRIMARY KEY, revision INTEGER NOT NULL, time TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, resource_id TEXT NOT NULL, alias TEXT NOT NULL, previous_id TEXT NOT NULL);
-PRAGMA user_version=2;`)
+CREATE TABLE audit (time TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, resource_id TEXT NOT NULL, alias TEXT NOT NULL, previous_id TEXT NOT NULL);
+PRAGMA user_version=4;`)
 		if err != nil {
 			return err
 		}
@@ -87,8 +92,8 @@ func next(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	n, _, err := revision(ctx, tx)
 	return n, err
 }
-func audit(ctx context.Context, tx *sql.Tx, n uint64, actor, action, id, alias, previous string) error {
-	_, err := tx.ExecContext(ctx, "INSERT INTO audit (revision,time,actor,action,resource_id,alias,previous_id) VALUES (?,?,?,?,?,?,?)", n, time.Now().UTC().Format(time.RFC3339Nano), actor, action, id, alias, previous)
+func audit(ctx context.Context, tx *sql.Tx, event directory.AuditEvent) error {
+	_, err := tx.ExecContext(ctx, "INSERT INTO audit (time,actor,action,resource_id,alias,previous_id) VALUES (?,?,?,?,?,?)", event.Time.Format(time.RFC3339Nano), event.Actor, event.Action, event.ID, event.Alias, event.PreviousID)
 	return err
 }
 
@@ -96,13 +101,15 @@ func audit(ctx context.Context, tx *sql.Tx, n uint64, actor, action, id, alias, 
 // membership are read by their own user/group operations below.
 func scanMetadata(row *sql.Row, m *directory.Metadata, fields ...any) error {
 	var created, modified string
-	fields = append(fields, &m.Version, &created, &modified)
+	var version uint64
+	fields = append(fields, &version, &created, &modified)
 	if err := row.Scan(fields...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return directory.ErrNotFound
 		}
 		return err
 	}
+	m.Version = strconv.FormatUint(version, 10)
 	var err error
 	if m.Created, err = time.Parse(time.RFC3339Nano, created); err != nil {
 		return err
@@ -117,8 +124,8 @@ func readUser(ctx context.Context, tx *sql.Tx, id string) (directory.ManagedUser
 	return u, err
 }
 
-func readGroup(ctx context.Context, tx *sql.Tx, id string) (directory.Group, error) {
-	g := directory.Group{Metadata: directory.Metadata{ID: id}, MemberIDs: []string{}}
+func readGroup(ctx context.Context, tx *sql.Tx, id string) (directory.ManagedGroup, error) {
+	g := directory.ManagedGroup{Metadata: directory.Metadata{ID: id}, MemberIDs: []string{}}
 	err := scanMetadata(tx.QueryRowContext(ctx, "SELECT external_id,display_name,version,created,modified FROM groups WHERE id=?", id), &g.Metadata, &g.ExternalID, &g.DisplayName)
 	if err != nil {
 		return g, err
@@ -138,42 +145,49 @@ func readGroup(ctx context.Context, tx *sql.Tx, id string) (directory.Group, err
 	return g, rows.Err()
 }
 
-func precondition(m directory.Metadata, match string) error {
-	if match == "" || match == "*" {
-		return nil
+func precondition(m directory.Metadata, expectedVersion string) error {
+	if expectedVersion != "" && expectedVersion != m.Version {
+		return directory.ErrVersion
 	}
-	for _, tag := range strings.Split(match, ",") {
-		if strings.TrimSpace(tag) == m.ETag() {
-			return nil
-		}
-	}
-	return directory.ErrVersion
+	return nil
 }
 
-func (s *Store) GetUser(ctx context.Context, id string) (directory.ManagedUser, error) {
+func (s *Store) GetUser(ctx context.Context, id string) (*directory.ManagedUser, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return directory.ManagedUser{}, err
+		return nil, err
 	}
 	defer tx.Rollback()
 	u, err := readUser(ctx, tx, id)
-	if err != nil {
-		return u, err
+	if errors.Is(err, directory.ErrNotFound) {
+		return nil, nil
 	}
-	return u, tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
-func (s *Store) GetGroup(ctx context.Context, id string) (directory.Group, error) {
+func (s *Store) GetGroup(ctx context.Context, id string) (*directory.ManagedGroup, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return directory.Group{}, err
+		return nil, err
 	}
 	defer tx.Rollback()
 	g, err := readGroup(ctx, tx, id)
-	if err != nil {
-		return g, err
+	if errors.Is(err, directory.ErrNotFound) {
+		return nil, nil
 	}
-	return g, tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &g, nil
 }
 
 // listIDs keeps count and selection in the caller's transaction. Table is an
@@ -223,7 +237,7 @@ func (s *Store) ListUsers(ctx context.Context, start, count int) ([]directory.Ma
 	return users, total, tx.Commit()
 }
 
-func (s *Store) ListGroups(ctx context.Context, start, count int) ([]directory.Group, int, error) {
+func (s *Store) ListGroups(ctx context.Context, start, count int) ([]directory.ManagedGroup, int, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, 0, err
@@ -233,7 +247,7 @@ func (s *Store) ListGroups(ctx context.Context, start, count int) ([]directory.G
 	if err != nil {
 		return nil, 0, err
 	}
-	groups := make([]directory.Group, 0, len(ids))
+	groups := make([]directory.ManagedGroup, 0, len(ids))
 	for _, id := range ids {
 		g, err := readGroup(ctx, tx, id)
 		if err != nil {
@@ -244,45 +258,51 @@ func (s *Store) ListGroups(ctx context.Context, start, count int) ([]directory.G
 	return groups, total, tx.Commit()
 }
 
-func (s *Store) CreateUser(ctx context.Context, user directory.ManagedUser) (directory.ManagedUser, error) {
-	return s.writeUser(ctx, "", user, "")
+func (s *Store) CreateUser(ctx context.Context, user directory.ManagedUser, event directory.AuditEvent) (directory.ManagedUser, error) {
+	return s.writeUser(ctx, "", user, "", event)
 }
-func (s *Store) ReplaceUser(ctx context.Context, id string, user directory.ManagedUser, match string) (directory.ManagedUser, error) {
-	if id == "" {
+func (s *Store) ReplaceUser(ctx context.Context, user directory.ManagedUser, expectedVersion string, event directory.AuditEvent) (directory.ManagedUser, error) {
+	if user.ID == "" {
 		return directory.ManagedUser{}, directory.ErrNotFound
 	}
-	return s.writeUser(ctx, id, user, match)
+	return s.writeUser(ctx, user.ID, user, expectedVersion, event)
 }
 
-func (s *Store) writeUser(ctx context.Context, id string, user directory.ManagedUser, match string) (directory.ManagedUser, error) {
-	if strings.TrimSpace(user.UserName) == "" || strings.TrimSpace(user.ExternalID) == "" {
-		return directory.ManagedUser{}, fmt.Errorf("%w: userName and externalId are required", directory.ErrInvalid)
-	}
+func (s *Store) writeUser(ctx context.Context, id string, user directory.ManagedUser, expectedVersion string, event directory.AuditEvent) (directory.ManagedUser, error) {
+	create := id == ""
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return directory.ManagedUser{}, err
 	}
 	defer tx.Rollback()
 	m := directory.Metadata{ID: id}
-	if id != "" {
+	if create {
+		m.ID = user.ID
+		m.Created = user.Created
+		if err := unusedID(ctx, tx, m.ID); err != nil {
+			return directory.ManagedUser{}, err
+		}
+	} else {
 		old, err := readUser(ctx, tx, id)
 		if err != nil {
 			return directory.ManagedUser{}, err
 		}
-		if err = precondition(old.Metadata, match); err != nil {
+		if err = precondition(old.Metadata, expectedVersion); err != nil {
 			return directory.ManagedUser{}, err
 		}
 		m = old.Metadata
 	}
-	nameKey := cases.Fold().String(norm.NFKC.String(user.UserName))
 	var other string
-	err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE id<>? AND (external_id=? OR name_key=?) LIMIT 1", id, user.ExternalID, nameKey).Scan(&other)
+	// The comparison key belongs to the SQLite index, not the user record.
+	nameKey := cases.Fold().String(norm.NFKC.String(user.UserName))
+	err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE id<>? AND name_key=? LIMIT 1", m.ID, nameKey).Scan(&other)
 	if err == nil {
 		return directory.ManagedUser{}, directory.ErrConflict
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return directory.ManagedUser{}, err
 	}
+	m.Modified = user.Modified
 	m, err = changed(ctx, tx, m)
 	if err != nil {
 		return directory.ManagedUser{}, err
@@ -293,101 +313,104 @@ func (s *Store) writeUser(ctx context.Context, id string, user directory.Managed
 	if err != nil {
 		return directory.ManagedUser{}, err
 	}
-	if err = auditWrite(ctx, tx, m, id == ""); err != nil {
+	if err = audit(ctx, tx, event); err != nil {
 		return directory.ManagedUser{}, err
 	}
 	return user, tx.Commit()
 }
 
-func (s *Store) CreateGroup(ctx context.Context, group directory.Group) (directory.Group, error) {
-	return s.writeGroup(ctx, "", group, "")
+func (s *Store) CreateGroup(ctx context.Context, group directory.ManagedGroup, event directory.AuditEvent) (directory.ManagedGroup, error) {
+	return s.writeGroup(ctx, "", group, "", event)
 }
-func (s *Store) ReplaceGroup(ctx context.Context, id string, group directory.Group, match string) (directory.Group, error) {
-	if id == "" {
-		return directory.Group{}, directory.ErrNotFound
+func (s *Store) ReplaceGroup(ctx context.Context, group directory.ManagedGroup, expectedVersion string, event directory.AuditEvent) (directory.ManagedGroup, error) {
+	if group.ID == "" {
+		return directory.ManagedGroup{}, directory.ErrNotFound
 	}
-	return s.writeGroup(ctx, id, group, match)
+	return s.writeGroup(ctx, group.ID, group, expectedVersion, event)
 }
 
 // writeGroup owns a group and its direct membership replacement.
 // Display names need not be unique; resource IDs distinguish the groups.
-func (s *Store) writeGroup(ctx context.Context, id string, group directory.Group, match string) (directory.Group, error) {
-	if strings.TrimSpace(group.DisplayName) == "" {
-		return directory.Group{}, fmt.Errorf("%w: displayName is required", directory.ErrInvalid)
-	}
+func (s *Store) writeGroup(ctx context.Context, id string, group directory.ManagedGroup, expectedVersion string, event directory.AuditEvent) (directory.ManagedGroup, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return directory.Group{}, err
+		return directory.ManagedGroup{}, err
 	}
 	defer tx.Rollback()
-	m := directory.Metadata{ID: id}
-	if id != "" {
+	m := directory.Metadata{ID: group.ID, Created: group.Created}
+	if id == "" {
+		if err := unusedID(ctx, tx, m.ID); err != nil {
+			return directory.ManagedGroup{}, err
+		}
+	} else {
 		old, err := readGroup(ctx, tx, id)
 		if err != nil {
-			return directory.Group{}, err
+			return directory.ManagedGroup{}, err
 		}
-		if err = precondition(old.Metadata, match); err != nil {
-			return directory.Group{}, err
+		if err = precondition(old.Metadata, expectedVersion); err != nil {
+			return directory.ManagedGroup{}, err
 		}
 		m = old.Metadata
 	}
 	for _, userID := range group.MemberIDs {
 		var exists bool
 		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE id=?)", userID).Scan(&exists); err != nil {
-			return directory.Group{}, err
+			return directory.ManagedGroup{}, err
 		}
 		if !exists {
-			return directory.Group{}, fmt.Errorf("%w: member must reference an existing user", directory.ErrInvalid)
+			return directory.ManagedGroup{}, fmt.Errorf("%w: member must reference an existing user", directory.ErrInvalid)
 		}
 	}
+	m.Modified = group.Modified
 	m, err = changed(ctx, tx, m)
 	if err != nil {
-		return directory.Group{}, err
+		return directory.ManagedGroup{}, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO groups (id,external_id,display_name,version,created,modified) VALUES (?,?,?,?,?,?)
  ON CONFLICT(id) DO UPDATE SET external_id=excluded.external_id,display_name=excluded.display_name,version=excluded.version,modified=excluded.modified`, m.ID, group.ExternalID, group.DisplayName, m.Version, m.Created.Format(time.RFC3339Nano), m.Modified.Format(time.RFC3339Nano))
 	if err != nil {
-		return directory.Group{}, err
+		return directory.ManagedGroup{}, err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM members WHERE group_id=?", m.ID); err != nil {
-		return directory.Group{}, err
+		return directory.ManagedGroup{}, err
 	}
 	for _, userID := range group.MemberIDs {
 		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO members (group_id,user_id) VALUES (?,?)", m.ID, userID)
 		if err != nil {
-			return directory.Group{}, err
+			return directory.ManagedGroup{}, err
 		}
 	}
-	if err = auditWrite(ctx, tx, m, id == ""); err != nil {
-		return directory.Group{}, err
+	if err = audit(ctx, tx, event); err != nil {
+		return directory.ManagedGroup{}, err
 	}
 	// Return the persisted membership set, including deduplication and ordering.
 	out, err := readGroup(ctx, tx, m.ID)
 	if err != nil {
-		return directory.Group{}, err
+		return directory.ManagedGroup{}, err
 	}
 	return out, tx.Commit()
 }
 
-// changed assigns storage-owned metadata within the mutation transaction.
-func changed(ctx context.Context, tx *sql.Tx, m directory.Metadata) (directory.Metadata, error) {
-	m.Modified = time.Now().UTC()
-	if m.ID == "" {
-		m.ID, m.Created = rand.Text(), m.Modified
+// unusedID checks the shared resource namespace within the mutation transaction.
+func unusedID(ctx context.Context, tx *sql.Tx, id string) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE id=? UNION ALL SELECT 1 FROM groups WHERE id=?)", id, id).Scan(&exists); err != nil {
+		return err
 	}
-	var err error
-	m.Version, err = next(ctx, tx)
-	return m, err
-}
-func auditWrite(ctx context.Context, tx *sql.Tx, m directory.Metadata, create bool) error {
-	action := "replace"
-	if create {
-		action = "create"
+	if exists {
+		return directory.ErrConflict
 	}
-	return audit(ctx, tx, m.Version, directory.Actor(ctx), action, m.ID, "", "")
+	return nil
 }
 
-func (s *Store) DeleteUser(ctx context.Context, id, match string) error {
+// changed assigns the storage-owned version within the mutation transaction.
+func changed(ctx context.Context, tx *sql.Tx, m directory.Metadata) (directory.Metadata, error) {
+	version, err := next(ctx, tx)
+	m.Version = strconv.FormatUint(version, 10)
+	return m, err
+}
+
+func (s *Store) DeleteUser(ctx context.Context, id, expectedVersion string, modified time.Time, event directory.AuditEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -397,28 +420,28 @@ func (s *Store) DeleteUser(ctx context.Context, id, match string) error {
 	if err != nil {
 		return err
 	}
-	if err = precondition(u.Metadata, match); err != nil {
+	if err = precondition(u.Metadata, expectedVersion); err != nil {
 		return err
 	}
 	n, err := next(ctx, tx)
 	if err != nil {
 		return err
 	}
-	// Membership deletion changes each affected group's ETag in the same commit.
-	_, err = tx.ExecContext(ctx, "UPDATE groups SET version=?,modified=? WHERE id IN (SELECT group_id FROM members WHERE user_id=?)", n, time.Now().UTC().Format(time.RFC3339Nano), id)
+	// Membership deletion changes each affected group's version in the same commit.
+	_, err = tx.ExecContext(ctx, "UPDATE groups SET version=?,modified=? WHERE id IN (SELECT group_id FROM members WHERE user_id=?)", n, modified.Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM users WHERE id=?", id); err != nil {
 		return err
 	}
-	if err = audit(ctx, tx, n, directory.Actor(ctx), "delete", id, "", ""); err != nil {
+	if err = audit(ctx, tx, event); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) DeleteGroup(ctx context.Context, id, match string) error {
+func (s *Store) DeleteGroup(ctx context.Context, id, expectedVersion string, event directory.AuditEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -428,148 +451,108 @@ func (s *Store) DeleteGroup(ctx context.Context, id, match string) error {
 	if err != nil {
 		return err
 	}
-	if err = precondition(g.Metadata, match); err != nil {
-		return err
-	}
-	n, err := next(ctx, tx)
-	if err != nil {
+	if err = precondition(g.Metadata, expectedVersion); err != nil {
 		return err
 	}
 	// Memberships are removed by the foreign-key cascade. Names are not reserved.
 	if _, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE id=?", id); err != nil {
 		return err
 	}
-	if err = audit(ctx, tx, n, directory.Actor(ctx), "delete", id, "", ""); err != nil {
+	if err = audit(ctx, tx, event); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) LookupUser(ctx context.Context, externalID string) (*directory.User, directory.Revision, error) {
-	users, rev, err := s.userFacts(ctx, &externalID)
-	if err != nil || len(users) == 0 {
-		return nil, rev, err
-	}
-	return &users[0], rev, nil
-}
-
-func (s *Store) ListUserFacts(ctx context.Context) ([]directory.User, directory.Revision, error) {
-	return s.userFacts(ctx, nil)
-}
-
-// userFacts projects authentication identities and bound group names together.
-// A nil externalID selects the entire directory. Sharing this read with lookup
-// keeps the administrative view identical to the facts used for authorization.
-func (s *Store) userFacts(ctx context.Context, externalID *string) ([]directory.User, directory.Revision, error) {
+// LookupUser reads one authentication identity and its current group facts from
+// one SQLite read transaction.
+func (s *Store) LookupUser(ctx context.Context, id string) (*directory.User, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer tx.Rollback()
-	n, instance, err := revision(ctx, tx)
-	if err != nil {
-		return nil, "", err
-	}
-	query := `SELECT u.external_id,u.user_name,u.active,u.user_type,u.department,u.organization,g.id,g.display_name,g.external_id
+	query := `SELECT u.id,u.user_name,u.active,u.user_type,u.department,u.organization,g.id,g.display_name,g.external_id
 FROM users u LEFT JOIN members m ON m.user_id=u.id LEFT JOIN groups g ON g.id=m.group_id`
-	var args []any
-	if externalID != nil {
-		query += " WHERE u.external_id=?"
-		args = append(args, *externalID)
-	}
-	query += " ORDER BY u.user_name,u.external_id,g.display_name,g.id"
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, "", err
-	}
-	defer rows.Close()
-	users := []directory.User{}
-	for rows.Next() {
-		var u directory.User
-		var groupID, groupName, groupExternalID sql.NullString
-		if err = rows.Scan(&u.ID, &u.UserName, &u.Active, &u.UserType, &u.Department, &u.Organization, &groupID, &groupName, &groupExternalID); err != nil {
-			return nil, "", err
-		}
-		if len(users) == 0 || users[len(users)-1].ID != u.ID {
-			u.Groups = []object.Object{}
-			users = append(users, u)
-		}
-		if groupID.Valid {
-			last := &users[len(users)-1]
-			g := object.Object{ID: groupID.String, Names: []string{groupName.String}}
-			if groupExternalID.String != "" {
-				g.Attributes = object.Attributes{"externalId": {groupExternalID.String}}
-			}
-			last.Groups = append(last.Groups, g)
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return nil, "", err
-	}
-	if err = rows.Close(); err != nil {
-		return nil, "", err
-	}
-	if err = tx.Commit(); err != nil {
-		return nil, "", err
-	}
-	return users, directory.Revision(fmt.Sprintf("%s:%d", instance, n)), nil
-}
-
-// Groups returns current provisioned identities, including same-named groups,
-// from one snapshot. Historical alias ownership no longer affects this view.
-func (s *Store) Groups(ctx context.Context) (directory.GroupSnapshot, error) {
-	out := directory.GroupSnapshot{Groups: []directory.GroupSummary{}}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return out, err
-	}
-	defer tx.Rollback()
-	out.Revision, _, err = revision(ctx, tx)
-	if err != nil {
-		return out, err
-	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,display_name,external_id FROM groups ORDER BY display_name,id")
-	if err != nil {
-		return out, err
-	}
-	for rows.Next() {
-		var g directory.GroupSummary
-		if err = rows.Scan(&g.ID, &g.DisplayName, &g.ExternalID); err != nil {
-			rows.Close()
-			return out, err
-		}
-		out.Groups = append(out.Groups, g)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return out, err
-	}
-	return out, tx.Commit()
-}
-func (s *Store) Audit(ctx context.Context, after directory.AuditSequence, limit int) ([]directory.AuditEvent, error) {
-	if limit == 0 {
-		limit = directory.DefaultAuditLimit
-	}
-	if limit < 0 || limit > directory.MaxAuditLimit {
-		return nil, fmt.Errorf("%w: audit limit must be between 1 and %d", directory.ErrInvalid, directory.MaxAuditLimit)
-	}
-	out := []directory.AuditEvent{}
-	rows, err := s.db.QueryContext(ctx, "SELECT sequence,revision,time,actor,action,resource_id,alias,previous_id FROM audit WHERE sequence>? ORDER BY sequence LIMIT ?", after, limit)
+	query += " WHERE u.id=?"
+	query += " ORDER BY g.display_name,g.id"
+	rows, err := tx.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	var user *directory.User
 	for rows.Next() {
+		var u directory.User
+		var groupID, groupName, groupExternalID sql.NullString
+		if err = rows.Scan(&u.ID, &u.UserName, &u.Active, &u.UserType, &u.Department, &u.Organization, &groupID, &groupName, &groupExternalID); err != nil {
+			return nil, err
+		}
+		if user == nil {
+			u.Groups = []directory.Group{}
+			user = &u
+		}
+		if groupID.Valid {
+			g := directory.ManagedGroup{
+				Metadata:    directory.Metadata{ID: groupID.String},
+				DisplayName: groupName.String,
+				ExternalID:  groupExternalID.String,
+			}
+			user.Groups = append(user.Groups, g.Group())
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// Audit uses SQLite row positions only to resume this backend's scan. They are
+// not audit event fields or a cross-backend ordering guarantee.
+func (s *Store) Audit(ctx context.Context, cursor string, limit int) ([]directory.AuditEvent, string, error) {
+	if limit == 0 {
+		limit = directory.DefaultAuditLimit
+	}
+	if limit < 0 || limit > directory.MaxAuditLimit {
+		return nil, "", fmt.Errorf("%w: audit limit must be between 1 and %d", directory.ErrInvalid, directory.MaxAuditLimit)
+	}
+	var after int64
+	if cursor != "" {
+		var err error
+		after, err = strconv.ParseInt(cursor, 10, 64)
+		if err != nil || after < 0 {
+			return nil, "", fmt.Errorf("%w: invalid audit cursor", directory.ErrInvalid)
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT rowid,time,actor,action,resource_id,alias,previous_id FROM audit WHERE rowid>? ORDER BY rowid LIMIT ?", after, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	events := []directory.AuditEvent{}
+	var last int64
+	for rows.Next() {
+		if len(events) == limit {
+			return events, strconv.FormatInt(last, 10), nil
+		}
 		var e directory.AuditEvent
 		var stamp string
-		if err = rows.Scan(&e.Sequence, &e.Revision, &stamp, &e.Actor, &e.Action, &e.ID, &e.Alias, &e.PreviousID); err != nil {
-			return nil, err
+		if err = rows.Scan(&last, &stamp, &e.Actor, &e.Action, &e.ID, &e.Alias, &e.PreviousID); err != nil {
+			return nil, "", err
 		}
 		if e.Time, err = time.Parse(time.RFC3339Nano, stamp); err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		out = append(out, e)
+		events = append(events, e)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, "", err
+	}
+	return events, "", nil
 }

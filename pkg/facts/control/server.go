@@ -1,5 +1,5 @@
 // Package control authenticates public requests and authorizes administrative
-// operations, then invokes fact services through their typed clients. Built-in
+// operations, then invokes the private provider protocols. Built-in
 // private service handlers and storage adapters live in pkg/facts/server.
 package control
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/epithet-ssh/epithet/internal/servicehttp"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -26,6 +27,12 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
+
+// authorization is the identity already authorized by public control.
+// The actor is signed in the service credential. Provider calls do not grant roles.
+type authorization struct {
+	Actor string
+}
 
 type TokenValidator interface {
 	Validate(context.Context, string) (*oidc.Claims, error)
@@ -59,16 +66,20 @@ type Config struct {
 	DirectoryAdmins, InventoryAdmins                       Admins
 	SCIMToken                                              string
 	InventoryToken                                         string
-	TLS                                                    tlsconfig.Config
+	// EnrollmentToken authorizes pending submissions only. Empty disables that
+	// path; single-use preapproval credentials are validated by inventory.
+	EnrollmentToken string
+	TLS             tlsconfig.Config
 }
 type Server struct {
-	config    Config
-	data      *facts.DataClient
-	control   *facts.ControlClient
-	directory *servicehttp.Client
-	mu        sync.Mutex
-	allowance float64
-	last      time.Time
+	config           Config
+	data             *facts.DataClient
+	directoryBackend *servicehttp.Client
+	inventory        *servicehttp.Client
+	directory        *servicehttp.Client
+	mu               sync.Mutex
+	allowance        float64
+	last             time.Time
 }
 
 func New(config Config) (*Server, error) {
@@ -79,23 +90,67 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	control, err := facts.NewControlClient(config.DirectoryBackendURL, config.InventoryBackendURL, config.Key, config.TLS)
-	if err != nil {
-		return nil, err
-	}
 	if strings.ContainsAny(config.SCIMToken, " \t\r\n") {
 		return nil, fmt.Errorf("SCIM requires a bearer token without whitespace")
 	}
 	if config.InventoryToken != "" && (config.InventoryBackendURL == "" || strings.ContainsAny(config.InventoryToken, " \t\r\n")) {
 		return nil, fmt.Errorf("inventory token requires an inventory fact endpoint and no whitespace")
 	}
+	if config.EnrollmentToken != "" && (config.InventoryBackendURL == "" || strings.ContainsAny(config.EnrollmentToken, " \t\r\n")) {
+		return nil, fmt.Errorf("enrollment token requires an inventory fact endpoint and no whitespace")
+	}
 	directory, err := servicehttp.New(config.DirectoryURL, "/lookup", config.Key, serviceauth.DirectoryAudience, config.TLS)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{config: config, data: data, control: control, directory: directory}
+	s := &Server{config: config, data: data, directory: directory}
+	if config.DirectoryBackendURL != "" {
+		s.directoryBackend, err = servicehttp.New(config.DirectoryBackendURL, "", config.Key, serviceauth.DirectoryAudience, config.TLS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if config.InventoryBackendURL != "" {
+		s.inventory, err = servicehttp.New(config.InventoryBackendURL, "/lookup", config.Key, serviceauth.InventoryAudience, config.TLS)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
+
+// providerCapabilities combines the enabled backends' supported operations. Failure to
+// read a backend is an error, never evidence that its capabilities are absent.
+func (c *Server) providerCapabilities(ctx context.Context) (facts.Capabilities, error) {
+	result := facts.Capabilities{Version: 1, Capabilities: []string{"admin"}}
+	if c.directoryBackend != nil {
+		resp, err := directoryRequest(ctx, c.directoryBackend, "GET", "/manage", nil, nil, "", 65536)
+		if err != nil {
+			return result, err
+		}
+		var caps facts.Capabilities
+		if err = decodeControl(resp, &caps); err != nil {
+			return result, err
+		}
+		if caps.Version != 1 || caps.Capabilities == nil {
+			return result, fmt.Errorf("%w: invalid backend capabilities", facts.ErrUnavailable)
+		}
+		for _, cap := range caps.Capabilities {
+			if !slices.Contains(result.Capabilities, cap) {
+				result.Capabilities = append(result.Capabilities, cap)
+			}
+		}
+	}
+	templates, err := c.inventoryTemplates(ctx)
+	if err != nil {
+		return result, err
+	}
+	if len(templates) != 0 {
+		result.Capabilities = append(result.Capabilities, "enroll")
+	}
+	return result, nil
+}
+
 func (s *Server) admit() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,8 +218,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		controlError(w, 404, "requested inventory capability is not configured")
 		return
 	}
-	actor, revision := "", ""
+	actor := ""
 	if req.Action == "enroll" {
+		// A single-use credential authorizes activation at the provider. Without
+		// one, require the shared credential before forwarding a pending submission.
+		if req.Token == "" {
+			fields := strings.Fields(r.Header.Get("Authorization"))
+			if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || !matchesSecret(fields[1], s.config.EnrollmentToken) {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="enrollment"`)
+				controlError(w, http.StatusUnauthorized, "enrollment authentication required")
+				return
+			}
+		}
 		if !s.admit() {
 			controlError(w, 429, "enrollment rate limit; retry later")
 			return
@@ -175,6 +240,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			controlError(w, 401, "authentication required")
 			return
 		}
+		if matchesSecret(raw, s.config.EnrollmentToken) {
+			controlError(w, http.StatusForbidden, "enrollment credential cannot authorize this operation")
+			return
+		}
 		if !isDirectory && matchesSecret(raw, s.config.InventoryToken) {
 			actor = "inventory-token"
 		} else {
@@ -183,10 +252,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				controlError(w, rejected.Status, rejected.Message)
 				return
 			}
-			actor, revision = auth.Actor, auth.DirectoryRevision
+			actor = auth.Actor
 		}
 	}
-	result, err := s.execute(r.Context(), req, facts.Authorization{Actor: actor, DirectoryRevision: revision})
+	result, err := s.execute(r.Context(), req, authorization{Actor: actor})
 	if err != nil {
 		var rejected *facts.ServiceError
 		if errors.As(err, &rejected) {
@@ -197,16 +266,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if req.Action == "enroll" && result.Host.Status == "pending" {
+	if req.Action == "enroll" && result.Host.Status == inventory.StatusPending {
 		w.WriteHeader(http.StatusAccepted)
 	}
 	json.NewEncoder(w).Encode(result)
 }
 
-// execute adapts the public operation envelope to the typed private client.
-// Authentication and role checks precede this dispatch; the client owns the
-// signed backend protocol and returns only domain results.
-func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth facts.Authorization) (*facts.ControlResponse, error) {
+// execute dispatches an already authorized public operation to its provider.
+// The directory and inventory operations own their signed backend protocols.
+func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth authorization) (*facts.ControlResponse, error) {
 	var result facts.ControlResponse
 	var err error
 	invalid := func(message string) (*facts.ControlResponse, error) {
@@ -215,58 +283,54 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth fac
 	switch req.Action {
 	case "enroll":
 		if req.Host == nil {
-			return invalid("host proposal is required")
+			return invalid("host is required")
 		}
-		result.Host, err = s.control.Enroll(ctx, *req.Host, req.Token)
-	case "add-pattern":
+		result.Host, err = s.enroll(ctx, *req.Host, req.Token)
+	case "add":
 		if req.Host == nil {
-			return invalid("pattern proposal is required")
+			return invalid("host is required")
 		}
-		result.Host, err = s.control.AddPattern(ctx, auth, *req.Host)
+		result.Host, err = s.addHost(ctx, auth, *req.Host)
 	case "list":
-		result.Hosts, err = s.control.Hosts(ctx, auth, req.After, req.Limit, req.Pending)
+		result.Hosts, err = s.hosts(ctx, auth, req.After, req.Limit, req.Pending)
 	case "get":
-		result.Host, err = s.control.Host(ctx, auth, req.ID)
+		result.Host, err = s.host(ctx, auth, req.ID)
 	case "edit":
 		if req.Host == nil {
-			return invalid("host proposal is required")
+			return invalid("host is required")
 		}
-		result.Host, err = s.control.EditHost(ctx, auth, req.ID, req.Revision, *req.Host)
+		result.Host, err = s.editHost(ctx, auth, req.ID, req.Revision, *req.Host)
 	case "approve":
-		result.Host, err = s.control.ApproveHost(ctx, auth, req.ID, req.Revision)
+		result.Host, err = s.approveHost(ctx, auth, req.ID, req.Revision)
 	case "deny":
-		result.Host, err = s.control.DenyHost(ctx, auth, req.ID, req.Revision)
+		result.Host, err = s.denyHost(ctx, auth, req.ID, req.Revision)
 	case "remove":
-		err = s.control.RemoveHost(ctx, auth, req.ID, req.Revision)
+		err = s.removeHost(ctx, auth, req.ID, req.Revision)
 	case "token-create":
-		result.Token, err = s.control.CreateToken(ctx, auth, req.LifetimeSeconds)
+		result.Token, err = s.createToken(ctx, auth, req.LifetimeSeconds)
 	case "token-revoke":
-		err = s.control.RevokeToken(ctx, auth, req.ID)
+		err = s.revokeToken(ctx, auth, req.ID)
 	case "audit":
-		result.Audit, err = s.control.HostAudit(ctx, auth, req.AuditAfter, req.AuditLimit)
-	case "directory-users":
-		result.DirectoryUsers, err = s.control.Users(ctx, auth)
-	case "directory-groups":
-		result.Directory, err = s.control.Groups(ctx, auth)
+		result.Audit, err = s.hostAudit(ctx, auth, req.AuditCursor, req.AuditLimit)
 	case "directory-audit":
-		result.DirectoryAudit, err = s.control.DirectoryAudit(ctx, auth, req.AuditAfter, req.AuditLimit)
+		result.DirectoryAudit, err = s.directoryAudit(ctx, auth, req.AuditCursor, req.AuditLimit)
 	default:
 		return invalid("unknown inventory action")
 	}
 	return &result, err
 }
-func (s *Server) actor(ctx context.Context, id string) (*facts.Actor, string, error) {
+func (s *Server) actor(ctx context.Context, id string) (*facts.Actor, error) {
 	if s.config.DirectoryBackendURL != "" {
-		return s.control.Actor(ctx, id)
+		return s.directoryActor(ctx, id)
 	}
 	u, err := s.data.User(ctx, id)
 	if err != nil || u == nil {
-		return nil, "", err
+		return nil, err
 	}
-	return &facts.Actor{ID: u.ID, UserName: u.UserName, Active: true, Groups: object.GroupNames(u.Groups)}, "", nil
+	return &facts.Actor{ID: u.ID, UserName: u.UserName, Active: true, Groups: object.GroupNames(u.Groups)}, nil
 }
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
-	result, err := s.control.Capabilities(r.Context())
+	result, err := s.providerCapabilities(r.Context())
 	if err != nil {
 		controlError(w, 503, "control backend unavailable")
 		return
@@ -286,9 +350,9 @@ func matchesSecret(actual, expected string) bool {
 
 // authorizeAdmin is shared by SCIM and command administration: public identity
 // validation and active-user grants have one owner, before provider dispatch.
-func (s *Server) authorizeAdmin(ctx context.Context, token string, admins Admins, role string) (facts.Authorization, *facts.ServiceError) {
-	fail := func(status int, message string) (facts.Authorization, *facts.ServiceError) {
-		return facts.Authorization{}, &facts.ServiceError{Status: status, Message: message}
+func (s *Server) authorizeAdmin(ctx context.Context, token string, admins Admins, role string) (authorization, *facts.ServiceError) {
+	fail := func(status int, message string) (authorization, *facts.ServiceError) {
+		return authorization{}, &facts.ServiceError{Status: status, Message: message}
 	}
 	if token == "" {
 		return fail(401, "authentication required")
@@ -300,12 +364,12 @@ func (s *Server) authorizeAdmin(ctx context.Context, token string, admins Admins
 		}
 		return fail(401, "invalid or expired authentication")
 	}
-	u, revision, err := s.actor(ctx, claims.UserID)
+	u, err := s.actor(ctx, claims.UserID)
 	if err != nil {
 		return fail(503, "directory unavailable")
 	}
 	if !admins.Allows(u) {
 		return fail(403, role+" role required")
 	}
-	return facts.Authorization{Actor: u.ID, DirectoryRevision: revision}, nil
+	return authorization{Actor: u.ID}, nil
 }

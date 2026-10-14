@@ -9,14 +9,11 @@ import (
 )
 
 func TestStoreContract(t *testing.T) {
-	storetest.Run(t, func(t *testing.T) (storetest.Backend, storetest.Backend) {
+	storetest.Run(t, func(t *testing.T) storetest.Backend {
 		path := filepath.Join(t.TempDir(), "inventory.db")
-		a, err := sqlitestore.Open(path)
+		store, err := sqlitestore.Open(path)
 		require.NoError(t, err)
-		t.Cleanup(func() { a.Close() })
-		b, err := sqlitestore.Open(path)
-		require.NoError(t, err)
-		t.Cleanup(func() { b.Close() })
-		return storetest.Backend{Hosts: a, Store: a}, storetest.Backend{Hosts: b, Store: b}
+		t.Cleanup(func() { store.Close() })
+		return storetest.Backend{Hosts: store, Store: store}
 	})
 }

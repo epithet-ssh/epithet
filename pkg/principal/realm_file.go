@@ -10,36 +10,6 @@ import (
 	"strings"
 )
 
-// DefaultRealmPath returns the native system-wide principal-realm path for this
-// operating system. Callers may offer an explicit override for other layouts.
-func DefaultRealmPath() (string, error) {
-	return defaultRealmPath(runtime.GOOS, os.Getenv)
-}
-
-func defaultRealmPath(goos string, getenv func(string) string) (string, error) {
-	var dir string
-	switch goos {
-	case "linux":
-		dir = "/var/lib/epithet"
-	case "dragonfly", "freebsd", "netbsd", "openbsd":
-		dir = "/var/db/epithet"
-	case "aix", "illumos", "solaris":
-		dir = "/var/opt/epithet"
-	case "darwin":
-		dir = "/Library/Application Support/Epithet"
-	case "windows":
-		dir = getenv("ProgramData")
-		if dir == "" {
-			return "", fmt.Errorf("ProgramData is not set")
-		}
-	default:
-		return "", fmt.Errorf("no default principal-realm path for %s; use an explicit path", goos)
-	}
-	// The identity filename is independent of the public terminology. Retain
-	// its path so existing enrollment keeps the same authorization boundary.
-	return filepath.Join(dir, "domain"), nil
-}
-
 // ReadRealmFile reads one literal principal realm. A file may omit its final line
 // ending or contain exactly one LF or CRLF; all other lines are rejected.
 func ReadRealmFile(path string) (Realm, error) {

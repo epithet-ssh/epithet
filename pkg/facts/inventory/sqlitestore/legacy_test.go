@@ -2,30 +2,31 @@ package sqlitestore
 
 import (
 	"context"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"time"
+
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 )
 
 // Change expresses existing lifecycle test scenarios through whole-record replacement.
-func (m *Store) Change(ctx context.Context, actor, action, id string, revision uint64, p *inventory.Proposal) (*inventory.HostRecord, error) {
+func (m *Store) Change(ctx context.Context, actor, action, id string, revision uint64, p *inventory.Host) (*inventory.Host, error) {
 	if action == "remove" {
-		return nil, m.Remove(ctx, actor, id, revision)
+		return nil, m.RemoveHost(ctx, id, revision, inventory.NewAuditEvent(actor, "remove", id))
 	}
-	h, err := m.Get(ctx, id)
+	h, err := m.GetHost(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	switch action {
 	case "edit":
 		if p != nil {
-			h.Proposal = *p
+			h.Names, h.Labels, h.Accounts, h.PrincipalMode, h.Realm = p.Names, p.Labels, p.Accounts, p.PrincipalMode, p.Realm
 		}
 	case "approve":
 		h.Status = "active"
 	case "deny":
 		h.Status = "denied"
 	}
-	return m.Replace(ctx, actor, *h, revision)
+	return m.ReplaceHost(ctx, *h, revision, inventory.NewAuditEvent(actor, action, h.ID))
 }
 
 // Tokens inspects stored credentials for persistence tests, not for clients.

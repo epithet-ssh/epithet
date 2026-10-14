@@ -30,7 +30,7 @@ func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
 	record := facts.HostRecord{
 		ID:       strings.Repeat("a", 64),
 		Revision: 9007199254740993,
-		Proposal: facts.Proposal{Pattern: "*.example", PrincipalMode: "account-name"},
+		Host:     facts.InventoryInput{Names: []string{"*.example"}, PrincipalMode: "account-name"},
 	}
 	require.NoError(t, printInventory(record))
 	_, err = output.Seek(0, 0)
@@ -43,11 +43,14 @@ func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
 	revisionNode := fields["revision"]
 	require.NoError(t, revisionNode.Decode(&revision))
 	require.Equal(t, record.Revision, revision)
-	var host inventory.Proposal
+	var host struct {
+		Names    []string `yaml:"names"`
+		Accounts []string `yaml:"accounts"`
+	}
 	hostNode := fields["host"]
 	require.NoError(t, hostNode.Decode(&host))
 	require.Nil(t, host.Accounts)
-	require.Equal(t, "*.example", host.Pattern)
+	require.Equal(t, []string{"*.example"}, host.Names)
 }
 
 func TestInventoryFindAcrossPages(t *testing.T) {
@@ -55,12 +58,12 @@ func TestInventoryFindAcrossPages(t *testing.T) {
 		t.Run(fmt.Sprintf("ambiguous=%t", ambiguous), func(t *testing.T) {
 			first := make([]facts.HostRecord, inventory.DefaultPageLimit)
 			for n := range first {
-				first[n] = facts.HostRecord{ID: fmt.Sprintf("%064x", n+1), Proposal: facts.Proposal{Names: []string{"other"}}}
+				first[n] = facts.HostRecord{ID: fmt.Sprintf("%064x", n+1), Host: facts.InventoryInput{Names: []string{"other"}}}
 			}
 			if ambiguous {
-				first[0].Proposal.Names = []string{"wanted"}
+				first[0].Host.Names = []string{"wanted"}
 			}
-			last := facts.HostRecord{ID: fmt.Sprintf("%064x", len(first)+1), Proposal: facts.Proposal{Names: []string{"wanted"}}}
+			last := facts.HostRecord{ID: fmt.Sprintf("%064x", len(first)+1), Host: facts.InventoryInput{Names: []string{"wanted"}}}
 			// Unix socket paths have a small platform limit; t.TempDir includes the
 			// full subtest name and can exceed it on macOS.
 			socketDir, err := os.MkdirTemp("", "ep-find-")

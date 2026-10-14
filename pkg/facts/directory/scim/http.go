@@ -1,6 +1,6 @@
 // Package scim adapts SCIM provisioning to the directory storage contract.
 // Elimity handles SCIM routing, schemas, validation, and response formatting;
-// Epithet owns authentication, identity rules, and atomic directory mutations.
+// Epithet owns authentication, identity rules, and directory operations.
 package scim
 
 import (
@@ -21,32 +21,49 @@ const enterpriseSchema = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:
 const maxBody = 4 << 20
 const maxPage = 1000
 
-type Handler struct{ server http.Handler }
+type Handler struct {
+	server      http.Handler
+	patchUsers  bool
+	patchGroups bool
+	versioning  bool
+}
 
 // NewBackend serves the existing SCIM API behind authenticated control requests.
 // The caller must verify control's signed request before dispatching here.
-func NewBackend(store directory.Store) (*Handler, error) {
+// userIDAttribute selects a stored string attribute used to assign user IDs on
+// creation. Empty defaults to externalId. Later updates retain the resource ID.
+func NewBackend(store directory.Store, userIDAttribute string) (*Handler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("SCIM requires a store")
 	}
+	if userIDAttribute == "" {
+		userIDAttribute = "externalId"
+	}
+	userIDAttribute = strings.ToLower(userIDAttribute)
+	switch userIDAttribute {
+	case "externalid", "username", "usertype",
+		strings.ToLower(enterpriseSchema) + ":department",
+		strings.ToLower(enterpriseSchema) + ":organization":
+	default:
+		return nil, fmt.Errorf("unsupported SCIM user ID attribute %q: select a stored string attribute", userIDAttribute)
+	}
+	patchUsers, patchGroups := store.SupportsPatchUser(), store.SupportsPatchGroup()
 	server, err := elimity.NewServer(&elimity.ServerArgs{
 		ServiceProviderConfig: &elimity.ServiceProviderConfig{
 			MaxResults: maxPage,
-			AuthenticationSchemes: []elimity.AuthenticationScheme{{
-				Type: elimity.AuthenticationTypeOauthBearerToken, Name: "Control bearer token",
-				Description: "Optional provisioning token or OIDC identity with directory-admin access", Primary: true,
-			}},
+			// SCIM exposes one service-wide flag, not a flag per resource type.
+			SupportPatch: patchUsers || patchGroups,
 		},
 		ResourceTypes: []elimity.ResourceType{
 			{ID: optional.NewString("User"), Name: "User", Endpoint: "/Users", Schema: selectedAttributes(schema.CoreUserSchema(), "userName", "active", "userType", "password"),
-				SchemaExtensions: []elimity.SchemaExtension{{Schema: selectedAttributes(schema.ExtensionEnterpriseUser(), "department", "organization")}}, Handler: userHandler{store}},
+				SchemaExtensions: []elimity.SchemaExtension{{Schema: selectedAttributes(schema.ExtensionEnterpriseUser(), "department", "organization")}}, Handler: userHandler{store: store, userIDAttribute: userIDAttribute}},
 			{ID: optional.NewString("Group"), Name: "Group", Endpoint: "/Groups", Schema: groupSchema(), Handler: groupHandler{store}},
 		},
 	}, elimity.WithBaseURL("/scim/v2"))
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{server: server}, nil
+	return &Handler{server: server, patchUsers: patchUsers, patchGroups: patchGroups, versioning: store.SupportsVersioning()}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,8 +77,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPatch {
-		writeError(w, http.StatusMethodNotAllowed, "PATCH is not supported")
-		return
+		resource, _, _ := strings.Cut(path, "/")
+		if (resource == "Users" && !h.patchUsers) || (resource == "Groups" && !h.patchGroups) {
+			writeError(w, http.StatusNotImplemented, "PATCH is not supported for "+resource)
+			return
+		}
 	}
 	// The adapter implements the same limited provisioning operations as Store.
 	// Do not silently ignore requests for unsupported filtering or sorting.
@@ -71,11 +91,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Elimity hardcodes etag.supported=false. Serve capability discovery here
+	// so it describes the configured store, including optional versioning.
+	if r.Method == http.MethodGet && strings.TrimSuffix(path, "/") == "ServiceProviderConfig" {
+		h.serviceProviderConfig(w)
+		return
+	}
 	r = r.Clone(r.Context())
 	r.URL.Path = "/v2/" + strings.TrimSuffix(path, "/")
 	r.URL.RawPath = ""
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	h.server.ServeHTTP(w, r)
+}
+
+// serviceProviderConfig owns discovery for the capabilities exposed by this adapter.
+func (h *Handler) serviceProviderConfig(w http.ResponseWriter) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"schemas":        []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"},
+		"patch":          map[string]bool{"supported": h.patchUsers || h.patchGroups},
+		"bulk":           map[string]any{"supported": false, "maxOperations": 1000, "maxPayloadSize": 1048576},
+		"filter":         map[string]any{"supported": false, "maxResults": maxPage},
+		"changePassword": map[string]bool{"supported": false},
+		"sort":           map[string]bool{"supported": false},
+		"etag":           map[string]bool{"supported": h.versioning},
+		"authenticationSchemes": []map[string]any{{
+			"type": "oauthbearertoken", "name": "Control bearer token",
+			"description": "Optional provisioning token or OIDC identity with directory-admin access", "primary": true,
+		}},
+	})
 }
 
 func writeError(w http.ResponseWriter, status int, detail string) {

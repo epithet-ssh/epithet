@@ -4,6 +4,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/principal"
 )
@@ -43,28 +44,34 @@ func (m PrincipalMode) Effective() PrincipalMode {
 	return m
 }
 
-// ResolvedHost carries both the authorization resource consumed by Writ and
-// issuance metadata that must remain outside the pure policy model. Policy.Names
-// always contains the host's names, independent of its principal mode or realm.
-type ResolvedHost struct {
-	Policy        Host
-	PrincipalMode PrincipalMode
-	Realm         principal.Realm
-}
+// Host enrollment statuses. Status remains a string in storage and API records.
+const (
+	StatusPending = "pending"
+	StatusActive  = "active"
+	StatusDenied  = "denied"
+)
 
-// Host contains authorization attributes, separate from principal metadata.
+// Host contains inventory names, authorization facts, and enrollment metadata.
+// Names may be exact hostnames or wildcard expressions. Lookup prefers exact
+// names; wildcard matches supply facts for the requested hostname.
 type Host struct {
-	ID       string
-	Names    []string
-	Labels   map[string]string
-	Accounts []string
+	ID            string            `yaml:"-"`
+	Revision      uint64            `yaml:"-"`
+	CreatedAt     time.Time         `yaml:"-"`
+	UpdatedAt     time.Time         `yaml:"-"`
+	Status        string            `yaml:"-"`
+	Names         []string          `yaml:"names"`
+	Labels        map[string]string `yaml:"labels"`
+	Accounts      []string          `yaml:"accounts"`
+	PrincipalMode PrincipalMode     `yaml:"principal-mode"`
+	Realm         principal.Realm   `yaml:"realm,omitempty"`
 }
 
 // Hosts resolves machines independently of the user directory.
-// LookupHost returns the host and the revision of the inventory used to resolve
-// it from one coherent read. A missing host returns nil with a nonempty revision;
-// lookup failures return an error. Managed lookups prefer exact names over
-// patterns and return ErrConflict for multiple matching active patterns.
+// LookupHost returns host facts. A missing host returns nil; lookup failures
+// return an error. Read consistency and visibility are backend-specific.
+// Managed lookups prefer exact names over patterns and return ErrConflict for
+// multiple matching active patterns.
 type Hosts interface {
-	LookupHost(context.Context, string) (*ResolvedHost, string, error)
+	LookupHost(context.Context, string) (*Host, error)
 }

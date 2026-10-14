@@ -267,7 +267,7 @@ func (s *caServer) logCertIssuance(
 	certFP := ssh.FingerprintSHA256(parsedCert)
 
 	event := &CertEvent{
-		PolicyID: issued.Audit.PolicyID, DirectoryRevision: issued.Audit.DirectoryRevision, InventoryRevision: issued.Audit.InventoryRevision,
+		PolicyID: issued.Audit.PolicyID, DirectoryRevision: issued.Audit.DirectoryRevision,
 		Timestamp:            time.Now(),
 		SerialNumber:         fmt.Sprintf("%d", parsedCert.Serial),
 		UserName:             parsedCert.KeyId,

@@ -126,3 +126,17 @@ func TestServiceInfrastructureDoesNotLinkFacts(t *testing.T) {
 		})
 	}
 }
+
+// Domain models are shared by stores and adapters. Their HTTP representations
+// belong at the adapter boundary, not in the models themselves.
+func TestFactDomainsDoNotLinkAdministrationProtocol(t *testing.T) {
+	for _, pkg := range []string{"./pkg/facts/directory", "./pkg/facts/inventory"} {
+		t.Run(pkg, func(t *testing.T) {
+			for _, dep := range deps(t, pkg) {
+				if dep == module+"pkg/facts" || dep == module+"pkg/facts/control" || dep == module+"pkg/facts/server" {
+					t.Errorf("%s depends on %s; protocol conversion belongs to the adapter", pkg, dep)
+				}
+			}
+		})
+	}
+}

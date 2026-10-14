@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDirectoryUsersCLIWithManagedInventory(t *testing.T) {
+func TestDirectoryListingCLIWithManagedInventory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
@@ -41,15 +41,17 @@ func TestDirectoryUsersCLIWithManagedInventory(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "policy.writ"), []byte("allow group:wheel -> root@*\n"), 0600))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "static.yaml"), []byte("users:\n - id: subject:admin\n   userName: static-admin\n   groups: [{name: [wheel]}]\n"), 0600))
 			name := "static-admin"
+			userID := ""
 			if source == "scim" {
 				store, err := sqlitestore.Open(filepath.Join(dir, "state", "directory", "directory.db"))
 				require.NoError(t, err)
-				user, err := store.CreateUser(t.Context(), directory.ManagedUser{ExternalID: "subject:admin", UserName: "scim-admin", Active: true})
+				user, err := store.CreateUser(t.Context(), directory.ManagedUser{Metadata: directory.Metadata{ID: "subject:admin"}, ExternalID: "subject:admin", UserName: "scim-admin", Active: true}, directory.NewAuditEvent(t.Context(), "create", "subject:admin"))
 				require.NoError(t, err)
-				_, err = store.CreateGroup(t.Context(), directory.Group{DisplayName: "wheel", MemberIDs: []string{user.ID}})
+				_, err = store.CreateGroup(t.Context(), directory.ManagedGroup{Metadata: directory.Metadata{ID: "group-wheel"}, DisplayName: "wheel", MemberIDs: []string{user.ID}}, directory.NewAuditEvent(t.Context(), "create", "group-wheel"))
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
 				name = "scim-admin"
+				userID = user.ID
 			}
 			controlPath := writeControlKey(t, dir)
 			config := fmt.Sprintf(`ca-key-file = "%s/ca.key"
@@ -96,20 +98,48 @@ scim-token = "provisioning-secret"
 			go b.Serve(ctx)
 			<-b.Ready()
 			defer b.Close()
-			for _, asJSON := range []bool{false, true} {
-				args := []string{"directory", "--broker-socket", socket, "users", "list"}
-				if asJSON {
-					args = append(args, "--json")
-				}
-				output, err := exec.Command(binary, args...).CombinedOutput()
-				require.NoError(t, err, string(output))
-				if asJSON {
-					var snapshot facts.UserSnapshot
-					require.NoError(t, json.Unmarshal(output, &snapshot))
-					require.NotEmpty(t, snapshot.Revision)
-					require.Equal(t, []facts.DirectoryUser{{UserName: name, ID: "subject:admin", Active: true, Groups: []string{"wheel"}}}, snapshot.Users)
-				} else {
-					require.Equal(t, "USERNAME\tID\tACTIVE\tGROUPS\n"+name+"\tsubject:admin\ttrue\twheel\n", string(output))
+			for _, resource := range []string{"users", "groups"} {
+				for _, asJSON := range []bool{false, true} {
+					args := []string{"directory", "--broker-socket", socket, resource, "list"}
+					if asJSON {
+						args = append(args, "--json")
+					}
+					output, err := exec.Command(binary, args...).CombinedOutput()
+					if source == "static" {
+						require.Error(t, err)
+						require.Contains(t, string(output), "does not support SCIM listing")
+						continue
+					}
+					require.NoError(t, err, string(output))
+					if resource == "groups" {
+						if asJSON {
+							var group struct {
+								ID          string `json:"id"`
+								DisplayName string `json:"displayName"`
+								Members     []struct {
+									Value string `json:"value"`
+								} `json:"members"`
+							}
+							require.NoError(t, json.Unmarshal(output, &group))
+							require.Equal(t, "group-wheel", group.ID)
+							require.Equal(t, "wheel", group.DisplayName)
+							require.Len(t, group.Members, 1)
+							require.Equal(t, userID, group.Members[0].Value)
+						} else {
+							require.Equal(t, "ID\tNAME\ngroup-wheel\twheel\n", string(output))
+						}
+						continue
+					}
+					if asJSON {
+						var user map[string]any
+						require.NoError(t, json.Unmarshal(output, &user))
+						require.Equal(t, userID, user["id"])
+						require.Equal(t, "subject:admin", user["externalId"])
+						require.Equal(t, name, user["userName"])
+						require.Equal(t, true, user["active"])
+					} else {
+						require.Equal(t, "USERNAME\tID\tEXTERNAL_ID\tACTIVE\n"+name+"\t"+userID+"\tsubject:admin\ttrue\n", string(output))
+					}
 				}
 			}
 			require.FileExists(t, filepath.Join(dir, "state", "inventory", "inventory.db"))

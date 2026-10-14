@@ -475,12 +475,9 @@ func seedManagedPattern(t *testing.T, state string, accounts []string) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	record, err := store.Enroll(t.Context(), inventory.Proposal{Pattern: "*", Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, "")
+	id1 := inventory.NewID()
+	_, err = store.AddHost(t.Context(), id1, inventory.Host{Names: []string{"*"}, Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
 	if err != nil {
-		t.Fatal(err)
-	}
-	record.Status = "active"
-	if _, err = store.Replace(t.Context(), "admin", *record, record.Revision); err != nil {
 		t.Fatal(err)
 	}
 }

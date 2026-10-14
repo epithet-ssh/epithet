@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStaticDirectoryIgnoresHostSemanticsAndRevisions(t *testing.T) {
+func TestStaticDirectoryIgnoresHostSemantics(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "facts.yaml")
 	users := "users:\n  - id: alice\n    groups: [{name: [ops]}]\n  - id: disabled\n    active: false\n"
 	load := func(hosts string) *directory.Static {
@@ -21,23 +21,21 @@ func TestStaticDirectoryIgnoresHostSemanticsAndRevisions(t *testing.T) {
 	}
 	first := load("hosts:\n  - names: []\n    pattern: '**invalid'\n    principal-mode: invalid\n    realm: undeclared\n")
 	second := load("hosts:\n  - names: [other]\nrealms: [other]\n")
-	user, revision, err := first.LookupUser(t.Context(), "alice")
+	user, err := first.LookupUser(t.Context(), "alice")
 	require.NoError(t, err)
 	require.True(t, user.Active)
-	require.Equal(t, []string{"ops"}, object.GroupNames(user.Groups))
-	require.NotEmpty(t, revision)
-	require.Equal(t, first.DirectoryRevision(), second.DirectoryRevision())
-	inactive, _, err := first.LookupUser(t.Context(), "disabled")
+	require.Equal(t, []string{"ops"}, object.GroupNames(user.Facts().Groups))
+
+	other, err := second.LookupUser(t.Context(), "alice")
+	require.NoError(t, err)
+	require.Equal(t, user, other)
+	inactive, err := first.LookupUser(t.Context(), "disabled")
 	require.NoError(t, err)
 	require.False(t, inactive.Active)
-	snapshot, listedRevision, err := first.ListUserFacts(t.Context())
-	require.NoError(t, err)
-	require.Len(t, snapshot, 2)
-	require.Equal(t, revision, listedRevision)
-	missing, missingRevision, err := first.LookupUser(t.Context(), "missing")
+	missing, err := first.LookupUser(t.Context(), "missing")
 	require.NoError(t, err)
 	require.Nil(t, missing)
-	require.Equal(t, revision, missingRevision)
+
 }
 
 func TestStaticDirectoryStillRejectsUnknownFields(t *testing.T) {
@@ -76,17 +74,12 @@ func TestStaticObjectFactsAndValidation(t *testing.T) {
 			continue
 		}
 		require.NoError(t, err)
-		user, _, err := dir.LookupUser(t.Context(), "subject")
+		user, err := dir.LookupUser(t.Context(), "subject")
 		require.NoError(t, err)
 		facts := user.Facts()
 		require.Equal(t, []string{"alice", "a@example.com"}, []string(facts.Names))
 		require.Equal(t, object.Values{"developer", "oncall"}, facts.Attributes["role"])
 		require.Empty(t, facts.Groups[0].ID)
-		listed, _, err := dir.ListUserFacts(t.Context())
-		require.NoError(t, err)
-		listed[0].Attributes["role"][0] = "changed"
-		listed[0].Groups[0].Attributes["region"][0] = "changed"
-		require.Equal(t, "developer", facts.Attributes["role"][0])
-		require.Equal(t, "west", facts.Groups[0].Attributes["region"][0])
+
 	}
 }

@@ -72,7 +72,6 @@ func TestMinimalCustomFactsAndOptionalUserName(t *testing.T) {
 			if tc.allowed {
 				require.NoError(t, err)
 				require.Empty(t, result.Audit.DirectoryRevision)
-				require.Empty(t, result.Audit.InventoryRevision)
 				cert, err := sshcert.Parse(result.Certificate)
 				require.NoError(t, err)
 				require.Equal(t, "subject:alice", cert.KeyId)

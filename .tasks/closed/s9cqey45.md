@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design inventory management interface and provider discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-14T08:55:55.681712Z
+updated: 2026-10-17T19:40:25.456240Z
 author: Brian McCallister
 priority: high
 tags:
@@ -828,3 +828,57 @@ Implemented provider REST with Link-Template discovery, complete-operation Store
 # Log: 2026-10-14T08:55:55Z Brian McCallister
 
 Closed: Inventory API and reusable backend starting design implemented and validated; directory work remains ywxp1g89.
+
+### Inventory audit and backend contract follow-up (2026-10-17)
+
+The shared contract factory returns one backend. List and Audit retain cursor
+pagination, with shared checks for page bounds, continuation and pending filtering.
+Epithet now generates IDs and complete audit events before storage. All six
+mutations accept the event; storage preserves every field and the supplied ID. Token redemption reuses the reservation ID. Removal keeps audit
+history and adds the supplied removal event. SQLite schema 2 removes cascading
+audit deletion; older schemas remain unsupported without automatic migration.
+Audit events now contain timestamps without sequences. Audit takes a backend-owned
+opaque cursor and returns events plus next; ordering and cursor lifetime remain
+backend properties. HTTP/CLI pages use events/next and --cursor. SQLite uses private
+row positions; events do not contain those positions. Shared tests compare supplied
+events without imposing audit ordering. Validation: make -B build and affected backend contract tests pass. The full
+make test run passes all other packages but fails in the unfinished in-memory
+inventory implementation at memInv.Enroll (panic("implement me")). Cursor transport
+coverage verifies that nonnumeric tokens are forwarded unchanged.
+
+### Inventory lookup revision removal (2026-10-17)
+
+LookupHost now returns only host facts and an error. Removed the global SQLite
+revision counter/state table, static fixture hashing, inventory response revision,
+and CA inventory revision logging/audit metadata. The empty facts.Host and server
+response wrappers are gone; the lookup client and server use wire.Host directly.
+Per-resource revisions and conditional writes remain. SQLite inventory schema 3
+removes the state table; older schemas remain unsupported without migration.
+
+Validation: make -B build passes. Full make test passes all packages except the
+existing unfinished in-memory inventory contract (memInv.Enroll panics with
+"implement me"). Fact transport, inventory storage, CA issuance, and security
+coverage pass. Diff reviewed against the start-of-change snapshot.
+
+### Remove invented realm-sharing constraints (2026-10-17)
+
+Removed shared-realm label/account equality checks and generated-realm uniqueness
+checks from inventory admission, edits, token redemption, and SQLite startup.
+Generated realms are also allowed on patterns. Removed the corresponding static
+fixture restrictions and updated the contract/documentation. Realm format checks
+remain separate. Regression coverage permits independent facts for hosts and
+patterns sharing either kind of realm, including after SQLite reopen.
+
+Validation: make -B build and focused inventory/fixture tests pass. Full make test
+passes all other packages; the existing unfinished memInv.Enroll still panics in
+the in-memory inventory contract. Diff checked for unrelated changes.
+
+---
+# Log: 2026-10-17T19:40:18Z Brian McCallister
+
+Unified inventory around Host: Names contains exact and wildcard names; removed Proposal and the separate Pattern model/storage paths. Administrator creation is AddHost and inventory add; enrollment retains exact-name validation. SQLite schema 4 indexes wildcard classification per name, with exact-name lookup first and wildcard-only fallback. Mixed-name lifecycle and precedence tests cover the shared model. Ambiguity warnings remain deferred in q06t72c8.
+
+---
+# Log: 2026-10-17T19:40:25Z Brian McCallister
+
+Validation: make -B build passed. Full make test passes all production and integration packages; examples/facts/inmemory still panics in the unfinished memInv.Enroll. SQLite EXPLAIN QUERY PLAN confirms exact and wildcard fallback queries use the covering name index. No live inventory was modified.

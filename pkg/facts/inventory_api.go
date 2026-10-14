@@ -17,7 +17,6 @@ const InventoryAuditRelation = "https://epithet.dev/rel/inventory-audit"
 // string-valued attributes. Accounts must be explicit, including null or [].
 type InventoryHost struct {
 	Name       []string           `json:"name,omitempty"`
-	Pattern    string             `json:"pattern,omitempty"`
 	Attributes map[string]string  `json:"attributes"`
 	Accounts   []string           `json:"accounts"`
 	Principal  InventoryPrincipal `json:"principal"`
@@ -63,25 +62,6 @@ type InventoryTokenCreate struct {
 type InventoryToken struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expiresAt"`
-}
-
-func (p Proposal) InventoryHost() *InventoryHost {
-	if p.Names == nil && p.Pattern == "" && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Realm == "" {
-		return nil
-	}
-	return &InventoryHost{Name: p.Names, Pattern: p.Pattern, Attributes: p.Labels, Accounts: p.Accounts, Principal: InventoryPrincipal{Mode: p.PrincipalMode, Realm: p.Realm}}
-}
-func (p *InventoryHost) Proposal() Proposal {
-	if p == nil {
-		return Proposal{}
-	}
-	return Proposal{Names: p.Name, Pattern: p.Pattern, Labels: p.Attributes, Accounts: p.Accounts, PrincipalMode: p.Principal.Mode, Realm: p.Principal.Realm}
-}
-func (h HostRecord) InventoryRecord() InventoryRecord {
-	return InventoryRecord{ID: h.ID, Status: h.Status, Host: h.Proposal.InventoryHost(), CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt}
-}
-func (h InventoryRecord) ControlRecord(revision uint64) HostRecord {
-	return HostRecord{ID: h.ID, Revision: revision, Status: h.Status, Proposal: h.Host.Proposal(), CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt}
 }
 
 // DecodeInventoryJSON rejects unknown fields and trailing documents at the wire boundary.

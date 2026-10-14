@@ -21,7 +21,8 @@ verbose = 2
 insecure = false
 oidc-issuer = "https://issuer.example/"
 certificate-extension = { permit-pty = "", permit-port-forwarding = "" }
-after = 9007199254740993
+cursor = "backend/page:+/= token"
+enrollment-token-file = "/path/to/enrollment-token"
 `))
 	require.NoError(t, err)
 	parse := func(args ...string) {
@@ -39,11 +40,14 @@ after = 9007199254740993
 	require.False(t, root.Insecure)
 	parse("control", "--directory", "https://directory.example/")
 	require.Equal(t, "https://issuer.example/", root.Control.OIDC.Issuer)
+	require.Equal(t, "/path/to/enrollment-token", root.Control.EnrollmentTokenFile)
+	parse("host", "enroll", "--ca", "https://ca.example/")
+	require.Equal(t, "/path/to/enrollment-token", root.Host.Enroll.EnrollmentTokenFile)
 	parse("ca", "--directory", "https://directory.example/", "--inventory", "https://inventory.example/")
 	require.Equal(t, "https://issuer.example/", root.CA.OIDC.Issuer)
 	require.Equal(t, map[string]string{"permit-pty": "", "permit-port-forwarding": ""}, root.CA.Extension)
 	parse("directory", "groups", "audit")
-	require.EqualValues(t, 9007199254740993, root.Directory.Groups.Audit.After)
+	require.Equal(t, "backend/page:+/= token", root.Directory.Groups.Audit.Cursor)
 }
 
 func TestFlatConfigMultilineInlineTable(t *testing.T) {

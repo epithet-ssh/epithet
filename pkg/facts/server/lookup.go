@@ -20,9 +20,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// LookupHandler serves one kind of fact; directory and inventory use separate
+// lookupHandler serves one kind of fact; directory and inventory use separate
 // audiences and transports. Either the CA reader or control key may read.
-func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
+func lookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, controlKey sshcert.RawPublicKey) (http.Handler, error) {
 	if (users == nil) == (hosts == nil) {
 		return nil, fmt.Errorf("exactly one fact source is required")
 	}
@@ -88,12 +88,12 @@ func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, cont
 		value := query.Get(param)
 		var response any
 		if users != nil {
-			u, revision, e := users.LookupUser(r.Context(), value)
+			u, e := users.LookupUser(r.Context(), value)
 			err = e
 			if err == nil && u != nil && u.Active {
 				f := u.Facts()
 				if err = f.Validate(value); err == nil {
-					response = &userFacts{User: facts.User{ID: f.ID, Names: f.Names, UserName: f.UserName, Groups: f.Groups, Attributes: f.Attributes}, Revision: string(revision)}
+					response = &facts.User{ID: f.ID, Names: f.Names, UserName: f.UserName, Groups: f.Groups, Attributes: f.Attributes}
 				}
 			}
 		} else {
@@ -101,10 +101,10 @@ func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, cont
 				http.Error(w, "host must be normalized", 400)
 				return
 			}
-			h, revision, e := hosts.LookupHost(r.Context(), value)
+			h, e := hosts.LookupHost(r.Context(), value)
 			err = e
 			if err == nil && h != nil {
-				response = &hostFacts{Host: wire.Host{HostResource: wire.HostResource{ID: h.Policy.ID, Names: h.Policy.Names, Attributes: object.FromStrings(h.Policy.Labels), Accounts: h.Policy.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}, Revision: string(revision)}
+				response = &wire.Host{HostResource: wire.HostResource{ID: h.ID, Names: h.Names, Attributes: object.FromStrings(h.Labels), Accounts: h.Accounts}, Principal: wire.Principal{Mode: string(h.PrincipalMode.Effective()), Realm: string(h.Realm)}}
 			}
 		}
 		if err != nil {
@@ -127,16 +127,4 @@ func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, cont
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	}), nil
-}
-
-// Stores omit empty revision metadata. The client representation separately
-// validates and preserves the presence of revisions supplied by any provider.
-type userFacts struct {
-	facts.User
-	Revision string `json:"revision,omitempty"`
-}
-
-type hostFacts struct {
-	wire.Host
-	Revision string `json:"revision,omitempty"`
 }

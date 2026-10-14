@@ -24,7 +24,7 @@ func TestProposalJSONRequiresExplicitAccounts(t *testing.T) {
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			data := []byte(`{"names":["host"],"labels":{},"principal-mode":"account-name"` + tc.field + `}`)
-			var proposal facts.Proposal
+			var proposal facts.InventoryInput
 			err := json.Unmarshal(data, &proposal)
 			if tc.invalid {
 				require.Error(t, err)

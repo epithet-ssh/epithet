@@ -7,16 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/epithet-ssh/epithet/pkg/broker"
-	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"os"
 	"os/signal"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,16 +26,16 @@ type InventoryCLI struct {
 	AdminTokenFile string `help:"Inventory automation bearer token file" name:"admin-token-file"`
 	tlsConfig      tlsconfig.Config
 
-	StateDir   string                 `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
-	Serve      InventoryServeCLI      `cmd:"" default:"withargs" help:"Serve managed inventory"`
-	List       InventoryListCLI       `cmd:"list" aliases:"l,ls" help:"List managed host records"`
-	AddPattern InventoryAddPatternCLI `cmd:"add-pattern" help:"Declare a managed hostname pattern in EDITOR"`
-	Show       InventoryShowCLI       `cmd:"show" aliases:"s,sh" help:"Show one host record"`
-	Edit       InventoryEditCLI       `cmd:"edit" aliases:"e,ed" help:"Edit a managed host in EDITOR"`
-	Approve    InventoryApproveCLI    `cmd:"approve" aliases:"a,app" help:"Review, edit, approve, or deny enrollment"`
-	Remove     InventoryRemoveCLI     `cmd:"remove" aliases:"rm" help:"Withdraw a managed host from inventory"`
-	Token      InventoryTokenCLI      `cmd:"token" help:"Create or revoke enrollment tokens"`
-	Audit      InventoryAuditCLI      `cmd:"audit" help:"Show durable inventory mutation audit"`
+	StateDir string              `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
+	Serve    InventoryServeCLI   `cmd:"" default:"withargs" help:"Serve managed inventory"`
+	List     InventoryListCLI    `cmd:"list" aliases:"l,ls" help:"List managed host records"`
+	Add      InventoryAddCLI     `cmd:"add" help:"Add a managed host in EDITOR"`
+	Show     InventoryShowCLI    `cmd:"show" aliases:"s,sh" help:"Show one host record"`
+	Edit     InventoryEditCLI    `cmd:"edit" aliases:"e,ed" help:"Edit a managed host in EDITOR"`
+	Approve  InventoryApproveCLI `cmd:"approve" aliases:"a,app" help:"Review, edit, approve, or deny enrollment"`
+	Remove   InventoryRemoveCLI  `cmd:"remove" aliases:"rm" help:"Withdraw a managed host from inventory"`
+	Token    InventoryTokenCLI   `cmd:"token" help:"Create or revoke enrollment tokens"`
+	Audit    InventoryAuditCLI   `cmd:"audit" help:"Show durable inventory mutation audit"`
 
 	Listen        string `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
 	ControlPubkey string `help:"Control service public key for administration" name:"control-public-key"`
@@ -83,8 +83,8 @@ func (c *InventoryCLI) find(id string) (*facts.HostRecord, error) {
 			return nil, err
 		}
 		for _, h := range resp.Hosts {
-			matches := strings.HasPrefix(h.ID, id) || h.Proposal.Pattern == id
-			for _, n := range h.Proposal.Names {
+			matches := strings.HasPrefix(h.ID, id)
+			for _, n := range h.Host.Names {
 				matches = matches || n == id
 			}
 			if matches {
@@ -134,10 +134,7 @@ func (c *InventoryListCLI) Run(p *InventoryCLI) error {
 		next = r.Hosts[len(r.Hosts)-1].ID
 	}
 	displayNames := func(h facts.HostRecord) string {
-		if h.Proposal.Pattern != "" {
-			return h.Proposal.Pattern
-		}
-		return strings.Join(h.Proposal.Names, ", ")
+		return strings.Join(h.Host.Names, ", ")
 	}
 	slices.SortStableFunc(r.Hosts, func(a, b facts.HostRecord) int {
 		return strings.Compare(displayNames(a), displayNames(b))
@@ -168,29 +165,23 @@ type InventoryShowCLI struct {
 	Host string `arg:"" help:"Host record ID or unambiguous name"`
 }
 
-type InventoryAddPatternCLI struct {
-	Pattern string `arg:"" help:"Hostname pattern (quote shell wildcards)"`
+type InventoryAddCLI struct {
+	Names []string `arg:"" help:"Hostnames or wildcard names (quote shell wildcards)"`
 }
 
-func (c *InventoryAddPatternCLI) Run(p *InventoryCLI) error {
-	fmt.Fprintln(os.Stderr, "Set realm to the shared SSH authorization boundary for this pattern, and choose its labels and accounts.")
-	proposal, err := editProposal(inventory.Proposal{
-		Pattern: c.Pattern, Labels: map[string]string{}, Accounts: []string{},
-		PrincipalMode: inventory.EpithetPrincipalV1,
-	}, bufio.NewReader(os.Stdin), func(p inventory.Proposal) error {
-		if p.Pattern == "" {
-			return fmt.Errorf("pattern is required")
-		}
-		return nil
-	})
+func (c *InventoryAddCLI) Run(p *InventoryCLI) error {
+	fmt.Fprintln(os.Stderr, "Set realm to the shared SSH authorization boundary for these names, and choose its labels and accounts.")
+	host, err := editInventory(inventory.Host{
+		Names: c.Names, Labels: map[string]string{}, Accounts: []string{}, PrincipalMode: inventory.EpithetPrincipalV1,
+	}, bufio.NewReader(os.Stdin), inventory.ParseHost)
 	if errors.Is(err, errCanceled) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	submitted := proposal.ControlProposal()
-	r, err := p.request(facts.ControlRequest{Action: "add-pattern", Host: &submitted})
+	submitted := controlHost(host)
+	r, err := p.request(facts.ControlRequest{Action: "add", Host: &submitted})
 	if err != nil {
 		return err
 	}
@@ -225,11 +216,11 @@ func (c *InventoryEditCLI) Run(p *InventoryCLI) error {
 }
 
 func editInventoryHost(p *InventoryCLI, h *facts.HostRecord, input *bufio.Reader) (*facts.HostRecord, error) {
-	proposal, err := editProposal(inventory.ProposalFromControl(h.Proposal), input)
+	host, err := editInventory(hostFromControl(h.Host), input, inventory.ParseHost)
 	if err != nil {
 		return nil, err
 	}
-	submitted := proposal.ControlProposal()
+	submitted := controlHost(host)
 	r, err := p.request(facts.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &submitted})
 	if err != nil {
 		return nil, err
@@ -246,7 +237,7 @@ func (c *InventoryApproveCLI) Run(p *InventoryCLI) error {
 	if err != nil {
 		return err
 	}
-	if h.Status != "pending" {
+	if h.Status != inventory.StatusPending {
 		return fmt.Errorf("only pending requests can be reviewed")
 	}
 	input := bufio.NewReader(os.Stdin)
@@ -284,7 +275,7 @@ func (c *InventoryApproveCLI) Run(p *InventoryCLI) error {
 					return e2
 				}
 				h = fresh
-				if h.Status != "pending" {
+				if h.Status != inventory.StatusPending {
 					return fmt.Errorf("request is now %s", h.Status)
 				}
 				continue
@@ -311,12 +302,12 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 }
 
 type InventoryAuditCLI struct {
-	After uint64 `help:"Return events after this audit sequence"`
-	Limit int    `help:"Maximum events to return (1-1000; default 100)"`
+	Cursor string `help:"Continue from the cursor returned by the previous audit page"`
+	Limit  int    `help:"Maximum events to return (1-1000; default 100)"`
 }
 
 func (c *InventoryAuditCLI) Run(p *InventoryCLI) error {
-	r, err := p.request(facts.ControlRequest{Action: "audit", AuditAfter: c.After, AuditLimit: c.Limit})
+	r, err := p.request(facts.ControlRequest{Action: "audit", AuditCursor: c.Cursor, AuditLimit: c.Limit})
 	if err != nil {
 		return err
 	}
@@ -331,7 +322,7 @@ func (c *InventoryCLI) request(req facts.ControlRequest) (*broker.InventoryRespo
 	if c.ControlURL == "" || c.AdminTokenFile == "" {
 		return nil, fmt.Errorf("automation requires both --control-url and --admin-token-file")
 	}
-	token, err := readAdminToken("", c.AdminTokenFile, "inventory")
+	token, err := readBearerToken("", c.AdminTokenFile, "inventory")
 	if err != nil {
 		return nil, err
 	}

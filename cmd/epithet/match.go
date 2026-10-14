@@ -1,21 +1,13 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
+	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 
-	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 )
-
-// scannerBufferSize caps how large a single response line from the broker
-// may be. Shared with inspect.go's client, whose Inspect responses can carry
-// several agents' worth of certificate data and so need the same headroom.
-const scannerBufferSize = 1024 * 1024 // 1MiB.
 
 // MatchCLI receives connection inputs from SSH's generated command line.
 // These flags must have no environment bindings; loadCLIConfig excludes them
@@ -38,49 +30,15 @@ func (m *MatchCLI) Run(logger *slog.Logger) error {
 		return fmt.Errorf("failed to expand broker socket path: %w", err)
 	}
 
-	// Connect to the broker over its Unix socket and send one request line.
-	conn, err := net.Dial("unix", brokerSock)
-	if err != nil {
-		return fmt.Errorf("failed to connect to broker at %s: %w", brokerSock, err)
-	}
-	defer conn.Close()
-
-	req := broker.Request{Match: &wire.Connection{
+	result, err := (brokerClient{socket: brokerSock}).match(context.Background(), wire.Connection{
 		RemoteHost: m.Host,
 		RemoteUser: m.User,
 		Port:       m.Port,
 		ProxyJump:  m.Jump,
 		Hash:       wire.ConnectionHash(m.Hash),
-	}}
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return fmt.Errorf("failed to send match request: %w", err)
-	}
-
-	// Read response events: zero or more Output lines (written live to
-	// stderr as auth progress, e.g. the auth-code+PKCE URL to visit), then
-	// one Result.
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 4096), scannerBufferSize)
-
-	var result *broker.MatchResponse
-	for scanner.Scan() {
-		var ev broker.Event
-		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-			return fmt.Errorf("failed to parse broker event: %w", err)
-		}
-		if ev.Output != "" {
-			os.Stderr.WriteString(ev.Output)
-		}
-		if ev.Result != nil {
-			result = ev.Result
-			break
-		}
-	}
-	if result == nil {
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("broker connection error: %w", err)
-		}
-		return fmt.Errorf("no result received from broker")
+	}, os.Stderr)
+	if err != nil {
+		return err
 	}
 
 	// Handle response. Allow alone drives the exit code; Error is a message

@@ -2,19 +2,20 @@ package server_test
 
 import (
 	"context"
-	"github.com/epithet-ssh/epithet/pkg/writ/object"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
+	"github.com/epithet-ssh/epithet/pkg/writ/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +49,7 @@ func TestServiceRoutesWithoutControlKey(t *testing.T) {
 				user, err := client.User(t.Context(), "id")
 				require.NoError(t, err)
 				require.Equal(t, "id", user.ID)
-				require.Equal(t, "opaque-revision", user.Revision.String())
+				require.True(t, user.Revision.IsZero())
 			} else {
 				host, err := client.Host(t.Context(), "missing")
 				require.NoError(t, err)
@@ -82,22 +83,23 @@ type inventoryContextKey struct{}
 // contract makes any unexpected operation fail instead of delegating to SQLite.
 type alternateInventoryStore struct {
 	inventory.Store
-	record       inventory.HostRecord
-	actor        string
+	record       inventory.Host
+	event        inventory.AuditEvent
 	contextValue any
 	closed       bool
 }
 
-func (s *alternateInventoryStore) AddPattern(ctx context.Context, actor string, p inventory.Proposal) (*inventory.HostRecord, error) {
-	s.actor, s.contextValue = actor, ctx.Value(inventoryContextKey{})
-	s.record = inventory.HostRecord{ID: strings.Repeat("a", 64), Revision: 1, Status: "active", Proposal: p}
+func (s *alternateInventoryStore) AddHost(ctx context.Context, id string, p inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
+	s.event, s.contextValue = event, ctx.Value(inventoryContextKey{})
+	s.record = p
+	s.record.ID, s.record.Revision = id, 1
 	return &s.record, nil
 }
 
-func (s *alternateInventoryStore) LookupHost(ctx context.Context, name string) (*inventory.ResolvedHost, string, error) {
+func (s *alternateInventoryStore) LookupHost(ctx context.Context, name string) (*inventory.Host, error) {
 	s.contextValue = ctx.Value(inventoryContextKey{})
-	p := s.record.Proposal
-	return &inventory.ResolvedHost{Policy: inventory.Host{Names: []string{name}, Labels: p.Labels, Accounts: p.Accounts}, PrincipalMode: p.PrincipalMode}, "opaque-backend-revision", nil
+	p := s.record
+	return &inventory.Host{Names: []string{name}, Labels: p.Labels, Accounts: p.Accounts, PrincipalMode: p.PrincipalMode}, nil
 }
 
 func (s *alternateInventoryStore) Close() error {
@@ -119,14 +121,24 @@ func TestInventoryServiceAcceptsAlternateManagedStore(t *testing.T) {
 	}))
 	defer service.Close()
 	tls := tlsconfig.Config{Insecure: true}
-	control, err := facts.NewControlClient("", service.URL+"/lookup", controlKey, tls)
+	client, err := newSignedTestClient(service.URL, controlKey, serviceauth.InventoryAudience)
 	require.NoError(t, err)
-	p := facts.Proposal{Pattern: "runner-*.example", Accounts: []string{"deploy"}, Labels: map[string]string{"role": "runner"}, PrincipalMode: string(inventory.AccountNamePrincipals)}
-	record, err := control.AddPattern(t.Context(), facts.Authorization{Actor: "admin"}, p)
+	p := facts.InventoryHost{Name: []string{"runner-*.example"}, Accounts: []string{"deploy"}, Attributes: map[string]string{"role": "runner"}, Principal: facts.InventoryPrincipal{Mode: string(inventory.AccountNamePrincipals)}}
+	body, err := json.Marshal(facts.InventoryCreate{Host: &p})
 	require.NoError(t, err)
-	require.Equal(t, "admin", store.actor)
+	response, err := client.Do(t.Context(), "POST", "/inventory/records", nil, body, "admin")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, 201, response.StatusCode)
+	var record facts.InventoryRecord
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&record))
+	require.Equal(t, "admin", store.event.Actor)
+	require.Equal(t, "add", store.event.Action)
+	require.Equal(t, record.ID, store.event.Resource)
+	require.Regexp(t, "^[0-9a-f]{64}$", record.ID)
+	require.False(t, store.event.At.IsZero())
 	require.Equal(t, "request-context", store.contextValue)
-	require.Equal(t, p, record.Proposal)
+	require.Equal(t, p, *record.Host)
 
 	data, err := facts.NewDataClient("", service.URL+"/lookup", caKey, tls)
 	require.NoError(t, err)
@@ -134,8 +146,7 @@ func TestInventoryServiceAcceptsAlternateManagedStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"runner-one.example"}, []string(host.Names))
 	require.Equal(t, p.Accounts, host.Accounts)
-	require.Equal(t, object.FromStrings(p.Labels), host.Attributes)
-	require.Equal(t, "opaque-backend-revision", host.Revision.String())
+	require.Equal(t, object.FromStrings(p.Attributes), host.Attributes)
 	require.Equal(t, "request-context", store.contextValue)
 	require.False(t, store.closed, "store lifetime belongs to the service caller")
 }

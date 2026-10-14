@@ -25,8 +25,8 @@ type Fixture struct {
 }
 type emptyDirectory struct{}
 
-func (emptyDirectory) LookupUser(context.Context, string) (*directory.User, directory.Revision, error) {
-	return nil, "", nil
+func (emptyDirectory) LookupUser(context.Context, string) (*directory.User, error) {
+	return nil, nil
 }
 
 type noAuthentication struct{}

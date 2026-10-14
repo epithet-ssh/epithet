@@ -188,8 +188,8 @@ hosts:
 			var entry map[string]any
 			require.NoError(t, json.Unmarshal(issuanceLog.Bytes(), &entry))
 			require.Equal(t, inventoryID, entry["id"])
-			require.Equal(t, inv.DirectoryRevision(), entry["directoryRevision"])
-			require.Equal(t, inv.InventoryRevision(), entry["inventoryRevision"])
+			require.NotContains(t, entry, "directoryRevision")
+			require.NotContains(t, entry, "inventoryRevision")
 			require.NotEmpty(t, entry["policyId"])
 			var publicResponse map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &publicResponse))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"testing"
@@ -12,14 +13,8 @@ import (
 )
 
 func TestRequestAgentKillUsesTypedProtocol(t *testing.T) {
-	client, server := net.Pipe()
-	t.Cleanup(func() {
-		client.Close()
-		server.Close()
-	})
-
 	received := make(chan broker.Request, 1)
-	go func() {
+	client := fakeBrokerClient(t, func(server net.Conn) {
 		var request broker.Request
 		if err := json.NewDecoder(server).Decode(&request); err != nil {
 			return
@@ -34,9 +29,9 @@ func TestRequestAgentKillUsesTypedProtocol(t *testing.T) {
 				Hash:       "agent-id",
 			},
 		}})
-	}()
+	})
 
-	response, err := requestAgentKill(client, "agent-id")
+	response, err := client.kill(context.Background(), "agent-id")
 	require.NoError(t, err)
 	require.Equal(t, wire.ConnectionHash("agent-id"), response.ID)
 	request := <-received
@@ -45,13 +40,7 @@ func TestRequestAgentKillUsesTypedProtocol(t *testing.T) {
 }
 
 func TestRequestAgentKillSurfacesTypedError(t *testing.T) {
-	client, server := net.Pipe()
-	t.Cleanup(func() {
-		client.Close()
-		server.Close()
-	})
-
-	go func() {
+	client := fakeBrokerClient(t, func(server net.Conn) {
 		var request broker.Request
 		if err := json.NewDecoder(server).Decode(&request); err != nil {
 			return
@@ -60,9 +49,9 @@ func TestRequestAgentKillSurfacesTypedError(t *testing.T) {
 			ID:    request.Kill.ID,
 			Error: `agent "missing" does not exist`,
 		}})
-	}()
+	})
 
-	_, err := requestAgentKill(client, "missing")
+	_, err := client.kill(context.Background(), "missing")
 	require.EqualError(t, err, `broker refused to kill agent: agent "missing" does not exist`)
 }
 

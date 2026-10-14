@@ -3,12 +3,14 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
@@ -108,19 +110,96 @@ func TestInventoryRESTLifecycle(t *testing.T) {
 	denied := call("PUT", "/inventory/records/"+token.Token, "admin", reserved.Header().Get("ETag"), h)
 	require.Equal(t, 200, denied.Code, denied.Body.String())
 	require.Nil(t, decode(denied).Host)
-	// A pattern is still an enrollment proposal unless an admin is authenticated.
-	pattern := &facts.InventoryHost{Pattern: "*.example", Accounts: nil, Principal: facts.InventoryPrincipal{Mode: "account-name"}}
-	pending := call("POST", "/inventory/records", "", "", facts.InventoryCreate{Host: pattern})
-	require.Equal(t, 201, pending.Code)
-	require.Equal(t, "pending", decode(pending).Status)
+	// Enrollment requires exact names; administrators may create wildcard names.
+	pattern := &facts.InventoryHost{Name: []string{"*.example"}, Accounts: nil, Principal: facts.InventoryPrincipal{Mode: "account-name"}}
+	rejected := call("POST", "/inventory/records", "", "", facts.InventoryCreate{Host: pattern})
+	require.Equal(t, 400, rejected.Code, rejected.Body.String())
 	active := call("POST", "/inventory/records", "admin", "", facts.InventoryCreate{Host: pattern})
 	require.Equal(t, 201, active.Code)
 	require.Equal(t, "active", decode(active).Status)
-	require.Equal(t, 400, call("POST", "/inventory/records", "admin", "", facts.InventoryCreate{Host: host}).Code)
+	edited := decode(active)
+	edited.Host.Attributes = map[string]string{"environment": "prod"}
+	require.Equal(t, 200, call("PUT", active.Header().Get("Location"), "admin", active.Header().Get("ETag"), edited).Code)
+
 	require.Equal(t, 405, call("OPTIONS", "/inventory/records", "admin", "", nil).Code)
 	require.Equal(t, 404, call("POST", "/manage", "admin", "", nil).Code)
 	// Omitting accounts is rejected before any backend mutation.
 	invalid := map[string]any{"host": map[string]any{"name": []string{"bad"}, "principal": map[string]string{"mode": "account-name"}}}
 	require.Equal(t, 400, call("POST", "/inventory/records", "", "", invalid).Code)
-	require.Equal(t, http.StatusOK, call("GET", "/inventory/audit", "admin", "", nil).Code)
+	audit := call("GET", "/inventory/audit", "admin", "", nil)
+	require.Equal(t, http.StatusOK, audit.Code)
+	var page facts.AuditPage[facts.HostAuditEvent]
+	require.NoError(t, json.Unmarshal(audit.Body.Bytes(), &page))
+	events := page.Events
+	expected := []struct{ action, actor, resource string }{
+		{"enroll", "host", decode(created).ID},
+		{"approve", "admin", decode(created).ID},
+		{"remove", "admin", decode(created).ID},
+		{"token-create", "admin", decode(admitted).ID},
+		{"enroll", "host", decode(admitted).ID},
+		{"token-revoke", "admin", decode(admitted).ID},
+		{"token-create", "admin", decode(denied).ID},
+		{"deny", "admin", decode(denied).ID},
+		{"add", "admin", decode(active).ID},
+		{"edit", "admin", decode(active).ID},
+	}
+	require.Len(t, events, len(expected))
+	for i, want := range expected {
+		require.Equal(t, want.action, events[i].Action)
+		require.Equal(t, want.actor, events[i].Actor)
+		require.Equal(t, want.resource, events[i].Resource)
+		require.False(t, events[i].At.IsZero())
+	}
+	require.Equal(t, decode(created).CreatedAt, events[0].At)
+	require.Equal(t, decode(approved).UpdatedAt, events[1].At)
+}
+
+func TestInventoryListIncludesWildcardNames(t *testing.T) {
+	pub, key, err := sshcert.GenerateKeys()
+	require.NoError(t, err)
+	store, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	handler, err := factserver.InventoryHandler(store, "", pub, factserver.WithInventoryManagement(store))
+	require.NoError(t, err)
+	signer, err := serviceauth.NewSignerFor(key, serviceauth.InventoryAudience)
+	require.NoError(t, err)
+	var allIDs, hostIDs []string
+	for i := 1; i <= 6; i++ {
+		id := fmt.Sprintf("%064x", i)
+		allIDs = append(allIDs, id)
+		if i%2 == 0 {
+			_, err = store.AddHost(t.Context(), id, inventory.Host{Names: []string{fmt.Sprintf("*.%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id))
+		} else {
+			_, err = store.Enroll(t.Context(), id, inventory.Host{Names: []string{fmt.Sprintf("host-%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, "", inventory.NewAuditEvent("host", "enroll", id))
+			hostIDs = append(hostIDs, id)
+		}
+		require.NoError(t, err)
+	}
+	for _, pending := range []bool{false, true} {
+		var actual []string
+		after := ""
+		for pageNumber := 0; pageNumber < 5; pageNumber++ {
+			req := httptest.NewRequest("GET", fmt.Sprintf("http://inventory/inventory/records?limit=2&after=%s&pending=%t", after, pending), nil)
+			require.NoError(t, signer.AuthorizeActor(req, nil, "admin"))
+			out := httptest.NewRecorder()
+			handler.ServeHTTP(out, req)
+			require.Equal(t, 200, out.Code, out.Body.String())
+			var page []facts.InventoryRecord
+			require.NoError(t, json.Unmarshal(out.Body.Bytes(), &page))
+			require.LessOrEqual(t, len(page), 2)
+			if len(page) == 0 {
+				break
+			}
+			for _, record := range page {
+				actual = append(actual, record.ID)
+			}
+			after = page[len(page)-1].ID
+		}
+		if pending {
+			require.Equal(t, hostIDs, actual)
+		} else {
+			require.Equal(t, allIDs, actual)
+		}
+	}
 }
