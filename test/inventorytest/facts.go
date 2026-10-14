@@ -23,7 +23,7 @@ type Facts struct {
 }
 
 func (f *Facts) CAOption() ca.Option {
-	return ca.WithFacts(f.URL+"/directory", f.URL+"/inventory", f.Identity, wire.AuthConfig{Issuer: f.Identity.Issuer, ClientID: f.Identity.ClientID}, tlsconfig.Config{Insecure: true})
+	return ca.WithFacts(f.URL+"/directory/lookup", f.URL+"/inventory/lookup", f.Identity, wire.AuthConfig{Issuer: f.Identity.Issuer, ClientID: f.Identity.ClientID}, tlsconfig.Config{Insecure: true})
 }
 func ServeFacts(t *testing.T, inv *Static, issuer string, key sshcert.RawPublicKey) *Facts {
 	return ServeFactsWithSources(t, inv, inv, oidc.ValidatorConfig{Issuer: issuer, ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, key)

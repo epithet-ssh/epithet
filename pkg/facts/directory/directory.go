@@ -26,6 +26,7 @@ type Revision string
 // Directory resolves users within one configured identity provider. LookupUser
 // returns the user and revision from one coherent snapshot. Missing users return
 // nil with a nonempty revision; storage failure is an error, never a missing user.
+// Identity, memberships and current group facts come from that same snapshot.
 type Directory interface {
 	LookupUser(context.Context, string) (*User, Revision, error)
 }

@@ -15,15 +15,17 @@ import (
 type ControlCLI struct {
 	Listen               string            `help:"Control listener" default:"127.0.0.1:9996"`
 	Key                  string            `help:"Configured control signing key" default:"/etc/epithet/control.key" name:"control-key-file"`
-	Directory            string            `placeholder:"URL" help:"Directory fact service URL" required:"true" name:"directory"`
+	Directory            string            `placeholder:"URL" help:"Directory fact endpoint URL (SCIM is discovered with OPTIONS)" required:"true" name:"directory"`
 	DirectoryBackend     string            `placeholder:"URL" help:"Built-in directory administration service URL" name:"directory-backend"`
-	InventoryBackend     string            `placeholder:"URL" help:"Built-in inventory administration service URL" name:"inventory-backend"`
+	InventoryBackend     string            `placeholder:"URL" help:"Inventory fact endpoint URL (management is discovered with OPTIONS)" name:"inventory-backend"`
 	OIDC                 ServiceOIDCConfig `embed:"" prefix:"oidc-"`
 	DirectoryAdminUsers  []string          `help:"Directory administrator user IDs" name:"directory-admin-user"`
 	DirectoryAdminGroups []string          `help:"Directory administrator groups" name:"directory-admin-group"`
 	InventoryAdminUsers  []string          `help:"Inventory administrator user IDs" name:"inventory-admin-user"`
 	InventoryAdminGroups []string          `help:"Inventory administrator groups" name:"inventory-admin-group"`
-	SCIMToken            string            `help:"SCIM provisioning bearer token" name:"scim-token"`
+	InventoryToken       string            `help:"Optional inventory automation bearer token" name:"inventory-token"`
+	InventoryTokenFile   string            `help:"Inventory automation bearer token file" name:"inventory-token-file"`
+	SCIMToken            string            `help:"Optional SCIM provisioning bearer token" name:"scim-token"`
 	SCIMTokenFile        string            `help:"SCIM provisioning bearer token file" name:"scim-token-file"`
 }
 
@@ -36,11 +38,15 @@ func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	if err != nil {
 		return err
 	}
+	inventoryToken, err := readAdminToken(c.InventoryToken, c.InventoryTokenFile, "inventory")
+	if err != nil {
+		return err
+	}
 	_, validator, err := oidc.PrepareService(oidc.ValidatorConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg})
 	if err != nil {
 		return err
 	}
-	handler, err := control.New(control.Config{Key: sshcert.RawPrivateKey(key), DirectoryURL: c.Directory, DirectoryBackendURL: c.DirectoryBackend, InventoryBackendURL: c.InventoryBackend, Validator: validator, DirectoryAdmins: control.Admins{Users: c.DirectoryAdminUsers, Groups: c.DirectoryAdminGroups}, InventoryAdmins: control.Admins{Users: c.InventoryAdminUsers, Groups: c.InventoryAdminGroups}, SCIMToken: token, TLS: tlsCfg})
+	handler, err := control.New(control.Config{Key: sshcert.RawPrivateKey(key), DirectoryURL: c.Directory, DirectoryBackendURL: c.DirectoryBackend, InventoryBackendURL: c.InventoryBackend, Validator: validator, DirectoryAdmins: control.Admins{Users: c.DirectoryAdminUsers, Groups: c.DirectoryAdminGroups}, InventoryAdmins: control.Admins{Users: c.InventoryAdminUsers, Groups: c.InventoryAdminGroups}, SCIMToken: token, InventoryToken: inventoryToken, TLS: tlsCfg})
 	if err != nil {
 		return err
 	}
@@ -69,6 +75,31 @@ func (c *ControlCLI) provisioningToken() (string, error) {
 	}
 	if strings.ContainsAny(token, " \t\r\n") {
 		return "", fmt.Errorf("SCIM requires a bearer token without whitespace")
+	}
+	return token, nil
+}
+
+func readAdminToken(literal, path, kind string) (string, error) {
+	if literal != "" && path != "" {
+		return "", fmt.Errorf("use either %s-token or %s-token-file", kind, kind)
+	}
+	token := literal
+	if path != "" {
+		expanded, err := expandPath(path)
+		if err != nil {
+			return "", err
+		}
+		data, err := os.ReadFile(expanded)
+		if err != nil {
+			return "", fmt.Errorf("reading %s token: %w", kind, err)
+		}
+		token = strings.TrimSpace(string(data))
+		if token == "" {
+			return "", fmt.Errorf("%s token file is empty", kind)
+		}
+	}
+	if strings.ContainsAny(token, " \t\r\n") {
+		return "", fmt.Errorf("%s token must not contain whitespace", kind)
 	}
 	return token, nil
 }

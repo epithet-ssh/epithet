@@ -15,7 +15,7 @@ func TestTokenCreatesPendingHostReservation(t *testing.T) {
 	host, err := m.Get(t.Context(), token.ID)
 	require.NoError(t, err)
 	require.Equal(t, "pending", host.Status)
-	require.True(t, emptyProposal(host.Proposal))
+	require.True(t, inventory.EmptyProposal(host.Proposal))
 	require.EqualValues(t, 1, host.Revision)
 	hosts, err := m.List(t.Context(), "", 0, false)
 	require.NoError(t, err)

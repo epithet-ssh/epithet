@@ -10,8 +10,9 @@ signs the certificate. Control may also read directory facts to authorize admins
 | Directory | `GET /lookup?id=OPAQUE_ID` | Active user object |
 | Inventory | `GET /lookup?host=HOST_NAME` | Active host object |
 
-Configure each service's root URL on CA. The client appends `/lookup`; a root may
-include a path prefix. Use standard URL query encoding, exactly one named query
+Configure the **complete fact endpoint URL** for both directory and inventory,
+including its path (the built-in HTTP endpoint is `/lookup`). Unix socket URLs
+select the built-in `/lookup` path. Use standard URL query encoding, exactly one named query
 parameter, and no request body. Directory IDs are opaque. Host lookup names are
 ASCII case-folded, with a trailing dot removed. Return `404` for unknown or inactive
 records. Authentication errors and service failures must use their own non-200,
@@ -97,23 +98,51 @@ APIs. These public keys are provisioned out of band; no shared user credential i
 sent to a fact provider.
 
 Each request has `Authorization: Bearer JWT`, signed with the calling service's
-SSH private key. `pkg/facts` is the reference implementation. Its
-`NewDataClient` configures directory and inventory lookup endpoints and exposes
-only validated `User` and `Host` lookups. `NewControlClient` configures private
-backend endpoints and exposes typed administration and provisioning operations.
-Both select service audiences and own their signed HTTP transport internally;
-callers do not supply paths or manage HTTP response bodies.
+SSH private key. `pkg/serviceauth` owns signing and verification of these
+request-bound credentials. Providers using their own HTTP handlers can use
+`serviceauth.NewVerifierFor` with `DirectoryAudience` or `InventoryAudience`;
+the built-in handlers configure verification themselves.
+
+`pkg/facts.NewDataClient` configures directory and inventory lookup endpoints and
+exposes only validated `User` and `Host` lookups. `NewControlClient` configures
+private backend endpoints and exposes typed administration operations. SCIM
+forwarding is private to `pkg/facts/control`, alongside its discovery and resource
+URL rebasing. The shared `internal/servicehttp` package owns connections, TLS and
+Unix sockets, signed exchanges and bounded response reads. It has no knowledge
+of fact resources or SCIM, and callers do not manage HTTP response bodies.
 
 `pkg/facts/server` owns built-in service handlers. `DirectoryHandler` and
-`InventoryHandler` assemble lookup authentication, optional private control
-operations, and routes. `LookupHandler` serves a read-only directory or inventory
-source. The CLI owns store lifetimes, key resolution, and listeners.
+`InventoryHandler` require a data source and assemble lookup authentication and
+routes. Add management explicitly with the corresponding typed option:
+
+```go
+directoryHTTP, err := factserver.DirectoryHandler(
+    directoryData, caPublicKey, controlPublicKey,
+    factserver.WithDirectoryManagement(directoryManagement),
+)
+inventoryHTTP, err := factserver.InventoryHandler(
+    inventoryData, caPublicKey, controlPublicKey,
+    factserver.WithInventoryManagement(inventoryManagement),
+)
+```
+
+The required sources implement `directory.Directory` and `inventory.Hosts`.
+The optional management implementations satisfy `directory.Store` and
+`inventory.Store`, which do not embed the data interfaces. Each pair must describe
+the same logical service, but may use different instances. A store implementing
+both can be supplied in both positions. Omitting the option leaves management
+disabled even if the source implements Store. Directory's existing read-only
+actor and user-list operations remain available; with management configured,
+administrative user listing uses that implementation.
+
+`LookupHandler` is the lower-level adapter for serving just fact reads at a
+caller-owned route. The CLI owns all source lifetimes, key resolution, and listeners.
 `pkg/facts/control` owns public authentication and administrative authorization;
 it depends on the typed clients, without importing the built-in handlers or stores.
 
 Human control operations receive the already authorized actor and directory
-revision explicitly. Enrollment and SCIM provisioning keep their nonhuman
-credential semantics. Control results are domain records; rejected operations
+revision explicitly. SCIM preserves the OIDC actor or uses `scim` for the
+optional provisioning secret. Enrollment retains its nonhuman credential semantics. Control results are domain records; rejected operations
 return `ServiceError`, with categories available through `errors.Is`. SCIM results
 retain the provisioning status, response body, ETag, location, and response format.
 `facts.AdminClient` invokes the public administration endpoint using user bearer
@@ -122,15 +151,18 @@ credentials. Its requests and responses are also defined in `pkg/facts`.
 | Claim | Meaning |
 |---|---|
 | `iss` | OpenSSH SHA256 fingerprint of the signing key |
+| `sub` | Authenticated actor for management; omitted for service-only reads/enrollment |
 | `aud` | `epithet-directory` or `epithet-inventory` |
 | `iat`, `exp` | Unix seconds; token lifetime is 60 seconds |
 | `jti` | Random request identifier |
 | `htm` | Exact HTTP method |
 | `htu` | HTTP authority plus escaped path and raw query, e.g. `facts.example/lookup?id=a%2Bb` |
+| `if_match` | Exact If-Match header value, omitted when empty |
+| `content_type` | Exact Content-Type header value, omitted when empty |
 | `bh` | Unpadded base64url SHA256 digest of the body; empty-body digest for GET |
 
 Verify signature, audience, expiry and issued-at freshness, method, target including query,
-and body digest. Algorithms follow the SSH key type: Ed25519 uses EdDSA, RSA
+body digest, If-Match, and Content-Type. Algorithms follow the SSH key type: Ed25519 uses EdDSA, RSA
 uses PS256, and supported ECDSA curves use ES256/ES384. Preserve authority, escaped
 path, and query through proxies. Rewriting any of them invalidates the signature.
 Tokens are request-bound but do not use a replay database. TLS remains necessary
@@ -143,8 +175,8 @@ HTTP handlers and the control plane.
 
 See [inventory-api.yaml](inventory-api.yaml) and
 [directory-api.yaml](directory-api.yaml) for response schemas, and
-[inventory.md](inventory.md) for deployment configuration. Bespoke providers do not
-need Epithet's private `/manage`, `/actor`, or `/scim` backend endpoints.
+[the inventory package](../pkg/facts/inventory/README.md) for management and deployment configuration. Bespoke providers do not
+need Epithet's private `/manage` or `/actor` backend endpoints.
 
 ## Package ownership
 
@@ -165,7 +197,7 @@ The fact-service implementation lives under the same namespace:
 
 Directory and inventory contracts stay independent of their SQLite implementations,
 allowing alternative managed stores. `directory.Store` and `inventory.Store` expose
-complete operations; each backend owns atomic changes, conflicts, audit history,
+complete management operations independently of the data-plane interfaces; each backend owns atomic changes, conflicts, audit history,
 and revisions. Every operation carries a request context. Service handlers accept
 these contracts and leave store lifetime to their caller. A backend can use an
 external database without changing the control plane or fact clients.
@@ -197,12 +229,12 @@ fails with a conflict rather than selecting one by order.
 Removing a managed host also deletes its names, token metadata, and audit history.
 
 Inventory administration returns bounded pages: 100 records by default, with a
-maximum of 1,000. `inventory list` and `inventory token list` accept `--after FULL_ID`
+maximum of 1,000. `inventory list` accepts `--after FULL_ID`
 and `--limit N`; `inventory list --pending` filters before applying the page limit.
 Host pages are selected by ID, then sorted by name for display. A full host page
 prints its continuation ID to stderr, preserving the concise stdout table.
-Token pages include their full IDs in YAML. Continue from the last ID in a token
-page; for hosts, use the continuation ID rather than the last displayed name.
+Use the continuation ID rather than the last displayed name. Tokens have no
+retrieval operation; create returns a credential and revoke takes that credential.
 
 `inventory audit --after SEQUENCE --limit N` uses the same page bounds. Events
 include a stable, increasing `sequence`; timestamps do not define pagination.
@@ -210,8 +242,8 @@ Sequences are never reused after deletion or restart. The last event's sequence
 is the next cursor. An empty page ends enumeration; separate pages may observe
 concurrent changes. A full page can be followed by an empty one.
 
-Control requests use `after`, `limit`, and `pending` for host lists, `after` and
-`limit` for token lists, and `audit-after` and `audit-limit` for inventory or
+CLI/control requests use `after`, `limit`, and `pending` for host lists,
+and `audit-after` and `audit-limit` for inventory or
 directory audit. Zero limits select the default; negative or oversized limits
 are rejected. Each database query applies its limit before loading the page.
 
@@ -241,3 +273,60 @@ does not matter, while `null` and `[]` remain distinct.
 
 The built-in directory's [mapping and database upgrade procedure](../pkg/facts/directory/README.md)
 explain current SCIM group names, optional static group IDs, and removal of historical bindings.
+
+## Optional inventory management
+
+Control discovers inventory management through OPTIONS and Link-Template at the
+configured inventory fact endpoint. A 4xx discovery response means a lookup-only
+provider. See the [inventory provider contract](../pkg/facts/inventory/README.md)
+for resources, JSON, preconditions, automation credentials and backend integration.
+The inventory provider no longer exposes the private `/manage` action envelope.
+
+## Optional SCIM management
+
+Control sends signed OPTIONS to the configured directory fact endpoint. A managed
+provider advertises its SCIM base URI with an ordinary RFC 8288 Link:
+
+```http
+HTTP/1.1 204 No Content
+Allow: GET, OPTIONS
+Cache-Control: no-store
+Link: </scim/v2/>; rel="https://epithet.dev/rel/scim"
+```
+
+The target can be absolute or relative to the fact URL; it must have no query,
+fragment or credentials. Unix services advertise same-service references. Any
+initial OPTIONS 4xx means data-only support; successful OPTIONS without this
+relation has the same meaning. Transport failures, redirects, 5xx, and invalid
+advertised URLs are errors. Discovery is refreshed per operation. Operation-level
+4xx responses retain their SCIM meaning and never trigger discovery fallback.
+
+SCIM already defines resource paths and query parameters, so its base uses Link,
+not Link-Template. Control appends the requested SCIM resource path and preserves
+the method, escaped path, raw query, body, Content-Type and If-Match in a direct
+signed HTTP request. The old POST `/scim` JSON tunnel is removed. The public
+endpoint remains `/scim/v2/`; statuses, ETags and SCIM errors pass through.
+Location headers and standard `meta.location`, User `groups.$ref`, and Group
+`members.$ref` within the provider's advertised SCIM tree are rebased to public
+`/scim/v2/` references, including ListResponse resources. External references and
+extension attributes are preserved.
+
+Public requests may authenticate with the optional `scim-token`/`scim-token-file`
+secret or OIDC. OIDC requires an active directory user with `directory-admin`
+grants; inventory grants and the inventory automation secret do not confer this
+access. With no SCIM secret, OIDC access remains available. The provider trusts
+only control signatures, which cover the actor, method, target, body, Content-Type
+and If-Match. User bearer tokens never reach the provider. Mutations record the
+human actor in audit, or `scim` for the provisioning secret.
+
+SCIM discovery uses `directory`, the complete fact endpoint URL. The optional
+`directory-backend` remains the built-in service root for existing actor snapshots,
+user/group listings and audit commands; it is not required by external SCIM
+providers. The built-in adapter keeps its current supported SCIM subset, schema
+and storage. Directory CLI creation/editing remains deferred in YATL `ywxp1g89`.
+
+**Configuration change:** HTTP directory URLs now name the complete lookup path,
+just like inventory URLs. Add `/lookup` to existing built-in HTTP directory root
+URLs on CA and control. Unix socket configuration is unchanged. Update signed
+request implementations together to bind `content_type` as well as `if_match`.
+

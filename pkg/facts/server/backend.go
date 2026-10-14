@@ -8,30 +8,25 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/scim"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
+	"github.com/epithet-ssh/epithet/pkg/wire"
 )
 
 // backend adapts the private control protocol to store operations. Only the
 // configured control key can invoke it; CA reader credentials never confer
 // mutation authority. Stores enforce their transactional invariants.
 type backend struct {
-	Store            inventory.Store
 	ManagedDirectory directory.Store
 	Directory        directory.Directory
 }
 
 func (c *backend) handler(key sshcert.RawPublicKey) (http.Handler, error) {
-	audience := facts.InventoryAudience
-	if c.Directory != nil {
-		audience = facts.DirectoryAudience
-	}
-	verifier, err := facts.NewVerifierFor(key, audience)
+	verifier, err := serviceauth.NewVerifierFor(key, serviceauth.DirectoryAudience)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +50,20 @@ func (c *backend) handler(key sshcert.RawPublicKey) (http.Handler, error) {
 			http.Error(w, "invalid control authentication", 403)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/scim/v2/") {
+			if provision == nil {
+				http.NotFound(w, r)
+				return
+			}
+			if actor == "" {
+				http.Error(w, "authenticated actor is required", 403)
+				return
+			}
+			r = r.WithContext(directory.WithActor(r.Context(), actor))
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			provision.ServeHTTP(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/actor":
 			if r.Method != "GET" || c.Directory == nil || r.URL.Query().Get("id") == "" {
@@ -68,24 +77,14 @@ func (c *backend) handler(key sshcert.RawPublicKey) (http.Handler, error) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(facts.ActorSnapshot{User: controlActor(u), Revision: string(rev)})
-		case "/scim":
-			if r.Method != "POST" || provision == nil || actor != "" {
+		case "/lookup":
+			if r.Method != "OPTIONS" || provision == nil {
 				http.NotFound(w, r)
 				return
 			}
-			var q facts.SCIMRequest
-			if err := json.Unmarshal(body, &q); err != nil || !strings.HasPrefix(q.Target, "/scim/v2/") {
-				http.Error(w, "invalid SCIM request", 400)
-				return
-			}
-			inner, err := http.NewRequestWithContext(r.Context(), q.Method, q.Target, bytes.NewReader(q.Body))
-			if err != nil {
-				http.Error(w, "invalid SCIM request", 400)
-				return
-			}
-			inner.Header.Set("Content-Type", q.ContentType)
-			inner.Header.Set("If-Match", q.IfMatch)
-			provision.ServeHTTP(w, inner)
+			w.Header().Set("Allow", "GET, OPTIONS")
+			w.Header().Set("Link", `</scim/v2/>; rel="`+wire.RelSCIM+`"`)
+			w.WriteHeader(http.StatusNoContent)
 		case "/manage":
 			c.manage(w, r, body, actor)
 		default:
@@ -95,6 +94,9 @@ func (c *backend) handler(key sshcert.RawPublicKey) (http.Handler, error) {
 }
 func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, actor string) {
 	users, canListUsers := c.Directory.(directory.UserLister)
+	if c.ManagedDirectory != nil {
+		users, canListUsers = c.ManagedDirectory, true
+	}
 	w.Header().Set("Content-Type", "application/json")
 	fail := func(code int, msg string) {
 		w.WriteHeader(code)
@@ -102,9 +104,6 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 	}
 	if r.Method == "GET" {
 		capabilities := []string{"admin"}
-		if c.Store != nil {
-			capabilities = append(capabilities, "enroll")
-		}
 		if c.ManagedDirectory != nil {
 			capabilities = append(capabilities, "directory")
 		}
@@ -127,16 +126,12 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 	isUserList := req.Action == "directory-users"
 	isManagedDirectory := req.Action == "directory-groups" || req.Action == "directory-audit"
 	isDirectory := isUserList || isManagedDirectory
-	if isUserList && !canListUsers || isManagedDirectory && c.ManagedDirectory == nil || !isDirectory && c.Store == nil {
+	if isUserList && !canListUsers || isManagedDirectory && c.ManagedDirectory == nil || !isDirectory {
 		fail(404, "requested inventory capability is not configured")
 		return
 	}
-	if req.Action != "enroll" && actor == "" {
+	if actor == "" {
 		fail(403, "authenticated actor is required")
-		return
-	}
-	if req.Action == "enroll" && actor != "" {
-		fail(400, "enrollment is not a human administrative operation")
 		return
 	}
 	var err error
@@ -155,76 +150,16 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 		var events []directory.AuditEvent
 		events, err = c.ManagedDirectory.Audit(r.Context(), directory.AuditSequence(req.AuditAfter), req.AuditLimit)
 		resp.DirectoryAudit = controlSlice(events, controlDirectoryEvent)
-	case "enroll":
-		if req.Host == nil {
-			err = fmt.Errorf("host proposal is required")
-			break
-		}
-		var h *inventory.HostRecord
-		h, err = c.Store.Enroll(r.Context(), inventory.ProposalFromControl(*req.Host), req.Token)
-		resp.Host = controlRecord(h)
-	case "add-pattern":
-		if req.Host == nil {
-			err = fmt.Errorf("pattern proposal is required")
-			break
-		}
-		var h *inventory.HostRecord
-		h, err = c.Store.AddPattern(r.Context(), actor, inventory.ProposalFromControl(*req.Host))
-		resp.Host = controlRecord(h)
-	case "list":
-		var hosts []inventory.HostRecord
-		hosts, err = c.Store.List(r.Context(), req.After, req.Limit, req.Pending)
-		resp.Hosts = controlSlice(hosts, inventory.HostRecord.ControlRecord)
-	case "get":
-		var h *inventory.HostRecord
-		h, err = c.Store.Get(r.Context(), req.ID)
-		resp.Host = controlRecord(h)
-	case "edit", "approve", "deny", "remove":
-		var proposal *inventory.Proposal
-		if req.Host != nil {
-			p := inventory.ProposalFromControl(*req.Host)
-			proposal = &p
-		}
-		var h *inventory.HostRecord
-		h, err = c.Store.Change(r.Context(), actor, req.Action, req.ID, req.Revision, proposal)
-		resp.Host = controlRecord(h)
-	case "token-create":
-		seconds := req.LifetimeSeconds
-		if seconds == 0 {
-			seconds = 3600
-		}
-		if seconds < 1 || seconds > 86400 {
-			err = fmt.Errorf("token lifetime must be between 1s and 24h")
-			break
-		}
-		var t inventory.EnrollmentToken
-		t, err = c.Store.CreateToken(r.Context(), actor, time.Duration(seconds)*time.Second)
-		token := t.ControlToken()
-		resp.Token = &token
-	case "token-list":
-		var tokens []inventory.EnrollmentToken
-		tokens, err = c.Store.Tokens(r.Context(), req.After, req.Limit)
-		resp.Tokens = controlSlice(tokens, inventory.EnrollmentToken.ControlToken)
-	case "token-revoke":
-		err = c.Store.RevokeToken(r.Context(), actor, req.ID)
-	case "audit":
-		var events []inventory.AuditEvent
-		events, err = c.Store.Audit(r.Context(), inventory.AuditSequence(req.AuditAfter), req.AuditLimit)
-		resp.Audit = controlSlice(events, inventory.AuditEvent.ControlEvent)
 	default:
 		err = fmt.Errorf("unknown inventory action")
 	}
 	if err != nil {
 		code := 400
 		switch {
-		case errors.Is(err, inventory.ErrConflict), errors.Is(err, inventory.ErrRevision), errors.Is(err, directory.ErrConflict), errors.Is(err, directory.ErrVersion):
+		case errors.Is(err, directory.ErrConflict), errors.Is(err, directory.ErrVersion):
 			code = 409
-		case errors.Is(err, inventory.ErrNotFound), errors.Is(err, directory.ErrNotFound):
+		case errors.Is(err, directory.ErrNotFound):
 			code = 404
-		case errors.Is(err, inventory.ErrToken):
-			code = 403
-		case errors.Is(err, inventory.ErrStorage):
-			code = 503
 		default:
 			if isDirectory && !errors.Is(err, directory.ErrInvalid) {
 				code = 503
@@ -236,9 +171,6 @@ func (c *backend) manage(w http.ResponseWriter, r *http.Request, body []byte, ac
 			fail(code, err.Error())
 		}
 		return
-	}
-	if req.Action == "enroll" && resp.Host.Status == "pending" {
-		w.WriteHeader(http.StatusAccepted)
 	}
 	json.NewEncoder(w).Encode(resp)
 }

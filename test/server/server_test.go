@@ -479,7 +479,8 @@ func seedManagedPattern(t *testing.T, state string, accounts []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Change(t.Context(), "admin", "approve", record.ID, record.Revision, nil); err != nil {
+	record.Status = "active"
+	if _, err = store.Replace(t.Context(), "admin", *record, record.Revision); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -24,9 +24,9 @@ func TestServiceRoutesWithoutControlKey(t *testing.T) {
 	store, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer store.Close()
-	directoryHandler, err := factserver.DirectoryHandler(&users{active: true}, nil, public, "")
+	directoryHandler, err := factserver.DirectoryHandler(&users{active: true}, public, "")
 	require.NoError(t, err)
-	inventoryHandler, err := factserver.InventoryHandler(store, public, "")
+	inventoryHandler, err := factserver.InventoryHandler(store, public, "", factserver.WithInventoryManagement(store))
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name    string
@@ -38,9 +38,9 @@ func TestServiceRoutesWithoutControlKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			service := httptest.NewServer(tc.handler)
 			defer service.Close()
-			directoryURL, inventoryURL := service.URL, ""
+			directoryURL, inventoryURL := service.URL+"/lookup", ""
 			if tc.name == "inventory" {
-				directoryURL, inventoryURL = "", service.URL
+				directoryURL, inventoryURL = "", service.URL+"/lookup"
 			}
 			client, err := facts.NewDataClient(directoryURL, inventoryURL, key, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestServiceConstructorsEnforceDistinctReaderAndControlKeys(t *testing.T) {
 	store, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer store.Close()
-	_, err = factserver.DirectoryHandler(&users{active: true}, nil, public, public)
+	_, err = factserver.DirectoryHandler(&users{active: true}, public, public)
 	require.ErrorContains(t, err, "distinct signing keys")
 	_, err = factserver.InventoryHandler(store, public, public)
 	require.ErrorContains(t, err, "distinct signing keys")
@@ -111,7 +111,7 @@ func TestInventoryServiceAcceptsAlternateManagedStore(t *testing.T) {
 	controlPublic, controlKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	store := &alternateInventoryStore{}
-	handler, err := factserver.InventoryHandler(store, caPublic, controlPublic)
+	handler, err := factserver.InventoryHandler(store, caPublic, controlPublic, factserver.WithInventoryManagement(store))
 	require.NoError(t, err)
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), inventoryContextKey{}, "request-context")
@@ -119,7 +119,7 @@ func TestInventoryServiceAcceptsAlternateManagedStore(t *testing.T) {
 	}))
 	defer service.Close()
 	tls := tlsconfig.Config{Insecure: true}
-	control, err := facts.NewControlClient("", service.URL, controlKey, tls)
+	control, err := facts.NewControlClient("", service.URL+"/lookup", controlKey, tls)
 	require.NoError(t, err)
 	p := facts.Proposal{Pattern: "runner-*.example", Accounts: []string{"deploy"}, Labels: map[string]string{"role": "runner"}, PrincipalMode: string(inventory.AccountNamePrincipals)}
 	record, err := control.AddPattern(t.Context(), facts.Authorization{Actor: "admin"}, p)
@@ -128,7 +128,7 @@ func TestInventoryServiceAcceptsAlternateManagedStore(t *testing.T) {
 	require.Equal(t, "request-context", store.contextValue)
 	require.Equal(t, p, record.Proposal)
 
-	data, err := facts.NewDataClient("", service.URL, caKey, tls)
+	data, err := facts.NewDataClient("", service.URL+"/lookup", caKey, tls)
 	require.NoError(t, err)
 	host, err := data.Host(t.Context(), "runner-one.example")
 	require.NoError(t, err)

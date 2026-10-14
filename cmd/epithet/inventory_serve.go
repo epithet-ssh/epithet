@@ -44,7 +44,7 @@ func (c *InventoryCLI) runServer(logger *slog.Logger, tlsCfg tlsconfig.Config) e
 			return err
 		}
 	}
-	handler, err := factserver.InventoryHandler(managed, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
+	handler, err := factserver.InventoryHandler(managed, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey), factserver.WithInventoryManagement(managed))
 	if err != nil {
 		return err
 	}

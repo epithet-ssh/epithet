@@ -1,4 +1,6 @@
-package facts
+// Package serviceauth signs and verifies request-bound service credentials.
+// It owns the JWT protocol shared by callers and fact providers.
+package serviceauth
 
 import (
 	"crypto/ecdsa"
@@ -38,17 +40,19 @@ const clockSkewGrace = 30 * time.Second
 // method and target (host, escaped path, and query) it was minted for, so a captured token
 // can't be replayed against a different request that happens to carry the
 // same (or empty) body — e.g. a GET / token replayed against a POST / with
-// no body.
+// no body. if_match and content_type bind the write precondition and body interpretation.
 type requestClaims struct {
-	Subject  string `json:"sub,omitempty"`
-	Issuer   string `json:"iss"`
-	Audience string `json:"aud"`
-	IssuedAt int64  `json:"iat"`
-	Expiry   int64  `json:"exp"`
-	ID       string `json:"jti"`
-	BodyHash string `json:"bh"`
-	Method   string `json:"htm"`
-	Target   string `json:"htu"`
+	Subject     string `json:"sub,omitempty"`
+	Issuer      string `json:"iss"`
+	Audience    string `json:"aud"`
+	IssuedAt    int64  `json:"iat"`
+	Expiry      int64  `json:"exp"`
+	ID          string `json:"jti"`
+	BodyHash    string `json:"bh"`
+	Method      string `json:"htm"`
+	Target      string `json:"htu"`
+	IfMatch     string `json:"if_match,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 // Signer mints request-bound JWTs signed with a service SSH private key.
@@ -98,7 +102,7 @@ func (s *Signer) Authorize(req *http.Request, body []byte) error {
 }
 
 // AuthorizeActor binds an authenticated human actor to this backend request.
-// An empty actor is used for service operations such as enrollment and SCIM.
+// An empty actor is used for service operations such as enrollment.
 func (s *Signer) AuthorizeActor(req *http.Request, body []byte, actor string) error {
 	return s.authorizeActorAt(req, body, actor, time.Now())
 }
@@ -117,15 +121,17 @@ func (s *Signer) authorizeActorAt(req *http.Request, body []byte, actor string, 
 	sum := sha256.Sum256(body)
 
 	claims := requestClaims{
-		Subject:  actor,
-		Issuer:   s.fingerprint,
-		Audience: s.audience,
-		IssuedAt: now.Unix(),
-		Expiry:   now.Add(TokenTTL).Unix(),
-		ID:       hex.EncodeToString(jti),
-		BodyHash: base64.RawURLEncoding.EncodeToString(sum[:]),
-		Method:   req.Method,
-		Target:   requestTarget(req.Host, req.URL.Host, req.URL.RequestURI()),
+		IfMatch:     req.Header.Get("If-Match"),
+		ContentType: req.Header.Get("Content-Type"),
+		Subject:     actor,
+		Issuer:      s.fingerprint,
+		Audience:    s.audience,
+		IssuedAt:    now.Unix(),
+		Expiry:      now.Add(TokenTTL).Unix(),
+		ID:          hex.EncodeToString(jti),
+		BodyHash:    base64.RawURLEncoding.EncodeToString(sum[:]),
+		Method:      req.Method,
+		Target:      requestTarget(req.Host, req.URL.Host, req.URL.RequestURI()),
 	}
 
 	raw, err := jwt.Signed(s.signer).Claims(claims).Serialize()
@@ -225,6 +231,12 @@ func (v *Verifier) VerifyActor(req *http.Request, body []byte) (string, error) {
 		return "", fmt.Errorf("target mismatch")
 	}
 
+	if claims.ContentType != req.Header.Get("Content-Type") {
+		return "", fmt.Errorf("Content-Type mismatch")
+	}
+	if claims.IfMatch != req.Header.Get("If-Match") {
+		return "", fmt.Errorf("If-Match mismatch")
+	}
 	sum := sha256.Sum256(body)
 	expectedHash := base64.RawURLEncoding.EncodeToString(sum[:])
 	if subtle.ConstantTimeCompare([]byte(claims.BodyHash), []byte(expectedHash)) != 1 {

@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +96,27 @@ func TestInventoryFindAcrossPages(t *testing.T) {
 						return
 					}
 				}
+				if !ambiguous {
+					conn, err := listener.Accept()
+					if err != nil {
+						done <- err
+						return
+					}
+					var req broker.Request
+					err = json.NewDecoder(conn).Decode(&req)
+					if err == nil && (req.Inventory == nil || req.Inventory.Action != "get" || req.Inventory.ID != last.ID) {
+						err = fmt.Errorf("expected selected record GET")
+					}
+					if err == nil {
+						last.Revision = 2
+						err = json.NewEncoder(conn).Encode(broker.Event{Inventory: &broker.InventoryResponse{ControlResponse: facts.ControlResponse{Host: &last}}})
+					}
+					conn.Close()
+					if err != nil {
+						done <- err
+						return
+					}
+				}
 				done <- nil
 			}()
 			cli := InventoryCLI{ManagementCLI: ManagementCLI{Broker: socket}}
@@ -106,4 +130,25 @@ func TestInventoryFindAcrossPages(t *testing.T) {
 			require.NoError(t, <-done)
 		})
 	}
+}
+
+func TestInventoryAutomationUsesConfiguredCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/manage", r.URL.Path)
+		require.Equal(t, "Bearer automation-secret", r.Header.Get("Authorization"))
+		var req facts.ControlRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Equal(t, "list", req.Action)
+		json.NewEncoder(w).Encode(facts.ControlResponse{Hosts: []facts.HostRecord{}})
+	}))
+	defer server.Close()
+	token := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(token, []byte("automation-secret\n"), 0600))
+	c := InventoryCLI{ControlURL: server.URL + "/manage", AdminTokenFile: token}
+	require.NoError(t, c.BeforeRun(tlsconfig.Config{Insecure: true}))
+	_, err := c.request(facts.ControlRequest{Action: "list"})
+	require.NoError(t, err)
+	c.ControlURL = ""
+	_, err = c.request(facts.ControlRequest{Action: "list"})
+	require.ErrorContains(t, err, "both --control-url and --admin-token-file")
 }

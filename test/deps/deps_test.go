@@ -112,3 +112,17 @@ func TestFactContractsAndHandlersDoNotLinkSQLite(t *testing.T) {
 		})
 	}
 }
+
+// The shared authentication and transport layers cannot acquire knowledge of
+// fact resources or service implementations through direct or indirect imports.
+func TestServiceInfrastructureDoesNotLinkFacts(t *testing.T) {
+	for _, pkg := range []string{"./pkg/serviceauth", "./internal/servicehttp"} {
+		t.Run(pkg, func(t *testing.T) {
+			for _, dep := range deps(t, pkg) {
+				if dep == module+"pkg/facts" || strings.HasPrefix(dep, module+"pkg/facts/") {
+					t.Errorf("%s depends on %s; fact protocol ownership belongs to callers", pkg, dep)
+				}
+			}
+		})
+	}
+}

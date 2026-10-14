@@ -19,6 +19,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	client, err := facts.NewDataClient(server.URL, "", key, tlsconfig.Config{Insecure: true})
+	client, err := facts.NewDataClient(server.URL+"/lookup", "", key, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	id := "opaque+id & slash/ ? こんにちは"
 	u, err := client.User(t.Context(), id)
@@ -53,7 +54,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	u, err = client.User(t.Context(), id)
 	require.NoError(t, err)
 	require.Nil(t, u, "same lookup must not reuse active facts")
-	signed, err := newSignedTestClient(server.URL, key, facts.DirectoryAudience)
+	signed, err := newSignedTestClient(server.URL, key, serviceauth.DirectoryAudience)
 	require.NoError(t, err)
 	for _, id := range []string{"missing", "inactive"} {
 		resp, err := signed.Do(t.Context(), "GET", "/lookup", url.Values{"id": {id}}, nil, "")
@@ -72,7 +73,7 @@ func TestDirectoryLookupContract(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, 400, resp.StatusCode)
-	wrong, err := newSignedTestClient(server.URL, key, facts.InventoryAudience)
+	wrong, err := newSignedTestClient(server.URL, key, serviceauth.InventoryAudience)
 	require.NoError(t, err)
 	resp, err = wrong.Do(t.Context(), "GET", "/lookup", url.Values{"id": {"one"}}, nil, "")
 	require.NoError(t, err)
@@ -121,7 +122,7 @@ func TestBespokeProviderResponseValidation(t *testing.T) {
 			defer server.Close()
 			directoryURL, inventoryURL := server.URL, ""
 			if tc.host {
-				directoryURL, inventoryURL = "", server.URL
+				directoryURL, inventoryURL = "", server.URL+"/lookup"
 			}
 			client, err := facts.NewDataClient(directoryURL, inventoryURL, key, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
@@ -152,7 +153,7 @@ func TestProviderStatusAndNoRedirects(t *testing.T) {
 				io.WriteString(w, `{"id":"id"}`)
 			}))
 			defer server.Close()
-			client, err := facts.NewDataClient(server.URL, "", key, tlsconfig.Config{Insecure: true})
+			client, err := facts.NewDataClient(server.URL+"/lookup", "", key, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			u, err := client.User(t.Context(), "id")
 			if status == 200 {
@@ -243,14 +244,14 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	signed, err := newSignedTestClient(server.URL, key, facts.InventoryAudience)
+	signed, err := newSignedTestClient(server.URL, key, serviceauth.InventoryAudience)
 	require.NoError(t, err)
 	resp, err := signed.Do(t.Context(), "GET", "/lookup", url.Values{"host": {"ci-one.example"}}, nil, "")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
-	client, err := facts.NewDataClient("", server.URL, key, tlsconfig.Config{Insecure: true})
+	client, err := facts.NewDataClient("", server.URL+"/lookup", key, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	h, err := client.Host(t.Context(), "ci-one.example")
 	require.Nil(t, h)
@@ -265,11 +266,11 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 // boundary. Raw HTTP stays test-only; production clients expose domain methods.
 type signedTestClient struct {
 	endpoint string
-	signer   *facts.Signer
+	signer   *serviceauth.Signer
 }
 
 func newSignedTestClient(endpoint string, key sshcert.RawPrivateKey, audience string) (*signedTestClient, error) {
-	signer, err := facts.NewSignerFor(key, audience)
+	signer, err := serviceauth.NewSignerFor(key, audience)
 	if err != nil {
 		return nil, err
 	}

@@ -78,17 +78,17 @@ type AuditEvent struct {
 	PreviousID string
 }
 
-// Store owns directory persistence and all changes to authorization indexes.
+// Store is the directory management contract, independent of Directory fact
+// lookup. Implementations own persistence and all changes to authorization indexes.
 // Each mutation commits the user or group, memberships, audit and revision
 // together. No database handles or multi-call transaction protocol escape here.
 // Get methods return independent snapshots; each List returns a typed slice and
-// total count from one snapshot (start is one-based). LookupUser resolves identity,
-// memberships and current group facts in a single read. Backend failures stay errors.
+// total count from one snapshot (start is one-based). Backend failures stay errors.
+// The caller owns implementation lifetime; closing it is not a management operation.
 //
 // Replace/Delete accept an optional resource ETag ("*" requires existence).
 // A stale precondition leaves state unchanged.
 type Store interface {
-	Directory
 	UserLister
 	CreateUser(context.Context, ManagedUser) (ManagedUser, error)
 	ReplaceUser(ctx context.Context, id string, user ManagedUser, match string) (ManagedUser, error)
@@ -105,5 +105,22 @@ type Store interface {
 	// in sequence order. Zero limit uses DefaultAuditLimit; limits above
 	// MaxAuditLimit are invalid. An empty result means the cursor is caught up.
 	Audit(ctx context.Context, after AuditSequence, limit int) ([]AuditEvent, error)
-	Close() error
+}
+
+// WithActor attaches the identity authenticated by the service boundary. HTTP
+// payloads must never supply it. Stores use Actor for every mutation audit row.
+func WithActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, actorKey{}, actor)
+}
+
+type actorKey struct{}
+
+// Actor returns the trusted actor, retaining "scim" for direct provisioning
+// callers without a human identity (including imports and shared-secret calls).
+func Actor(ctx context.Context) string {
+	actor, _ := ctx.Value(actorKey{}).(string)
+	if actor == "" {
+		return "scim"
+	}
+	return actor
 }

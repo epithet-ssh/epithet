@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design SCIM directory management and CLI access through control
 id: ywxp1g89
 created: 2026-10-13T15:43:29.263132Z
-updated: 2026-10-13T15:45:10.537899Z
+updated: 2026-10-14T09:38:48.667320Z
 author: Brian McCallister
 priority: low
 tags:
@@ -15,9 +15,32 @@ tags:
 
 # SCIM directory management and CLI access
 
-Deferred, lower-priority design work split from inventory task `s9cqey45`.
-Manual directory user creation and editing must not block inventory management.
-Implementation is not authorized by this task.
+SCIM exposure through control was authorized on 2026-10-14 and is implemented.
+Manual directory user creation/editing on the CLI remains deferred, lower-priority
+work split from inventory task `s9cqey45`.
+
+## Implemented SCIM provider boundary
+
+- Signed OPTIONS at the complete directory fact endpoint discovers a SCIM base
+  using `Link: </scim/v2/>; rel="https://epithet.dev/rel/scim"`. Ordinary Link was
+  explicitly chosen because SCIM already defines resource paths and query syntax.
+- Initial discovery 4xx or successful discovery without the relation means
+  data-only support. Transport errors, 5xx, redirects and invalid target URLs
+  remain failures. There is no recursive OPTIONS discovery or capability cache.
+- Forward SCIM HTTP directly with signed method, target, body, actor, If-Match and
+  Content-Type. Removed the private POST `/scim` envelope. The public route stays
+  `/scim/v2/`. Preserve statuses, ETags, query encoding, and response bodies.
+- Rebase standard resource references (Location, meta.location, User groups.$ref,
+  Group members.$ref, including list results) from the private SCIM tree to the
+  public path, as explicitly agreed. Preserve external references and extensions.
+- The provisioning secret is optional. OIDC directory-admin users can access SCIM
+  without it. Control authenticates and authorizes; providers trust control-signed
+  requests and preserve human identity in audit. Secret provisioning uses `scim`.
+- HTTP directory URLs on CA/control now name the complete fact endpoint, just like
+  inventory URLs. Unix socket URLs retain /lookup. `directory-backend` remains
+  the built-in root for existing snapshots/listing/audit, separate from SCIM.
+- The built-in SCIM subset, identity mapping, schema and database are unchanged.
+  Directory CLI commands and the identity/setup questions below remain deferred.
 
 ## Agreed direction
 
@@ -72,30 +95,17 @@ removing the separate actor/revision protocol was recommended but not yet agreed
 The current backend no longer checks the authorization revision formerly used
 for rebinding. Determine audit inspection separately from standard SCIM operations.
 
-Provisioning transport alternatives previously considered:
-
-1. Retain the current signed SCIM-in-JSON tunnel: smallest immediate change, but
-   exposes a custom envelope and header allowlist.
-2. Advertise a SCIM endpoint and forward signed HTTP: preferred exploration
-   direction, requiring precise target and conditional-header integrity rules.
-3. Move SCIM adaptation into control and invent provider user/group operations:
-   enlarges the private API and conflicts with the agreed SCIM management direction.
-
-The current signature binds method, target, and body, not arbitrary headers.
-The tunnel protects If-Match inside the signed body; any direct SCIM hop must
-preserve that integrity. This is unresolved design, not implementation approval.
-
-Discovery remains optional for a data-only directory provider. Coordinate shared
-control/discovery conventions with inventory task `s9cqey45`, without making
-inventory wait for manual directory administration. Signed OPTIONS and Link-based
-capabilities remain a proposal; exact relations, failure semantics and Unix
-addressing are not settled.
+The chosen direct-SCIM transport avoids requiring external providers to implement
+an Epithet JSON tunnel. Moving SCIM adaptation into control and inventing generic
+directory CRUD was rejected because it duplicates the standard. Existing signed
+actor snapshot and directory audit/listing protocols remain: their removal was
+not authorized by this implementation.
 
 ## Design record
 
 The user requested discussion followed by ADR 0002 for the settled management
-interface, alternatives and rationale. Coordinate that record with `s9cqey45`;
-no ADR has been written and deferred directory work must not block inventory.
+interface, alternatives and rationale. ADR 0002 now records the settled inventory
+and SCIM provider boundaries; deferred directory CLI work must not block either.
 Implementation planning and sequencing stay in YATL.
 
 The original combined exploration and conversation log remain in the history of
@@ -111,3 +121,38 @@ Created task.
 # Log: 2026-10-13T15:45:10Z Brian McCallister
 
 Split from s9cqey45 at user request. Preserved agreed SCIM/control authentication, agent-backed CLI direction, unique-name addressing, single-name creation and OIDC mapping discussion. Manual directory administration is deferred; inventory is higher priority. Implementation remains unapproved.
+
+---
+# Log: 2026-10-14T09:07:01Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-10-14T09:13:32Z Brian McCallister
+
+Implemented the authorized SCIM exposure through control: OPTIONS/Link discovery, direct signed SCIM HTTP, optional provisioning secret plus OIDC directory-admin, human audit identity, and standard resource URL rebasing. Complete directory fact URLs align with inventory. Updated ADR 0002 and provider documentation. Full make test passed, including server integration tests; final build/checks recorded separately. Directory CLI design remains deferred.
+
+---
+# Log: 2026-10-14T09:13:32Z Brian McCallister
+
+Stopped working.
+
+---
+# Log: 2026-10-14T09:14:12Z Brian McCallister
+
+Final verification: make -B build and make test passed (including test/server). Focused facts, SCIM, CA-client and wire suites passed again after final ownership cleanup. Reviewed the SCIM-only diff against the completed inventory snapshot; directory CLI and broader actor/audit protocol redesign remain deferred.
+
+---
+# Log: 2026-10-14T09:26:22Z Brian McCallister
+
+Separated the data and management contracts. DirectoryHandler and InventoryHandler now require a data source and accept typed WithDirectoryManagement / WithInventoryManagement options; each pair may use the same instance or independent implementations of one logical service. Store interfaces no longer embed lookup interfaces, and directory Close remains concrete lifecycle ownership. Updated provider docs and ADR 0002; tests cover separate database handles and explicit opt-in.
+
+---
+# Log: 2026-10-14T09:27:03Z Brian McCallister
+
+Constructor/interface refactor validation: make -B build and full make test passed. Reviewed the incremental diff; only interface separation, explicit constructor options, caller/test adaptations and related documentation changed. Existing static-directory inspection remains supported.
+
+---
+# Log: 2026-10-14T09:38:48Z Brian McCallister
+
+Completed the approved cohesion refactor: SCIM forwarding, OPTIONS discovery and resource URL rebasing are private to facts/control/scim.go; removed the public SCIM client/request/result types. Shared signed HTTP exchanges now live in internal/servicehttp, with the unchanged signing and verification protocol relocated to pkg/serviceauth. Domain statuses and errors remain with their callers. Updated provider imports, documentation and tests; added dependency and discovered-URL policy checks. Reviewed the incremental diff against a5df7604. Final make -B build and make test passed, including server integration tests.

@@ -35,7 +35,13 @@ func (noAuthentication) Validate(context.Context, string) (*oidc.Claims, error) 
 	return nil, fmt.Errorf("no authentication configured")
 }
 
-func New(t *testing.T, users directory.Directory, managed directory.Store, hosts inventory.Store, config control.Config) *Fixture {
+// Most control fixtures use a single inventory instance for both planes.
+type managedInventory interface {
+	inventory.Hosts
+	inventory.Store
+}
+
+func New(t *testing.T, users directory.Directory, managed directory.Store, hosts managedInventory, config control.Config) *Fixture {
 	t.Helper()
 	caPub, caKey, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
@@ -45,22 +51,22 @@ func New(t *testing.T, users directory.Directory, managed directory.Store, hosts
 	if users == nil {
 		users = emptyDirectory{}
 	}
-	handler, err := factserver.DirectoryHandler(users, managed, caPub, pub)
+	handler, err := factserver.DirectoryHandler(users, caPub, pub, factserver.WithDirectoryManagement(managed))
 	require.NoError(t, err)
 	ds := httptest.NewServer(handler)
 	t.Cleanup(ds.Close)
 	f.DirectoryURL = ds.URL
 	config.Key = key
-	config.DirectoryURL = ds.URL
+	config.DirectoryURL = ds.URL + "/lookup"
 	config.DirectoryBackendURL = ds.URL
 	config.TLS = tlsconfig.Config{Insecure: true}
 	if hosts != nil {
-		h, err := factserver.InventoryHandler(hosts, caPub, pub)
+		h, err := factserver.InventoryHandler(hosts, caPub, pub, factserver.WithInventoryManagement(hosts))
 		require.NoError(t, err)
 		is := httptest.NewServer(h)
 		t.Cleanup(is.Close)
-		f.InventoryURL = is.URL
-		config.InventoryBackendURL = is.URL
+		f.InventoryURL = is.URL + "/lookup"
+		config.InventoryBackendURL = f.InventoryURL
 	}
 	if config.Validator == nil {
 		config.Validator = noAuthentication{}

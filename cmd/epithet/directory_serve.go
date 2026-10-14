@@ -16,7 +16,7 @@ type DirectoryServeCLI struct{}
 
 func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	var users directory.Directory
-	var store directory.Store
+	var store *sqlitestore.Store
 	switch c.Mode {
 	case "", "static":
 		paths, err := config.ExpandGlobs(c.Static)
@@ -64,7 +64,11 @@ func (*DirectoryServeCLI) Run(c *DirectoryCLI, logger *slog.Logger, tlsCfg tlsco
 			return err
 		}
 	}
-	handler, err := factserver.DirectoryHandler(users, store, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey))
+	var options []factserver.DirectoryOption
+	if store != nil {
+		options = append(options, factserver.WithDirectoryManagement(store))
+	}
+	handler, err := factserver.DirectoryHandler(users, sshcert.RawPublicKey(key), sshcert.RawPublicKey(controlKey), options...)
 	if err != nil {
 		return err
 	}

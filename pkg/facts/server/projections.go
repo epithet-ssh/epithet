@@ -3,21 +3,10 @@ package server
 import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/writ/object"
 )
 
-// Projections from storage types onto the control API. Host records convert
-// through pkg/facts/inventory; directory types convert here so pkg/facts/directory never
-// learns the shared protocol's shape.
-
-func controlRecord(r *inventory.HostRecord) *facts.HostRecord {
-	if r == nil {
-		return nil
-	}
-	v := r.ControlRecord()
-	return &v
-}
+// Directory projections stay here so storage never learns the control protocol.
 
 // controlSlice maps a slice element-wise, preserving nil versus empty.
 func controlSlice[S, T any](in []S, f func(S) T) []T {

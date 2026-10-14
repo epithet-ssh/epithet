@@ -297,9 +297,11 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 	first, err := hosts.List(t.Context(), "", 1, false)
 	require.NoError(t, err)
 	p := inventory.Proposal{Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
-	h, err := hosts.Change(t.Context(), "admin", "edit", first[0].ID, first[0].Revision, &p)
+	first[0].Proposal = p
+	h, err := hosts.Replace(t.Context(), "admin", first[0], first[0].Revision)
 	require.NoError(t, err)
-	_, err = hosts.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+	h.Status = "active"
+	_, err = hosts.Replace(t.Context(), "admin", *h, h.Revision)
 	require.NoError(t, err)
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})
@@ -328,7 +330,7 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 	}
 	require.Equal(t, 132, count)
 	require.Greater(t, bytes, facts.MaxControlResponse)
-	for _, action := range []string{"list", "token-list"} {
+	for _, action := range []string{"list"} {
 		var after string
 		count := 0
 		for {
@@ -337,9 +339,6 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 			var ids []string
 			for _, h := range r.Hosts {
 				ids = append(ids, h.ID)
-			}
-			for _, token := range r.Tokens {
-				ids = append(ids, token.ID)
 			}
 			require.LessOrEqual(t, len(ids), 37)
 			if len(ids) == 0 {

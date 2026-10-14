@@ -372,7 +372,7 @@ func (c *Client) doGetDiscovery(ctx context.Context, caURL string) (*DiscoveryRe
 		return nil, err
 	}
 
-	ref, _ := findLinkTarget(links, wire.RelAuth) // fetchDiscoveryLinks requires this relation.
+	ref, _ := wire.FindLinkTarget(links, wire.RelAuth) // fetchDiscoveryLinks requires this relation.
 	target, err := resolveLinkTarget(final, ref)
 	if err != nil {
 		return nil, err
@@ -440,7 +440,7 @@ func (c *Client) fetchDiscoveryLinks(ctx context.Context, caURL string) (*url.UR
 		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("GET %s returned %d", caURL, res.StatusCode)}
 	}
 
-	_, ok := findLinkTarget(res.Header, wire.RelAuth)
+	_, ok := wire.FindLinkTarget(res.Header, wire.RelAuth)
 	if !ok {
 		return nil, nil, &InvalidRequestError{Message: fmt.Sprintf("CA at %s did not advertise its auth config (no Link with rel=%q); the CA is older than this client and must be upgraded", caURL, wire.RelAuth)}
 	}

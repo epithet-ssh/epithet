@@ -17,8 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/servicehttp"
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -46,20 +48,24 @@ func (a Admins) Allows(u *facts.Actor) bool {
 }
 
 // Config keeps identity and administrative grants at control. The directory
-// lookup URL is required; optional backend URLs enable the existing built-in
-// management capabilities without imposing them on custom fact providers.
+// complete lookup URL is required and discovers optional SCIM management.
+// DirectoryBackendURL enables the built-in directory snapshot and audit APIs;
+// InventoryBackendURL is the complete inventory fact endpoint where optional
+// management resources are discovered.
 type Config struct {
 	Key                                                    sshcert.RawPrivateKey
 	DirectoryURL, DirectoryBackendURL, InventoryBackendURL string
 	Validator                                              TokenValidator
 	DirectoryAdmins, InventoryAdmins                       Admins
 	SCIMToken                                              string
+	InventoryToken                                         string
 	TLS                                                    tlsconfig.Config
 }
 type Server struct {
 	config    Config
 	data      *facts.DataClient
 	control   *facts.ControlClient
+	directory *servicehttp.Client
 	mu        sync.Mutex
 	allowance float64
 	last      time.Time
@@ -77,10 +83,17 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.SCIMToken != "" && (config.DirectoryBackendURL == "" || strings.ContainsAny(config.SCIMToken, " \t\r\n")) {
-		return nil, fmt.Errorf("SCIM requires a directory backend and a bearer token without whitespace")
+	if strings.ContainsAny(config.SCIMToken, " \t\r\n") {
+		return nil, fmt.Errorf("SCIM requires a bearer token without whitespace")
 	}
-	s := &Server{config: config, data: data, control: control}
+	if config.InventoryToken != "" && (config.InventoryBackendURL == "" || strings.ContainsAny(config.InventoryToken, " \t\r\n")) {
+		return nil, fmt.Errorf("inventory token requires an inventory fact endpoint and no whitespace")
+	}
+	directory, err := servicehttp.New(config.DirectoryURL, "/lookup", config.Key, serviceauth.DirectoryAudience, config.TLS)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{config: config, data: data, control: control, directory: directory}
 	return s, nil
 }
 func (s *Server) admit() bool {
@@ -162,25 +175,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			controlError(w, 401, "authentication required")
 			return
 		}
-		claims, err := s.config.Validator.Validate(r.Context(), raw)
-		if err != nil {
-			if errors.Is(err, oidc.ErrUnavailable) {
-				controlError(w, 503, "OIDC dependency unavailable")
+		if !isDirectory && matchesSecret(raw, s.config.InventoryToken) {
+			actor = "inventory-token"
+		} else {
+			auth, rejected := s.authorizeAdmin(r.Context(), raw, admins, role)
+			if rejected != nil {
+				controlError(w, rejected.Status, rejected.Message)
 				return
 			}
-			controlError(w, 401, "invalid or expired authentication")
-			return
+			actor, revision = auth.Actor, auth.DirectoryRevision
 		}
-		u, rev, err := s.actor(r.Context(), claims.UserID)
-		if err != nil {
-			controlError(w, 503, "directory unavailable")
-			return
-		}
-		if !admins.Allows(u) {
-			controlError(w, 403, role+" role required")
-			return
-		}
-		actor, revision = u.ID, rev
 	}
 	result, err := s.execute(r.Context(), req, facts.Authorization{Actor: actor, DirectoryRevision: revision})
 	if err != nil {
@@ -236,8 +240,6 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth fac
 		err = s.control.RemoveHost(ctx, auth, req.ID, req.Revision)
 	case "token-create":
 		result.Token, err = s.control.CreateToken(ctx, auth, req.LifetimeSeconds)
-	case "token-list":
-		result.Tokens, err = s.control.Tokens(ctx, auth, req.After, req.Limit)
 	case "token-revoke":
 		err = s.control.RevokeToken(ctx, auth, req.ID)
 	case "audit":
@@ -272,47 +274,38 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
-func (s *Server) scim(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/scim+json")
-	if s.config.SCIMToken == "" {
-		http.NotFound(w, r)
-		return
+
+// Hash both inputs so comparison time does not disclose credential length.
+func matchesSecret(actual, expected string) bool {
+	if actual == "" || expected == "" {
+		return false
 	}
-	fields := strings.Fields(r.Header.Get("Authorization"))
-	token := ""
-	if len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
-		token = fields[1]
-	}
-	actual, expected := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(s.config.SCIMToken))
-	if token == "" || subtle.ConstantTimeCompare(actual[:], expected[:]) != 1 {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="scim"`)
-		scimError(w, 401, "invalid provisioning credential")
-		return
-	}
-	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20+1))
-	if err != nil || len(body) > 4<<20 {
-		scimError(w, 413, "request too large")
-		return
-	}
-	result, err := s.control.Provision(r.Context(), facts.SCIMRequest{Method: r.Method, Target: r.URL.RequestURI(), ContentType: r.Header.Get("Content-Type"), IfMatch: r.Header.Get("If-Match"), Body: body})
-	if err != nil {
-		controlError(w, 503, "control backend unavailable")
-		return
-	}
-	// Preserve the provisioning protocol's status and metadata without exposing
-	// the private service transport or forwarding its authentication headers.
-	for name, value := range map[string]string{"Content-Type": result.ContentType, "ETag": result.ETag, "Location": result.Location, "WWW-Authenticate": result.WWWAuthenticate} {
-		if value != "" {
-			w.Header().Set(name, value)
-		}
-	}
-	w.WriteHeader(result.Status)
-	w.Write(result.Body)
+	a, b := sha256.Sum256([]byte(actual)), sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
-func scimError(w http.ResponseWriter, status int, detail string) {
-	w.Header().Set("Content-Type", "application/scim+json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:Error"}, "status": fmt.Sprint(status), "detail": detail})
+// authorizeAdmin is shared by SCIM and command administration: public identity
+// validation and active-user grants have one owner, before provider dispatch.
+func (s *Server) authorizeAdmin(ctx context.Context, token string, admins Admins, role string) (facts.Authorization, *facts.ServiceError) {
+	fail := func(status int, message string) (facts.Authorization, *facts.ServiceError) {
+		return facts.Authorization{}, &facts.ServiceError{Status: status, Message: message}
+	}
+	if token == "" {
+		return fail(401, "authentication required")
+	}
+	claims, err := s.config.Validator.Validate(ctx, token)
+	if err != nil {
+		if errors.Is(err, oidc.ErrUnavailable) {
+			return fail(503, "OIDC dependency unavailable")
+		}
+		return fail(401, "invalid or expired authentication")
+	}
+	u, revision, err := s.actor(ctx, claims.UserID)
+	if err != nil {
+		return fail(503, "directory unavailable")
+	}
+	if !admins.Allows(u) {
+		return fail(403, role+" role required")
+	}
+	return facts.Authorization{Actor: u.ID, DirectoryRevision: revision}, nil
 }

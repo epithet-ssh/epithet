@@ -33,8 +33,8 @@ func NewBackend(store directory.Store) (*Handler, error) {
 		ServiceProviderConfig: &elimity.ServiceProviderConfig{
 			MaxResults: maxPage,
 			AuthenticationSchemes: []elimity.AuthenticationScheme{{
-				Type: elimity.AuthenticationTypeOauthBearerToken, Name: "Provisioning bearer token",
-				Description: "Operator-supplied provisioning token", Primary: true,
+				Type: elimity.AuthenticationTypeOauthBearerToken, Name: "Control bearer token",
+				Description: "Optional provisioning token or OIDC identity with directory-admin access", Primary: true,
 			}},
 		},
 		ResourceTypes: []elimity.ResourceType{

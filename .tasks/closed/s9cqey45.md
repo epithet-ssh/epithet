@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design inventory management interface and provider discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-14T08:15:25.246922Z
+updated: 2026-10-14T08:55:55.681712Z
 author: Brian McCallister
 priority: high
 tags:
@@ -15,9 +15,37 @@ tags:
 
 # Inventory management interface and provider discovery
 
-High-priority, in-progress design work. Directory management and the deferred
-manual-user CLI are now tracked separately in `ywxp1g89`; they do not block this
-task. Application implementation is not authorized yet.
+Implemented after explicit user authorization on 2026-10-14. Directory management
+and the deferred manual-user CLI remain separately tracked in `ywxp1g89`.
+
+## Implementation result (2026-10-14)
+
+- Added REST inventory provider resources and signed OPTIONS/Link-Template
+  discovery at the complete configured fact endpoint. Initial OPTIONS 4xx or
+  success without management relations selects lookup-only use; malformed/partial
+  advertisements, redirects, transport and 5xx failures remain errors.
+- Control translates existing CLI commands to provider REST. Whole PUT supports
+  either proposal editing or pending-to-active/denied review, not both. Strong
+  ETag/If-Match protects PUT/DELETE; If-Match is covered by service signatures.
+- Record/audit lists retain bounded ID/sequence continuation. List documents omit
+  revisions; CLI selection reads the item to obtain its ETag before review.
+- Added optional control inventory-token/inventory-token-file authentication and
+  inventory CLI control-url/admin-token-file automation access. Human CLI use
+  remains OIDC through the agent. Removed token retrieval and token-list CLI.
+- Shared HTTP protocol and pure inventory rules serve a complete-operation Store
+  contract. SQLite implements Replace/Remove atomically. Store lifetime belongs to
+  its executable. No schema migration or cloud SDK dependency was introduced.
+- Added a reusable store conformance suite, protocol/discovery/authentication tests,
+  and ADR 0002. Firebase and DynamoDB adapters are later implementations of this
+  starting boundary, not part of this change.
+- Validated with make -B build, make test, and race tests for inventory and broker.
+  One integration run hit a wall-clock jump and expired test credential; reruns
+  passed. A remaining root-URL broker fixture was corrected for complete inventory
+  fact endpoint semantics.
+
+The decisions below preserve the design discussion; earlier statements withholding
+implementation authorization and open wire details are superseded by this result.
+
 
 ## Agreed direction and next step
 
@@ -790,3 +818,13 @@ Accepted POST record bodies containing host and optional enrollment token, with 
 # Log: 2026-10-14T08:15:25Z Brian McCallister
 
 Accepted as a starting implementation design: reusable inventory HTTP service plus complete-domain-operation Store interface for bundled SQLite and separate Firebase/DynamoDB services. Share protocol handling and inventory rules; backends own atomic storage mechanics. Refine signatures through actual backend work rather than freeze the sketch. Preserve control authorization and use shared backend contract tests.
+
+---
+# Log: 2026-10-14T08:55:55Z Brian McCallister
+
+Implemented provider REST with Link-Template discovery, complete-operation Store and shared rules, optional inventory automation secret, token enumeration removal, CLI adaptation, ADR 0002 and reusable backend contract tests. Full build/test and inventory/broker race checks pass; cloud adapters remain separate work.
+
+---
+# Log: 2026-10-14T08:55:55Z Brian McCallister
+
+Closed: Inventory API and reusable backend starting design implemented and validated; directory work remains ywxp1g89.

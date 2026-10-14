@@ -93,7 +93,7 @@ func TestFindLinkTarget(t *testing.T) {
 			for _, v := range tt.values {
 				h.Add("Link", v)
 			}
-			got, ok := findLinkTarget(h, wire.RelAuth)
+			got, ok := wire.FindLinkTarget(h, wire.RelAuth)
 			require.Equal(t, tt.found, ok)
 			require.Equal(t, tt.want, got)
 		})

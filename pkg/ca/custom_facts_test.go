@@ -11,8 +11,8 @@ import (
 
 	"github.com/epithet-ssh/epithet/pkg/ca"
 	"github.com/epithet-ssh/epithet/pkg/caserver"
-	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -28,9 +28,9 @@ func TestMinimalCustomFactsAndOptionalUserName(t *testing.T) {
 	require.NoError(t, err)
 	userKey, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	userVerifier, err := facts.NewVerifierFor(pub, facts.DirectoryAudience)
+	userVerifier, err := serviceauth.NewVerifierFor(pub, serviceauth.DirectoryAudience)
 	require.NoError(t, err)
-	hostVerifier, err := facts.NewVerifierFor(pub, facts.InventoryAudience)
+	hostVerifier, err := serviceauth.NewVerifierFor(pub, serviceauth.InventoryAudience)
 	require.NoError(t, err)
 	token := idp.MintIDToken("alice", time.Now().Add(time.Hour))
 	directory := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +66,7 @@ func TestMinimalCustomFactsAndOptionalUserName(t *testing.T) {
 			eval, _, err := writpolicy.New(policy, nil, writpolicy.Options{})
 			require.NoError(t, err)
 			var logs bytes.Buffer
-			authority, err := ca.New(key, eval, ca.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))), ca.WithFacts(directory.URL, inventory.URL, oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
+			authority, err := ca.New(key, eval, ca.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))), ca.WithFacts(directory.URL+"/lookup", inventory.URL, oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}}, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
 			result, err := authority.Issue(t.Context(), token, wire.Connection{RemoteHost: "HOST", RemoteUser: "root"}, userKey)
 			if tc.allowed {

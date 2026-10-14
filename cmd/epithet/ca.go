@@ -20,8 +20,8 @@ import (
 type CACLI struct {
 	ControlPublicURL string `placeholder:"URL" help:"Client-accessible control URL advertised at bootstrap" name:"control-public"`
 
-	Inventory    string            `placeholder:"URL" help:"URL for inventory service" name:"inventory" required:"true"`
-	Directory    string            `placeholder:"URL" help:"Directory service URL" name:"directory" required:"true"`
+	Inventory    string            `placeholder:"URL" help:"Complete inventory fact endpoint URL (or Unix socket URL)" name:"inventory" required:"true"`
+	Directory    string            `placeholder:"URL" help:"Directory fact endpoint URL" name:"directory" required:"true"`
 	OIDC         ServiceOIDCConfig `embed:"" prefix:"oidc-"`
 	PolicyConfig `embed:""`
 

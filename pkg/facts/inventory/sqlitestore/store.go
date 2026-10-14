@@ -1,5 +1,5 @@
 // Package sqlitestore implements managed inventory using embedded SQLite.
-// SQL, admission checks, and transaction ownership stay here; callers use inventory.Store.
+// SQL and transaction ownership stay here; shared admission rules live in inventory.
 package sqlitestore
 
 import (
@@ -9,8 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
@@ -24,14 +22,14 @@ import (
 // revision in one transaction. Reads return independent, coherent snapshots;
 // there is no application cache or separate index to rebuild after a restart.
 type Store struct {
-	db    *sql.DB
+	db *sql.DB
+	// newID is replaced by tests for collisions and deterministic pagination.
+	// Production always uses randomSecret.
 	newID func() (string, error)
-	// <review>
-	// why is this an attribute? Does it ever actually change?
-	// </review>
 }
 
 var _ inventory.Store = (*Store)(nil)
+var _ inventory.Hosts = (*Store)(nil)
 
 // Open opens a private SQLite database at path, creating its schema if
 // needed. Storage, schema, or validation errors fail startup.
@@ -256,7 +254,7 @@ func (m *Store) validate() error {
 			if t != nil && (t.ExpiresAt.IsZero() || t.UsedBy == "" && !t.Revoked && h.Status != "pending") {
 				return fmt.Errorf("%s: invalid token metadata", id)
 			}
-			if !(emptyProposal(h.Proposal) && t != nil && t.UsedBy == "" && h.Status != "active") {
+			if !(inventory.EmptyProposal(h.Proposal) && t != nil && t.UsedBy == "" && h.Status != "active") {
 				if err = h.Proposal.Validate(); err != nil {
 					return fmt.Errorf("%s: %w", id, err)
 				}
@@ -328,10 +326,10 @@ func finish(ctx context.Context, tx *sql.Tx, id, actor, action string) error {
 	if _, err := tx.ExecContext(ctx, "UPDATE state SET revision=revision+1 WHERE singleton=1"); err != nil {
 		return storageError(err)
 	}
-	if action != "remove" {
+	if event := inventory.MutationEvent(id, actor, action, time.Now().UTC()); event != nil {
 		// The persistent revision counter survives audit deletion. Using it as
 		// the event sequence prevents a deleted last event's cursor being reused.
-		if _, err := tx.ExecContext(ctx, "INSERT INTO audit (sequence,host_id,time,actor,action) SELECT revision,?,?,?,? FROM state WHERE singleton=1", id, time.Now().UTC().Format(time.RFC3339Nano), actor, action); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO audit (sequence,host_id,time,actor,action) SELECT revision,?,?,?,? FROM state WHERE singleton=1", event.Resource, event.At.Format(time.RFC3339Nano), event.Actor, event.Action); err != nil {
 			return storageError(err)
 		}
 	}
@@ -368,12 +366,11 @@ func checkNames(ctx context.Context, tx *sql.Tx, p inventory.Proposal, except st
 // Its attributes and admission checks are the same as an approved proposal;
 // creation and its audit event commit together.
 func (m *Store) AddPattern(ctx context.Context, actor string, p inventory.Proposal) (*inventory.HostRecord, error) {
-	if p.Pattern == "" {
-		return nil, fmt.Errorf("pattern is required")
-	}
-	if err := p.Validate(); err != nil {
+	planned, err := inventory.PatternAdmission("", p, time.Now().UTC())
+	if err != nil {
 		return nil, err
 	}
+	p = planned.Proposal
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
@@ -386,8 +383,8 @@ func (m *Store) AddPattern(ctx context.Context, actor string, p inventory.Propos
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	h := &inventory.HostRecord{ID: id, Revision: 1, Status: "active", Proposal: p, CreatedAt: now, UpdatedAt: now}
+	planned.ID = id
+	h := &planned
 	if err = saveHost(ctx, tx, h, true); err != nil {
 		return nil, err
 	}
@@ -438,15 +435,12 @@ func (m *Store) checkRealm(ctx context.Context, tx *sql.Tx, p inventory.Proposal
 			return storageError(err)
 		}
 		for _, id := range ids {
-			if realm.IsGeneratedHost() {
-				return fmt.Errorf("%w: principal realm is already active on host %s", inventory.ErrConflict, id)
-			}
 			member, err := readHost(ctx, tx, id)
 			if err != nil {
 				return err
 			}
-			if !sameAuthorization(member.Proposal.Labels, member.Proposal.Accounts, p.Labels, p.Accounts) {
-				return fmt.Errorf("%w: realm %q has different authorization attributes from host %s", inventory.ErrConflict, realm, id)
+			if err = inventory.CheckRealm(p, *member); err != nil {
+				return err
 			}
 		}
 		if len(ids) == 0 {
@@ -475,16 +469,18 @@ func (m *Store) unusedID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 func (m *Store) Enroll(ctx context.Context, p inventory.Proposal, token string) (*inventory.HostRecord, error) {
-	if err := p.Validate(); err != nil {
+	planned, err := inventory.Enrollment("", p, nil, nil, time.Now().UTC())
+	if err != nil {
 		return nil, err
 	}
+	p = planned.Proposal
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
-	h := &inventory.HostRecord{Revision: 1, Status: "pending", Proposal: p, CreatedAt: now, UpdatedAt: now}
+	h := &planned
 	if token != "" {
 		if !validID(token) {
 			return nil, inventory.ErrToken
@@ -500,13 +496,13 @@ func (m *Store) Enroll(ctx context.Context, p inventory.Proposal, token string) 
 		if err != nil {
 			return nil, err
 		}
-		if reserved.Status != "pending" || t == nil || t.Revoked || t.UsedBy != "" || !now.Before(t.ExpiresAt) {
-			return nil, inventory.ErrToken
+		planned, err = inventory.Enrollment(token, p, reserved, t, now)
+		if err != nil {
+			return nil, err
 		}
 		if err = m.conflict(ctx, tx, p, ""); err != nil {
 			return nil, err
 		}
-		h.ID, h.Status, h.CreatedAt, h.Revision = token, "active", reserved.CreatedAt, reserved.Revision+1
 		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET used=1 WHERE host_id=?", token); err != nil {
 			return nil, storageError(err)
 		}
@@ -537,80 +533,60 @@ func (m *Store) Enroll(ctx context.Context, p inventory.Proposal, token string) 
 	return h, nil
 }
 
-func (m *Store) Change(ctx context.Context, actor, action, id string, revision uint64, p *inventory.Proposal) (*inventory.HostRecord, error) {
-	if p != nil {
-		if err := p.Validate(); err != nil {
-			return nil, err
-		}
-	}
+func (m *Store) Replace(ctx context.Context, actor string, proposed inventory.HostRecord, revision uint64) (*inventory.HostRecord, error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	h, err := readHost(ctx, tx, id)
+	current, err := readHost(ctx, tx, proposed.ID)
 	if err != nil {
 		return nil, err
 	}
-	if revision == 0 || h.Revision != revision {
-		return nil, inventory.ErrRevision
+	h, action, err := inventory.Replacement(*current, proposed, revision, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
-	switch action {
-	case "edit":
-		if p == nil {
-			return nil, fmt.Errorf("host proposal is required")
-		}
-		if h.Status != "pending" && h.Status != "active" {
-			return nil, fmt.Errorf("only pending or active records can be edited")
-		}
-		if h.Status == "active" {
-			if err = m.conflict(ctx, tx, *p, id); err != nil {
-				return nil, err
-			}
-		}
-		h.Proposal = *p
-	case "approve":
-		if h.Status != "pending" {
-			return nil, fmt.Errorf("only pending records can be approved")
-		}
-		if err = h.Proposal.Validate(); err != nil {
-			return nil, fmt.Errorf("host attributes are required before approval: %w", err)
-		}
-		if err = m.conflict(ctx, tx, h.Proposal, id); err != nil {
+	if h.Status == "active" {
+		if err = m.conflict(ctx, tx, h.Proposal, h.ID); err != nil {
 			return nil, err
 		}
-		h.Status = "active"
-	case "deny":
-		if h.Status != "pending" {
-			return nil, fmt.Errorf("only pending records can be denied")
-		}
-		h.Status = "denied"
-	case "remove":
-		if _, err = tx.ExecContext(ctx, "DELETE FROM hosts WHERE id=?", id); err != nil {
-			return nil, storageError(err)
-		}
-		return nil, finish(ctx, tx, id, actor, action)
-	default:
-		return nil, fmt.Errorf("unknown inventory action")
 	}
 	if h.Status != "pending" {
-		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET revoked=1 WHERE host_id=? AND used=0", id); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET revoked=1 WHERE host_id=? AND used=0", h.ID); err != nil {
 			return nil, storageError(err)
 		}
 	}
-	h.Revision++
-	h.UpdatedAt = time.Now().UTC()
-	if err = saveHost(ctx, tx, h, false); err != nil {
+	if err = saveHost(ctx, tx, &h, false); err != nil {
 		return nil, err
 	}
-	h, err = readHost(ctx, tx, id)
+	result, err := readHost(ctx, tx, h.ID)
 	if err != nil {
 		return nil, err
 	}
-	if err = finish(ctx, tx, id, actor, action); err != nil {
+	if err = finish(ctx, tx, h.ID, actor, action); err != nil {
 		return nil, err
 	}
-	return h, nil
+	return result, nil
+}
+
+func (m *Store) Remove(ctx context.Context, actor, id string, revision uint64) error {
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return storageError(err)
+	}
+	defer tx.Rollback()
+	h, err := readHost(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err = inventory.CheckRevision(*h, revision); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM hosts WHERE id=?", id); err != nil {
+		return storageError(err)
+	}
+	return finish(ctx, tx, id, actor, "remove")
 }
 
 func (m *Store) Get(ctx context.Context, id string) (*inventory.HostRecord, error) {
@@ -652,8 +628,9 @@ func (m *Store) List(ctx context.Context, after string, limit int, pending bool)
 }
 
 func (m *Store) CreateToken(ctx context.Context, actor string, lifetime time.Duration) (inventory.EnrollmentToken, error) {
-	if lifetime <= 0 || lifetime > 24*time.Hour {
-		return inventory.EnrollmentToken{}, fmt.Errorf("token lifetime must be positive and no more than 24h")
+	record, token, err := inventory.Reservation("", lifetime, time.Now().UTC())
+	if err != nil {
+		return inventory.EnrollmentToken{}, err
 	}
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -664,9 +641,9 @@ func (m *Store) CreateToken(ctx context.Context, actor string, lifetime time.Dur
 	if err != nil {
 		return inventory.EnrollmentToken{}, err
 	}
-	now := time.Now().UTC()
-	token := inventory.EnrollmentToken{ID: id, ExpiresAt: now.Add(lifetime)}
-	h := &inventory.HostRecord{ID: id, Revision: 1, Status: "pending", CreatedAt: now, UpdatedAt: now}
+	record.ID = id
+	token.ID = id
+	h := &record
 	if err = saveHost(ctx, tx, h, true); err != nil {
 		return inventory.EnrollmentToken{}, err
 	}
@@ -674,35 +651,6 @@ func (m *Store) CreateToken(ctx context.Context, actor string, lifetime time.Dur
 		return inventory.EnrollmentToken{}, storageError(err)
 	}
 	return token, finish(ctx, tx, id, actor, "token-create")
-}
-
-func (m *Store) Tokens(ctx context.Context, after string, limit int) ([]inventory.EnrollmentToken, error) {
-	limit, err := recordPage(after, limit)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := m.db.QueryContext(ctx, "SELECT host_id,expires,used,revoked FROM tokens WHERE host_id>? ORDER BY host_id LIMIT ?", after, limit)
-	if err != nil {
-		return nil, storageError(err)
-	}
-	defer rows.Close()
-	tokens := []inventory.EnrollmentToken{}
-	for rows.Next() {
-		var t inventory.EnrollmentToken
-		var expires string
-		var used bool
-		if err = rows.Scan(&t.ID, &expires, &used, &t.Revoked); err != nil {
-			return nil, storageError(err)
-		}
-		if t.ExpiresAt, err = time.Parse(time.RFC3339Nano, expires); err != nil {
-			return nil, storageError(err)
-		}
-		if used {
-			t.UsedBy = t.ID
-		}
-		tokens = append(tokens, t)
-	}
-	return tokens, storageError(rows.Err())
 }
 
 func (m *Store) RevokeToken(ctx context.Context, actor, id string) error {
@@ -833,24 +781,6 @@ func validID(id string) bool {
 		}
 	}
 	return true
-}
-
-// emptyProposal identifies a reservation that has not supplied any host attributes yet.
-// It is permitted only on non-active host records with enrollment metadata.
-func emptyProposal(p inventory.Proposal) bool {
-	return p.Names == nil && p.Pattern == "" && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Realm == ""
-}
-
-// sameAuthorization compares the authorization attributes shared by all realm members.
-// Account order is irrelevant; unrestricted (nil) differs from no accounts ([]).
-func sameAuthorization(previousLabels map[string]string, previousAccounts []string, labels map[string]string, accounts []string) bool {
-	if !maps.Equal(previousLabels, labels) || (previousAccounts == nil) != (accounts == nil) {
-		return false
-	}
-	previous, proposed := slices.Clone(previousAccounts), slices.Clone(accounts)
-	slices.Sort(previous)
-	slices.Sort(proposed)
-	return slices.Equal(previous, proposed)
 }
 
 // Page bounds apply before reading rows, so memory use does not grow with the

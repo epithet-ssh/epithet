@@ -16,6 +16,7 @@ import (
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/test/controltest"
@@ -66,10 +67,10 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		require.NoError(t, err)
 		_, err = private.CreateToken(t.Context(), facts.Authorization{Actor: "subject:inventory-admin"}, 0)
 		if key == f.CAKey {
-			require.ErrorIs(t, err, facts.ErrDenied)
+			require.ErrorIs(t, err, facts.ErrNotFound)
 			var rejected *facts.ServiceError
 			require.ErrorAs(t, err, &rejected)
-			require.Equal(t, 403, rejected.Status)
+			require.Equal(t, 404, rejected.Status)
 		} else {
 			require.NoError(t, err)
 		}
@@ -79,7 +80,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "subject:inventory-admin", events[len(events)-1].Actor)
 	// The provisioning bearer belongs to public control only, never the backend.
-	for _, endpoint := range []string{f.URL + "/scim/v2/Users", f.DirectoryURL + "/scim"} {
+	for _, endpoint := range []string{f.URL + "/scim/v2/Users", f.DirectoryURL + "/scim/v2/Users"} {
 		req, err := http.NewRequest("GET", endpoint, nil)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer provisioning-secret")
@@ -127,7 +128,7 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	defer hosts.Close()
 	pub, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	verifier, err := facts.NewVerifierFor(pub, facts.DirectoryAudience)
+	verifier, err := serviceauth.NewVerifierFor(pub, serviceauth.DirectoryAudience)
 	require.NoError(t, err)
 	custom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, verifier.Verify(r, nil))
@@ -137,11 +138,11 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 		json.NewEncoder(w).Encode(facts.User{ID: "subject:admin"})
 	}))
 	defer custom.Close()
-	handler, err := factserver.InventoryHandler(hosts, "", pub)
+	handler, err := factserver.InventoryHandler(hosts, "", pub, factserver.WithInventoryManagement(hosts))
 	require.NoError(t, err)
 	backend := httptest.NewServer(handler)
 	defer backend.Close()
-	control, err := control.New(control.Config{Key: key, DirectoryURL: custom.URL, InventoryBackendURL: backend.URL, Validator: validator, InventoryAdmins: control.Admins{Users: []string{"subject:admin"}}, TLS: tlsconfig.Config{Insecure: true}})
+	control, err := control.New(control.Config{Key: key, DirectoryURL: custom.URL + "/lookup", InventoryBackendURL: backend.URL + "/lookup", Validator: validator, InventoryAdmins: control.Admins{Users: []string{"subject:admin"}}, TLS: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
 	server := httptest.NewServer(control)
 	defer server.Close()

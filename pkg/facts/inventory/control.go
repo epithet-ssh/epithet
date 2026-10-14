@@ -40,11 +40,6 @@ func (r HostRecord) ControlRecord() facts.HostRecord {
 	}
 }
 
-// ControlToken projects the token onto the control API.
-func (t EnrollmentToken) ControlToken() facts.EnrollmentToken {
-	return facts.EnrollmentToken{ID: t.ID, ExpiresAt: t.ExpiresAt, UsedBy: t.UsedBy, Revoked: t.Revoked}
-}
-
 // ControlEvent projects the audit event onto the control API.
 func (e AuditEvent) ControlEvent() facts.HostAuditEvent {
 	return facts.HostAuditEvent{Sequence: uint64(e.Sequence), At: e.At, Actor: e.Actor, Action: e.Action, Resource: e.Resource}

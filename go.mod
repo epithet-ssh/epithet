@@ -35,6 +35,8 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/dunglas/httpsfv v1.1.0
+	github.com/jtacoma/uritemplates v1.0.0
 	github.com/elimity-com/scim v0.0.0-20260728105928-2641426a1539
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/sony/gobreaker/v2 v2.4.0

@@ -65,6 +65,8 @@ func (e *PolicyError) Error() string {
 const (
 	RelAuth    = "https://epithet.dev/rel/auth"
 	RelControl = "https://epithet.dev/rel/control"
+	// RelSCIM advertises a directory provider's SCIM base URL.
+	RelSCIM = "https://epithet.dev/rel/scim"
 )
 
 // CreateCertRequest asks the CA for a signed cert. Both fields are required.

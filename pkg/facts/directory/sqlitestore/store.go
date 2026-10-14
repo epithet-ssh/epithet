@@ -21,6 +21,7 @@ import (
 type Store struct{ db *sql.DB }
 
 var _ directory.Store = (*Store)(nil)
+var _ directory.Directory = (*Store)(nil)
 
 // Open creates a private database if needed. Schema version mismatches fail
 // startup; existing databases are never upgraded here. Opening a database never
@@ -383,7 +384,7 @@ func auditWrite(ctx context.Context, tx *sql.Tx, m directory.Metadata, create bo
 	if create {
 		action = "create"
 	}
-	return audit(ctx, tx, m.Version, "scim", action, m.ID, "", "")
+	return audit(ctx, tx, m.Version, directory.Actor(ctx), action, m.ID, "", "")
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id, match string) error {
@@ -411,7 +412,7 @@ func (s *Store) DeleteUser(ctx context.Context, id, match string) error {
 	if _, err = tx.ExecContext(ctx, "DELETE FROM users WHERE id=?", id); err != nil {
 		return err
 	}
-	if err = audit(ctx, tx, n, "scim", "delete", id, "", ""); err != nil {
+	if err = audit(ctx, tx, n, directory.Actor(ctx), "delete", id, "", ""); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -438,7 +439,7 @@ func (s *Store) DeleteGroup(ctx context.Context, id, match string) error {
 	if _, err = tx.ExecContext(ctx, "DELETE FROM groups WHERE id=?", id); err != nil {
 		return err
 	}
-	if err = audit(ctx, tx, n, "scim", "delete", id, "", ""); err != nil {
+	if err = audit(ctx, tx, n, directory.Actor(ctx), "delete", id, "", ""); err != nil {
 		return err
 	}
 	return tx.Commit()

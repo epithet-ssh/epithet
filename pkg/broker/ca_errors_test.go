@@ -64,7 +64,7 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 				fmt.Fprint(w, "private policy diagnostic")
 			}))
 			defer policyHTTP.Close()
-			c, err := ca.New(priv, catest.HTTPPolicy{URL: policyHTTP.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, ca.WithFacts(inventoryHTTP.URL+"/directory", inventoryHTTP.URL+"/inventory", realInventory.Identity, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
+			c, err := ca.New(priv, catest.HTTPPolicy{URL: policyHTTP.URL, Key: priv, TLS: tlsconfig.Config{Insecure: true}}, ca.WithFacts(inventoryHTTP.URL+"/directory/lookup", inventoryHTTP.URL+"/inventory/lookup", realInventory.Identity, wire.AuthConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID}, tlsconfig.Config{Insecure: true}))
 			require.NoError(t, err)
 			logger := slog.New(slog.DiscardHandler)
 			handler := caserver.New(c, logger, nil).Handler()

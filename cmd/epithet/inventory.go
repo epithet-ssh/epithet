@@ -2,13 +2,18 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/epithet-ssh/epithet/pkg/broker"
+	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
@@ -16,7 +21,10 @@ import (
 )
 
 type InventoryCLI struct {
-	ManagementCLI `embed:""`
+	ManagementCLI  `embed:""`
+	ControlURL     string `help:"Public control management URL for token-authenticated automation" name:"control-url"`
+	AdminTokenFile string `help:"Inventory automation bearer token file" name:"admin-token-file"`
+	tlsConfig      tlsconfig.Config
 
 	StateDir   string                 `help:"Shared root for inventory/ and directory/ storage (default: native system state directory)" name:"state-dir"`
 	Serve      InventoryServeCLI      `cmd:"" default:"withargs" help:"Serve managed inventory"`
@@ -26,7 +34,7 @@ type InventoryCLI struct {
 	Edit       InventoryEditCLI       `cmd:"edit" aliases:"e,ed" help:"Edit a managed host in EDITOR"`
 	Approve    InventoryApproveCLI    `cmd:"approve" aliases:"a,app" help:"Review, edit, approve, or deny enrollment"`
 	Remove     InventoryRemoveCLI     `cmd:"remove" aliases:"rm" help:"Withdraw a managed host from inventory"`
-	Token      InventoryTokenCLI      `cmd:"token" help:"Create, list, or revoke enrollment tokens"`
+	Token      InventoryTokenCLI      `cmd:"token" help:"Create or revoke enrollment tokens"`
 	Audit      InventoryAuditCLI      `cmd:"audit" help:"Show durable inventory mutation audit"`
 
 	Listen        string `help:"Address to listen on" short:"l" default:"127.0.0.1:9998"`
@@ -97,7 +105,15 @@ func (c *InventoryCLI) find(id string) (*facts.HostRecord, error) {
 		after = next
 	}
 	if match != nil {
-		return match, nil
+		// List records have no ETag. Read the selected record before review.
+		response, err := c.request(facts.ControlRequest{Action: "get", ID: match.ID})
+		if err != nil {
+			return nil, err
+		}
+		if response.Host == nil {
+			return nil, inventory.ErrNotFound
+		}
+		return response.Host, nil
 	}
 	return nil, inventory.ErrNotFound
 }
@@ -305,4 +321,31 @@ func (c *InventoryAuditCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 	return printInventory(r.Audit)
+}
+
+func (c *InventoryCLI) BeforeRun(cfg tlsconfig.Config) error { c.tlsConfig = cfg; return nil }
+func (c *InventoryCLI) request(req facts.ControlRequest) (*broker.InventoryResponse, error) {
+	if c.ControlURL == "" && c.AdminTokenFile == "" {
+		return c.ManagementCLI.request(req)
+	}
+	if c.ControlURL == "" || c.AdminTokenFile == "" {
+		return nil, fmt.Errorf("automation requires both --control-url and --admin-token-file")
+	}
+	token, err := readAdminToken("", c.AdminTokenFile, "inventory")
+	if err != nil {
+		return nil, err
+	}
+	client, err := facts.NewAdminClient(c.ControlURL, c.tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	result, _, err := client.Control(ctx, token, req)
+	if err != nil {
+		return nil, err
+	}
+	return &broker.InventoryResponse{ControlResponse: *result}, nil
 }

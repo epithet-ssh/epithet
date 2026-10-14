@@ -13,6 +13,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/hostpattern"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/wire"
 	"github.com/epithet-ssh/epithet/pkg/writ/object"
@@ -38,16 +39,16 @@ func LookupHandler(users directory.Directory, hosts inventory.Hosts, caKey, cont
 			return nil, fmt.Errorf("CA and control must use distinct signing keys")
 		}
 	}
-	audience, param := facts.InventoryAudience, "host"
+	audience, param := serviceauth.InventoryAudience, "host"
 	if users != nil {
-		audience, param = facts.DirectoryAudience, "id"
+		audience, param = serviceauth.DirectoryAudience, "id"
 	}
-	var verifiers []*facts.Verifier
+	var verifiers []*serviceauth.Verifier
 	for _, key := range []sshcert.RawPublicKey{caKey, controlKey} {
 		if key == "" {
 			continue
 		}
-		v, err := facts.NewVerifierFor(key, audience)
+		v, err := serviceauth.NewVerifierFor(key, audience)
 		if err != nil {
 			return nil, err
 		}

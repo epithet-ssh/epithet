@@ -1,4 +1,4 @@
-package facts
+package serviceauth
 
 import (
 	"net/http"
@@ -135,4 +135,26 @@ func TestSignedQueryAndActor(t *testing.T) {
 	require.NoError(t, err)
 	_, err = wrongAudience.VerifyActor(req, nil)
 	require.Error(t, err)
+}
+
+func TestSignedContentTypeAndPrecondition(t *testing.T) {
+	pub, key := keyPair(t)
+	signer, err := NewSignerFor(key, DirectoryAudience)
+	require.NoError(t, err)
+	verifier, err := NewVerifierFor(pub, DirectoryAudience)
+	require.NoError(t, err)
+	body := []byte(`{"userName":"alice"}`)
+	req, err := http.NewRequest("PUT", "http://directory/scim/v2/Users/u", nil)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/scim+json")
+	req.Header.Set("If-Match", `W/"7"`)
+	require.NoError(t, signer.AuthorizeActor(req, body, "admin"))
+	require.NoError(t, verifier.Verify(req, body))
+	for _, header := range []string{"Content-Type", "If-Match"} {
+		for _, value := range []string{"", "changed"} {
+			tampered := req.Clone(t.Context())
+			tampered.Header.Set(header, value)
+			require.ErrorContains(t, verifier.Verify(tampered, body), header+" mismatch")
+		}
+	}
 }

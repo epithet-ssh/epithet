@@ -21,7 +21,8 @@ const MaxPageLimit = 1000
 // Sequences increase and are never reused, including after record deletion.
 type AuditSequence uint64
 
-// Store owns managed inventory persistence and admission. Each mutation commits
+// Store is the inventory management contract, independent of Hosts fact lookup.
+// Implementations own persistence and admission. Each mutation commits
 // the record, token changes, audit event, and inventory revision atomically.
 // Active exact names and patterns are unique; shared named realms require equal
 // labels and account sets, and generated realms belong to one host. Pending and
@@ -29,26 +30,23 @@ type AuditSequence uint64
 // Implementations enforce these rules in storage, without relying on coordination
 // between service processes. Database handles and transaction steps stay private.
 //
-// Reads return independent, coherent snapshots. LookupHost returns an opaque
-// revision from the same snapshot as its facts; exact names take precedence, and
-// multiple matching active patterns return ErrConflict. Storage failures return
+// Reads return independent, coherent snapshots. Storage failures return
 // ErrStorage, never missing records. Contexts bound both reads and mutations.
 // The caller owns the store's lifetime; HTTP handlers never close it.
 type Store interface {
-	Hosts
-
 	// Enroll validates a proposal and creates a pending record without a token.
 	// A valid token atomically activates its reserved record and consumes the
 	// preapproval. Expired, revoked, or used tokens return ErrToken.
 	Enroll(ctx context.Context, proposal Proposal, token string) (*HostRecord, error)
 	// AddPattern validates and admits an active pattern as one audited mutation.
 	AddPattern(ctx context.Context, actor string, proposal Proposal) (*HostRecord, error)
-	// Change accepts edit, approve, deny, or remove. The expected record revision
-	// must be nonzero and current, otherwise ErrRevision leaves state unchanged.
-	// Edit requires a proposal; approve and deny require a pending record. Moving
-	// a record out of pending revokes unused preapproval. Remove returns nil and
-	// deletes the record, its token, and its audit history.
-	Change(ctx context.Context, actor, action, id string, revision uint64, proposal *Proposal) (*HostRecord, error)
+	// Replace checks the version and server-owned fields inside the mutation.
+	// A replacement edits the proposal OR moves a pending record to active or
+	// denied. Combined edits and status transitions are rejected. Leaving pending
+	// revokes unused preapproval. Empty reservations may be denied.
+	Replace(ctx context.Context, actor string, record HostRecord, revision uint64) (*HostRecord, error)
+	// Remove checks the version and deletes the record, token and audit together.
+	Remove(ctx context.Context, actor, id string, revision uint64) error
 	Get(ctx context.Context, id string) (*HostRecord, error)
 	// List returns at most limit records after the exclusive full-ID cursor,
 	// ordered by ID. pending restricts results before applying the limit.
@@ -61,15 +59,11 @@ type Store interface {
 	// Lifetime must be positive and no more than 24 hours. The token's ID is the
 	// reserved host ID; redemption preserves its creation time.
 	CreateToken(ctx context.Context, actor string, lifetime time.Duration) (EnrollmentToken, error)
-	// Tokens includes used, revoked, and expired tokens, ordered by ID, with
-	// the same exclusive full-ID cursor and page limits as List.
-	Tokens(ctx context.Context, after string, limit int) ([]EnrollmentToken, error)
 	RevokeToken(ctx context.Context, actor, id string) error
 	// Audit returns at most limit surviving events after the exclusive sequence
 	// cursor, in sequence order. Zero after starts at the beginning. Page limits
 	// are the same as List; an empty page means the reader is caught up.
 	Audit(ctx context.Context, after AuditSequence, limit int) ([]AuditEvent, error)
-	Close() error
 }
 
 // HostRecord includes the editable proposal and server-owned admission metadata.

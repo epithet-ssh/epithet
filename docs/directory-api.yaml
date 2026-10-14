@@ -5,8 +5,8 @@ info:
   description: >-
     A single active-object lookup, independent of control-plane APIs. Responses
     are limited to 64 KiB and all responses must include Cache-Control no-store.
-    Requests have exactly one query parameter and no body. The client appends
-    /lookup to the configured service root. See fact-services.md.
+    Requests have exactly one query parameter and no body. Configure the complete
+    fact endpoint URL; Unix socket URLs use /lookup. See fact-services.md.
 paths:
   /lookup:
     get:

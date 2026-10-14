@@ -13,7 +13,7 @@ import (
 // ControlRequest is one operation at the complete advertised inventory URL.
 // An optional single-use token preapproves enrollment. Admin authentication is
 // the OIDC bearer header. Revision binds review/edit to the displayed record.
-// Host and token lists use exclusive After IDs and Limit (0 defaults to 100,
+// Host lists use exclusive After IDs and Limit (0 defaults to 100,
 // maximum 1000); Pending filters host lists. Audits use AuditAfter sequences
 // and AuditLimit with the same bounds. Cursor fields survive JSON as exact values.
 type ControlRequest struct {
@@ -39,7 +39,6 @@ type ControlResponse struct {
 	Host           *HostRecord           `json:"host,omitempty"`
 	Hosts          []HostRecord          `json:"hosts,omitempty"`
 	Token          *EnrollmentToken      `json:"token,omitempty"`
-	Tokens         []EnrollmentToken     `json:"tokens,omitempty"`
 	Audit          []HostAuditEvent      `json:"audit,omitempty"`
 	Error          string                `json:"error,omitempty"`
 }

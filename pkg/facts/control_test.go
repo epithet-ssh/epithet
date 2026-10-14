@@ -1,7 +1,6 @@
 package facts_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/stretchr/testify/require"
@@ -46,12 +46,12 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 		t.Cleanup(server.Close)
 		return server
 	}
-	dir := serve(factserver.DirectoryHandler(users, users, readerPublic, controlPublic))
-	inv := serve(factserver.InventoryHandler(hosts, readerPublic, controlPublic))
+	dir := serve(factserver.DirectoryHandler(users, readerPublic, controlPublic, factserver.WithDirectoryManagement(users)))
+	inv := serve(factserver.InventoryHandler(hosts, readerPublic, controlPublic, factserver.WithInventoryManagement(hosts)))
 	cfg := tlsconfig.Config{Insecure: true}
-	data, err := facts.NewDataClient(dir.URL, inv.URL, readerKey, cfg)
+	data, err := facts.NewDataClient(dir.URL+"/lookup", inv.URL+"/lookup", readerKey, cfg)
 	require.NoError(t, err)
-	control, err := facts.NewControlClient(dir.URL, inv.URL, controlKey, cfg)
+	control, err := facts.NewControlClient(dir.URL, inv.URL+"/lookup", controlKey, cfg)
 	require.NoError(t, err)
 	user, err := data.User(t.Context(), "admin")
 	require.NoError(t, err)
@@ -107,9 +107,6 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	require.Equal(t, "active", pattern.Status)
 	token, err := control.CreateToken(t.Context(), auth, 60)
 	require.NoError(t, err)
-	tokens, err := control.Tokens(t.Context(), auth, "", 0)
-	require.NoError(t, err)
-	require.Len(t, tokens, 1)
 	require.NoError(t, control.RevokeToken(t.Context(), auth, token.ID))
 	events, err := control.HostAudit(t.Context(), auth, 0, 0)
 	require.NoError(t, err)
@@ -128,16 +125,16 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	denied, err := control.DenyHost(t.Context(), auth, pending.ID, pending.Revision)
 	require.NoError(t, err)
 	require.Equal(t, "denied", denied.Status)
-	wrong, err := facts.NewControlClient(dir.URL, inv.URL, readerKey, cfg)
+	wrong, err := facts.NewControlClient(dir.URL, inv.URL+"/lookup", readerKey, cfg)
 	require.NoError(t, err)
 	_, err = wrong.CreateToken(t.Context(), auth, 60)
-	require.ErrorIs(t, err, facts.ErrDenied)
+	require.ErrorIs(t, err, facts.ErrNotFound)
 }
 
-func TestTypedControlResponsesAndProvisioningMetadata(t *testing.T) {
+func TestControlActorIdentityMismatch(t *testing.T) {
 	public, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
-	verifier, err := facts.NewVerifierFor(public, facts.DirectoryAudience)
+	verifier, err := serviceauth.NewVerifierFor(public, serviceauth.DirectoryAudience)
 	require.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -145,27 +142,8 @@ func TestTypedControlResponsesAndProvisioningMetadata(t *testing.T) {
 		actor, err := verifier.VerifyActor(r, body)
 		require.NoError(t, err)
 		require.Empty(t, actor)
-		switch r.URL.Path {
-		case "/manage":
-			// This is valid JSON but not a host-administration result.
-			fmt.Fprint(w, `{}`)
-		case "/actor":
-			fmt.Fprint(w, `{"user":{"ID":"other"}}`)
-		case "/scim":
-			var req facts.SCIMRequest
-			require.NoError(t, json.Unmarshal(body, &req))
-			require.Equal(t, "DELETE", req.Method)
-			require.Equal(t, "/scim/v2/Users/id?attributes=id", req.Target)
-			require.Equal(t, `W/"3"`, req.IfMatch)
-			require.Equal(t, "application/scim+json", req.ContentType)
-			w.Header().Set("Content-Type", "application/scim+json")
-			w.Header().Set("ETag", `W/"4"`)
-			w.Header().Set("Location", "/scim/v2/Users/id")
-			w.Header().Set("WWW-Authenticate", `Bearer realm="scim"`)
-			w.Header().Set("Authorization", "must-not-escape")
-			w.WriteHeader(412)
-			fmt.Fprint(w, `{"status":"412","detail":"stale revision"}`)
-		}
+		require.Equal(t, "/actor", r.URL.Path)
+		fmt.Fprint(w, `{"user":{"ID":"other"}}`)
 	}))
 	defer server.Close()
 	client, err := facts.NewControlClient(server.URL, server.URL, key, tlsconfig.Config{Insecure: true})
@@ -173,21 +151,22 @@ func TestTypedControlResponsesAndProvisioningMetadata(t *testing.T) {
 	// Actor identity mismatch cannot become an authorization success.
 	_, _, err = client.Actor(t.Context(), "admin")
 	require.ErrorContains(t, err, "actor identity mismatch")
-	result, err := client.Provision(t.Context(), facts.SCIMRequest{Method: "DELETE", Target: "/scim/v2/Users/id?attributes=id", ContentType: "application/scim+json", IfMatch: `W/"3"`})
-	require.NoError(t, err)
-	require.Equal(t, 412, result.Status)
-	require.Equal(t, `W/"4"`, result.ETag)
-	require.Equal(t, "/scim/v2/Users/id", result.Location)
-	require.Equal(t, "application/scim+json", result.ContentType)
-	require.Equal(t, `Bearer realm="scim"`, result.WWWAuthenticate)
-	require.JSONEq(t, `{"status":"412","detail":"stale revision"}`, string(result.Body))
 }
 
 func TestControlClientRejectsMalformedAndOversizedResults(t *testing.T) {
 	_, key, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	for _, body := range []string{`{}`, `{"host":`, strings.Repeat("x", (8<<20)+1)} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "OPTIONS" {
+				w.Header().Add("Link-Template", `"/records{/id}"; rel="`+facts.InventoryRecordsRelation+`"`)
+				w.Header().Add("Link-Template", `"/tokens{?token}"; rel="`+facts.InventoryTokensRelation+`"`)
+				w.Header().Add("Link-Template", `"/audit{?after,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
+				w.WriteHeader(204)
+				return
+			}
+			fmt.Fprint(w, body)
+		}))
 		client, err := facts.NewControlClient("", server.URL, key, tlsconfig.Config{Insecure: true})
 		require.NoError(t, err)
 		_, err = client.Host(t.Context(), facts.Authorization{Actor: "admin"}, "id")

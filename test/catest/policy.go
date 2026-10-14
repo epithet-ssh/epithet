@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -29,7 +29,7 @@ func (p HTTPPolicy) Evaluate(ctx context.Context, conn wire.Connection, policyFa
 		return nil, err
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	signer, err := facts.NewSigner(p.Key)
+	signer, err := serviceauth.NewSigner(p.Key)
 	if err != nil {
 		return nil, err
 	}
