@@ -1,49 +1,378 @@
 ---
 yatl_version: 1
-title: Design fact provider management operations and discovery
+title: Design inventory management interface and provider discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-12T13:16:07.500337Z
+updated: 2026-10-14T08:15:25.246922Z
 author: Brian McCallister
-priority: medium
+priority: high
 tags:
 - design
 - control
 - facts
-blocked_by:
-- rv3znarg
+- inventory
 ---
 
-# Fact provider management API exploration
+# Inventory management interface and provider discovery
 
-Design proposal for discussion. Implementation is not authorized by this task. Provider-management discovery remains unimplemented; ADR 0001 selector and fact changes are now complete.
+High-priority, in-progress design work. Directory management and the deferred
+manual-user CLI are now tracked separately in `ywxp1g89`; they do not block this
+task. Application implementation is not authorized yet.
 
-## Ready for further design after ADR 0001
+## Agreed direction and next step
 
-ADR 0001 is implemented. Resume this design against structured memberships, flat string attributes, and current group names; historical bindings and reconciliation no longer exist.
+- Define only endpoints and methods required by our CLI's concrete workflows.
+  The CLI is the only client driving requirements. Do not add operations for
+  resource symmetry, hypothetical third-party clients, or possible future use.
+  Alternate providers implement this contract; they do not justify enlarging it.
+- Prefer PUT for whole-record replacement rather than PATCH. Revoke enrollment
+  tokens with DELETE. Provide no token retrieval endpoints, either individual
+  GET or collection listing. POST returns the newly created token; DELETE revokes
+  a known token. Remove the existing inventory token list CLI command when this
+  design is implemented. Atomic edit-and-approve semantics for record PUT remain
+  undecided.
+- Use a resource-oriented REST API over HTTP for inventory management. Do not
+  introduce gRPC or retain the action-dispatch RPC envelope as the new provider
+  contract. Discover resource locations through `Link-Template` headers on
+  `OPTIONS` responses as recorded below. Remaining representation and HTTP
+  semantics must be settled and recorded in ADR 0002.
+- Use RFC 9652 Link-Template with RFC 6570 URI templates to advertise management
+  resource locations and their variable slots. This resolves the member-addressing
+  question without token reads or client-owned provider path construction.
+  Token revocation can supply the known token through a template query variable.
+- Retain existing record revision preconditions: expose the revision as a strong
+  ETag and use If-Match on record PUT and DELETE. No conditional-read endpoint
+  behavior is required by the CLI.
+- Any 4xx response to the initial OPTIONS request at the inventory fact endpoint
+  means inventory management APIs are unsupported: continue using that provider
+  for data-plane lookups only. This rule is specific to discovery OPTIONS, not
+  failed operations on an advertised management resource.
+- The current inventory behavior/model is acceptable. Focus on exposing its
+  operations through a coherent provider API, not redesigning its lifecycle.
+- Add optional inventory-administration shared-secret authentication at control
+  for automation alongside existing OIDC inventory-admin access. Keep this
+  credential distinct from the SCIM secret and single-use enrollment tokens.
+- Start at the operator interface under `epithet inventory`, not `epithet control`.
+- Control fronts inventory administration and enrollment; providers own inventory
+  invariants and complete mutations. CLI administration uses the agent's OIDC
+  authentication and control's inventory-admin authorization.
+- Keep authorization fact lookup small and independently implementable. Its
+  configured URL is arbitrary; management discovery must not require a fixed
+  fact lookup path or management support from data-only providers.
+- Resume by mapping existing inventory operations to REST resources individually.
+  The earlier A/B/C exploration remains historical rationale, not a mandate to
+  redesign workflows or use command envelopes.
+- Discuss and record settled contracts, alternatives and rationale in ADR 0002.
+  Keep implementation planning and sequencing in this task. No ADR is written yet.
 
-The earlier preference for Proposal A below was based on preserving existing workflows. That is no longer a requirement: the user explicitly permits reconsidering those workflows, particularly SCIM reconciliation. The three proposals remain useful exploration, but A is not an agreed final design.
+ADR 0001 is implemented. Its selector/fact semantics are the baseline, not new
+work for this task. Directory-specific decisions and SCIM provisioning transport
+questions belong to `ywxp1g89`.
 
-Direction established in discussion:
+## Agreed OPTIONS discovery shape
 
-- Trust the IdP's current group names, including deletion and recreation under the same name. Historical ownership of a name need not be preserved through aliases, tombstones, or manual rebinding.
-- Preserve the ability to select a particular group identity when multiple groups share a name. Group membership facts should retain structured identity and attribute information.
-- Use object filters such as `group{id:abc123}` and `user{employmentType:contractor, department:engineering}`; the parallel host form is `root@{environment:sandbox, region:eu-west-1}`.
-- Filters use colons, and comma-separated predicates are AND on the same object. A group filter must be satisfied by one membership, not by distributing predicates across different groups.
-- Express OR through repeated rules, rather than inline alternatives. This revisits existing outer selector-set alternatives as well as defining the new filters; deny precedence must remain explicit.
-- Permit provider-defined attributes instead of a fixed vocabulary tied to SCIM or the built-in inventory. Nested paths are excluded by ADR 0001.
-- The short form selects the `name` attribute. The fact-service reply contains the mapped names; Writ has no provider-controlled default-attribute configuration.
-- `name` is multi-valued for users, groups, and hosts. A name selector matches any supplied name. Users will commonly have one username but may have aliases; adding an alias is authorization-relevant.
+Send OPTIONS to the configured inventory fact URL. Advertise three URI templates
+for records, enrollment tokens and audit. The accepted example is:
 
-The Writ work settled the fact shapes, SCIM group resource IDs, string-only values, same-object conjunction, missing-value and negation semantics, flat keys, and retained hostname patterns. See ADR 0001 for the implemented contracts.
+```http
+HTTP/1.1 204 No Content
+Allow: GET, OPTIONS
+Cache-Control: no-store
+Link-Template: "/inventory/records{/id}{?after,limit,pending}"; rel="https://epithet.dev/rel/inventory-records"
+Link-Template: "/inventory/tokens{?token}"; rel="https://epithet.dev/rel/inventory-tokens"
+Link-Template: "/inventory/audit{?after,limit}"; rel="https://epithet.dev/rel/inventory-audit"
+```
 
-Resume control-plane design after those semantics land: identify the administrator operations still needed, reconsider directory binding/reconciliation operations, then settle operation schemas and OPTIONS/Link capability discovery. Preserve the agreed direction that the data-plane endpoint is an arbitrary configured URL with query parameters as its contract; discovery should advertise optional management support without requiring a fixed lookup path.
+Paths are illustrative and provider-owned; the client selects the relation and
+supplies the operation's variables. Expand according to RFC 6570, then resolve
+relative references against the discovery URL. Do not hard-code provider paths.
 
-## Earlier proposal assessment
+| Operation | Template | Variables |
+|---|---|---|
+| List records | inventory-records | Optional after, limit, pending |
+| Enroll / add pattern | inventory-records | None; proposal in POST body |
+| Read / replace / remove record | inventory-records | id |
+| Create token | inventory-tokens | None; lifetime in POST body |
+| Revoke token | inventory-tokens | token |
+| Read audit | inventory-audit | Optional after, limit |
 
-The initial recommendation was **Proposal A: explicit operations over the existing inventory lifecycle**, with operation-specific requests and results. Proposal B offers an atomic review workflow. Proposal C separates enrollment from admitted inventory with a larger domain model. Reassess these choices against the revised semantics rather than treating existing workflows as requirements.
+Omitted variables contribute nothing: `{/id}` disappears for collection requests,
+and `{?token}` disappears for token creation. Token revocation expands to a DELETE
+target such as `/inventory/tokens?token=abc123`. A caller with a known token or
+record ID can address it without retrieving tokens or retaining a creation URL.
 
-The objective is a contract that an independent fact provider can understand and implement. OPTIONS and Link discovery should describe that contract after its operations are settled. They should not freeze the current route names, Go types, or SQLite representation.
+OPTIONS is defined only at the known fact endpoint for this discovery purpose.
+Do not add OPTIONS discovery on the advertised resource URLs: the CLI already
+knows each relation's methods and representations from the API contract. `Allow`
+above describes the fact endpoint receiving OPTIONS, not the linked resources.
+
+Any 4xx from this initial OPTIONS means no inventory-management support; continue
+data-plane lookups. This fallback does not apply to management-operation errors.
+
+References: [Link-Template, RFC 9652](https://www.rfc-editor.org/rfc/rfc9652.html)
+and [URI Templates, RFC 6570](https://www.rfc-editor.org/rfc/rfc6570.html).
+
+## Agreed record representation for GET and PUT
+
+GET and PUT use the same record document, without an action or response envelope.
+GET returns HTTP 200, Content-Type application/json and a strong ETag derived
+from the existing record revision, for example `ETag: "7"`:
+
+```json
+{
+  "id": "record-123",
+  "status": "pending",
+  "host": {
+    "name": ["web.example.com", "web.internal"],
+    "attributes": {
+      "environment": "production"
+    },
+    "accounts": ["deploy"],
+    "principal": {
+      "mode": "epithet-principal-v1",
+      "realm": "production-web"
+    }
+  },
+  "createdAt": "2026-10-14T09:00:00Z",
+  "updatedAt": "2026-10-14T09:15:00Z"
+}
+```
+
+To approve this record, PUT the entire document to the expanded record URL with
+`If-Match: "7"`, changing only `status` to `active`. Success returns HTTP 200,
+the committed record with its updated timestamp, and the new ETag. A stale
+precondition returns 412. Record DELETE also requires If-Match.
+
+Field contracts:
+
+- `host` and `status` are writable, subject to existing lifecycle constraints.
+  Editing replaces the host specification; approval or denial changes status.
+  Combined specification editing and approval remains undecided.
+- `id`, `createdAt` and `updatedAt` are server-owned. Clients echo these unchanged
+  in PUT. Reject attempts to alter them; the server updates `updatedAt` on commit.
+- The record revision is represented by the ETag, not duplicated in the JSON.
+- Use fact-API vocabulary: `name`, `attributes` and nested `principal` replace
+  management's `names`, `labels` and `principal-mode`. This naming change does
+  not expand the attribute types supported by the built-in store.
+- Pattern records use `pattern` instead of `name` in the host specification.
+- `accounts` must be explicit in a non-null host specification: null is
+  unrestricted, [] permits none, and a populated array restricts account names.
+  Omitting it is invalid.
+- Empty token reservations use `host: null`. They can be denied or removed, but
+  need a complete specification before approval.
+
+The example ID and timestamps are illustrative. These are agreed design contracts;
+no application implementation has been authorized by accepting this representation.
+
+## Agreed record POST representation
+
+POST to the records template with `id` omitted. The body contains `host` and,
+for token-backed enrollment, `token`. Do not include `status`, record ID,
+timestamps or revision. Status is derived from the operation's authorization
+and enrollment credential, not chosen by the caller.
+
+Enrollment without a token:
+
+```json
+{
+  "host": {
+    "name": ["web.example.com", "web.internal"],
+    "attributes": {},
+    "accounts": ["deploy"],
+    "principal": {
+      "mode": "epithet-principal-v1",
+      "realm": "production-web"
+    }
+  }
+}
+```
+
+Token-backed enrollment uses the same body with a top-level
+`"token": "enrollment-token-value"`. This is the single-use enrollment credential,
+not the inventory-administration shared secret. The provider atomically fills
+and activates its existing reservation and consumes the token. The credential
+is not part of the returned record.
+
+An authorized administrator adding a pattern sends:
+
+```json
+{
+  "host": {
+    "pattern": "*.example.com",
+    "attributes": {
+      "environment": "production"
+    },
+    "accounts": ["deploy"],
+    "principal": {
+      "mode": "epithet-principal-v1",
+      "realm": "production-web"
+    }
+  }
+}
+```
+
+| Existing operation | Derived status | Success response |
+|---|---|---|
+| Enrollment without a token | pending | 201 Created |
+| Enrollment with a valid token | active | 200 OK; existing reservation activated |
+| Administrator adds a pattern | active | 201 Created |
+
+Pattern admission requires inventory-admin authority through control. Direct
+administrator creation of active exact-host records is not added. Preserve
+existing support for pattern enrollment proposals; a pattern alone does not
+confer administrator authority or bypass review.
+
+Each success returns the complete record, its ETag and its Location. POST does
+not require If-Match; token redemption checks and consumes the reservation
+atomically. Human OIDC and automation shared-secret credentials are authentication
+inputs, separate from the JSON enrollment token. `status` remains in record GET
+responses and PUT replacements for review transitions.
+
+## CLI-driven REST surface audit
+
+Audited the proposed surface against `cmd/epithet/inventory.go`,
+`inventory_token.go`, `admin_client.go`, and `host_enroll_registration.go`.
+This is the revised proposal, not an implementation authorization. It supersedes
+the endpoint suggestions and RPC alternatives in the historical exploration.
+
+The surface needs eight management method/resource combinations plus initial
+OPTIONS discovery. Resource names below denote discovered locations, not fixed
+provider paths.
+
+| Resource | Method | Concrete CLI consumer |
+|---|---|---|
+| Inventory fact endpoint | OPTIONS | Discover whether management/enrollment is available and locate its resources |
+| Record collection | GET | inventory list, including pending filtering; resolve unambiguous names, patterns and ID prefixes |
+| Record collection | POST | host enroll, with or without an enrollment token; inventory add-pattern |
+| Individual record | GET | inventory show and exact-ID lookup; read before edit/review/remove; reread after a stale review |
+| Individual record | PUT | inventory edit and the approve/deny choices in inventory approve |
+| Individual record | DELETE | inventory remove |
+| Token collection | POST | inventory token create, returning the new credential and expiry |
+| Individual token | DELETE | inventory token revoke with a known token |
+| Audit collection | GET | inventory audit |
+
+Keep only the query capabilities the CLI needs: record pagination, page limit,
+pending-only filtering, and audit continuation/page limit. Name/pattern/prefix
+resolution currently walks record pages; it does not require a new server search
+endpoint. Record GET has a real caller and avoids enumeration for a full ID.
+
+Remove from the proposal:
+
+- Both token GET operations, including listing, and the token list CLI command.
+- Per-resource OPTIONS requests for dynamic method discovery: our CLI already
+  knows the methods defined by the contract. Retain initial OPTIONS/Link-Template discovery.
+- PATCH, separate approve/deny/revoke action endpoints, and separate durable
+  enrollment-request or review resources.
+- Individual audit-event retrieval and audit mutations; no CLI consumer exists.
+- Generic search/filter/sort, arbitrary status assignment, bulk operations and
+  new inventory lifecycle behavior merely to fill out REST resources.
+
+## Accepted starting implementation boundary
+
+Target three separately published inventory fact services: the bundled SQLite
+service, a separate Firebase-backed service, and a separate DynamoDB-backed
+service. Use one reusable Go inventory service package and a backend interface.
+This is the accepted starting design; refine the interface based on implementing
+the real backends rather than treating the sketch below as a frozen abstraction.
+Acceptance does not authorize application implementation before the remaining
+design discussion and ADR 0002.
+
+Evolve the existing `factserver.InventoryHandler` and `inventory.Store` boundary.
+Extract shared inventory rules currently embedded in the SQLite implementation.
+
+| Shared implementation | Backend-specific implementation |
+|---|---|
+| Fact lookup and REST HTTP handlers | Database connections and schema |
+| Service-key authentication and trusted actor extraction | Queries, indexes and storage encoding |
+| OPTIONS and Link-Template discovery | Pagination cursors |
+| JSON validation and representation mapping | Transactions and conditional writes |
+| ETag/If-Match handling and HTTP error mapping | Atomic enforcement of record, name, realm and token constraints |
+| Inventory validation, lifecycle rules and audit-event construction | Persistence of records, credentials and audit together |
+
+Public OIDC/shared-secret authentication and administrator authorization remain
+in control. Each service executable opens its backend, passes it and trusted keys
+to the common handler, serves HTTP, and owns backend/server shutdown. The shared
+package has no Firebase or AWS SDK dependency; separate adapters supply those.
+
+The illustrative backend interface consists of complete domain operations:
+
+```go
+type Store interface {
+    LookupHost(ctx context.Context, name string) (*ResolvedHost, string, error)
+
+    Get(ctx context.Context, id string) (*Record, error)
+    List(ctx context.Context, query RecordQuery) (RecordPage, error)
+
+    Enroll(ctx context.Context, host Proposal, token string) (*Record, error)
+    AddPattern(ctx context.Context, actor string, host Proposal) (*Record, error)
+    Replace(ctx context.Context, actor string, record Record, version uint64) (*Record, error)
+    Remove(ctx context.Context, actor, id string, version uint64) error
+
+    CreateToken(ctx context.Context, actor string, lifetime time.Duration) (Token, error)
+    RevokeToken(ctx context.Context, actor, token string) error
+
+    Audit(ctx context.Context, query AuditQuery) (AuditPage, error)
+}
+```
+
+Types and signatures are schematic. Each method serves an existing workflow.
+Do not add token retrieval, generic queries, or provider-owned HTTP handlers.
+Backend lifetime belongs to its executable rather than the handler's interface.
+
+Each mutation owns its complete atomic operation. The handler must not read,
+check a revision and write through separate backend calls. Shared inventory
+logic validates current/proposed state and constructs the resulting state and
+audit event; the backend uses it inside its transaction or conditional-write
+sequence. Name/realm rules have shared meaning; the backend owns the database
+mechanism ensuring those rules cannot be invalidated by concurrent changes.
+
+A generic transaction interface beneath a shared engine was considered but is
+not the starting approach: it risks becoming a database portability framework.
+Firestore transaction callbacks/read ordering and DynamoDB transactional
+batches/condition checks differ. Complete domain operations hide those mechanics
+without requiring each provider to recreate protocol and business-rule logic.
+The exact Firebase storage product remains to be selected; Firestore was the
+transaction-model example used in the comparison.
+
+Use a shared backend contract test suite for lifecycle, concurrent approval,
+single-use token redemption and lookup invariants across the three backends.
+
+## Necessary contract details still to settle
+
+- PUT must cover current edit, approve and deny behavior with the reviewed
+  version as a precondition. The current approval UI saves edits immediately and
+  approves in a separate request. Atomic edit-and-approve is not needed by that
+  UI and must not be introduced implicitly. The rule for a PUT that changes both
+  specification and status remains a design decision. Denial must still support
+  an empty pending token reservation; do not require an approvable specification
+  merely because PUT carries the whole record.
+- Record edits/reviews/removals already require a version check. ETag/If-Match
+  is the agreed HTTP representation. Define how to bind If-Match in the signed
+  request; current service signatures do not cover it. Token revocation currently
+  needs no read or version precondition; do not add one that requires token GET.
+- Pagination is required, including multi-page name resolution. Continuation
+  encoding and links are still wire-design choices, not reasons to add endpoints
+  or snapshot semantics. Preserve only the needed record and audit continuations.
+- Creation and record replacement must return the record because callers display
+  it and approval updates its reviewed version. Host enrollment consumes record
+  ID/status; token creation consumes the credential/expiry. Token revocation and
+  record removal need no response object. Keep these direct results, without a
+  cross-domain union envelope.
+
+Initial OPTIONS returning any 4xx continues to mean data-plane-only support.
+Do not reuse that fallback for failed requests to advertised management resources.
+The proposed no-links-on-success and 5xx/transport-error handling still need to be
+settled as part of the discovery contract.
+
+## Retained inventory exploration
+
+The material below records the original exploration against its cited checkout.
+It is not an approved specification. References to then-current behavior and
+recommendations must be rechecked, especially shared directory/authentication
+assumptions changed by ADR 0001. Historical logs are retained for traceability.
+The RPC envelope and command-URL recommendations below are superseded by the
+REST and OPTIONS/Link discovery decision above. Resource contracts must be
+designed before implementation.
 
 ## Scope and ownership
 
@@ -112,22 +441,6 @@ All operations except enrollment require an authorized inventory administrator o
 
 The operation set has four reads and eight mutations. Most of the specification fits into four groups: enrollment/admission, record inspection/editing, preapproval, and audit. All twelve represent existing behavior.
 
-### Exact directory operations
-
-| Operation | Caller-supplied input | Result and effect |
-|---|---|---|
-| `directory.read-actor` | Authentication subject `id` | Return the user's current authorization view and an opaque authorization revision from one coherent snapshot; missing or inactive users cannot authorize an administrator |
-| `directory.list-users` | None in the initial behavior-preserving contract | Return the current user facts snapshot, including inactive users and policy-visible groups |
-| `directory.read-bindings` | None | Return group identities, names, alias/conflict/deletion state, and an opaque binding revision |
-| `directory.bind-group` | `group_id`, `alias`, `expected_revision` | Bind or rebind the alias after checking the reviewed binding revision and control's trusted authorization revision; return empty success |
-| `directory.read-audit` | `cursor`, `limit` | Return a page of directory events and a continuation cursor |
-
-`read-actor` is a service operation by control, before human authorization. The remaining four require directory-admin authorization. `bind-group` additionally carries the trusted authorization revision obtained by control, outside caller-supplied parameters.
-
-Keep the distinction between authentication subject IDs and provisioned group/resource IDs explicit in field names. The ordinary fact response stays sufficient for authorizing administration against a read-only directory; a directory supporting binding mutations must also support the coherent actor snapshot they require.
-
-User and binding listings currently return whole snapshots. Paging them is potentially worthwhile, but requires defining snapshot consistency across pages. It should not be smuggled into an operation rename, and it is not assumed in the count above.
-
 ### Why A is viable
 
 A provider can implement one validator and one transaction per mutation. Existing CLI workflows map directly to the operations. It requires no new durable object types, draft lifecycle, or migration of pending records into another collection. The client can use typed methods without exposing a giant request containing irrelevant fields.
@@ -153,7 +466,7 @@ Replace A's separate approval and denial operations with:
 
 The decision has exactly two variants: `{"approve":{"spec":...}}` or `{"deny":{}}`. Approval always supplies the complete specification being approved; denial cannot carry a specification. Both variants require a pending record. The backend checks its current revision and commits the replacement and decision together. This is a proposed behavior change from the current edit-then-approve sequence.
 
-All nine other A operations remain: create-pattern, get-record, list-records, replace-record, remove-record, create-token, list-tokens, revoke-token, and read-audit. Directory operations remain the same. **B therefore also has twelve inventory operations.** Its value is a different transaction boundary, not a lower operation count.
+All nine other A operations remain: create-pattern, get-record, list-records, replace-record, remove-record, create-token, list-tokens, revoke-token, and read-audit. **B therefore also has twelve inventory operations.** Its value is a different transaction boundary, not a lower operation count.
 
 An administrator may still save a draft using replace-record. That preserves the current ability to edit now and decide later. Approval can instead send the final reviewed specification in one operation without first exposing an intermediate saved draft.
 
@@ -178,7 +491,7 @@ A complete operation catalogue would be:
 | Preapproval | `create-preapproval(lifetime)`, `list-preapprovals(cursor,limit)`, `revoke-preapproval(id)`, `redeem-preapproval(token,spec)`, `complete-preapproval(id,revision,spec)` |
 | Audit | `read-audit(cursor,limit)` |
 
-This has **seventeen inventory operations**, with the same five directory operations as A. The administrator-only complete-preapproval operation preserves today's ability to finish a reservation without the host redeeming its token. Omitting it would remove an existing workflow.
+This has **seventeen inventory operations**. The administrator-only complete-preapproval operation preserves today's ability to finish a reservation without the host redeeming its token. Omitting it would remove an existing workflow.
 
 Approving a request creates an admitted record and closes the request atomically. Redeeming or administratively completing a preapproval creates the admitted record and consumes or withdraws its credential atomically. Responses explicitly identify both the source request/grant and resulting record. This avoids requiring their IDs to be the same.
 
@@ -206,7 +519,6 @@ The candidates were compared against complete user tasks and concurrent outcomes
 | Active record moves to another name or realm | replace-record atomically releases old claims and acquires new claims | same | same admitted-record mutation |
 | Active exact record is removed above a wildcard | existing matching pattern becomes effective | same | same; request history must not affect lookup |
 | A pending or denied record names an existing host | it remains inert | same | isolation follows from the separate request model |
-| Admin authorization changes before group rebind | bind-group rejects the old authorization snapshot | same | same; inventory model changes do not help |
 | Response is lost after a commit | outcome may be unknown; no automatic mutation retry guarantee | same | same, with more identities to reconcile |
 
 B provides the best single-step human review, but its failed approval also discards the included edit. A preserves the saved pending edit when a later approval fails. Both are useful semantics; they are different behavior, not equivalent spellings.
@@ -266,7 +578,6 @@ The provider remains responsible for operation-specific validation. Control must
 
 - **Record IDs:** opaque identifiers. Their allocation is provider-owned. The existing 64-hex display/prefix-resolution assumptions would need adjustment if arbitrary provider IDs are adopted.
 - **Record revisions:** opaque equality preconditions. They bind a mutation to the exact record reviewed. They are never client-incremented timestamps or counters.
-- **Directory authorization revisions:** separately named coherent-snapshot preconditions. They must not be confused with advisory fact revisions or record edit revisions.
 - **Pages:** `{items, next_cursor}` with an opaque cursor and a bounded limit. The provider owns ordering; cursors are scoped to the operation and filters. A page is coherent, but pages are not promised to share a historical snapshot. This is a proposed replacement for exposing record IDs and numeric audit offsets as cursors.
 - **Replacement:** the complete editable specification, with explicit account restrictions. Preserve the distinction between omitted accounts, unrestricted `null`, and empty `[]`.
 - **Failures:** distinguish invalid input, unauthenticated/forbidden, missing resource, stale review, admission conflict, invalid token, unsupported operation, and unavailable provider. Authentication and internal failures stay distinct from a missing record.
@@ -274,28 +585,6 @@ The provider remains responsible for operation-specific validation. Control must
 The numeric HTTP status mapping can follow after these meanings are agreed. Separating stale-review and admission-conflict error codes is useful even if they share a status: the former requires re-reading, while the latter requires resolving the conflicting authorization state. Messages are explanations, not machine-readable discriminators.
 
 A smaller command set should not be purchased with a generic patch language, arbitrary status assignment, or client-visible begin/commit calls. Those mechanisms make a simple-looking interface harder to implement correctly.
-
-## Directory and provisioning alternatives
-
-### Keep actor inspection inside the management contract
-
-A managed directory can expose read-actor as a service-only operation on its management URL; it does not require a special hard-coded `/actor` route or a human role before the user has been authorized. Keep the actual coherent snapshot semantics.
-
-Eliminating this operation by upgrading every ordinary user lookup revision into an authorization precondition would enlarge the read-only provider contract. A directory that only supplies facts should not need a mutation-consistency protocol. Conversely, a directory implementing bind-group must provide the authorization snapshot needed by that operation. OPTIONS can describe supported operation groups; it need not create a link for every command.
-
-There is no need to add CRUD operations for users to the human administration API. Existing human directory tasks are inspection and alias binding. Provisioning already has a distinct caller and protocol.
-
-### Three provisioning boundaries
-
-| Boundary | Benefit | Cost and recommendation |
-|---|---|---|
-| Keep the current SCIM request tunnel | Smallest immediate implementation change; preserves existing adapter | Freezes a bespoke HTTP-inside-JSON envelope and its header allowlist; acceptable temporarily, weak as the long-term public provider contract |
-| Advertise an optional SCIM endpoint and forward signed HTTP | Provider owns the existing provisioning protocol; alternate directories can implement it directly | Requires a precise route/base-URL and conditional-header binding design; preferred direction for a separate provisioning contract |
-| Move the SCIM adapter to control and define provider user/group operations | Providers can work with domain records without interpreting SCIM | Adds roughly ten user/group CRUD/read operations plus provisioning identity/version/alias semantics to the private API; broader provider contract and more translation in control |
-
-Prefer an optional, separately specified SCIM capability. It is not a requirement for a provider that only supports inventory management or reads an existing directory. The current adapter supports a selected user/group projection, create/replace/get/list/delete, and explicitly rejects PATCH and unsupported query parameters. The proposal does not promise full SCIM support.
-
-There is one concrete dependency before replacing the tunnel: the current request signature binds method, target, and body, but not arbitrary HTTP headers. Today the tunneled If-Match value is protected because it is inside the signed body. A direct SCIM hop must preserve equivalent integrity for the mutation precondition. Forwarding the header alone would lose that guarantee. This is a reason to design the provisioning hop separately, not to add all SCIM operations to basic management.
 
 ## Alternate backend assessment
 
@@ -322,7 +611,6 @@ These are specific decisions to make before freezing a provider version. They ar
 | Review transaction | Save an edit, then approve the stored revision | Choose A unless atomic edit-and-approve is explicitly wanted; B is fully specified if it is |
 | Pattern scope of enrollment | Shared validation allows a pattern proposal | Preserve it in an API cleanup or explicitly decide to restrict it; the operation name must not conceal a restriction |
 | Pagination and versions | Record IDs/numeric sequences and numeric edit revisions leak into callers | Prefer opaque wire values and returned cursors; account for corresponding CLI changes before implementation |
-| Whole directory snapshots | User and binding listings are unpaged | Keep that limitation visible initially; introduce paging only with defined consistency semantics |
 | Repeated or uncertain mutations | No durable HTTP deduplication; some repeated operations change revisions/audit | Preserve no-automatic-retry behavior initially. Do not promise exactly-once execution or use JWT jti as an idempotency key |
 
 For token revoke, current behavior invalidates the token but retains the record and increments its revision, even when repeated. Expiry and revocation prevent redemption; they do not by themselves remove or deny the pending record. An API description should say that directly.
@@ -331,23 +619,22 @@ For token revoke, current behavior invalidates the token but retains the record 
 
 Signed OPTIONS at the configured fact URL is the favored bootstrap. It requires no fabricated hostname or user ID and can advertise management even when there are no records. CA can continue using GET alone for facts.
 
-Advertise complete URLs for coherent APIs: directory management, inventory management, and optional provisioning. A domain command uses the advertised management URL without appending operation paths. read-actor can be part of the directory management operation set. This revises the earlier idea of reproducing the current `/manage`, `/actor`, and `/scim` routes one-for-one in Link relations.
+Advertise complete URLs for coherent APIs: directory management, inventory management, and optional provisioning. A domain command uses the advertised management URL without appending operation paths. This revises the earlier idea of reproducing the current `/manage`, `/actor`, and `/scim` routes one-for-one in Link relations.
 
-Partial directory support is real: the static directory can list users but cannot rebind managed aliases. Discovery therefore needs defined capability groups or an explicit supported-operation list; a single boolean `supports control` is insufficient. For example, advertising bind-group must also guarantee read-bindings and read-actor. Choose that discovery representation after agreeing the operation catalogue, rather than inventing dozens of relation types now.
+Directory management and SCIM discovery are tracked in `ywxp1g89`. Settle the inventory capability representation here without importing the superseded directory-binding catalogue.
 
 An absent capability and a failed discovery request remain different outcomes. A listed capability that later fails is an error, not permission to silently fall back to another mode. The exact handling of a data-only provider with no OPTIONS implementation remains a bootstrap decision.
 
 Unix socket addressing also remains separate: a socket path identifies the connection, while the fact endpoint and relative management links identify HTTP targets. Links can preserve a socket connection for relative targets, but cannot supply the initial missing fact path. The address format still needs a decision.
 
-## Recommendation and discussion order
+## Discussion order
 
-1. Adopt A's twelve inventory and five directory operations as the baseline to review. Most simplicity comes from their specific input/result contracts and ownership, not from combining verbs.
-2. Decide between separate approve/deny and B's atomic review using the concrete saved-edit behavior above. Keep the current single record lifecycle unless C's separate request model serves an actual product need.
-3. Settle token identity and deletion/audit semantics before claiming backend portability. Adopt opaque revision/cursor representations with explicit CLI impact.
-4. Agree the directory authorization-snapshot contract and optional provisioning boundary. Preserve the existing role and signing-key ownership.
-5. Then specify signed OPTIONS, capability groups, relation names, target resolution, and Unix addressing. Write the normative wire schemas and behavioral conformance scenarios only after those decisions.
-
-The simplest viable starting point is a record-oriented domain API whose mutation owns the complete business operation. Independent providers should be able to implement that API without recreating control's authentication, learning Go interfaces, or coordinating transactions over HTTP.
+1. Start with the operator's inventory CLI workflows and agree required behavior.
+2. Reassess A/B/C against those requirements; no alternative is selected yet.
+3. Settle token identity, review transactions, deletion/audit semantics and opaque
+   revisions/cursors before claiming a portable provider contract.
+4. Specify the inventory operations, discovery and transport contracts.
+5. Record the settled design and rationale in ADR 0002 before implementation.
 
 ## Evidence in the current checkout
 
@@ -363,11 +650,9 @@ The baseline was the source tree at parent change `qqkmuxpr`, commit `a8a41523` 
 - `pkg/facts/inventory/sqlitestore/managed_test.go`: concurrent admission/redemption, realm constraints, and pending/denied inertness.
 - `pkg/facts/inventory/sqlitestore/managed_pattern_test.go`: pattern enrollment, ambiguity, exact-name precedence, and lifecycle.
 - `pkg/facts/inventory/sqlitestore/managed_sqlite_test.go:80`: atomic removal and cascading audit/token deletion.
-- `pkg/facts/directory/sqlitestore/store.go:561` and `store_test.go:112`: both reviewed and authorized revisions checked during group rebinding.
 - `pkg/facts/control/server.go:106`: public authorization and action dispatch; `:257`: managed versus read-only actor lookup.
 - `pkg/facts/server/backend.go:29`: private actor/SCIM/management routes and service authorization.
 - `pkg/facts/auth.go`: signed actor, request method/target/body binding, and no header-precondition binding.
-- `pkg/facts/directory/scim/http.go:52`: current provisioning scope and explicit unsupported operations.
 
 No application code was changed, no normative API was frozen, and no backend implementation was started. This task retains the exploration and the decisions required before implementation.
 
@@ -410,3 +695,98 @@ Added blocker: rv3znarg
 # Log: 2026-10-12T13:16:07Z Brian McCallister
 
 ADR 0001 implementation is complete: flat string predicates, explicit name/id, structured groups, provider-owned eligibility, and unchanged account filters. Historical group bindings and directory-bind are removed. Reassess the management proposal against these implemented semantics; discovery and broader workflows remain design-only.
+
+---
+# Log: 2026-10-13T15:14:59Z Brian McCallister
+
+Started working.
+
+---
+# Log: 2026-10-13T15:22:15Z Brian McCallister
+
+Agreed directory management uses SCIMv2 rather than a parallel user/group API. Control accepts the existing SCIM token as an optional shared secret and also OIDC users with directory-admin grants; omitting the secret does not disable authorized OIDC access. Minimal SCIM CLI remains proposed, with its command set open. Implementation remains design-only.
+
+---
+# Log: 2026-10-13T15:22:33Z Brian McCallister
+
+Clarified and agreed: CLI SCIM operations use OIDC via the existing agent authentication path, with directory-admin authorization at control.
+
+---
+# Log: 2026-10-13T15:24:24Z Brian McCallister
+
+Agreed operator commands belong under directory and inventory, not control or scim. Exact verbs remain open. Discuss remaining decisions, then record the settled design in ADR 0002; retain implementation planning in this task.
+
+---
+# Log: 2026-10-13T15:27:18Z Brian McCallister
+
+Agreed CLI resource references accept names when unique. Resolve to SCIM IDs, reject missing or ambiguous names, and retain explicit ID addressing. ID-versus-name syntax remains open.
+
+---
+# Log: 2026-10-13T15:37:51Z Brian McCallister
+
+Agreed built-in directory retains a single userName, projected as a one-element fact name collection. User creation takes positional NAME; optional --id supplies authentication identity via SCIM externalId and defaults to NAME. No multivalued-name persistence expansion.
+
+---
+# Log: 2026-10-13T15:43:12Z Brian McCallister
+
+Priority clarified: inventory management is high priority. Defer manual directory user creation/editing without blocking inventory work. Resume design from inventory operator interfaces and workflows; retain directory decisions and notes for later.
+
+---
+# Log: 2026-10-13T15:44:53Z Brian McCallister
+
+Removed blocker: rv3znarg
+
+---
+# Log: 2026-10-13T15:45:10Z Brian McCallister
+
+Split directory management into ywxp1g89. This task now owns high-priority inventory interface, operations and discovery design; remains in progress. Retained detailed inventory alternatives and historical logs. Removed the completed ADR 0001 blocker. Directory CLI work does not block inventory.
+
+---
+# Log: 2026-10-13T15:51:30Z Brian McCallister
+
+Agreed REST over HTTP for the inventory provider management API, with resource locations discovered through Link headers on OPTIONS responses. No gRPC; earlier action-dispatch RPC proposal is superseded. Current inventory model is acceptable. Optional inventory admin shared secret supports automation. Resource mappings and HTTP contracts remain design work for ADR 0002.
+
+---
+# Log: 2026-10-13T15:54:59Z Brian McCallister
+
+Agreed discovery rule: any 4xx response to initial inventory OPTIONS means management APIs are unsupported; continue data-plane lookups. Preparing a REST resource proposal around records, enrollment tokens and audit; the resource/method mapping is not yet agreed.
+
+---
+# Log: 2026-10-13T15:58:28Z Brian McCallister
+
+Explicit scope constraint: our CLI is the only client; define only endpoints it needs, never operations for symmetry or hypothetical usefulness. Remove individual token GET. Prefer whole-record PUT and token DELETE; combined edit/approve semantics remain open.
+
+---
+# Log: 2026-10-13T15:59:00Z Brian McCallister
+
+Token scope narrowed further: no retrieval at all, including collection listing. Keep POST creation returning the new token and DELETE revocation of a known token. This supersedes the previous note retaining listing and entails removing the current token list CLI command during implementation.
+
+---
+# Log: 2026-10-13T16:00:54Z Brian McCallister
+
+Audited REST proposal against actual CLI callers. Retain eight management method/resource combinations plus initial OPTIONS. Remove all token reads and per-resource method-discovery OPTIONS. Preserve real record reads, pagination, pending filtering and audit continuation. Flag member addressing for revoke-by-token/full-ID lookup, signed version preconditions, constrained record creation, and PUT transition semantics as necessary unresolved contract details; no new application code.
+
+---
+# Log: 2026-10-13T16:07:58Z Brian McCallister
+
+Agreed RFC 9652 Link-Template discovery using RFC 6570 URI templates. Token revocation can use a token query variable. Also confirmed existing record revisions should be exposed as ETags with If-Match on replacement and removal. Preparing illustrative OPTIONS headers; exact relation names and pagination variable encoding remain proposed.
+
+---
+# Log: 2026-10-14T07:54:55Z Brian McCallister
+
+Saved accepted OPTIONS response with three Link-Template relations for records, tokens and audit, including variable/method usage and illustrative provider-owned paths. OPTIONS discovery is required only on the known fact URL; no recursive OPTIONS on advertised resources. Any initial OPTIONS 4xx means data-plane-only support. Member addressing is settled by template expansion; ETag/If-Match is agreed, with signature binding still to design.
+
+---
+# Log: 2026-10-14T08:04:53Z Brian McCallister
+
+Accepted matching GET/PUT record JSON: id, status, host and camelCase timestamps; host uses name or pattern, attributes, accounts and nested principal. Version is in ETag with If-Match. Echo server-owned fields unchanged; empty reservations use host:null. PUT returns committed record and new ETag. Combined edit-and-approve remains undecided.
+
+---
+# Log: 2026-10-14T08:10:08Z Brian McCallister
+
+Accepted POST record bodies containing host and optional enrollment token, with no caller-supplied status. Provider derives pending for untokened enrollment and active for valid token redemption or administrator-added patterns. New records return 201; reservation activation returns 200. Responses include record, ETag and Location. No direct active exact-host creation added.
+
+---
+# Log: 2026-10-14T08:15:25Z Brian McCallister
+
+Accepted as a starting implementation design: reusable inventory HTTP service plus complete-domain-operation Store interface for bundled SQLite and separate Firebase/DynamoDB services. Share protocol handling and inventory rules; backends own atomic storage mechanics. Refine signatures through actual backend work rather than freeze the sketch. Preserve control authorization and use shared backend contract tests.
