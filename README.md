@@ -6,14 +6,76 @@ Epithet is an SSH certificate authority that replaces static authorized_keys wit
 
 Very small right now, but we have a [mailing list](https://groups.google.com/g/epithet-dev)!
 
-## Quick start
+## Installation
 
-**1. Build epithet:**
+### macOS
+
+Install with [Homebrew](https://brew.sh/) on Apple Silicon or Intel Macs:
+
+```sh
+brew install epithet-ssh/tap/epithet
+```
+
+### FreeBSD
+
+Packages are available for FreeBSD 15 on amd64. Run the following as root to
+install the repository signing key and configure the signed package repository:
+
+```sh
+install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
+fetch -o /usr/local/etc/pkg/keys/epithet.pub https://pkg.epithet.dev/keys/epithet.pub
+chmod 0644 /usr/local/etc/pkg/keys/epithet.pub
+cat > /usr/local/etc/pkg/repos/Epithet.conf <<'EOF'
+Epithet: {
+    url: "https://pkg.epithet.dev/${ABI}/latest",
+    signature_type: "pubkey",
+    pubkey: "/usr/local/etc/pkg/keys/epithet.pub",
+    enabled: yes
+}
+EOF
+pkg update -r Epithet
+pkg install -r Epithet epithet
+```
+
+Keep the literal `${ABI}` in the repository URL. The package includes server
+rc.d scripts, disabled by default; installation does not start a server.
+
+### Arch Linux
+
+Packages are available for x86_64. Import and trust the repository signing key:
+
+```sh
+curl -fsS --proto '=https' https://pkg.epithet.dev/keys/epithet-arch.asc | sudo pacman-key --add -
+sudo pacman-key --lsign-key EDF8AFF765FBCD24AE3E2D0B1146870201C33C51
+```
+
+Add the following to `/etc/pacman.conf`, keeping the literal `$arch`:
+
+```ini
+[epithet]
+SigLevel = Required
+Server = https://pkg.epithet.dev/arch/$arch
+```
+
+Then update the system and install Epithet:
+
+```sh
+sudo pacman -Syu epithet
+```
+
+### From source
+
 ```bash
 git clone https://github.com/epithet-ssh/epithet.git
 cd epithet
 make
 ```
+
+Add the resulting `epithet` binary to your `PATH`.
+
+## Quick start
+
+**1. [Install Epithet](#installation).**
 
 **2. Start the agent:**
 ```bash
@@ -67,14 +129,9 @@ When you run `ssh server.example.com`, OpenSSH's `Match tagged` triggers `epithe
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) - How epithet works under the hood
 - [Directory and SCIM groups](pkg/facts/directory/README.md) - identities, current group names, and database upgrades
-- [Writ Policy Guide](docs/policy-server.md) - Authorization rules and configuration
 - [Fact Provider API](docs/fact-services.md) - Implement a custom directory or inventory
 - [Destination-bound Principals](docs/principals.md) - Interoperable principal derivation protocol
-- [Authentication](docs/authentication.md) - The OIDC token contract and in-process auth flow
-- [OIDC Setup](docs/oidc-setup.md) - Provider-specific OIDC configuration (Google, Okta, Azure AD)
-- [Releasing](docs/RELEASING.md) - Notes on cutting releases
 
 **Requires OpenSSH 9.4+** on the client (for `Tag`/`Match tagged`; see below).
 
