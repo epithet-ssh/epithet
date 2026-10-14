@@ -2,6 +2,10 @@
 
 Epithet is an SSH certificate authority that replaces static authorized_keys with short-lived certificates (2-10 minutes) and authentication over OIDC. It creates on-demand SSH agents for each outbound connection, enabling real-time policy enforcement without touching your target hosts.
 
+## Community
+
+Very small right now, but we have a [mailing list](https://groups.google.com/g/epithet-dev)!
+
 ## Quick start
 
 **1. Build epithet:**
