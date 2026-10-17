@@ -36,8 +36,8 @@ func managedFixture(t *testing.T, initialYAML string) (*Store, string) {
 	require.NoError(t, yaml.Unmarshal([]byte(initialYAML), &initial))
 	for _, h := range initial.Hosts {
 		id := inventory.NewID()
-		p := inventory.Host{Names: h.Names, Labels: h.Labels, Accounts: h.Accounts, PrincipalMode: h.PrincipalMode.Effective(), Realm: principal.Realm(h.Realm)}
-		_, err := m.AddHost(t.Context(), id, p, inventory.NewAuditEvent("admin", "add", id))
+		p := inventory.Host{Status: inventory.StatusActive, Names: h.Names, Labels: h.Labels, Accounts: h.Accounts, PrincipalMode: h.PrincipalMode.Effective(), Realm: principal.Realm(h.Realm)}
+		_, err := m.CreateHost(t.Context(), id, p, inventory.NewAuditEvent("admin", "add", id))
 		require.NoError(t, err)
 	}
 	t.Cleanup(func() { m.Close() })
@@ -49,32 +49,32 @@ func proposal(name string) inventory.Host {
 func TestManagedAdmissionConflictAndWildcardFallback(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n  - names: ['*.example']\n    accounts: [root]\n")
 	id2 := inventory.NewID()
-	a, err := m.Enroll(t.Context(), id2, proposal("a.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
+	a, err := inventory.Enroll(t.Context(), m, id2, proposal("a.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
 	require.NoError(t, err)
 	id3 := inventory.NewID()
-	b, err := m.Enroll(t.Context(), id3, proposal("a.example"), "", inventory.NewAuditEvent("host", "enroll", id3))
+	b, err := inventory.Enroll(t.Context(), m, id3, proposal("a.example"), "", inventory.NewAuditEvent("host", "enroll", id3))
 	require.NoError(t, err)
 	h, err := m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, h.Accounts, "pending must not change wildcard admission")
-	a, err = m.Change(t.Context(), "admin", "approve", a.ID, a.Revision, nil)
+	a, err = m.Change(t.Context(), "admin", "approve", a.ID, a.Version, nil)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", b.ID, b.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", b.ID, b.Version, nil)
 	require.ErrorIs(t, err, inventory.ErrConflict)
 	p := proposal("b.example")
-	b, err = m.Change(t.Context(), "admin", "edit", b.ID, b.Revision, &p)
+	b, err = m.Change(t.Context(), "admin", "edit", b.ID, b.Version, &p)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", b.ID, b.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", b.ID, b.Version, nil)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "remove", a.ID, a.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "remove", a.ID, a.Version, nil)
 	require.NoError(t, err)
 	h, err = m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, h.Accounts)
 	id4 := inventory.NewID()
-	a, err = m.Enroll(t.Context(), id4, proposal("a.example"), "", inventory.NewAuditEvent("host", "enroll", id4))
+	a, err = inventory.Enroll(t.Context(), m, id4, proposal("a.example"), "", inventory.NewAuditEvent("host", "enroll", id4))
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", a.ID, a.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", a.ID, a.Version, nil)
 	require.NoError(t, err)
 	h, err = m.LookupHost(context.Background(), "a.example")
 	require.NoError(t, err)
@@ -88,14 +88,14 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	id6 := secret
-	h, err := m.Enroll(t.Context(), id6, proposal("one"), secret, inventory.NewAuditEvent("host", "enroll", id6))
+	h, err := inventory.Enroll(t.Context(), m, id6, proposal("one"), secret, inventory.NewAuditEvent("host", "enroll", id6))
 	require.NoError(t, err)
 	require.Equal(t, "active", h.Status)
 	id7 := secret
-	_, err = m.Enroll(t.Context(), id7, proposal("different"), secret, inventory.NewAuditEvent("host", "enroll", id7))
+	_, err = inventory.Enroll(t.Context(), m, id7, proposal("different"), secret, inventory.NewAuditEvent("host", "enroll", id7))
 	require.ErrorIs(t, err, inventory.ErrToken)
 	id8 := secret
-	_, err = m.Enroll(t.Context(), id8, proposal("two"), secret, inventory.NewAuditEvent("host", "enroll", id8))
+	_, err = inventory.Enroll(t.Context(), m, id8, proposal("two"), secret, inventory.NewAuditEvent("host", "enroll", id8))
 	require.ErrorIs(t, err, inventory.ErrToken)
 	require.Equal(t, secret, h.ID)
 	require.Equal(t, tok.ID, h.ID)
@@ -110,7 +110,7 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	host, err := fresh.LookupHost(context.Background(), "one")
 	require.NoError(t, err)
 	require.NotNil(t, host)
-	_, err = fresh.Change(t.Context(), "admin", "remove", h.ID, h.Revision, nil)
+	_, err = fresh.Change(t.Context(), "admin", "remove", h.ID, h.Version, nil)
 	require.NoError(t, err)
 	require.NoError(t, fresh.Close())
 	fresh, err = Open(path)
@@ -125,10 +125,10 @@ func TestManagedTokenAtomicSingleUseAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, host)
 	id9 := secret
-	_, err = fresh.Enroll(t.Context(), id9, proposal("one"), secret, inventory.NewAuditEvent("host", "enroll", id9))
+	_, err = inventory.Enroll(t.Context(), fresh, id9, proposal("one"), secret, inventory.NewAuditEvent("host", "enroll", id9))
 	require.ErrorIs(t, err, inventory.ErrToken, "deleted host must not make its token reusable")
 	id10 := inventory.NewID()
-	again, err := fresh.Enroll(t.Context(), id10, proposal("one"), "", inventory.NewAuditEvent("host", "enroll", id10))
+	again, err := inventory.Enroll(t.Context(), fresh, id10, proposal("one"), "", inventory.NewAuditEvent("host", "enroll", id10))
 	require.NoError(t, err)
 	require.NotEqual(t, h.ID, again.ID)
 	require.Equal(t, "pending", again.Status)
@@ -150,7 +150,7 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			id12 := secret
-			_, e := store.Enroll(t.Context(), id12, proposal(n), secret, inventory.NewAuditEvent("host", "enroll", id12))
+			_, e := inventory.Enroll(t.Context(), store, id12, proposal(n), secret, inventory.NewAuditEvent("host", "enroll", id12))
 			results <- e
 		}()
 	}
@@ -166,10 +166,10 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 	}
 	require.Equal(t, 1, successes)
 	id13 := inventory.NewID()
-	a, e := m.Enroll(t.Context(), id13, proposal("same"), "", inventory.NewAuditEvent("host", "enroll", id13))
+	a, e := inventory.Enroll(t.Context(), m, id13, proposal("same"), "", inventory.NewAuditEvent("host", "enroll", id13))
 	require.NoError(t, e)
 	id14 := inventory.NewID()
-	b, e := m.Enroll(t.Context(), id14, proposal("same"), "", inventory.NewAuditEvent("host", "enroll", id14))
+	b, e := inventory.Enroll(t.Context(), m, id14, proposal("same"), "", inventory.NewAuditEvent("host", "enroll", id14))
 	require.NoError(t, e)
 	results = make(chan error, 2)
 	for i, h := range []*inventory.Host{a, b} {
@@ -177,7 +177,7 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, e := store.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+			_, e := store.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 			results <- e
 		}()
 	}
@@ -196,24 +196,24 @@ func TestManagedConcurrentApprovalAndRedemption(t *testing.T) {
 func TestManagedExactConflictAndStorageFailure(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [static]\n   accounts: [root]\n - names: ['*']\n   accounts: [fallback]\n")
 	id15 := inventory.NewID()
-	pending, err := m.Enroll(t.Context(), id15, proposal("static"), "", inventory.NewAuditEvent("host", "enroll", id15))
+	pending, err := inventory.Enroll(t.Context(), m, id15, proposal("static"), "", inventory.NewAuditEvent("host", "enroll", id15))
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Version, nil)
 	require.ErrorIs(t, err, inventory.ErrConflict)
 	id16 := inventory.NewID()
-	h, err := m.Enroll(t.Context(), id16, proposal("dynamic"), "", inventory.NewAuditEvent("host", "enroll", id16))
+	h, err := inventory.Enroll(t.Context(), m, id16, proposal("dynamic"), "", inventory.NewAuditEvent("host", "enroll", id16))
 	require.NoError(t, err)
 	// A failed audit insert must roll back the approval and name changes.
 	_, err = m.db.Exec("CREATE TRIGGER fail_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END")
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 	require.ErrorIs(t, err, inventory.ErrStorage)
 	current, err := m.GetHost(t.Context(), h.ID)
 	require.NoError(t, err)
 	require.Equal(t, h, current)
 	_, err = m.db.Exec("DROP TRIGGER fail_audit")
 	require.NoError(t, err)
-	h, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+	h, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 	require.NoError(t, err)
 	require.NoError(t, m.Close())
 	for _, name := range []string{"dynamic", "static", "fallback"} {
@@ -227,14 +227,14 @@ func TestManagedRevisionAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	defer other.Close()
 	id17 := inventory.NewID()
-	h, err := m.Enroll(t.Context(), id17, proposal("A.example"), "", inventory.NewAuditEvent("host", "enroll", id17))
+	h, err := inventory.Enroll(t.Context(), m, id17, proposal("A.example"), "", inventory.NewAuditEvent("host", "enroll", id17))
 	require.NoError(t, err)
 	require.Equal(t, []string{"a.example"}, h.Names)
 	p := proposal("other")
-	_, err = m.Change(t.Context(), "admin", "edit", h.ID, h.Revision, &p)
+	_, err = m.Change(t.Context(), "admin", "edit", h.ID, h.Version, &p)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
-	require.ErrorIs(t, err, inventory.ErrRevision)
+	_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
+	require.ErrorIs(t, err, inventory.ErrVersion)
 	for _, body := range []string{"names: [a]\nprincipal-mode: account-name\n", "names: [a]\naccounts: []\nprincipal-mode: account-name\nstatus: active\n", "names: [a]\naccounts: []\nprincipal-mode: account-name\n---\n{}"} {
 		_, err := inventory.ParseHost([]byte(body))
 		require.Error(t, err)
@@ -253,10 +253,10 @@ func TestManagedTokenConflictDoesNotConsumeAndExpiry(t *testing.T) {
 	secret := token.ID
 	require.NoError(t, err)
 	id19 := secret
-	_, err = m.Enroll(t.Context(), id19, proposal("taken"), secret, inventory.NewAuditEvent("host", "enroll", id19))
+	_, err = inventory.Enroll(t.Context(), m, id19, proposal("taken"), secret, inventory.NewAuditEvent("host", "enroll", id19))
 	require.ErrorIs(t, err, inventory.ErrConflict)
 	id20 := secret
-	_, err = m.Enroll(t.Context(), id20, proposal("free"), secret, inventory.NewAuditEvent("host", "enroll", id20))
+	_, err = inventory.Enroll(t.Context(), m, id20, proposal("free"), secret, inventory.NewAuditEvent("host", "enroll", id20))
 	require.NoError(t, err)
 	id21 := inventory.NewID()
 	tok, err := m.CreateToken(t.Context(), id21, time.Hour, inventory.NewAuditEvent("admin", "token-create", id21))
@@ -264,7 +264,7 @@ func TestManagedTokenConflictDoesNotConsumeAndExpiry(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, m.RevokeToken(t.Context(), tok.ID, inventory.NewAuditEvent("admin", "token-revoke", tok.ID)))
 	id22 := secret
-	_, err = m.Enroll(t.Context(), id22, proposal("revoked"), secret, inventory.NewAuditEvent("host", "enroll", id22))
+	_, err = inventory.Enroll(t.Context(), m, id22, proposal("revoked"), secret, inventory.NewAuditEvent("host", "enroll", id22))
 	require.ErrorIs(t, err, inventory.ErrToken)
 	id23 := inventory.NewID()
 	expiredToken, err := m.CreateToken(t.Context(), id23, time.Nanosecond, inventory.NewAuditEvent("admin", "token-create", id23))
@@ -272,7 +272,7 @@ func TestManagedTokenConflictDoesNotConsumeAndExpiry(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Millisecond)
 	id24 := secret
-	_, err = m.Enroll(t.Context(), id24, proposal("expired"), secret, inventory.NewAuditEvent("host", "enroll", id24))
+	_, err = inventory.Enroll(t.Context(), m, id24, proposal("expired"), secret, inventory.NewAuditEvent("host", "enroll", id24))
 	require.ErrorIs(t, err, inventory.ErrToken)
 }
 func TestManagedRejectCorruptState(t *testing.T) {
@@ -293,14 +293,14 @@ func TestManagedSnapshotsDoNotExposeMutableState(t *testing.T) {
 	p.Labels = map[string]string{"role": "server"}
 
 	id25 := inventory.NewID()
-	h, err := m.Enroll(t.Context(), id25, p, "", inventory.NewAuditEvent("host", "enroll", id25))
+	h, err := inventory.Enroll(t.Context(), m, id25, p, "", inventory.NewAuditEvent("host", "enroll", id25))
 	require.NoError(t, err)
 	p.Labels["role"] = "hijacked"
 	h.Accounts[0] = "root"
 	retry, err := m.GetHost(t.Context(), h.ID)
 	require.NoError(t, err)
 	retry.Labels["role"] = "hijacked"
-	h, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+	h, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 	require.NoError(t, err)
 	host, err := m.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
@@ -326,9 +326,9 @@ func TestManagedSharedRealmsSurviveRestart(t *testing.T) {
 					p.Accounts = []string{}
 				}
 				id := inventory.NewID()
-				h, err := m.Enroll(t.Context(), id, p, "", inventory.NewAuditEvent("host", "enroll", id))
+				h, err := inventory.Enroll(t.Context(), m, id, p, "", inventory.NewAuditEvent("host", "enroll", id))
 				require.NoError(t, err)
-				_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+				_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 				require.NoError(t, err)
 			}
 			require.NoError(t, m.Close())
@@ -355,17 +355,17 @@ func TestManagedSharedRealmValidation(t *testing.T) {
 	p := proposal("host")
 	p.Realm = "fleet"
 	id33 := inventory.NewID()
-	_, err := m.Enroll(t.Context(), id33, p, "", inventory.NewAuditEvent("host", "enroll", id33))
+	_, err := inventory.Enroll(t.Context(), m, id33, p, "", inventory.NewAuditEvent("host", "enroll", id33))
 	require.ErrorContains(t, err, "requires epithet-principal-v1")
 	p.PrincipalMode, p.Realm = inventory.EpithetPrincipalV1, "NewFleet"
 	id34 := inventory.NewID()
-	h, err := m.Enroll(t.Context(), id34, p, "", inventory.NewAuditEvent("host", "enroll", id34))
+	h, err := inventory.Enroll(t.Context(), m, id34, p, "", inventory.NewAuditEvent("host", "enroll", id34))
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 	require.NoError(t, err, "a named realm needs no separate declaration")
 	p.Realm = "not a realm"
 	id35 := inventory.NewID()
-	_, err = m.Enroll(t.Context(), id35, p, "", inventory.NewAuditEvent("host", "enroll", id35))
+	_, err = inventory.Enroll(t.Context(), m, id35, p, "", inventory.NewAuditEvent("host", "enroll", id35))
 	require.Error(t, err)
 }
 
@@ -376,9 +376,9 @@ func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
 			p := proposal("host")
 			p.Accounts = accounts
 			id36 := inventory.NewID()
-			h, err := m.Enroll(t.Context(), id36, p, "", inventory.NewAuditEvent("host", "enroll", id36))
+			h, err := inventory.Enroll(t.Context(), m, id36, p, "", inventory.NewAuditEvent("host", "enroll", id36))
 			require.NoError(t, err)
-			_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Revision, nil)
+			_, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
 			require.NoError(t, err)
 			require.NoError(t, m.Close())
 			fresh, err := Open(path)
@@ -394,28 +394,28 @@ func TestManagedAccountSemanticsSurviveRestart(t *testing.T) {
 func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
 	m, _ := managedFixture(t, "hosts:\n - names: [static]\n   accounts: [root]\n")
 	id37 := inventory.NewID()
-	approved, err := m.Enroll(t.Context(), id37, proposal("taken"), "", inventory.NewAuditEvent("host", "enroll", id37))
+	approved, err := inventory.Enroll(t.Context(), m, id37, proposal("taken"), "", inventory.NewAuditEvent("host", "enroll", id37))
 	require.NoError(t, err)
-	approved, err = m.Change(t.Context(), "admin", "approve", approved.ID, approved.Revision, nil)
+	approved, err = m.Change(t.Context(), "admin", "approve", approved.ID, approved.Version, nil)
 	require.NoError(t, err)
 	id38 := inventory.NewID()
-	pending, err := m.Enroll(t.Context(), id38, proposal("taken"), "", inventory.NewAuditEvent("host", "enroll", id38))
+	pending, err := inventory.Enroll(t.Context(), m, id38, proposal("taken"), "", inventory.NewAuditEvent("host", "enroll", id38))
 	require.NoError(t, err)
 	require.Equal(t, "pending", pending.Status)
-	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Version, nil)
 	require.ErrorIs(t, err, inventory.ErrConflict)
 
 	// Editing the existing record can release the name for the pending request.
 	moved := proposal("moved")
-	_, err = m.Change(t.Context(), "admin", "edit", approved.ID, approved.Revision, &moved)
+	_, err = m.Change(t.Context(), "admin", "edit", approved.ID, approved.Version, &moved)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Version, nil)
 	require.NoError(t, err)
 
 	id39 := inventory.NewID()
-	pending, err = m.Enroll(t.Context(), id39, proposal("static"), "", inventory.NewAuditEvent("host", "enroll", id39))
+	pending, err = inventory.Enroll(t.Context(), m, id39, proposal("static"), "", inventory.NewAuditEvent("host", "enroll", id39))
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Version, nil)
 	require.ErrorIs(t, err, inventory.ErrConflict)
 	current, err := m.LookupHost(t.Context(), "static")
 	require.NoError(t, err)
@@ -423,9 +423,9 @@ func TestPendingConflictsAreResolvedBeforeApproval(t *testing.T) {
 
 	// Editing the pending request can resolve a conflict with a active record.
 	moved = proposal("free")
-	pending, err = m.Change(t.Context(), "admin", "edit", pending.ID, pending.Revision, &moved)
+	pending, err = m.Change(t.Context(), "admin", "edit", pending.ID, pending.Version, &moved)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "approve", pending.ID, pending.Version, nil)
 	require.NoError(t, err)
 }
 
@@ -434,24 +434,24 @@ func TestUnapprovedRecordsNeverAffectResolution(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			m, path := managedFixture(t, "hosts:\n - names: ['*.example']\n   accounts: [root]\n")
 			id40 := inventory.NewID()
-			accepted, err := m.Enroll(t.Context(), id40, proposal("accepted.example"), "", inventory.NewAuditEvent("host", "enroll", id40))
+			accepted, err := inventory.Enroll(t.Context(), m, id40, proposal("accepted.example"), "", inventory.NewAuditEvent("host", "enroll", id40))
 			require.NoError(t, err)
-			_, err = m.Change(t.Context(), "admin", "approve", accepted.ID, accepted.Revision, nil)
+			_, err = m.Change(t.Context(), "admin", "approve", accepted.ID, accepted.Version, nil)
 			require.NoError(t, err)
 
 			id41 := inventory.NewID()
-			pending, err := m.Enroll(t.Context(), id41, proposal("old.example"), "", inventory.NewAuditEvent("host", "enroll", id41))
+			pending, err := inventory.Enroll(t.Context(), m, id41, proposal("old.example"), "", inventory.NewAuditEvent("host", "enroll", id41))
 			require.NoError(t, err)
 			edited := proposal("new.example")
 			edited.Names = append(edited.Names, "accepted.example")
-			pending, err = m.Change(t.Context(), "admin", "edit", pending.ID, pending.Revision, &edited)
+			pending, err = m.Change(t.Context(), "admin", "edit", pending.ID, pending.Version, &edited)
 			require.NoError(t, err)
 			if action == "deny" || action == "deny-then-remove" {
-				pending, err = m.Change(t.Context(), "admin", "deny", pending.ID, pending.Revision, nil)
+				pending, err = m.Change(t.Context(), "admin", "deny", pending.ID, pending.Version, nil)
 				require.NoError(t, err)
 			}
 			if action == "remove" || action == "deny-then-remove" {
-				_, err = m.Change(t.Context(), "admin", "remove", pending.ID, pending.Revision, nil)
+				_, err = m.Change(t.Context(), "admin", "remove", pending.ID, pending.Version, nil)
 				require.NoError(t, err)
 			}
 			check := func(store *Store) {

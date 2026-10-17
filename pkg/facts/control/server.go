@@ -19,7 +19,6 @@ import (
 
 	"github.com/epithet-ssh/epithet/internal/servicehttp"
 	"github.com/epithet-ssh/epithet/pkg/facts"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
@@ -178,15 +177,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.scim(w, r)
 		return
 	}
-	if r.URL.Path != "/manage" {
+	enrollmentPath := strings.HasPrefix(r.URL.Path, "/manage/")
+	if r.URL.Path != "/manage" && !enrollmentPath {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method == "GET" {
+	if !enrollmentPath && r.Method == "GET" {
 		s.capabilities(w, r)
 		return
 	}
-	if r.Method != "POST" {
+	if (enrollmentPath && r.Method != "PUT") || (!enrollmentPath && r.Method != "POST") {
 		controlError(w, 405, "method not allowed")
 		return
 	}
@@ -206,6 +206,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if dec.Decode(new(any)) != io.EOF {
 		controlError(w, 400, "invalid inventory request")
 		return
+	}
+	if (req.Action == "enroll") != enrollmentPath {
+		controlError(w, 405, "enrollment requires PUT to the host id")
+		return
+	}
+	if enrollmentPath {
+		id := strings.TrimPrefix(r.URL.Path, "/manage/")
+		if id == "" || strings.Contains(id, "/") || req.ID != id || (req.Token != "" && req.Token != id) {
+			controlError(w, 400, "enrollment id must match its URL and token")
+			return
+		}
 	}
 	isDirectory := strings.HasPrefix(req.Action, "directory-")
 	endpoint, admins := s.config.InventoryBackendURL, s.config.InventoryAdmins
@@ -266,7 +277,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if req.Action == "enroll" && result.Host.Status == inventory.StatusPending {
+	if req.Action == "enroll" && result.Host.Status == "pending" {
 		w.WriteHeader(http.StatusAccepted)
 	}
 	json.NewEncoder(w).Encode(result)
@@ -285,7 +296,7 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth aut
 		if req.Host == nil {
 			return invalid("host is required")
 		}
-		result.Host, err = s.enroll(ctx, *req.Host, req.Token)
+		result.Host, err = s.enroll(ctx, req.ID, *req.Host, req.Token)
 	case "add":
 		if req.Host == nil {
 			return invalid("host is required")
@@ -299,13 +310,13 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth aut
 		if req.Host == nil {
 			return invalid("host is required")
 		}
-		result.Host, err = s.editHost(ctx, auth, req.ID, req.Revision, *req.Host)
+		result.Host, err = s.editHost(ctx, auth, req.ID, req.ExpectedVersion, *req.Host)
 	case "approve":
-		result.Host, err = s.approveHost(ctx, auth, req.ID, req.Revision)
+		result.Host, err = s.approveHost(ctx, auth, req.ID, req.ExpectedVersion)
 	case "deny":
-		result.Host, err = s.denyHost(ctx, auth, req.ID, req.Revision)
+		result.Host, err = s.denyHost(ctx, auth, req.ID, req.ExpectedVersion)
 	case "remove":
-		err = s.removeHost(ctx, auth, req.ID, req.Revision)
+		err = s.removeHost(ctx, auth, req.ID, req.ExpectedVersion)
 	case "token-create":
 		result.Token, err = s.createToken(ctx, auth, req.LifetimeSeconds)
 	case "token-revoke":

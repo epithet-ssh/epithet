@@ -20,7 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
+func TestInventoryDisplayPreservesVersionAndPattern(t *testing.T) {
 	output, err := os.CreateTemp(t.TempDir(), "output")
 	require.NoError(t, err)
 	defer output.Close()
@@ -28,9 +28,9 @@ func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
 	os.Stdout = output
 	defer func() { os.Stdout = original }()
 	record := facts.HostRecord{
-		ID:       strings.Repeat("a", 64),
-		Revision: 9007199254740993,
-		Host:     facts.InventoryInput{Names: []string{"*.example"}, PrincipalMode: "account-name"},
+		ID:      strings.Repeat("a", 64),
+		Version: "backend:9007199254740993/opaque",
+		Host:    facts.InventoryInput{Names: []string{"*.example"}, PrincipalMode: "account-name"},
 	}
 	require.NoError(t, printInventory(record))
 	_, err = output.Seek(0, 0)
@@ -39,10 +39,10 @@ func TestInventoryDisplayPreservesRevisionAndPattern(t *testing.T) {
 	require.NoError(t, err)
 	var fields map[string]yaml.Node
 	require.NoError(t, yaml.Unmarshal(data, &fields))
-	var revision uint64
-	revisionNode := fields["revision"]
-	require.NoError(t, revisionNode.Decode(&revision))
-	require.Equal(t, record.Revision, revision)
+	var version string
+	versionNode := fields["version"]
+	require.NoError(t, versionNode.Decode(&version))
+	require.Equal(t, record.Version, version)
 	var host struct {
 		Names    []string `yaml:"names"`
 		Accounts []string `yaml:"accounts"`
@@ -111,7 +111,7 @@ func TestInventoryFindAcrossPages(t *testing.T) {
 						err = fmt.Errorf("expected selected record GET")
 					}
 					if err == nil {
-						last.Revision = 2
+						last.Version = "next-version"
 						err = json.NewEncoder(conn).Encode(broker.Event{Inventory: &broker.InventoryResponse{ControlResponse: facts.ControlResponse{Host: &last}}})
 					}
 					conn.Close()

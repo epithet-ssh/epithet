@@ -432,8 +432,8 @@ func renderSSHDFragment(settings *sshdSettings, realmPath, caKeyPath, goos strin
 	var b strings.Builder
 	fmt.Fprintln(&b, sshdFragmentHeader)
 	fmt.Fprintf(&b, "# principal-mode: %s\n", settings.principalMode)
-	// Keep the on-disk metadata key so enrollment can reuse existing identity paths.
-	fmt.Fprintf(&b, "# domain-file: %s\n", realmMetadata)
+	// Record the paths reused by later enrollment attempts.
+	fmt.Fprintf(&b, "# realm-file: %s\n", realmMetadata)
 	fmt.Fprintf(&b, "# ca-pubkey-file: %s\n", caToken)
 	fmt.Fprintf(&b, "TrustedUserCAKeys %s\n", caToken)
 	if settings.principalMode == principal.SchemeV1 {
@@ -484,7 +484,7 @@ func parseSSHDEnrollmentMetadata(fragment []byte) (sshdEnrollmentMetadata, error
 	if !ok || (mode != principal.SchemeV1 && mode != accountNamePrincipalMode) {
 		return sshdEnrollmentMetadata{}, fmt.Errorf("fragment has invalid principal-mode metadata")
 	}
-	realmFile, err := parseSSHDMetadataPath(lines[2], "# domain-file: ")
+	realmFile, err := parseSSHDMetadataPath(lines[2], "# realm-file: ")
 	if err != nil {
 		return sshdEnrollmentMetadata{}, err
 	}

@@ -13,7 +13,7 @@ var (
 	ErrConflict = errors.New("inventory conflict")
 	ErrNotFound = errors.New("inventory record not found")
 	ErrToken    = errors.New("invalid, expired, revoked, or used enrollment token")
-	ErrRevision = errors.New("record changed; reload before retrying")
+	ErrVersion  = errors.New("record changed; reload before retrying")
 )
 
 const DefaultPageLimit = 100
@@ -21,8 +21,8 @@ const MaxPageLimit = 1000
 
 // Store is the inventory management contract, independent of Hosts fact lookup.
 // Epithet owns enrollment and review policy; implementations persist host and
-// token operations. Each call is independent: token redemption and the following
-// host replacement do not share a transaction. Consistency is backend-specific.
+// token operations. Enrollment and any token consumption form one
+// storage call. Consistency is backend-specific.
 //
 // Only active records contribute lookup facts or reserve authorization names.
 // Active exact names and identical patterns are unique. Overlapping patterns are
@@ -41,19 +41,29 @@ const MaxPageLimit = 1000
 // Storage preserves all event fields. Callers also assign IDs
 // before creation using NewID; collisions return ErrConflict. Mutation timestamps
 // use event.At. Storage never generates IDs or completes audit events.
+// Version is an opaque, backend-owned token, compared only for equality. Stores
+// without versioning return empty Host.Version and receive empty expectedVersion.
+// Empty expectedVersion means no requested version check; enforcement and
+// consistency are backend properties.
 type Store interface {
+	// SupportsVersioning is stable for the store's lifetime. When true, returned
+	// hosts have nonempty versions that change on mutation. HTTP exposes them as
+	// ETags. When false, versions and mutation preconditions are empty.
+	SupportsVersioning() bool
+
 	// CreateHost persists a new host with the supplied ID and status. It assigns
-	// revision 1 and uses event.At for creation/update timestamps. Duplicate IDs
-	// return ErrConflict. Epithet chooses pending or active before calling storage.
+	// a version according to SupportsVersioning and uses event.At for timestamps.
+	// Duplicate IDs return ErrConflict. Epithet chooses pending or active before
+	// calling storage.
 	CreateHost(ctx context.Context, id string, host Host, event AuditEvent) (*Host, error)
 	// ReplaceHost persists the supplied facts and status. It does not enforce
 	// enrollment/review workflow rules. ID and timestamps must be echoed unchanged;
-	// the separate revision argument must match the stored nonzero version.
-	// Success advances revision/update time. Leaving pending revokes unused tokens.
-	ReplaceHost(ctx context.Context, host Host, revision uint64, event AuditEvent) (*Host, error)
+	// expectedVersion is the optional concurrency precondition, independent of the
+	// supplied Host.Version. Storage owns the new version and update time.
+	ReplaceHost(ctx context.Context, host Host, expectedVersion string, event AuditEvent) (*Host, error)
 	// Removal retains audit history and appends the supplied event. A missing ID
-	// returns ErrNotFound; a stale/zero revision returns ErrRevision.
-	RemoveHost(ctx context.Context, id string, revision uint64, event AuditEvent) error
+	// returns ErrNotFound; a failed version precondition returns ErrVersion.
+	RemoveHost(ctx context.Context, id string, expectedVersion string, event AuditEvent) error
 	// GetHost returns ErrNotFound for an absent ID.
 	GetHost(ctx context.Context, id string) (*Host, error)
 	// ListHosts returns hosts ordered by ID, strictly after the cursor.
@@ -62,15 +72,20 @@ type Store interface {
 	// filters host records before applying the limit. A short page ends that read.
 	// Each page is independent; later calls may observe changes.
 	ListHosts(ctx context.Context, after string, limit int, pending bool) ([]Host, error)
-	// CreateToken creates an empty pending host reservation. Its supplied ID is
-	// also its single-use secret. Lifetime must be positive and at most 24 hours.
+	// EnrollHost creates a host at the client-selected ID. Epithet supplies pending
+	// for a submission awaiting review, or active for single-use preapproval;
+	// active creation must validate and consume the token whose secret is id.
+	// An identical retry returns the existing host without changing its status,
+	// version, timestamps, or audit. Enrollment never edits existing host facts.
+	// Different facts at the same ID return ErrConflict (pending) or ErrToken
+	// (preapproved). Token validation, creation, and audit are one storage call;
+	// consistency remains a backend property.
+	EnrollHost(ctx context.Context, id string, host Host, event AuditEvent) (*Host, error)
+	// CreateToken stores a single-use credential without creating a host.
+	// Its supplied ID becomes the host ID on enrollment. Lifetime must be
+	// positive and at most 24 hours.
 	CreateToken(ctx context.Context, id string, lifetime time.Duration, event AuditEvent) (EnrollmentToken, error)
-	// RedeemToken consumes an unused, unrevoked, unexpired token and returns its
-	// pending host reservation. Invalid credentials return ErrToken. It appends
-	// the supplied event but does not change host facts, status, or revision.
-	// Consumption is final even if a later ReplaceHost fails.
-	RedeemToken(ctx context.Context, id string, event AuditEvent) (*Host, error)
-	// RevokeToken records revocation and advances the reservation's resource version.
+	// RevokeToken prevents unused credentials from authorizing enrollment.
 	RevokeToken(ctx context.Context, id string, event AuditEvent) error
 	// Audit returns events and a backend-owned continuation cursor. Empty input
 	// starts a read; empty next completes it. Callers forward cursors unchanged.
@@ -79,9 +94,8 @@ type Store interface {
 	Audit(ctx context.Context, cursor string, limit int) (events []AuditEvent, next string, err error)
 }
 
-// EnrollmentToken's ID is also its secret. UsedBy is the reserved host ID after
-// consumption; it does not imply that the host update succeeded. Unused tokens
-// retain an empty UsedBy value.
+// EnrollmentToken's ID is also its secret and the resulting host ID.
+// Unused tokens retain an empty UsedBy value.
 type EnrollmentToken struct {
 	ID        string    `yaml:"id"`
 	ExpiresAt time.Time `yaml:"expires-at"`
@@ -104,8 +118,7 @@ func NewAuditEvent(actor, action, resource string) AuditEvent {
 	return AuditEvent{At: time.Now().UTC(), Actor: actor, Action: action, Resource: resource}
 }
 
-// NewID creates an inventory resource ID. A token reservation also uses this
-// cryptographically random value as its enrollment credential.
+// NewID creates an inventory resource ID or single-use enrollment credential.
 func NewID() string {
 	var b [32]byte
 	rand.Read(b[:])

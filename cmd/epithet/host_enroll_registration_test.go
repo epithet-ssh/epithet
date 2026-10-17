@@ -21,13 +21,15 @@ import (
 
 func TestManagedEnrollmentLifecycle(t *testing.T) {
 	for _, tc := range []struct {
-		name, token, status    string
-		realm, editedRealm     string
-		rejected, localFailure bool
+		name, token, status                  string
+		realm, editedRealm                   string
+		rejected, localFailure, lostResponse bool
 	}{
 		{name: "pending", status: "pending"},
 		{name: "token admission", token: "one-use-token", status: "active"},
 		{name: "rejection then rerun", status: "pending", rejected: true},
+		{name: "lost response then rerun", status: "pending", lostResponse: true},
+		{name: "lost preapproval response then rerun", token: "one-use-token", status: "active", lostResponse: true},
 		{name: "local failure", localFailure: true},
 		{name: "named realm flag", status: "pending", realm: "fleet"},
 		{name: "edited realm", status: "pending", editedRealm: "fleet"},
@@ -71,7 +73,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 				w.Header().Set("Link", `<manage>; rel="https://epithet.dev/rel/control"`)
 				fmt.Fprint(w, pub)
 			})
-			mux.HandleFunc("/manage", func(w http.ResponseWriter, r *http.Request) {
+			manage := func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "GET" {
 					json.NewEncoder(w).Encode(facts.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
 					return
@@ -97,8 +99,21 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 					json.NewEncoder(w).Encode(facts.ControlResponse{Error: "rejected"})
 					return
 				}
-				json.NewEncoder(w).Encode(facts.ControlResponse{Host: &facts.HostRecord{ID: "record", Status: tc.status}})
-			})
+				require.Equal(t, "PUT", r.Method)
+				require.Equal(t, "/manage/"+req.ID, r.URL.Path)
+				id, err := os.ReadFile(filepath.Join(filepath.Dir(cmd.RealmFile), "id"))
+				require.NoError(t, err)
+				require.Equal(t, req.ID+"\n", string(id), "identity must be durable before submission")
+				if tc.lostResponse {
+					conn, _, err := w.(http.Hijacker).Hijack()
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
+					return
+				}
+				json.NewEncoder(w).Encode(facts.ControlResponse{Host: &facts.HostRecord{ID: req.ID, Status: tc.status}})
+			}
+			mux.HandleFunc("/manage", manage)
+			mux.HandleFunc("/manage/", manage)
 			server := httptest.NewServer(mux)
 			defer server.Close()
 			cmd.CAURL = server.URL + "/"
@@ -110,7 +125,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 				requireFileContents(t, main, "Port 22\n")
 				return
 			}
-			if tc.rejected {
+			if tc.rejected || tc.lostResponse {
 				require.ErrorContains(t, err, "local sshd is configured, but registration did not complete")
 				require.Nil(t, first)
 			} else {
@@ -132,17 +147,13 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			require.Equal(t, tc.token, req.Token)
 			requireFileContents(t, cmd.CAPubkeyFile, string(pub))
 			// A rerun reviews and submits anew, reusing local identity and skipping
-			// reload when sshd is already configured. No prior record is resumed.
+			// reload when sshd is already configured. The same host ID is reused.
 			tc.rejected = false
-			cmd.Token = ""
-			if cmd.EnrollmentTokenFile == "" {
-				cmd.EnrollmentToken = "shared-enrollment-secret"
-			}
+			tc.lostResponse = false
 			cmd.PrincipalRealm = ""
-			tc.status = "pending"
 			second, err := cmd.enroll(t.Context(), nil, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
-			require.Equal(t, "pending", second.Status)
+			require.Equal(t, tc.status, second.Status)
 			require.Equal(t, 2, resolutions)
 			require.Len(t, runner.calls, 7, "unchanged setup only validates on rerun")
 			require.False(t, second.RealmCreated)
@@ -150,7 +161,9 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			require.Equal(t, reviewed.Realm, second.Realm)
 			resubmitted := <-requests
 			require.Equal(t, controlHost(reviewed), *resubmitted.Host)
-			require.Empty(t, resubmitted.Token)
+			require.Equal(t, req.Token, resubmitted.Token)
+			require.Equal(t, req.ID, resubmitted.ID)
+			require.Equal(t, req.ID, second.RecordID)
 			require.NoFileExists(t, filepath.Join(filepath.Dir(cmd.RealmFile), "enrollment.key"))
 		})
 	}

@@ -38,16 +38,16 @@ func Run(t *testing.T, open Factory) {
 			return e
 		}
 		id := inventory.NewID()
-		h, err := store.Enroll(ctx, id, proposal("audit.example"), "", event("enroll", id))
+		h, err := inventory.Enroll(ctx, store, id, proposal("audit.example"), "", event("enroll", id))
 		require.NoError(t, err)
 		require.Equal(t, id, h.ID)
 		require.Equal(t, expected[0].At, h.CreatedAt)
 		h.Status = "active"
-		h, err = store.ReplaceHost(ctx, *h, h.Revision, event("approve", id))
+		h, err = store.ReplaceHost(ctx, *h, h.Version, event("approve", id))
 		require.NoError(t, err)
 		patternID := inventory.NewID()
-		p := inventory.Host{Names: []string{"*.audit.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
-		pattern, err := store.AddHost(ctx, patternID, p, event("pattern", patternID))
+		p := inventory.Host{Status: inventory.StatusActive, Names: []string{"*.audit.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
+		pattern, err := store.CreateHost(ctx, patternID, p, event("pattern", patternID))
 		require.NoError(t, err)
 		require.Equal(t, patternID, pattern.ID)
 		tokenID := inventory.NewID()
@@ -55,7 +55,7 @@ func Run(t *testing.T, open Factory) {
 		require.NoError(t, err)
 		require.Equal(t, tokenID, token.ID)
 		require.NoError(t, store.RevokeToken(ctx, tokenID, event("revoke", tokenID)))
-		require.NoError(t, store.RemoveHost(ctx, id, h.Revision, event("remove", id)))
+		require.NoError(t, store.RemoveHost(ctx, id, h.Version, event("remove", id)))
 		var actual []inventory.AuditEvent
 		var cursor string
 		for {
@@ -78,7 +78,7 @@ func Run(t *testing.T, open Factory) {
 		for i := count - 1; i >= 0; i-- {
 			id := fmt.Sprintf("%064x", i+1)
 			ids[i] = id
-			_, err := store.CreateToken(ctx, id, time.Hour, inventory.NewAuditEvent("admin", "token-create", id))
+			_, err := store.CreateHost(ctx, id, inventory.Host{Status: inventory.StatusPending, Names: []string{"page.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "create", id))
 			require.NoError(t, err)
 		}
 		first, err := store.ListHosts(ctx, "", 0, false)
@@ -101,9 +101,11 @@ func Run(t *testing.T, open Factory) {
 		h, err := store.GetHost(ctx, ids[0])
 		require.NoError(t, err)
 		h.Status = "denied"
-		_, err = store.ReplaceHost(ctx, *h, h.Revision, inventory.NewAuditEvent("admin", "deny", h.ID))
+		_, err = store.ReplaceHost(ctx, *h, h.Version, inventory.NewAuditEvent("admin", "deny", h.ID))
 		require.NoError(t, err)
-		require.NoError(t, store.RemoveHost(ctx, ids[1], 1, inventory.NewAuditEvent("admin", "remove", ids[1])))
+		removed, err := store.GetHost(ctx, ids[1])
+		require.NoError(t, err)
+		require.NoError(t, store.RemoveHost(ctx, ids[1], removed.Version, inventory.NewAuditEvent("admin", "remove", ids[1])))
 		for _, cursor := range []string{"", ids[1]} {
 			page, err := store.ListHosts(ctx, cursor, 2, true)
 			require.NoError(t, err)
@@ -128,7 +130,7 @@ func Run(t *testing.T, open Factory) {
 		}
 		var createdIDs []string
 		for _, e := range events {
-			if e.Action == "token-create" {
+			if e.Action == "create" {
 				createdIDs = append(createdIDs, e.Resource)
 			}
 		}
@@ -138,28 +140,34 @@ func Run(t *testing.T, open Factory) {
 	t.Run("review and removal", func(t *testing.T) {
 		store := open(t)
 		id1 := inventory.NewID()
-		h, err := store.Enroll(t.Context(), id1, proposal("one.example"), "", inventory.NewAuditEvent("host", "enroll", id1))
+		h, err := inventory.Enroll(t.Context(), store, id1, proposal("one.example"), "", inventory.NewAuditEvent("host", "enroll", id1))
 		require.NoError(t, err)
 		got, err := store.LookupHost(t.Context(), "one.example")
 		require.NoError(t, err)
 		require.Nil(t, got)
 		h.Status = "active"
-		active, err := store.ReplaceHost(t.Context(), *h, h.Revision, inventory.NewAuditEvent("admin", "approve", h.ID))
+		active, err := store.ReplaceHost(t.Context(), *h, h.Version, inventory.NewAuditEvent("admin", "approve", h.ID))
 		require.NoError(t, err)
-		_, err = store.ReplaceHost(t.Context(), *h, h.Revision, inventory.NewAuditEvent("admin", "approve", h.ID))
-		require.ErrorIs(t, err, inventory.ErrRevision)
+		if store.SupportsVersioning() {
+			require.NotEmpty(t, h.Version)
+			require.NotEmpty(t, active.Version)
+			require.NotEqual(t, h.Version, active.Version)
+		} else {
+			require.Empty(t, h.Version)
+			require.Empty(t, active.Version)
+		}
 		got, err = store.LookupHost(t.Context(), "one.example")
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.NotNil(t, got.Accounts)
 		require.Empty(t, got.Accounts)
 		active.Accounts = nil
-		active, err = store.ReplaceHost(t.Context(), *active, active.Revision, inventory.NewAuditEvent("admin", "edit", active.ID))
+		active, err = store.ReplaceHost(t.Context(), *active, active.Version, inventory.NewAuditEvent("admin", "edit", active.ID))
 		require.NoError(t, err)
 		got, err = store.LookupHost(t.Context(), "one.example")
 		require.NoError(t, err)
 		require.Nil(t, got.Accounts)
-		require.NoError(t, store.RemoveHost(t.Context(), active.ID, active.Revision, inventory.NewAuditEvent("admin", "remove", active.ID)))
+		require.NoError(t, store.RemoveHost(t.Context(), active.ID, active.Version, inventory.NewAuditEvent("admin", "remove", active.ID)))
 		_, err = store.GetHost(t.Context(), active.ID)
 		require.ErrorIs(t, err, inventory.ErrNotFound)
 	})
@@ -172,10 +180,10 @@ func Run(t *testing.T, open Factory) {
 				firstHost.PrincipalMode, firstHost.Realm = inventory.EpithetPrincipalV1, principal.Realm(realm)
 				firstHost.Labels = map[string]string{"role": "first"}
 				firstID := inventory.NewID()
-				first, err := store.Enroll(ctx, firstID, firstHost, "", inventory.NewAuditEvent("host", "enroll", firstID))
+				first, err := inventory.Enroll(ctx, store, firstID, firstHost, "", inventory.NewAuditEvent("host", "enroll", firstID))
 				require.NoError(t, err)
 				first.Status = "active"
-				first, err = store.ReplaceHost(ctx, *first, first.Revision, inventory.NewAuditEvent("admin", "approve", firstID))
+				first, err = store.ReplaceHost(ctx, *first, first.Version, inventory.NewAuditEvent("admin", "approve", firstID))
 				require.NoError(t, err)
 
 				secondHost := proposal("second.example")
@@ -185,18 +193,18 @@ func Run(t *testing.T, open Factory) {
 				secondID := inventory.NewID()
 				token, err := store.CreateToken(ctx, secondID, time.Hour, inventory.NewAuditEvent("admin", "token-create", secondID))
 				require.NoError(t, err)
-				_, err = store.Enroll(ctx, secondID, secondHost, token.ID, inventory.NewAuditEvent("host", "enroll", secondID))
+				_, err = inventory.Enroll(ctx, store, secondID, secondHost, token.ID, inventory.NewAuditEvent("host", "enroll", secondID))
 				require.NoError(t, err)
 
 				first.Labels = map[string]string{"role": "edited"}
 				first.Accounts = []string{"deploy"}
-				_, err = store.ReplaceHost(ctx, *first, first.Revision, inventory.NewAuditEvent("admin", "edit", firstID))
+				_, err = store.ReplaceHost(ctx, *first, first.Version, inventory.NewAuditEvent("admin", "edit", firstID))
 				require.NoError(t, err)
 
 				patternID := inventory.NewID()
-				pattern := inventory.Host{Names: []string{"runner-*.example"}, PrincipalMode: inventory.EpithetPrincipalV1, Realm: principal.Realm(realm),
+				pattern := inventory.Host{Status: inventory.StatusActive, Names: []string{"runner-*.example"}, PrincipalMode: inventory.EpithetPrincipalV1, Realm: principal.Realm(realm),
 					Labels: map[string]string{"role": "runner"}, Accounts: []string{"root"}}
-				_, err = store.AddHost(ctx, patternID, pattern, inventory.NewAuditEvent("admin", "add", patternID))
+				_, err = store.CreateHost(ctx, patternID, pattern, inventory.NewAuditEvent("admin", "add", patternID))
 				require.NoError(t, err)
 
 				for _, expected := range []struct {
@@ -220,10 +228,10 @@ func Run(t *testing.T, open Factory) {
 	t.Run("concurrent approval", func(t *testing.T) {
 		store := open(t)
 		id2 := inventory.NewID()
-		first, err := store.Enroll(t.Context(), id2, proposal("same.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
+		first, err := inventory.Enroll(t.Context(), store, id2, proposal("same.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
 		require.NoError(t, err)
 		id3 := inventory.NewID()
-		second, err := store.Enroll(t.Context(), id3, proposal("same.example"), "", inventory.NewAuditEvent("host", "enroll", id3))
+		second, err := inventory.Enroll(t.Context(), store, id3, proposal("same.example"), "", inventory.NewAuditEvent("host", "enroll", id3))
 		require.NoError(t, err)
 		var wg sync.WaitGroup
 		errs := make(chan error, 2)
@@ -232,7 +240,7 @@ func Run(t *testing.T, open Factory) {
 			wg.Go(func() {
 				<-start
 				h.Status = "active"
-				_, err := store.ReplaceHost(t.Context(), *h, h.Revision, inventory.NewAuditEvent("admin", "approve", h.ID))
+				_, err := store.ReplaceHost(t.Context(), *h, h.Version, inventory.NewAuditEvent("admin", "approve", h.ID))
 				errs <- err
 			})
 		}
@@ -252,14 +260,13 @@ func Run(t *testing.T, open Factory) {
 		require.Equal(t, 1, success)
 		require.Equal(t, 1, conflict)
 	})
-	t.Run("single-use reservation", func(t *testing.T) {
+	t.Run("single-use token", func(t *testing.T) {
 		store := open(t)
 		id4 := inventory.NewID()
 		token, err := store.CreateToken(t.Context(), id4, time.Hour, inventory.NewAuditEvent("admin", "token-create", id4))
 		require.NoError(t, err)
-		reserved, err := store.GetHost(t.Context(), token.ID)
-		require.NoError(t, err)
-		require.True(t, inventory.EmptyHost(*reserved))
+		_, err = store.GetHost(t.Context(), token.ID)
+		require.ErrorIs(t, err, inventory.ErrNotFound)
 		errs := make(chan error, 2)
 		start := make(chan struct{})
 		var wg sync.WaitGroup
@@ -267,7 +274,7 @@ func Run(t *testing.T, open Factory) {
 			wg.Go(func() {
 				<-start
 				id5 := token.ID
-				_, err := store.Enroll(t.Context(), id5, proposal(name), token.ID, inventory.NewAuditEvent("host", "enroll", id5))
+				_, err := inventory.Enroll(t.Context(), store, id5, proposal(name), token.ID, inventory.NewAuditEvent("host", "enroll", id5))
 				errs <- err
 			})
 		}
@@ -288,14 +295,13 @@ func Run(t *testing.T, open Factory) {
 		require.Equal(t, 1, rejected)
 		admitted, err := store.GetHost(t.Context(), token.ID)
 		require.NoError(t, err)
-		require.Equal(t, reserved.CreatedAt, admitted.CreatedAt)
 		require.Equal(t, "active", admitted.Status)
 	})
 	t.Run("exact and wildcard names share a host lifecycle", func(t *testing.T) {
 		store := open(t)
 		ctx := t.Context()
 		id := inventory.NewID()
-		host, err := store.AddHost(ctx, id, inventory.Host{
+		host, err := store.CreateHost(ctx, id, inventory.Host{Status: inventory.StatusActive,
 			Names:  []string{"build.example", "ci-*.example", "ci-?.example"},
 			Labels: map[string]string{"team": "build"}, Accounts: []string{"deploy"},
 			PrincipalMode: inventory.AccountNamePrincipals,
@@ -318,7 +324,7 @@ func Run(t *testing.T, open Factory) {
 		}
 		// Replacing names updates both lookup paths and removes obsolete entries.
 		host.Names = []string{"build-*.example", "ci-one.example"}
-		host, err = store.ReplaceHost(ctx, *host, host.Revision, inventory.NewAuditEvent("admin", "edit", id))
+		host, err = store.ReplaceHost(ctx, *host, host.Version, inventory.NewAuditEvent("admin", "edit", id))
 		require.NoError(t, err)
 		for _, name := range []string{"build.example", "ci-1.example"} {
 			resolved, err := store.LookupHost(ctx, name)
@@ -330,7 +336,7 @@ func Run(t *testing.T, open Factory) {
 			require.NoError(t, err)
 			require.NotNil(t, resolved)
 		}
-		require.NoError(t, store.RemoveHost(ctx, id, host.Revision, inventory.NewAuditEvent("admin", "remove", id)))
+		require.NoError(t, store.RemoveHost(ctx, id, host.Version, inventory.NewAuditEvent("admin", "remove", id)))
 		for _, name := range []string{"build-one.example", "ci-one.example"} {
 			resolved, err := store.LookupHost(ctx, name)
 			require.NoError(t, err)
@@ -339,21 +345,21 @@ func Run(t *testing.T, open Factory) {
 	})
 	t.Run("exact names precede patterns", func(t *testing.T) {
 		store := open(t)
-		p := inventory.Host{Names: []string{"*.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
+		p := inventory.Host{Status: inventory.StatusActive, Names: []string{"*.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
 		id6 := inventory.NewID()
-		_, err := store.AddHost(t.Context(), id6, p, inventory.NewAuditEvent("admin", "add", id6))
+		_, err := store.CreateHost(t.Context(), id6, p, inventory.NewAuditEvent("admin", "add", id6))
 		require.NoError(t, err)
 		p.Names = []string{"one.*"}
 		id7 := inventory.NewID()
-		_, err = store.AddHost(t.Context(), id7, p, inventory.NewAuditEvent("admin", "add", id7))
+		_, err = store.CreateHost(t.Context(), id7, p, inventory.NewAuditEvent("admin", "add", id7))
 		require.NoError(t, err)
 		_, err = store.LookupHost(t.Context(), "one.example")
 		require.ErrorIs(t, err, inventory.ErrConflict)
 		id8 := inventory.NewID()
-		h, err := store.Enroll(t.Context(), id8, proposal("one.example"), "", inventory.NewAuditEvent("host", "enroll", id8))
+		h, err := inventory.Enroll(t.Context(), store, id8, proposal("one.example"), "", inventory.NewAuditEvent("host", "enroll", id8))
 		require.NoError(t, err)
 		h.Status = "active"
-		_, err = store.ReplaceHost(t.Context(), *h, h.Revision, inventory.NewAuditEvent("admin", "approve", h.ID))
+		_, err = store.ReplaceHost(t.Context(), *h, h.Version, inventory.NewAuditEvent("admin", "approve", h.ID))
 		require.NoError(t, err)
 		got, err := store.LookupHost(t.Context(), "one.example")
 		require.NoError(t, err)

@@ -46,15 +46,15 @@ func TestServiceStatePathsAndModeSelection(t *testing.T) {
 
 func TestDefaultPath(t *testing.T) {
 	tests := map[string]string{
-		"linux":     "/var/lib/epithet/domain",
-		"freebsd":   "/var/db/epithet/domain",
-		"openbsd":   "/var/db/epithet/domain",
-		"netbsd":    "/var/db/epithet/domain",
-		"dragonfly": "/var/db/epithet/domain",
-		"solaris":   "/var/opt/epithet/domain",
-		"illumos":   "/var/opt/epithet/domain",
-		"aix":       "/var/opt/epithet/domain",
-		"darwin":    "/Library/Application Support/Epithet/domain",
+		"linux":     "/var/lib/epithet/realm",
+		"freebsd":   "/var/db/epithet/realm",
+		"openbsd":   "/var/db/epithet/realm",
+		"netbsd":    "/var/db/epithet/realm",
+		"dragonfly": "/var/db/epithet/realm",
+		"solaris":   "/var/opt/epithet/realm",
+		"illumos":   "/var/opt/epithet/realm",
+		"aix":       "/var/opt/epithet/realm",
+		"darwin":    "/Library/Application Support/Epithet/realm",
 	}
 	for goos, want := range tests {
 		t.Run(goos, func(t *testing.T) {
@@ -71,7 +71,7 @@ func TestDefaultPathWindowsUsesProgramData(t *testing.T) {
 		return `C:\ProgramData`
 	})
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(`C:\ProgramData`, "domain"), got)
+	require.Equal(t, filepath.Join(`C:\ProgramData`, "realm"), got)
 }
 
 func TestDefaultPathRejectsUnknownOS(t *testing.T) {

@@ -13,12 +13,14 @@ type memInv struct {
 	audit  []inventory.AuditEvent
 }
 
+func (m *memInv) SupportsVersioning() bool { return false }
+
 func (m *memInv) CreateHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *memInv) RedeemToken(ctx context.Context, id string, event inventory.AuditEvent) (*inventory.Host, error) {
+func (m *memInv) EnrollHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -28,30 +30,12 @@ func (m *memInv) LookupHost(ctx context.Context, s string) (*inventory.Host, err
 	panic("implement me")
 }
 
-func (m *memInv) Enroll(ctx context.Context, id string, proposal inventory.Host, token string, event inventory.AuditEvent) (*inventory.Host, error) {
-	status := inventory.StatusPending
-	if token != "" {
-		if _, found := m.tokens[token]; !found {
-			status = inventory.StatusActive
-			delete(m.tokens, token)
-		}
-	}
-	proposal.Status = status
-	m.hosts[id] = proposal
-	return &proposal, nil
-}
-
-func (m *memInv) AddHost(ctx context.Context, id string, proposal inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
+func (m *memInv) ReplaceHost(ctx context.Context, record inventory.Host, expectedVersion string, event inventory.AuditEvent) (*inventory.Host, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *memInv) ReplaceHost(ctx context.Context, record inventory.Host, revision uint64, event inventory.AuditEvent) (*inventory.Host, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *memInv) RemoveHost(ctx context.Context, id string, revision uint64, event inventory.AuditEvent) error {
+func (m *memInv) RemoveHost(ctx context.Context, id string, expectedVersion string, event inventory.AuditEvent) error {
 	//TODO implement me
 	panic("implement me")
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/serviceauth"
@@ -110,23 +111,23 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, directoryEvents.Events)
 	proposal := facts.InventoryInput{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	host, err := control.enroll(t.Context(), proposal, "")
+	host, err := control.enroll(t.Context(), inventory.NewID(), proposal, "")
 	require.NoError(t, err)
 	require.Equal(t, "pending", host.Status)
 	resolved, err := data.Host(t.Context(), "host")
 	require.NoError(t, err)
 	require.Nil(t, resolved)
-	_, err = control.approveHost(t.Context(), auth, host.ID, host.Revision+1)
+	_, err = control.approveHost(t.Context(), auth, host.ID, "stale-version")
 	var rejected *facts.ServiceError
 	require.ErrorAs(t, err, &rejected)
 	require.Equal(t, http.StatusPreconditionFailed, rejected.Status)
-	host, err = control.approveHost(t.Context(), auth, host.ID, host.Revision)
+	host, err = control.approveHost(t.Context(), auth, host.ID, host.Version)
 	require.NoError(t, err)
 	resolved, err = data.Host(t.Context(), "host")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, resolved.Accounts)
 	proposal.Accounts = []string{}
-	host, err = control.editHost(t.Context(), auth, host.ID, host.Revision, proposal)
+	host, err = control.editHost(t.Context(), auth, host.ID, host.Version, proposal)
 	require.NoError(t, err)
 	got, err := control.host(t.Context(), auth, host.ID)
 	require.NoError(t, err)
@@ -149,13 +150,13 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 			require.Equal(t, "admin", event.Actor)
 		}
 	}
-	require.NoError(t, control.removeHost(t.Context(), auth, host.ID, host.Revision))
+	require.NoError(t, control.removeHost(t.Context(), auth, host.ID, host.Version))
 	_, err = control.host(t.Context(), auth, host.ID)
 	require.ErrorIs(t, err, facts.ErrNotFound)
 	proposal.Names = []string{"denied"}
-	pending, err := control.enroll(t.Context(), proposal, "")
+	pending, err := control.enroll(t.Context(), inventory.NewID(), proposal, "")
 	require.NoError(t, err)
-	denied, err := control.denyHost(t.Context(), auth, pending.ID, pending.Revision)
+	denied, err := control.denyHost(t.Context(), auth, pending.ID, pending.Version)
 	require.NoError(t, err)
 	require.Equal(t, "denied", denied.Status)
 	wrong, err := newProviderTestServer(dir.URL, inv.URL+"/lookup", readerKey, cfg)

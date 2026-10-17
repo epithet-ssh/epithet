@@ -476,7 +476,7 @@ func seedManagedPattern(t *testing.T, state string, accounts []string) {
 	}
 	defer store.Close()
 	id1 := inventory.NewID()
-	_, err = store.AddHost(t.Context(), id1, inventory.Host{Names: []string{"*"}, Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
+	_, err = store.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusActive, Names: []string{"*"}, Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
 	if err != nil {
 		t.Fatal(err)
 	}

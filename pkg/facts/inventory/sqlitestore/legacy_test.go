@@ -8,25 +8,31 @@ import (
 )
 
 // Change expresses existing lifecycle test scenarios through whole-record replacement.
-func (m *Store) Change(ctx context.Context, actor, action, id string, revision uint64, p *inventory.Host) (*inventory.Host, error) {
+func (m *Store) Change(ctx context.Context, actor, action, id string, expectedVersion string, p *inventory.Host) (*inventory.Host, error) {
 	if action == "remove" {
-		return nil, m.RemoveHost(ctx, id, revision, inventory.NewAuditEvent(actor, "remove", id))
+		return nil, m.RemoveHost(ctx, id, expectedVersion, inventory.NewAuditEvent(actor, "remove", id))
 	}
 	h, err := m.GetHost(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	current := *h
 	switch action {
 	case "edit":
 		if p != nil {
 			h.Names, h.Labels, h.Accounts, h.PrincipalMode, h.Realm = p.Names, p.Labels, p.Accounts, p.PrincipalMode, p.Realm
 		}
 	case "approve":
-		h.Status = "active"
+		h.Status = inventory.StatusActive
 	case "deny":
-		h.Status = "denied"
+		h.Status = inventory.StatusDenied
 	}
-	return m.ReplaceHost(ctx, *h, revision, inventory.NewAuditEvent(actor, action, h.ID))
+	event := inventory.NewAuditEvent(actor, action, h.ID)
+	_, event.Action, err = inventory.Review(current, *h, expectedVersion, event.At)
+	if err != nil {
+		return nil, err
+	}
+	return m.ReplaceHost(ctx, *h, expectedVersion, event)
 }
 
 // Tokens inspects stored credentials for persistence tests, not for clients.

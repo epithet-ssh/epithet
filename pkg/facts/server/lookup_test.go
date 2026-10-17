@@ -229,7 +229,7 @@ func TestManagedPatternConflictIsReportedAcrossFactTransport(t *testing.T) {
 	defer hosts.Close()
 	for _, pattern := range []string{"*.example", "ci-*.*"} {
 		id1 := inventory.NewID()
-		_, err = hosts.AddHost(t.Context(), id1, inventory.Host{Names: []string{pattern}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
+		_, err = hosts.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusActive, Names: []string{pattern}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
 		require.NoError(t, err)
 	}
 	handler, err := factserver.InventoryHandler(hosts, pub, "")

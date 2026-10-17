@@ -21,6 +21,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/broker"
 	"github.com/epithet-ssh/epithet/pkg/caclient"
 	"github.com/epithet-ssh/epithet/pkg/facts"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/epithet-ssh/epithet/pkg/tlsconfig"
 	"github.com/epithet-ssh/epithet/pkg/wire"
@@ -98,7 +99,7 @@ state-dir = "%s/state"
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
 	proposal := facts.InventoryInput{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	enrolled, status, err := inventoryClient.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", Host: &proposal})
+	enrolled, status, err := inventoryClient.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", ID: inventory.NewID(), Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))

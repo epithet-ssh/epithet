@@ -39,9 +39,9 @@ signature covers If-Match along with method, target, body and actor. Edit and
 review remain separate operations; PUT cannot combine a proposal change with a
 status transition. Server-owned identity and timestamps must be echoed unchanged.
 
-Enrollment POST carries a host and optional enrollment credential. Status derives
+Enrollment PUT targets the client-selected host ID and carries a host and optional enrollment credential. Status derives
 from authority: enrollment authenticated by control's shared enrollment bearer creates pending state;
-a valid single-use credential activates its reservation; an authorized admin can
+a valid single-use credential becomes the host ID and is consumed while creating the active host; an authorized admin can
 create an active pattern. A pattern alone never conveys administrative authority.
 Existing lifecycle, name constraints and deletion semantics remain.
 
@@ -179,7 +179,7 @@ false. Per-resource versions remain independent of global directory revisions.
 ## Amendment: inventory audit ownership and retention
 
 Epithet generates inventory resource IDs before storage and supplies complete
-audit events with every mutation. Token redemption retains the reservation ID.
+audit events with every mutation. A single-use credential becomes the enrolled host ID; token creation stores no host.
 The storage adapter preserves every field of the supplied event and may
 commit it with the mutation. This follows directory's ownership model and avoids
 making adapters infer the actor, action, resource ID or operation time.
@@ -253,3 +253,31 @@ forwarded to inventory or stored with the host. Providers continue accepting
 control-signed enrollment requests. Control explicitly rejects the enrollment
 bearer for inventory administration and SCIM, without falling through to OIDC or
 other shared-credential authorization.
+
+
+### Optional opaque inventory resource versions (2026-10-18)
+
+Inventory versions express a concurrency precondition, not a numeric sequence.
+`Host.Version` is a string; mutation methods receive `expectedVersion string`.
+The backend owns version generation and callers only compare tokens for equality.
+SQLite retains its internal counter without exposing arithmetic in the contract.
+
+Like directory, inventory stores declare `SupportsVersioning()`. Unsupported
+stores return empty versions and receive empty preconditions. Empty
+`expectedVersion` requests no check; enforcement and atomicity belong to the
+backend. The built-in HTTP adapter emits ETag and requires If-Match only for
+versioned stores. Control and CLI preserve opaque versions and omit preconditions
+for providers whose responses have no ETag.
+
+
+## Amendment: retryable enrollment PUT
+
+Both enrollment paths use PUT to a stable host ID. The client stores that ID in
+`id` beside the default `realm` file and CA public key before its first request.
+The ID is generated for pending enrollment or taken from the single-use token.
+Control confines the shared enrollment bearer to pending submissions and never
+forwards it to inventory. `EnrollHost` performs creation and any token consumption
+in one storage call; SQLite commits them with the caller-supplied audit event.
+Identical retries return the existing host without mutation; differing facts
+cannot replace it. Administrative review remains separate. SQLite schema 5 removes
+the token-to-host foreign key because unused tokens no longer create reservations.

@@ -10,21 +10,21 @@ import (
 	"time"
 )
 
-// CheckRevision must run against the snapshot being mutated, inside the backend's
-// transaction or conditional commit. A stale or missing version never writes.
-func CheckRevision(current Host, version uint64) error {
-	if version == 0 || current.Revision != version {
-		return ErrRevision
+// CheckVersion compares opaque versions. Empty means no requested version check;
+// the backend determines the consistency of checking and applying a mutation.
+func CheckVersion(current Host, expectedVersion string) error {
+	if expectedVersion != "" && current.Version != expectedVersion {
+		return ErrVersion
 	}
 	return nil
 }
 
 // Review validates an administrator edit or review at the Epithet boundary.
 // A review cannot also edit the facts being approved. Storage accepts complete
-// replacements, including enrollment filling and activating a reservation.
-func Review(current, proposed Host, version uint64, now time.Time) (Host, string, error) {
+// replacements, without imposing the administrator review workflow.
+func Review(current, proposed Host, expectedVersion string, now time.Time) (Host, string, error) {
 	fail := func(err error) (Host, string, error) { return Host{}, "", err }
-	if err := CheckRevision(current, version); err != nil {
+	if err := CheckVersion(current, expectedVersion); err != nil {
 		return fail(err)
 	}
 	if proposed.ID != current.ID || !proposed.CreatedAt.Equal(current.CreatedAt) || !proposed.UpdatedAt.Equal(current.UpdatedAt) {
@@ -36,7 +36,7 @@ func Review(current, proposed Host, version uint64, now time.Time) (Host, string
 		if current.Status != StatusPending {
 			return fail(fmt.Errorf("only pending records can be reviewed"))
 		}
-		if !sameHostFacts(current, proposed) {
+		if !SameHostFacts(current, proposed) {
 			return fail(fmt.Errorf("edit the host before changing its status"))
 		}
 		switch proposed.Status {
@@ -58,35 +58,34 @@ func Review(current, proposed Host, version uint64, now time.Time) (Host, string
 			return fail(err)
 		}
 	}
-	proposed.Revision = current.Revision + 1
+	proposed.Version = current.Version
 	proposed.UpdatedAt = now
 	return proposed, action, nil
 }
 
-// EmptyHost identifies a reservation without host facts.
-func EmptyHost(p Host) bool {
-	return p.Names == nil && p.Labels == nil && p.Accounts == nil && p.PrincipalMode == "" && p.Realm == ""
-}
-
-func sameHostFacts(a, b Host) bool {
+// SameHostFacts compares enrollment facts without lifecycle metadata.
+func SameHostFacts(a, b Host) bool {
 	a.ID = ""
 	a.Status = ""
-	a.Revision = 0
+	a.Version = ""
 	a.CreatedAt = time.Time{}
 	a.UpdatedAt = time.Time{}
 	b.ID = ""
 	b.Status = ""
-	b.Revision = 0
+	b.Version = ""
 	b.CreatedAt = time.Time{}
 	b.UpdatedAt = time.Time{}
 	return reflect.DeepEqual(a, b)
 }
 
-// Enroll performs Epithet's enrollment workflow using independent storage calls.
-// Validation precedes token consumption. A redeemed token stays consumed if the
-// subsequent reservation update fails.
+// Enroll validates a PUT enrollment before one storage operation. A preapproval
+// token is the host ID; the control-plane pending-enrollment bearer never enters
+// this layer. An identical retry does not update the existing host.
 func Enroll(ctx context.Context, store Store, id string, host Host, token string, event AuditEvent) (*Host, error) {
 	host = cloneHost(host)
+	if id == "" {
+		return nil, fmt.Errorf("host id is required")
+	}
 	for _, name := range host.Names {
 		if strings.ContainsAny(name, "*?") {
 			return nil, fmt.Errorf("enrollment requires exact hostnames")
@@ -95,27 +94,14 @@ func Enroll(ctx context.Context, store Store, id string, host Host, token string
 	if err := host.Validate(); err != nil {
 		return nil, err
 	}
-	if token == "" {
-		pending, err := store.ListHosts(ctx, "", MaxPageLimit, true)
-		if err != nil {
-			return nil, err
+	host.Status = StatusPending
+	if token != "" {
+		if token != id {
+			return nil, ErrToken
 		}
-		if len(pending) >= 1000 {
-			return nil, fmt.Errorf("pending enrollment queue is full")
-		}
-		host.Status = StatusPending
-		return store.CreateHost(ctx, id, host, event)
+		host.Status = StatusActive
 	}
-	redeemed := event
-	redeemed.Action = "token-redeem"
-	reserved, err := store.RedeemToken(ctx, token, redeemed)
-	if err != nil {
-		return nil, err
-	}
-	host.ID, host.Revision = reserved.ID, reserved.Revision
-	host.CreatedAt, host.UpdatedAt = reserved.CreatedAt, reserved.UpdatedAt
-	host.Status = StatusActive
-	return store.ReplaceHost(ctx, host, reserved.Revision, event)
+	return store.EnrollHost(ctx, id, host, event)
 }
 
 // Creation prepares storage metadata without deciding the host's status.
@@ -124,14 +110,14 @@ func Creation(id string, host Host, now time.Time) (Host, error) {
 	if err := validateStoredHost(&host); err != nil {
 		return Host{}, err
 	}
-	host.ID, host.Revision, host.CreatedAt, host.UpdatedAt = id, 1, now, now
+	host.ID, host.Version, host.CreatedAt, host.UpdatedAt = id, "", now, now
 	return host, nil
 }
 
 // Replacement checks resource metadata and prepares a complete host write.
 // Review policy belongs to Review, not this storage operation.
-func Replacement(current, proposed Host, version uint64, now time.Time) (Host, error) {
-	if err := CheckRevision(current, version); err != nil {
+func Replacement(current, proposed Host, expectedVersion string, now time.Time) (Host, error) {
+	if err := CheckVersion(current, expectedVersion); err != nil {
 		return Host{}, err
 	}
 	if proposed.ID != current.ID || !proposed.CreatedAt.Equal(current.CreatedAt) || !proposed.UpdatedAt.Equal(current.UpdatedAt) {
@@ -141,30 +127,17 @@ func Replacement(current, proposed Host, version uint64, now time.Time) (Host, e
 	if err := validateStoredHost(&proposed); err != nil {
 		return Host{}, err
 	}
-	proposed.Revision, proposed.UpdatedAt = current.Revision+1, now
+	proposed.Version, proposed.UpdatedAt = current.Version, now
 	return proposed, nil
 }
 
 func validateStoredHost(host *Host) error {
 	switch host.Status {
-	case StatusPending, StatusDenied:
-		if EmptyHost(*host) {
-			return nil
-		}
-	case StatusActive:
+	case StatusPending, StatusDenied, StatusActive:
 	default:
 		return fmt.Errorf("invalid host status %q", host.Status)
 	}
 	return host.Validate()
-}
-
-// Reservation constructs the empty record and expiring single-use credential
-// which the backend persists together. IDs/secrets are supplied by Epithet.
-func Reservation(id string, lifetime time.Duration, now time.Time) (Host, EnrollmentToken, error) {
-	if lifetime <= 0 || lifetime > 24*time.Hour {
-		return Host{}, EnrollmentToken{}, fmt.Errorf("token lifetime must be positive and no more than 24h")
-	}
-	return Host{ID: id, Revision: 1, Status: StatusPending, CreatedAt: now, UpdatedAt: now}, EnrollmentToken{ID: id, ExpiresAt: now.Add(lifetime)}, nil
 }
 
 // Validation normalizes/sorts names. Copy collections before planning so failed

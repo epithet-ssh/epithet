@@ -45,8 +45,8 @@ func serviceStatePath(root string, elements ...string) (string, error) {
 	return filepath.Join(append([]string{root}, elements...)...), nil
 }
 
-// defaultRealmPath shares service-state placement while preserving the realm's
-// established filename. File validation and installation belong to principal.
+// defaultRealmPath places realm beside native host state. File validation and
+// installation belong to principal.
 func defaultRealmPath(goos string, getenv func(string) string) (string, error) {
 	// Windows enrollment predates the Epithet service-state subdirectory.
 	// Keep its existing path; moving it would change the host's realm lookup.
@@ -55,11 +55,11 @@ func defaultRealmPath(goos string, getenv func(string) string) (string, error) {
 		if dir == "" {
 			return "", fmt.Errorf("ProgramData is not set")
 		}
-		return filepath.Join(dir, "domain"), nil
+		return filepath.Join(dir, "realm"), nil
 	}
 	dir, err := systemStateDir(goos, getenv)
 	if err != nil {
 		return "", fmt.Errorf("no default principal-realm path: %w; use an explicit path", err)
 	}
-	return filepath.Join(dir, "domain"), nil
+	return filepath.Join(dir, "realm"), nil
 }

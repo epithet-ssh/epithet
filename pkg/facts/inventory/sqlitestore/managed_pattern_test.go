@@ -9,13 +9,13 @@ import (
 )
 
 func patternInput(pattern string) inventory.Host {
-	return inventory.Host{Names: []string{pattern}, Accounts: []string{"root"}, Labels: map[string]string{"role": "runner"}, PrincipalMode: inventory.AccountNamePrincipals}
+	return inventory.Host{Status: inventory.StatusActive, Names: []string{pattern}, Accounts: []string{"root"}, Labels: map[string]string{"role": "runner"}, PrincipalMode: inventory.AccountNamePrincipals}
 }
 
 func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 	m, path := managedFixture(t, "")
 	id1 := inventory.NewID()
-	pattern, err := m.AddHost(t.Context(), id1, patternInput("Runner-*.EXAMPLE"), inventory.NewAuditEvent("admin", "add", id1))
+	pattern, err := m.CreateHost(t.Context(), id1, patternInput("Runner-*.EXAMPLE"), inventory.NewAuditEvent("admin", "add", id1))
 	require.NoError(t, err)
 	require.Equal(t, "runner-*.example", pattern.Names[0])
 	for _, name := range []string{"runner-one.example", "RUNNER-TWO.EXAMPLE"} {
@@ -31,27 +31,27 @@ func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 
 	// Pending exact records leave the fleet rule in effect.
 	id2 := inventory.NewID()
-	exact, err := m.Enroll(t.Context(), id2, proposal("runner-one.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
+	exact, err := inventory.Enroll(t.Context(), m, id2, proposal("runner-one.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
 	require.NoError(t, err)
 	h, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, h.Accounts)
-	exact, err = m.Change(t.Context(), "admin", "approve", exact.ID, exact.Revision, nil)
+	exact, err = m.Change(t.Context(), "admin", "approve", exact.ID, exact.Version, nil)
 	require.NoError(t, err)
 	h, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alice"}, h.Accounts)
-	_, err = m.Change(t.Context(), "admin", "remove", exact.ID, exact.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "remove", exact.ID, exact.Version, nil)
 	require.NoError(t, err)
 	h, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"root"}, h.Accounts)
 
 	updated := patternInput("worker-**.example")
-	_, err = m.Change(t.Context(), "admin", "edit", pattern.ID, pattern.Revision, &updated)
+	_, err = m.Change(t.Context(), "admin", "edit", pattern.ID, pattern.Version, &updated)
 	require.Error(t, err)
 	updated.Names[0] = "worker-*.example"
-	pattern, err = m.Change(t.Context(), "admin", "edit", pattern.ID, pattern.Revision, &updated)
+	pattern, err = m.Change(t.Context(), "admin", "edit", pattern.ID, pattern.Version, &updated)
 	require.NoError(t, err)
 	h, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 	h, err = restarted.LookupHost(t.Context(), "worker-one.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"worker-one.example"}, h.Names)
-	_, err = restarted.Change(t.Context(), "admin", "remove", pattern.ID, pattern.Revision, nil)
+	_, err = restarted.Change(t.Context(), "admin", "remove", pattern.ID, pattern.Version, nil)
 	require.NoError(t, err)
 	h, err = restarted.LookupHost(t.Context(), "worker-one.example")
 	require.NoError(t, err)
@@ -76,30 +76,30 @@ func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 func TestManagedAmbiguousPatternsFailUntilDisambiguated(t *testing.T) {
 	m, _ := managedFixture(t, "")
 	id3 := inventory.NewID()
-	first, err := m.AddHost(t.Context(), id3, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id3))
+	first, err := m.CreateHost(t.Context(), id3, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id3))
 	require.NoError(t, err)
 	id4 := inventory.NewID()
-	second, err := m.AddHost(t.Context(), id4, patternInput("runner-*.*"), inventory.NewAuditEvent("admin", "add", id4))
+	second, err := m.CreateHost(t.Context(), id4, patternInput("runner-*.*"), inventory.NewAuditEvent("admin", "add", id4))
 	require.NoError(t, err)
 	_, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.ErrorIs(t, err, inventory.ErrConflict)
 	// An exact record resolves the name even when patterns overlap.
 	id5 := inventory.NewID()
-	exact, err := m.Enroll(t.Context(), id5, proposal("runner-one.example"), "", inventory.NewAuditEvent("host", "enroll", id5))
+	exact, err := inventory.Enroll(t.Context(), m, id5, proposal("runner-one.example"), "", inventory.NewAuditEvent("host", "enroll", id5))
 	require.NoError(t, err)
-	exact, err = m.Change(t.Context(), "admin", "approve", exact.ID, exact.Revision, nil)
+	exact, err = m.Change(t.Context(), "admin", "approve", exact.ID, exact.Version, nil)
 	require.NoError(t, err)
 	h, err := m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alice"}, h.Accounts)
-	_, err = m.Change(t.Context(), "admin", "remove", exact.ID, exact.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "remove", exact.ID, exact.Version, nil)
 	require.NoError(t, err)
-	_, err = m.Change(t.Context(), "admin", "remove", first.ID, first.Revision, nil)
+	_, err = m.Change(t.Context(), "admin", "remove", first.ID, first.Version, nil)
 	require.NoError(t, err)
 	_, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	id6 := inventory.NewID()
-	_, err = m.AddHost(t.Context(), id6, patternInput(second.Names[0]), inventory.NewAuditEvent("admin", "add", id6))
+	_, err = m.CreateHost(t.Context(), id6, patternInput(second.Names[0]), inventory.NewAuditEvent("admin", "add", id6))
 	require.ErrorIs(t, err, inventory.ErrConflict)
 }
 
@@ -110,13 +110,13 @@ func TestManagedPatternValidationAndCreationRollback(t *testing.T) {
 		patternInput("bad-**.example"),
 	} {
 		id7 := inventory.NewID()
-		_, err := m.AddHost(t.Context(), id7, p, inventory.NewAuditEvent("admin", "add", id7))
+		_, err := m.CreateHost(t.Context(), id7, p, inventory.NewAuditEvent("admin", "add", id7))
 		require.Error(t, err)
 	}
 	_, err := m.db.Exec("CREATE TRIGGER fail_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'simulated failure'); END")
 	require.NoError(t, err)
 	id8 := inventory.NewID()
-	_, err = m.AddHost(t.Context(), id8, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id8))
+	_, err = m.CreateHost(t.Context(), id8, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id8))
 	require.ErrorIs(t, err, inventory.ErrStorage)
 	records, err := m.ListHosts(t.Context(), "", 0, false)
 	require.NoError(t, err)

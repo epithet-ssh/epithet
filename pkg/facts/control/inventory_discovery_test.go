@@ -45,7 +45,7 @@ func TestInventoryDiscoveryAtArbitraryFactURL(t *testing.T) {
 		case "/tenant/items":
 			require.Equal(t, "GET", r.Method)
 			require.Equal(t, "opaque/id", r.URL.Query().Get("id"))
-			w.Header().Set("ETag", `"9"`)
+			w.Header().Set("ETag", `"backend:opaque/9"`)
 			json.NewEncoder(w).Encode(facts.InventoryRecord{ID: "opaque/id", Status: "pending", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 		case "/tenant/credentials":
 			require.Equal(t, "DELETE", r.Method)
@@ -62,7 +62,7 @@ func TestInventoryDiscoveryAtArbitraryFactURL(t *testing.T) {
 	require.NoError(t, err)
 	h, err := c.host(t.Context(), authorization{Actor: "admin"}, "opaque/id")
 	require.NoError(t, err)
-	require.EqualValues(t, 9, h.Revision)
+	require.Equal(t, "backend:opaque/9", h.Version)
 	require.NoError(t, c.revokeToken(t.Context(), authorization{Actor: "admin"}, token))
 	data, err := facts.NewDataClient("", server.URL+"/tenant/facts", key, cfg)
 	require.NoError(t, err)

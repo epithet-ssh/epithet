@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"time"
 )
 
@@ -44,7 +43,7 @@ func (p *InventoryHost) UnmarshalJSON(data []byte) error {
 }
 
 // InventoryRecord is the GET/PUT document. Version belongs exclusively in ETag
-// and If-Match. A nil Host represents an empty enrollment reservation.
+// and If-Match. Every stored record contains host facts.
 type InventoryRecord struct {
 	ID        string         `json:"id"`
 	Status    string         `json:"status"`
@@ -76,17 +75,31 @@ func DecodeInventoryJSON(data []byte, target any) error {
 	}
 	return nil
 }
-func InventoryETag(version uint64) string { return `"` + strconv.FormatUint(version, 10) + `"` }
 
-// InventoryVersion accepts a single strong record ETag, never a wildcard or weak
-// tag: a mutation must identify the exact version the operator reviewed.
-func InventoryVersion(tag string) (uint64, error) {
+// InventoryETag quotes a backend version without interpreting it. Empty means
+// the provider does not expose resource versions, so no header is sent.
+func InventoryETag(version string) string {
+	if version == "" {
+		return ""
+	}
+	return `"` + version + `"`
+}
+
+// InventoryVersion accepts an absent ETag or a single strong opaque ETag.
+// Wildcards, weak tags, and lists do not identify a reviewed record version.
+func InventoryVersion(tag string) (string, error) {
+	if tag == "" {
+		return "", nil
+	}
 	if len(tag) < 3 || tag[0] != '"' || tag[len(tag)-1] != '"' {
-		return 0, fmt.Errorf("a strong record ETag is required")
+		return "", fmt.Errorf("a strong record ETag is required")
 	}
-	n, err := strconv.ParseUint(tag[1:len(tag)-1], 10, 64)
-	if err != nil || n == 0 || InventoryETag(n) != tag {
-		return 0, fmt.Errorf("invalid record ETag")
+	version := tag[1 : len(tag)-1]
+	for i := 0; i < len(version); i++ {
+		c := version[i]
+		if c < 0x21 || c == '"' || c == 0x7f {
+			return "", fmt.Errorf("invalid record ETag")
+		}
 	}
-	return n, nil
+	return version, nil
 }

@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design inventory management interface and provider discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-17T19:40:25.456240Z
+updated: 2026-10-17T23:42:58.007195Z
 author: Brian McCallister
 priority: high
 tags:
@@ -882,3 +882,18 @@ Unified inventory around Host: Names contains exact and wildcard names; removed 
 # Log: 2026-10-17T19:40:25Z Brian McCallister
 
 Validation: make -B build passed. Full make test passes all production and integration packages; examples/facts/inmemory still panics in the unfinished memInv.Enroll. SQLite EXPLAIN QUERY PLAN confirms exact and wildcard fallback queries use the covering name index. No live inventory was modified.
+
+---
+# Log: 2026-10-17T22:50:26Z Brian McCallister
+
+Added control-owned enrollment-token/enrollment-token-file credentials for pending host submission and matching host enroll options. Unset or invalid credentials cannot submit pending hosts. The bearer is explicitly rejected for inventory administration and SCIM and never reaches the inventory provider; single-use preapproval remains separate. Build and control/CLI suites pass. Full make test remains blocked by prior AddHost/Enroll interface references and the existing control-to-inventory dependency check.
+
+---
+# Log: 2026-10-17T22:57:29Z Brian McCallister
+
+Made inventory resource versions opaque and optional: Host.Version string, mutation expectedVersion string, ErrVersion, and SupportsVersioning matching directory. HTTP/control/CLI preserve opaque tokens and omit version requirements for unsupported providers; SQLite keeps its counter internally. Build, facts/control/CLI tests, optional-version protocol fixture, and isolated SQLite precondition test pass. Full suite still blocked by the earlier AddHost/Enroll references and existing control dependency rule.
+
+---
+# Log: 2026-10-17T23:42:58Z Brian McCallister
+
+Completed retryable enrollment PUT through client, control, router, provider, and EnrollHost storage operation. Pending enrollment uses a client-generated ID; preapproval uses the token as ID. Client persists id beside realm and the CA public key before submission. Identical retries preserve host state and audit; SQLite commits token consumption, creation, and the supplied event together. Token creation no longer creates empty hosts; schema 5 removes the token-to-host foreign key. Renamed default domain file and sshd metadata to realm. Removed the control import of inventory implementation status constants without weakening the dependency guard. Updated obsolete reservation fixtures and added restart/lost-response retry coverage. make -B build and full make test pass; no live data was modified.

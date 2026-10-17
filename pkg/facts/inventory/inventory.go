@@ -53,10 +53,11 @@ const (
 
 // Host contains inventory names, authorization facts, and enrollment metadata.
 // Names may be exact hostnames or wildcard expressions. Lookup prefers exact
-// names; wildcard matches supply facts for the requested hostname.
+// names; wildcard matches supply facts for the requested hostname. Version is
+// an opaque storage token, empty when the store does not support versioning.
 type Host struct {
 	ID            string            `yaml:"-"`
-	Revision      uint64            `yaml:"-"`
+	Version       string            `yaml:"-"`
 	CreatedAt     time.Time         `yaml:"-"`
 	UpdatedAt     time.Time         `yaml:"-"`
 	Status        string            `yaml:"-"`

@@ -16,10 +16,18 @@ contract against another backend. The factory returns one
 `storetest.Backend{Hosts: data, Store: management}` value pairing the independent
 data and management views. The factory owns its cleanup.
 
+Resource versioning is optional. `SupportsVersioning()` declares whether the
+store returns nonempty `Host.Version` values. Versions are opaque strings;
+callers compare them only for equality and pass them back as `expectedVersion`
+to `ReplaceHost` and `RemoveHost`. Empty `expectedVersion` requests no version
+check. Stores without versioning return empty versions and callers pass empty
+preconditions. Enforcement and atomicity are backend properties. SQLite supports
+versioning and keeps its numeric counter entirely inside the adapter.
+
 `Host` contains names, authorization facts, and enrollment metadata. Names may be
 exact hostnames or wildcard expressions in the same collection. There is no
 separate pattern resource or proposal object. `Enroll` accepts exact names and
-creates pending state (or redeems a token); `AddHost` lets administrators create
+creates pending state (or redeems a token); `CreateHost` lets administrators create
 active hosts with exact or wildcard names. All records use `GetHost`, `ListHosts`,
 `ReplaceHost`, and `RemoveHost`.
 
@@ -31,31 +39,35 @@ record's management identity to the synthesized host. Multiple matching names on
 one record are unambiguous; matching different records is a conflict.
 
 Epithet generates IDs with `inventory.NewID` before calling storage. Token
-redemption reuses the reservation ID. Each mutation receives an `AuditEvent`
+credentials become the enrolled host ID. Tokens do not create host reservations. Each mutation receives an `AuditEvent`
 containing the authenticated actor, action, resource ID and operation timestamp.
 Storage preserves every field; it does not construct or
 complete audit events. Record timestamps use the supplied event time. Removal
 retains audit history and appends the supplied removal event.
 
-SQLite uses schema version 4, with indexed exact/wildcard names, retained audit
+SQLite uses schema version 5, with indexed exact/wildcard names, retained audit
 history, and no inventory-wide revision counter. Older schema
 versions are rejected without modification; there is no automatic migration.
 
-The pure rules in this package are also used inside the adapter's atomic operation:
+Epithet owns enrollment and review policy:
 
-- `Enrollment`, `Admission`, and `Reservation` construct admitted state.
-- `Replacement` validates the reviewed revision, immutable metadata, and allowed
-  edit/review transition, and returns the new record and audit action.
-- Removal checks the resource version before deleting.
-- `NewAuditEvent` constructs events before storage. For replacement, Epithet reads
-  the current record and uses `Replacement` to determine edit/approve/deny. Storage
-  repeats the state-dependent checks when applying the mutation.
+- `Enroll` validates the submitted facts and creates a pending host, or calls
+  `EnrollHost` to create the host and consume its token in one storage operation.
+  SQLite commits activation, token consumption, and the supplied audit event in
+  one transaction; a failed operation leaves the token usable.
+- `Review` validates administrator edits and approval/denial transitions before
+  storage, and selects the audit action.
+- `Creation` and `Replacement` prepare records for persistence.
+  `Replacement` checks metadata and an optional expected version; it does not
+  impose the administrator review workflow on storage.
+- `NewAuditEvent` constructs events before storage. Each mutation persists the
+  supplied event, including token activation, without a separate redemption event.
 
 Adapters enforce active exact-name/pattern uniqueness. Realms may be shared
 across records with independent labels and account restrictions, including
-generated realms. Pending and denied records do not reserve names. Empty reservations may be denied or
-removed, but must be filled before approval. The existing pending enrollment
-queue bound is 1,000. Token creation does not count-check that queue.
+generated realms. Pending and denied records do not reserve names. Enrollment
+retries with the same ID and facts return the existing record unchanged; different
+facts cannot overwrite it. Administrator edits use `ReplaceHost`.
 
 Lookups return host facts without an inventory-wide revision. Exact names win
 over patterns; multiple matching active patterns are a conflict. Pattern facts
@@ -87,7 +99,8 @@ relative results against the discovery URL. No resource-level OPTIONS is needed.
 | Template / target | Methods | Result |
 |---|---|---|
 | records, no id | GET | 200, JSON array of records |
-| records, no id | POST | 201 for enrollment/admin creation; 200 for token redemption |
+| records, no id | POST | administrator creation, 201 |
+| records, id | PUT without actor | enrollment or identical retry, 200 |
 | records, id | GET, PUT | 200, complete record plus ETag |
 | records, id | DELETE | 204 |
 | tokens, no token | POST | 201, new token and expiry |
@@ -118,29 +131,42 @@ GET and PUT share this representation:
 }
 ```
 
-Exact and wildcard names use the same `name` array. An empty reservation has
-`"host": null`. Non-null hosts must include `accounts`. Attributes remain
-string-valued in managed inventory. Record revisions appear only in a strong
-`ETag`, for example `"7"`. PUT and DELETE require the exact reviewed tag in
-`If-Match`; missing preconditions return 428, malformed tags 400, stale tags 412.
-The signed service JWT's `if_match` claim binds this header to the request.
+Exact and wildcard names use the same `name` array. Hosts must include `accounts`. Attributes remain
+string-valued in managed inventory. Versioned stores return a strong `ETag`, for
+example `"backend:opaque/version"`. Administrator PUT and DELETE then require the exact reviewed
+tag in `If-Match`; missing preconditions return 428, malformed tags 400, and stale
+tags 412. Stores without versioning omit ETag and accept writes without If-Match;
+an explicit version precondition against such a store returns 412. The signed
+service JWT's `if_match` claim binds this header to the request.
 
-PUT echoes id and timestamps unchanged. It either replaces host attributes while
+Control exposes the unquoted ETag value as an optional `version` string on host
+records. Mutation requests carry `expected-version`. Control preserves the token
+without interpreting it numerically; an absent provider ETag yields no version
+and no outgoing If-Match.
+
+Administrator PUT echoes id and timestamps unchanged. It either replaces host attributes while
 retaining status or changes a pending record to active/denied without modifying
 host attributes. Combined edit and review is rejected. A successful mutation
-returns the committed record and new ETag. Name/pattern conflicts return 409.
+returns the committed record and a new ETag when versioning is supported. Name/pattern conflicts return 409.
 
-POST records accepts `{"host": {...}}` with optional `"token": "credential"`.
-It does not accept status, id, timestamps or revision. A signed request with no
-actor enrolls: no token creates pending state, a valid token consumes and
-activates its reservation. A signed administrator request may add an active
-host with exact or wildcard names. Enrollment accepts exact names only. Creation/redemption returns
-the record, ETag and Location.
+Enrollment uses PUT to the records URL with the client-selected `id`. It carries
+`{"host": {...}}` and, for preapproval, `"token": "credential"` equal to that ID.
+Control signs the request without an administrator actor. Pending submissions
+require the shared enrollment bearer at control; it never reaches inventory.
+Preapproved enrollment validates and consumes the token while creating an active
+host. Both paths accept identical retries without another write or audit event.
+Enrollment accepts exact names only and does not use If-Match. It cannot edit an
+existing host or undo an administrator's review.
+
+Administrator POST to the collection accepts `{"host": {...}}` and creates an
+active host with exact or wildcard names. Responses include the record, ETag when
+supported, and Location.
 
 POST tokens accepts `{"lifetimeSeconds": 3600}` (0 defaults to one hour; maximum
 24 hours), returning `{"token": "credential", "expiresAt": "..."}`. DELETE
 expands the known credential into the template's `token` variable. Invalid,
-expired, revoked or consumed enrollment credentials return 403. Missing resources
+expired or revoked credentials cannot create a host (403). A consumed credential
+only permits an identical retry of its existing host. Missing resources
 return 404; storage failures return 503. Errors use `{"error": "message"}`.
 
 ## Authentication and CLI
@@ -162,6 +188,11 @@ Configure the control service (including when launched by `epithet server`) with
 ```toml
 enrollment-token-file = "/etc/epithet/enrollment-token"
 ```
+
+The public client sends PUT to the control URL followed by the host ID. Host
+enrollment persists that ID in an `id` file beside `realm` and the CA public key
+before submitting. Pending enrollment generates it once; preapproval uses the
+single-use credential. Rerunning enrollment reuses the stored ID.
 
 Supply the same secret on an enrolling host:
 

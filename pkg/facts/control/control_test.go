@@ -43,8 +43,9 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 		{`,"accounts":["deploy"]`, []string{"deploy"}, 202},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
-			body := `{"action":"enroll","host":{"names":["host"],"principal-mode":"account-name"` + tc.field + `}}`
-			request := httptest.NewRequest("POST", "/manage", strings.NewReader(body))
+			id := inventory.NewID()
+			body := `{"id":"` + id + `","action":"enroll","host":{"names":["host"],"principal-mode":"account-name"` + tc.field + `}}`
+			request := httptest.NewRequest("PUT", "/manage/"+id, strings.NewReader(body))
 			request.Header.Set("Authorization", "Bearer enrollment-secret")
 			response := httptest.NewRecorder()
 			control.ServeHTTP(response, request)
@@ -107,12 +108,12 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 		require.Error(t, err)
 	}
 	p := facts.InventoryInput{Names: []string{"new-host"}, Accounts: []string{}, PrincipalMode: "account-name"}
-	response, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", Host: &p})
+	response, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", ID: inventory.NewID(), Host: &p})
 	require.NoError(t, err)
 	require.Equal(t, 202, status)
 	require.Equal(t, "pending", response.Host.Status)
 	token := idp.MintIDTokenWithClaims("unrelated-subject", time.Now().Add(time.Hour), map[string]any{"oid": "directory-admin"})
-	response, status, err = client.Control(t.Context(), token, facts.ControlRequest{Action: "approve", ID: response.Host.ID, Revision: response.Host.Revision})
+	response, status, err = client.Control(t.Context(), token, facts.ControlRequest{Action: "approve", ID: response.Host.ID, ExpectedVersion: response.Host.Version})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", response.Host.Status)
@@ -214,7 +215,7 @@ func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
 				require.Equal(t, "subject:admin", byName["admin-scim"]["id"])
 				require.Equal(t, false, byName["disabled-scim"]["active"])
 			}
-			_, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "enroll"})
+			_, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", ID: inventory.NewID()})
 			require.Error(t, err)
 			require.Equal(t, 404, status, "listing users must not enable host enrollment")
 			if source == "static" {
@@ -292,17 +293,17 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 	// real stores and both HTTP planes must preserve cursors and page limits.
 	for n := 0; n < 130; n++ {
 		id1 := inventory.NewID()
-		_, err = hosts.CreateToken(t.Context(), id1, time.Hour, inventory.NewAuditEvent(strings.Repeat("x", 70<<10), "token-create", id1))
+		_, err = hosts.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusPending, Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent(strings.Repeat("x", 70<<10), "enroll", id1))
 		require.NoError(t, err)
 	}
 	first, err := hosts.ListHosts(t.Context(), "", 1, false)
 	require.NoError(t, err)
 	p := inventory.Host{Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
 	first[0].Names, first[0].Accounts, first[0].PrincipalMode = p.Names, p.Accounts, p.PrincipalMode
-	h, err := hosts.ReplaceHost(t.Context(), first[0], first[0].Revision, inventory.NewAuditEvent("admin", "edit", (first[0]).ID))
+	h, err := hosts.ReplaceHost(t.Context(), first[0], first[0].Version, inventory.NewAuditEvent("admin", "edit", (first[0]).ID))
 	require.NoError(t, err)
 	h.Status = "active"
-	_, err = hosts.ReplaceHost(t.Context(), *h, h.Revision, inventory.NewAuditEvent("admin", "edit", h.ID))
+	_, err = hosts.ReplaceHost(t.Context(), *h, h.Version, inventory.NewAuditEvent("admin", "edit", h.ID))
 	require.NoError(t, err)
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})

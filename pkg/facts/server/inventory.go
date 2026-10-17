@@ -55,7 +55,7 @@ func InventoryHandler(hosts inventory.Hosts, caKey, controlKey sshcert.RawPublic
 }
 
 // inventoryHTTP owns the inventory protocol; storage adapters implement complete
-// atomic domain operations, with no HTTP, authentication, or JSON knowledge.
+// domain operations, with no HTTP, authentication, or JSON knowledge.
 type inventoryHTTP struct {
 	store    inventory.Store
 	verifier *serviceauth.Verifier
@@ -100,7 +100,7 @@ func inventoryJSON(w http.ResponseWriter, status int, value any) {
 func inventoryFailure(w http.ResponseWriter, err error) {
 	status := 400
 	switch {
-	case errors.Is(err, inventory.ErrRevision):
+	case errors.Is(err, inventory.ErrVersion):
 		status = 412
 	case errors.Is(err, inventory.ErrConflict):
 		status = 409
@@ -123,8 +123,10 @@ func inventoryFailure(w http.ResponseWriter, err error) {
 		Error string `json:"error"`
 	}{message})
 }
-func writeInventoryRecord(w http.ResponseWriter, status int, record facts.InventoryRecord, revision uint64) {
-	w.Header().Set("ETag", facts.InventoryETag(revision))
+func (h *inventoryHTTP) writeInventoryRecord(w http.ResponseWriter, status int, record facts.InventoryRecord, version string) {
+	if h.store.SupportsVersioning() && version != "" {
+		w.Header().Set("ETag", facts.InventoryETag(version))
+	}
 	w.Header().Set("Location", "/inventory/records/"+url.PathEscape(record.ID))
 	inventoryJSON(w, status, record)
 }
@@ -143,7 +145,7 @@ func (h *inventoryHTTP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	// Actor presence is trusted only after signature verification. Enrollment
 	// has no actor; a signed administrator may create active hosts.
-	enrollment := r.Method == "POST" && r.URL.Path == "/inventory/records" && actor == ""
+	enrollment := r.Method == "PUT" && r.PathValue("id") != "" && actor == ""
 	if !enrollment && actor == "" {
 		inventoryFailure(w, &facts.ServiceError{Status: 403, Message: "authenticated actor is required"})
 		return
@@ -176,34 +178,17 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if create.Host == nil {
 			return fmt.Errorf("host is required")
 		}
-		status := 201
-		if actor == "" {
-			host := inventoryHost(create.Host)
-			id := create.Token
-			if id == "" {
-				id = inventory.NewID()
-			}
-			result, err := inventory.Enroll(ctx, h.store, id, host, create.Token, inventory.NewAuditEvent("host", "enroll", id))
-			if err != nil {
-				return err
-			}
-			if create.Token != "" {
-				status = 200
-			}
-			writeInventoryRecord(w, status, hostRecord(result), result.Revision)
-		} else {
-			if create.Token != "" {
-				return fmt.Errorf("administrator host creation cannot use an enrollment token")
-			}
-			host := inventoryHost(create.Host)
-			host.Status = inventory.StatusActive
-			id := inventory.NewID()
-			result, err := h.store.CreateHost(ctx, id, host, inventory.NewAuditEvent(actor, "add", id))
-			if err != nil {
-				return err
-			}
-			writeInventoryRecord(w, status, hostRecord(result), result.Revision)
+		if create.Token != "" {
+			return fmt.Errorf("administrator host creation cannot use an enrollment token")
 		}
+		host := inventoryHost(create.Host)
+		host.Status = inventory.StatusActive
+		id := inventory.NewID()
+		result, err := h.store.CreateHost(ctx, id, host, inventory.NewAuditEvent(actor, "add", id))
+		if err != nil {
+			return err
+		}
+		h.writeInventoryRecord(w, 201, hostRecord(result), result.Version)
 		return nil
 	case r.URL.Path == "/inventory/records" && r.Method == "GET":
 		limit, err := pageLimit(r)
@@ -232,19 +217,36 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if err != nil {
 			return err
 		}
-		writeInventoryRecord(w, 200, hostRecord(host), host.Revision)
+		h.writeInventoryRecord(w, 200, hostRecord(host), host.Version)
 		return nil
-	case id != "" && (r.Method == "PUT" || r.Method == "DELETE"):
-		if r.Header.Get("If-Match") == "" {
-			return &facts.ServiceError{Status: 428, Message: "If-Match is required"}
+	case id != "" && r.Method == "PUT" && actor == "":
+		var submission facts.InventoryCreate
+		if err := facts.DecodeInventoryJSON(body, &submission); err != nil {
+			return err
 		}
-		version, err := facts.InventoryVersion(r.Header.Get("If-Match"))
+		if submission.Host == nil {
+			return fmt.Errorf("host is required")
+		}
+		result, err := inventory.Enroll(ctx, h.store, id, inventoryHost(submission.Host), submission.Token, inventory.NewAuditEvent("host", "enroll", id))
 		if err != nil {
 			return err
 		}
+		h.writeInventoryRecord(w, 200, hostRecord(result), result.Version)
+		return nil
+	case id != "" && (r.Method == "PUT" || r.Method == "DELETE"):
+		if h.store.SupportsVersioning() && r.Header.Get("If-Match") == "" {
+			return &facts.ServiceError{Status: 428, Message: "If-Match is required"}
+		}
+		expectedVersion, err := facts.InventoryVersion(r.Header.Get("If-Match"))
+		if err != nil {
+			return err
+		}
+		if !h.store.SupportsVersioning() && expectedVersion != "" {
+			return inventory.ErrVersion
+		}
 		if r.Method == "DELETE" {
 			event := inventory.NewAuditEvent(actor, "remove", id)
-			err = h.store.RemoveHost(ctx, id, version, event)
+			err = h.store.RemoveHost(ctx, id, expectedVersion, event)
 			if err != nil {
 				return err
 			}
@@ -255,7 +257,7 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if err = facts.DecodeInventoryJSON(body, &record); err != nil {
 			return err
 		}
-		// Require the full representation, including explicit null host reservations.
+		// Require the full representation.
 		var fields map[string]json.RawMessage
 		_ = json.Unmarshal(body, &fields)
 		for _, key := range []string{"id", "status", "host", "createdAt", "updatedAt"} {
@@ -273,16 +275,16 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		proposed := inventoryHost(record.Host)
 		proposed.ID, proposed.Status, proposed.CreatedAt, proposed.UpdatedAt = record.ID, record.Status, record.CreatedAt, record.UpdatedAt
 		event := inventory.NewAuditEvent(actor, "", id)
-		_, action, err := inventory.Review(*current, proposed, version, event.At)
+		_, action, err := inventory.Review(*current, proposed, expectedVersion, event.At)
 		if err != nil {
 			return err
 		}
 		event.Action = action
-		result, err := h.store.ReplaceHost(ctx, proposed, version, event)
+		result, err := h.store.ReplaceHost(ctx, proposed, expectedVersion, event)
 		if err != nil {
 			return err
 		}
-		writeInventoryRecord(w, 200, hostRecord(result), result.Revision)
+		h.writeInventoryRecord(w, 200, hostRecord(result), result.Version)
 		return nil
 	case r.URL.Path == "/inventory/tokens" && r.Method == "POST":
 		var create facts.InventoryTokenCreate
@@ -333,10 +335,7 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 
 // The HTTP document keeps lifecycle metadata separate from editable host facts.
 func hostRecord(h *inventory.Host) facts.InventoryRecord {
-	var fields *facts.InventoryHost
-	if !inventory.EmptyHost(*h) {
-		fields = &facts.InventoryHost{Name: h.Names, Attributes: h.Labels, Accounts: h.Accounts, Principal: facts.InventoryPrincipal{Mode: string(h.PrincipalMode), Realm: string(h.Realm)}}
-	}
+	fields := &facts.InventoryHost{Name: h.Names, Attributes: h.Labels, Accounts: h.Accounts, Principal: facts.InventoryPrincipal{Mode: string(h.PrincipalMode), Realm: string(h.Realm)}}
 	return facts.InventoryRecord{ID: h.ID, Status: h.Status, CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt, Host: fields}
 }
 func inventoryHost(p *facts.InventoryHost) inventory.Host {

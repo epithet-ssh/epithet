@@ -168,7 +168,7 @@ func TestRenderSSHDFragmentDestinationBound(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `# Managed by epithet host enroll. DO NOT EDIT.
 # principal-mode: epithet-principal-v1
-# domain-file: "/var/lib/epithet/realm"
+# realm-file: "/var/lib/epithet/realm"
 # ca-pubkey-file: "/var/lib/epithet/epithet-ca.pub"
 TrustedUserCAKeys "/var/lib/epithet/epithet-ca.pub"
 AuthorizedPrincipalsCommand /opt/Epithet\ Bin/epithet host authorized-principals --principal-realm-file "/var/lib/epithet/realm" %u

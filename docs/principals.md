@@ -78,7 +78,7 @@ issued certificate remains bounded by its validity period.
 
 Host commands use `--principal-realm` and
 `--principal-realm-file`. The local identity file retains its existing
-path (the native state directory's `domain` file by default), and
+path (the native state directory's `realm` file by default), and
 generated realm values retain the `epithet-host-id-v1:`
 prefix. Regenerate previously installed Epithet SSHD fragments to use
 `--principal-realm-file` in `AuthorizedPrincipalsCommand`; the realm

@@ -221,7 +221,7 @@ func editInventoryHost(p *InventoryCLI, h *facts.HostRecord, input *bufio.Reader
 		return nil, err
 	}
 	submitted := controlHost(host)
-	r, err := p.request(facts.ControlRequest{Action: "edit", ID: h.ID, Revision: h.Revision, Host: &submitted})
+	r, err := p.request(facts.ControlRequest{Action: "edit", ID: h.ID, ExpectedVersion: h.Version, Host: &submitted})
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ func (c *InventoryApproveCLI) Run(p *InventoryCLI) error {
 			if choice == "d" || choice == "deny" {
 				action = "deny"
 			}
-			r, e := p.request(facts.ControlRequest{Action: action, ID: h.ID, Revision: h.Revision})
+			r, e := p.request(facts.ControlRequest{Action: action, ID: h.ID, ExpectedVersion: h.Version})
 			if e != nil {
 				fmt.Fprintln(os.Stderr, e)
 				fresh, e2 := p.find(h.ID)
@@ -297,7 +297,7 @@ func (c *InventoryRemoveCLI) Run(p *InventoryCLI) error {
 		return err
 	}
 
-	_, err = p.request(facts.ControlRequest{Action: "remove", ID: h.ID, Revision: h.Revision})
+	_, err = p.request(facts.ControlRequest{Action: "remove", ID: h.ID, ExpectedVersion: h.Version})
 	return err
 }
 

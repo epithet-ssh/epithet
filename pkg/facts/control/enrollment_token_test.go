@@ -33,7 +33,7 @@ func TestEnrollmentBearerScope(t *testing.T) {
 	require.NoError(t, err)
 	host := facts.InventoryInput{Names: []string{"pending.example"}, Accounts: []string{}, PrincipalMode: "account-name"}
 	for _, bearer := range []string{"", "wrong", "inventory-secret", "scim-secret"} {
-		_, status, err := client.Control(t.Context(), bearer, facts.ControlRequest{Action: "enroll", Host: &host})
+		_, status, err := client.Control(t.Context(), bearer, facts.ControlRequest{Action: "enroll", ID: inventory.NewID(), Host: &host})
 		require.Error(t, err)
 		require.Equal(t, http.StatusUnauthorized, status)
 	}
@@ -43,7 +43,7 @@ func TestEnrollmentBearerScope(t *testing.T) {
 	events, _, err := store.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Empty(t, events)
-	result, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", Host: &host})
+	result, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", ID: inventory.NewID(), Host: &host})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusAccepted, status)
 	require.Equal(t, inventory.StatusPending, result.Host.Status)
@@ -52,7 +52,7 @@ func TestEnrollmentBearerScope(t *testing.T) {
 	require.Nil(t, resolved)
 	for _, action := range []string{"list", "get", "audit", "add", "edit", "remove", "approve", "deny", "token-create", "token-revoke", "directory-audit"} {
 		t.Run(action, func(t *testing.T) {
-			_, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: action, ID: result.Host.ID, Revision: result.Host.Revision, Host: &host})
+			_, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: action, ID: result.Host.ID, ExpectedVersion: result.Host.Version, Host: &host})
 			require.Error(t, err)
 			require.Equal(t, http.StatusForbidden, status)
 		})
@@ -99,12 +99,12 @@ func TestEnrollmentBearerStopsAtControl(t *testing.T) {
 		require.NoError(t, err, "provider receives control's signed credential")
 		require.Empty(t, actor, "enrollment must not become an administrator write")
 		if r.Method == "OPTIONS" {
-			w.Header().Set("Link-Template", `"/records"; rel="`+facts.InventoryRecordsRelation+`", "/tokens"; rel="`+facts.InventoryTokensRelation+`", "/audit"; rel="`+facts.InventoryAuditRelation+`"`)
+			w.Header().Set("Link-Template", `"/records{/id}"; rel="`+facts.InventoryRecordsRelation+`", "/tokens"; rel="`+facts.InventoryTokensRelation+`", "/audit"; rel="`+facts.InventoryAuditRelation+`"`)
 			w.WriteHeader(204)
 			return
 		}
-		require.Equal(t, "/records", r.URL.Path)
-		require.Equal(t, "POST", r.Method)
+		require.Equal(t, "/records/created-host", r.URL.Path)
+		require.Equal(t, "PUT", r.Method)
 		var create facts.InventoryCreate
 		require.NoError(t, json.Unmarshal(body, &create))
 		require.Empty(t, create.Token, "shared bearer must not become a single-use token")
@@ -118,7 +118,7 @@ func TestEnrollmentBearerStopsAtControl(t *testing.T) {
 		require.NoError(t, err)
 		for _, header := range []string{"", "Bearer wrong", "Basic enrollment-secret", "Bearer enrollment-secret extra", "Bearer enrollment-secret"} {
 			before := calls.Load()
-			req := httptest.NewRequest("POST", "/manage", strings.NewReader(`{"action":"enroll","host":{"names":["pending.example"],"principal-mode":"account-name","accounts":[]}}`))
+			req := httptest.NewRequest("PUT", "/manage/created-host", strings.NewReader(`{"id":"created-host","action":"enroll","host":{"names":["pending.example"],"principal-mode":"account-name","accounts":[]}}`))
 			req.Header.Set("Authorization", header)
 			response := httptest.NewRecorder()
 			s.ServeHTTP(response, req)

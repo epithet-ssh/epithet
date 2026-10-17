@@ -14,6 +14,7 @@ import (
 	"github.com/epithet-ssh/epithet/pkg/facts/control"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory"
 	"github.com/epithet-ssh/epithet/pkg/facts/directory/sqlitestore"
+	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	inventorysqlite "github.com/epithet-ssh/epithet/pkg/facts/inventory/sqlitestore"
 	factserver "github.com/epithet-ssh/epithet/pkg/facts/server"
 	"github.com/epithet-ssh/epithet/pkg/oidc"
@@ -163,15 +164,13 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	created, status, err := client.Control(t.Context(), idp.MintIDToken("admin", time.Now().Add(time.Hour)), facts.ControlRequest{Action: "token-create"})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	record, err := hosts.GetHost(t.Context(), created.Token.ID)
-	require.NoError(t, err)
-	require.Equal(t, "pending", record.Status)
-	require.Empty(t, record.Names)
+	_, err = hosts.GetHost(t.Context(), created.Token.ID)
+	require.ErrorIs(t, err, inventory.ErrNotFound)
 	proposal := facts.InventoryInput{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
 	enrolled, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Token: created.Token.ID, Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	require.Equal(t, record.ID, enrolled.Host.ID)
+	require.Equal(t, created.Token.ID, enrolled.Host.ID)
 	require.Equal(t, "active", enrolled.Host.Status)
 	events, _, err := hosts.Audit(t.Context(), "", 0)
 	require.NoError(t, err)

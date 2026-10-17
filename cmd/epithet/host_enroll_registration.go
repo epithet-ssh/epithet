@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,8 @@ import (
 )
 
 type hostRegistration struct {
+	id              string
+	idFile          string
 	endpoint        string
 	token           string
 	enrollmentToken string
@@ -73,6 +76,23 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	if token == "" && enrollmentToken == "" {
 		return nil, fmt.Errorf("managed enrollment requires --enrollment-token or --enrollment-token-file for pending approval, or --token or --token-file for single-use preapproval")
 	}
+	idFile := filepath.Join(filepath.Dir(result.RealmFile), "id")
+	id := token
+	if data, err := os.ReadFile(idFile); err == nil {
+		stored := strings.TrimSpace(string(data))
+		if stored == "" {
+			return nil, fmt.Errorf("host id file %s is empty", idFile)
+		}
+		if id != "" && id != stored {
+			return nil, fmt.Errorf("enrollment token conflicts with the stored host id in %s", idFile)
+		}
+		id = stored
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("reading host id: %w", err)
+	}
+	if id == "" {
+		id = inventory.NewID()
+	}
 	proposal := inventory.Host{
 		Names:         c.Names,
 		Accounts:      guessLoginAccounts(),
@@ -106,7 +126,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	// The reviewed proposal chooses the identity installed locally and submitted
 	// to inventory. No realm has been written before review completes.
 	result.Realm = principal.Realm(proposal.Realm)
-	return &hostRegistration{endpoint: endpoint, token: token, enrollmentToken: enrollmentToken, proposal: proposal}, nil
+	return &hostRegistration{id: id, idFile: idFile, endpoint: endpoint, token: token, enrollmentToken: enrollmentToken, proposal: proposal}, nil
 }
 
 func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, cfg tlsconfig.Config, logger *slog.Logger) error {
@@ -114,17 +134,21 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 	if err != nil {
 		return err
 	}
+	if err := r.persistID(); err != nil {
+		return err
+	}
 	proposal := controlHost(r.proposal)
 	response, _, err := client.Control(ctx, r.enrollmentToken, facts.ControlRequest{
 		Action: "enroll",
+		ID:     r.id,
 		Host:   &proposal,
 		Token:  r.token,
 	})
 	if err != nil {
 		return fmt.Errorf("local sshd is configured, but registration did not complete: %w", err)
 	}
-	if response.Host == nil {
-		return fmt.Errorf("local sshd is configured, but inventory returned no host record")
+	if response.Host == nil || response.Host.ID != r.id {
+		return fmt.Errorf("local sshd is configured, but inventory returned no matching host record")
 	}
 	result.RecordID = response.Host.ID
 	result.Status = response.Host.Status
@@ -132,6 +156,46 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 		logger.Info("host registration submitted", "id", result.RecordID, "status", result.Status)
 	}
 	return nil
+}
+
+// persistID publishes the complete ID before the first request. A retry must
+// reuse the same identity even if the previous response never reached the client.
+func (r *hostRegistration) persistID() error {
+	if data, err := os.ReadFile(r.idFile); err == nil {
+		if strings.TrimSpace(string(data)) != r.id {
+			return fmt.Errorf("stored host id changed during enrollment")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(r.idFile), ".epithet-id-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.WriteString(r.id + "\n"); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err = os.Link(f.Name(), r.idFile); errors.Is(err, os.ErrExist) {
+		data, readErr := os.ReadFile(r.idFile)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.TrimSpace(string(data)) != r.id {
+			return fmt.Errorf("stored host id changed during enrollment")
+		}
+	} else if err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(r.idFile))
 }
 
 // guessHostNames only reads local configuration; it never resolves DNS names.

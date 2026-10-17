@@ -52,8 +52,8 @@ func TestInventoryRESTLifecycle(t *testing.T) {
 	require.Equal(t, 204, options.Code)
 	require.Len(t, options.Header().Values("Link-Template"), 3)
 	host := &facts.InventoryHost{Name: []string{"one.example"}, Accounts: []string{}, Principal: facts.InventoryPrincipal{Mode: "account-name"}}
-	created := call("POST", "/inventory/records", "", "", facts.InventoryCreate{Host: host})
-	require.Equal(t, 201, created.Code, created.Body.String())
+	created := call("PUT", "/inventory/records/"+inventory.NewID(), "", "", facts.InventoryCreate{Host: host})
+	require.Equal(t, 200, created.Code, created.Body.String())
 	h := decode(created)
 	require.Equal(t, "pending", h.Status)
 	require.Equal(t, `"1"`, created.Header().Get("ETag"))
@@ -95,24 +95,22 @@ func TestInventoryRESTLifecycle(t *testing.T) {
 	require.Equal(t, 405, call("GET", "/inventory/tokens", "admin", "", nil).Code)
 	require.Equal(t, 405, call("GET", "/inventory/tokens?token="+token.Token, "admin", "", nil).Code)
 	reserved := call("GET", "/inventory/records/"+token.Token, "admin", "", nil)
-	require.Nil(t, decode(reserved).Host)
-	admitted := call("POST", "/inventory/records", "", "", facts.InventoryCreate{Host: host, Token: token.Token})
+	require.Equal(t, 404, reserved.Code)
+	admitted := call("PUT", "/inventory/records/"+token.Token, "", "", facts.InventoryCreate{Host: host, Token: token.Token})
 	require.Equal(t, 200, admitted.Code, admitted.Body.String())
 	require.Equal(t, token.Token, decode(admitted).ID)
-	require.Equal(t, 403, call("POST", "/inventory/records", "", "", facts.InventoryCreate{Host: host, Token: token.Token}).Code)
+	require.Equal(t, 200, call("PUT", "/inventory/records/"+token.Token, "", "", facts.InventoryCreate{Host: host, Token: token.Token}).Code)
 	require.Equal(t, 204, call("DELETE", "/inventory/tokens?token="+token.Token, "admin", "", nil).Code)
-	// Empty reservations can be denied without supplying host attributes.
-	tokenResponse = call("POST", "/inventory/tokens", "admin", "", facts.InventoryTokenCreate{})
-	require.NoError(t, json.Unmarshal(tokenResponse.Body.Bytes(), &token))
-	reserved = call("GET", "/inventory/records/"+token.Token, "admin", "", nil)
-	h = decode(reserved)
+	// Administrator review applies to an actual pending host.
+	pending := call("PUT", "/inventory/records/"+inventory.NewID(), "", "", facts.InventoryCreate{Host: host})
+	h = decode(pending)
 	h.Status = "denied"
-	denied := call("PUT", "/inventory/records/"+token.Token, "admin", reserved.Header().Get("ETag"), h)
+	denied := call("PUT", pending.Header().Get("Location"), "admin", pending.Header().Get("ETag"), h)
 	require.Equal(t, 200, denied.Code, denied.Body.String())
-	require.Nil(t, decode(denied).Host)
+	require.NotNil(t, decode(denied).Host)
 	// Enrollment requires exact names; administrators may create wildcard names.
 	pattern := &facts.InventoryHost{Name: []string{"*.example"}, Accounts: nil, Principal: facts.InventoryPrincipal{Mode: "account-name"}}
-	rejected := call("POST", "/inventory/records", "", "", facts.InventoryCreate{Host: pattern})
+	rejected := call("PUT", "/inventory/records/"+inventory.NewID(), "", "", facts.InventoryCreate{Host: pattern})
 	require.Equal(t, 400, rejected.Code, rejected.Body.String())
 	active := call("POST", "/inventory/records", "admin", "", facts.InventoryCreate{Host: pattern})
 	require.Equal(t, 201, active.Code)
@@ -125,7 +123,7 @@ func TestInventoryRESTLifecycle(t *testing.T) {
 	require.Equal(t, 404, call("POST", "/manage", "admin", "", nil).Code)
 	// Omitting accounts is rejected before any backend mutation.
 	invalid := map[string]any{"host": map[string]any{"name": []string{"bad"}, "principal": map[string]string{"mode": "account-name"}}}
-	require.Equal(t, 400, call("POST", "/inventory/records", "", "", invalid).Code)
+	require.Equal(t, 400, call("PUT", "/inventory/records/"+inventory.NewID(), "", "", invalid).Code)
 	audit := call("GET", "/inventory/audit", "admin", "", nil)
 	require.Equal(t, http.StatusOK, audit.Code)
 	var page facts.AuditPage[facts.HostAuditEvent]
@@ -138,7 +136,7 @@ func TestInventoryRESTLifecycle(t *testing.T) {
 		{"token-create", "admin", decode(admitted).ID},
 		{"enroll", "host", decode(admitted).ID},
 		{"token-revoke", "admin", decode(admitted).ID},
-		{"token-create", "admin", decode(denied).ID},
+		{"enroll", "host", decode(denied).ID},
 		{"deny", "admin", decode(denied).ID},
 		{"add", "admin", decode(active).ID},
 		{"edit", "admin", decode(active).ID},
@@ -169,9 +167,9 @@ func TestInventoryListIncludesWildcardNames(t *testing.T) {
 		id := fmt.Sprintf("%064x", i)
 		allIDs = append(allIDs, id)
 		if i%2 == 0 {
-			_, err = store.AddHost(t.Context(), id, inventory.Host{Names: []string{fmt.Sprintf("*.%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id))
+			_, err = store.CreateHost(t.Context(), id, inventory.Host{Status: inventory.StatusActive, Names: []string{fmt.Sprintf("*.%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id))
 		} else {
-			_, err = store.Enroll(t.Context(), id, inventory.Host{Names: []string{fmt.Sprintf("host-%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, "", inventory.NewAuditEvent("host", "enroll", id))
+			_, err = inventory.Enroll(t.Context(), store, id, inventory.Host{Names: []string{fmt.Sprintf("host-%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, "", inventory.NewAuditEvent("host", "enroll", id))
 			hostIDs = append(hostIDs, id)
 		}
 		require.NoError(t, err)

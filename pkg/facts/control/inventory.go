@@ -10,7 +10,6 @@ import (
 	"github.com/dunglas/httpsfv"
 	"github.com/epithet-ssh/epithet/internal/servicehttp"
 	"github.com/epithet-ssh/epithet/pkg/facts"
-	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/jtacoma/uritemplates"
 )
 
@@ -147,8 +146,8 @@ func inventoryRecordResult(resp *servicehttp.Response, err error) (*facts.HostRe
 	result := controlRecord(record, version)
 	return &result, nil
 }
-func (c *Server) enroll(ctx context.Context, proposal facts.InventoryInput, token string) (*facts.HostRecord, error) {
-	return inventoryRecordResult(c.inventoryCall(ctx, authorization{}, facts.InventoryRecordsRelation, "POST", nil, facts.InventoryCreate{Host: inventoryHost(proposal), Token: token}, ""))
+func (c *Server) enroll(ctx context.Context, id string, proposal facts.InventoryInput, token string) (*facts.HostRecord, error) {
+	return inventoryRecordResult(c.inventoryCall(ctx, authorization{}, facts.InventoryRecordsRelation, "PUT", map[string]string{"id": id}, facts.InventoryCreate{Host: inventoryHost(proposal), Token: token}, ""))
 }
 func (c *Server) addHost(ctx context.Context, auth authorization, proposal facts.InventoryInput) (*facts.HostRecord, error) {
 	return inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "POST", nil, facts.InventoryCreate{Host: inventoryHost(proposal)}, ""))
@@ -164,12 +163,12 @@ func (c *Server) host(ctx context.Context, auth authorization, id string) (*fact
 // replaceHost adapts the agent's reviewed version to a whole PUT document. The
 // read does not authorize a write: If-Match still binds PUT to the reviewed version,
 // and the provider checks every precondition inside its atomic mutation.
-func (c *Server) replaceHost(ctx context.Context, auth authorization, id string, version uint64, proposal *facts.InventoryInput, status string) (*facts.HostRecord, error) {
+func (c *Server) replaceHost(ctx context.Context, auth authorization, id string, expectedVersion string, proposal *facts.InventoryInput, status string) (*facts.HostRecord, error) {
 	h, err := c.host(ctx, auth, id)
 	if err != nil {
 		return nil, err
 	}
-	if version == 0 || h.Revision != version {
+	if h.Version != expectedVersion {
 		return nil, &facts.ServiceError{Status: 412, Message: "record changed; reload before retrying"}
 	}
 	if proposal != nil {
@@ -178,19 +177,19 @@ func (c *Server) replaceHost(ctx context.Context, auth authorization, id string,
 	if status != "" {
 		h.Status = status
 	}
-	return inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "PUT", map[string]string{"id": id}, inventoryRecord(*h), facts.InventoryETag(version)))
+	return inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "PUT", map[string]string{"id": id}, inventoryRecord(*h), facts.InventoryETag(expectedVersion)))
 }
-func (c *Server) editHost(ctx context.Context, auth authorization, id string, version uint64, p facts.InventoryInput) (*facts.HostRecord, error) {
-	return c.replaceHost(ctx, auth, id, version, &p, "")
+func (c *Server) editHost(ctx context.Context, auth authorization, id string, expectedVersion string, p facts.InventoryInput) (*facts.HostRecord, error) {
+	return c.replaceHost(ctx, auth, id, expectedVersion, &p, "")
 }
-func (c *Server) approveHost(ctx context.Context, auth authorization, id string, version uint64) (*facts.HostRecord, error) {
-	return c.replaceHost(ctx, auth, id, version, nil, inventory.StatusActive)
+func (c *Server) approveHost(ctx context.Context, auth authorization, id string, expectedVersion string) (*facts.HostRecord, error) {
+	return c.replaceHost(ctx, auth, id, expectedVersion, nil, "active")
 }
-func (c *Server) denyHost(ctx context.Context, auth authorization, id string, version uint64) (*facts.HostRecord, error) {
-	return c.replaceHost(ctx, auth, id, version, nil, inventory.StatusDenied)
+func (c *Server) denyHost(ctx context.Context, auth authorization, id string, expectedVersion string) (*facts.HostRecord, error) {
+	return c.replaceHost(ctx, auth, id, expectedVersion, nil, "denied")
 }
-func (c *Server) removeHost(ctx context.Context, auth authorization, id string, version uint64) error {
-	resp, err := c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "DELETE", map[string]string{"id": id}, nil, facts.InventoryETag(version))
+func (c *Server) removeHost(ctx context.Context, auth authorization, id string, expectedVersion string) error {
+	resp, err := c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "DELETE", map[string]string{"id": id}, nil, facts.InventoryETag(expectedVersion))
 	return inventoryNoContent(resp, err)
 }
 func inventoryNoContent(resp *servicehttp.Response, err error) error {
@@ -230,7 +229,7 @@ func (c *Server) hosts(ctx context.Context, auth authorization, after string, li
 	}
 	result := make([]facts.HostRecord, len(records))
 	for i, h := range records {
-		result[i] = controlRecord(h, 0)
+		result[i] = controlRecord(h, "")
 	}
 	return result, nil
 }
@@ -283,6 +282,6 @@ func controlInput(p *facts.InventoryHost) facts.InventoryInput {
 func inventoryRecord(h facts.HostRecord) facts.InventoryRecord {
 	return facts.InventoryRecord{ID: h.ID, Status: h.Status, Host: inventoryHost(h.Host), CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt}
 }
-func controlRecord(h facts.InventoryRecord, revision uint64) facts.HostRecord {
-	return facts.HostRecord{ID: h.ID, Revision: revision, Status: h.Status, Host: controlInput(h.Host), CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt}
+func controlRecord(h facts.InventoryRecord, version string) facts.HostRecord {
+	return facts.HostRecord{ID: h.ID, Version: version, Status: h.Status, Host: controlInput(h.Host), CreatedAt: h.CreatedAt, UpdatedAt: h.UpdatedAt}
 }

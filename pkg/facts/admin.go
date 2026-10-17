@@ -52,11 +52,30 @@ func (c *AdminClient) Control(ctx context.Context, bearer string, request Contro
 	if c.endpoint == "" {
 		return nil, 0, fmt.Errorf("CA does not advertise managed inventory")
 	}
+	method, endpoint := "POST", c.endpoint
+	if request.Action == "enroll" {
+		if request.Token != "" {
+			if request.ID != "" && request.ID != request.Token {
+				return nil, 0, fmt.Errorf("enrollment token must equal host id")
+			}
+			request.ID = request.Token
+		}
+		if request.ID == "" {
+			return nil, 0, fmt.Errorf("enrollment requires a stable host id")
+		}
+		method = "PUT"
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, 0, err
+		}
+		u.Path = strings.TrimSuffix(u.Path, "/") + "/" + request.ID
+		endpoint = u.String()
+	}
 	data, err := json.Marshal(request)
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -177,7 +196,8 @@ type ActorSnapshot struct {
 
 // ControlRequest is one operation at the complete advertised inventory URL.
 // An optional single-use token preapproves enrollment. Admin authentication is
-// the OIDC bearer header. Revision binds review/edit to the displayed record.
+// the OIDC bearer header. ExpectedVersion binds review/edit to the displayed
+// record when the provider supports versioning.
 // Host lists use exclusive After IDs and Limit (0 defaults to 100,
 // maximum 1000); Pending filters host lists. Audits use opaque AuditCursor values
 // and AuditLimit with the same bounds. Cursor fields survive JSON as exact values.
@@ -189,7 +209,7 @@ type ControlRequest struct {
 	AuditLimit      int             `json:"audit-limit,omitempty"`
 	Action          string          `json:"action"`
 	ID              string          `json:"id,omitempty"`
-	Revision        uint64          `json:"revision,omitempty"`
+	ExpectedVersion string          `json:"expected-version,omitempty"`
 	Host            *InventoryInput `json:"host,omitempty"`
 	Token           string          `json:"token,omitempty"`
 	LifetimeSeconds int64           `json:"lifetime-seconds,omitempty"`
@@ -249,7 +269,7 @@ func (p *InventoryInput) UnmarshalJSON(data []byte) error {
 // HostRecord is one managed inventory record as administrators see it.
 type HostRecord struct {
 	ID        string         `json:"id"`
-	Revision  uint64         `json:"revision"`
+	Version   string         `json:"version,omitempty"`
 	Status    string         `json:"status"`
 	Host      InventoryInput `json:"host"`
 	CreatedAt time.Time      `json:"created-at"`

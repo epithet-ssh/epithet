@@ -24,6 +24,8 @@ type Store struct {
 	db *sql.DB
 }
 
+func (m *Store) SupportsVersioning() bool { return true }
+
 var _ inventory.Store = (*Store)(nil)
 var _ inventory.Hosts = (*Store)(nil)
 
@@ -58,7 +60,7 @@ func (m *Store) initialize() error {
 	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version != 0 && version != 4 {
+	if version != 0 && version != 5 {
 		return fmt.Errorf("unsupported inventory database version %d", version)
 	}
 	if version == 0 {
@@ -77,9 +79,9 @@ CREATE TABLE names (host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE
 CREATE INDEX hostname ON names(wildcard,name,host_id);
 CREATE TABLE labels (host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(host_id,name));
 CREATE TABLE accounts (host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, position INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY(host_id,position), UNIQUE(host_id,name));
-CREATE TABLE tokens (host_id TEXT PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE, expires TEXT NOT NULL, used INTEGER NOT NULL CHECK(used IN (0,1)), revoked INTEGER NOT NULL CHECK(revoked IN (0,1)));
+CREATE TABLE tokens (host_id TEXT PRIMARY KEY, expires TEXT NOT NULL, used INTEGER NOT NULL CHECK(used IN (0,1)), revoked INTEGER NOT NULL CHECK(revoked IN (0,1)));
 CREATE TABLE audit (host_id TEXT NOT NULL, time TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL);
-PRAGMA user_version=4;`)
+PRAGMA user_version=5;`)
 		if err != nil {
 			return err
 		}
@@ -117,7 +119,7 @@ func readHost(ctx context.Context, tx *sql.Tx, id string) (*inventory.Host, erro
 	h := &inventory.Host{ID: id}
 	var labelsNull, accountsNull bool
 	var created, updated string
-	err := tx.QueryRowContext(ctx, "SELECT revision,status,principal_mode,realm,labels_null,accounts_null,created,updated FROM hosts WHERE id=?", id).Scan(&h.Revision, &h.Status, &h.PrincipalMode, &h.Realm, &labelsNull, &accountsNull, &created, &updated)
+	err := tx.QueryRowContext(ctx, "SELECT revision,status,principal_mode,realm,labels_null,accounts_null,created,updated FROM hosts WHERE id=?", id).Scan(&h.Version, &h.Status, &h.PrincipalMode, &h.Realm, &labelsNull, &accountsNull, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, inventory.ErrNotFound
 	}
@@ -236,17 +238,8 @@ func (m *Store) validate() error {
 			if err != nil {
 				return err
 			}
-			t, err := readToken(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			if t != nil && (t.ExpiresAt.IsZero() || t.UsedBy == "" && !t.Revoked && h.Status != inventory.StatusPending) {
-				return fmt.Errorf("%s: invalid token metadata", id)
-			}
-			if !(inventory.EmptyHost(*h) && t != nil && t.UsedBy == "" && h.Status != inventory.StatusActive) {
-				if err = h.Validate(); err != nil {
-					return fmt.Errorf("%s: %w", id, err)
-				}
+			if err = h.Validate(); err != nil {
+				return fmt.Errorf("%s: %w", id, err)
 			}
 			if h.Status == inventory.StatusActive {
 				if err = checkNames(ctx, tx, h.Names, id); err != nil {
@@ -266,7 +259,7 @@ func (m *Store) validate() error {
 // transaction. Null flags preserve null versus empty collections across reads.
 func saveRecord(ctx context.Context, tx *sql.Tx, h *inventory.Host, create bool) error {
 	p := h
-	fields := []any{h.Revision, h.Status, p.PrincipalMode, p.Realm, p.Labels == nil, p.Accounts == nil, h.CreatedAt.UTC().Format(time.RFC3339Nano), h.UpdatedAt.UTC().Format(time.RFC3339Nano), h.ID}
+	fields := []any{h.Status, p.PrincipalMode, p.Realm, p.Labels == nil, p.Accounts == nil, h.CreatedAt.UTC().Format(time.RFC3339Nano), h.UpdatedAt.UTC().Format(time.RFC3339Nano), h.ID}
 	var err error
 	if create {
 		var exists bool
@@ -276,9 +269,9 @@ func saveRecord(ctx context.Context, tx *sql.Tx, h *inventory.Host, create bool)
 		if exists {
 			return inventory.ErrConflict
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO hosts (revision,status,principal_mode,realm,labels_null,accounts_null,created,updated,id) VALUES (?,?,?,?,?,?,?,?,?)", fields...)
+		_, err = tx.ExecContext(ctx, "INSERT INTO hosts (revision,status,principal_mode,realm,labels_null,accounts_null,created,updated,id) VALUES (1,?,?,?,?,?,?,?,?)", fields...)
 	} else {
-		_, err = tx.ExecContext(ctx, "UPDATE hosts SET revision=?,status=?,principal_mode=?,realm=?,labels_null=?,accounts_null=?,created=?,updated=? WHERE id=?", fields...)
+		_, err = tx.ExecContext(ctx, "UPDATE hosts SET revision=revision+1,status=?,principal_mode=?,realm=?,labels_null=?,accounts_null=?,created=?,updated=? WHERE id=?", fields...)
 	}
 	if err != nil {
 		return storageError(err)
@@ -360,9 +353,21 @@ func (m *Store) CreateHost(ctx context.Context, id string, host inventory.Host, 
 	return result, nil
 }
 
-func (m *Store) RedeemToken(ctx context.Context, id string, event inventory.AuditEvent) (*inventory.Host, error) {
+// EnrollHost keeps creation, token consumption, and audit in one SQLite transaction.
+func (m *Store) EnrollHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
+	preapproved := host.Status == inventory.StatusActive
 	if !validID(id) {
-		return nil, inventory.ErrToken
+		if preapproved {
+			return nil, inventory.ErrToken
+		}
+		return nil, fmt.Errorf("invalid host id")
+	}
+	if host.Status != inventory.StatusPending && !preapproved {
+		return nil, fmt.Errorf("enrollment must be pending or preapproved")
+	}
+	h, err := inventory.Creation(id, host, event.At)
+	if err != nil {
+		return nil, err
 	}
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -373,29 +378,54 @@ func (m *Store) RedeemToken(ctx context.Context, id string, event inventory.Audi
 	if err != nil {
 		return nil, err
 	}
-	if token == nil || token.Revoked || token.UsedBy != "" || !time.Now().UTC().Before(token.ExpiresAt) {
-		return nil, inventory.ErrToken
-	}
-	reserved, err := readHost(ctx, tx, id)
-	if errors.Is(err, inventory.ErrNotFound) {
-		return nil, inventory.ErrToken
-	}
-	if err != nil {
+	current, err := readHost(ctx, tx, id)
+	if err != nil && !errors.Is(err, inventory.ErrNotFound) {
 		return nil, err
 	}
-	if reserved.Status != inventory.StatusPending {
-		return nil, inventory.ErrToken
+	if current != nil {
+		if preapproved && (token == nil || token.UsedBy == "") {
+			return nil, inventory.ErrToken
+		}
+		if inventory.SameHostFacts(*current, h) {
+			return current, nil
+		}
+		if preapproved {
+			return nil, inventory.ErrToken
+		}
+		return nil, inventory.ErrConflict
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE tokens SET used=1 WHERE host_id=?", id); err != nil {
-		return nil, storageError(err)
+	if preapproved {
+		if token == nil || token.Revoked || token.UsedBy != "" || !time.Now().UTC().Before(token.ExpiresAt) {
+			return nil, inventory.ErrToken
+		}
+		if err = checkNames(ctx, tx, h.Names, id); err != nil {
+			return nil, err
+		}
+	} else {
+		// Pending enrollment cannot claim an ID issued as a preapproval token.
+		if token != nil {
+			return nil, inventory.ErrConflict
+		}
+	}
+	if err = saveRecord(ctx, tx, &h, true); err != nil {
+		return nil, err
+	}
+	if preapproved {
+		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET used=1 WHERE host_id=?", id); err != nil {
+			return nil, storageError(err)
+		}
+	}
+	result, err := readHost(ctx, tx, id)
+	if err != nil {
+		return nil, err
 	}
 	if err = finish(ctx, tx, event); err != nil {
 		return nil, err
 	}
-	return reserved, nil
+	return result, nil
 }
 
-func (m *Store) ReplaceHost(ctx context.Context, proposed inventory.Host, revision uint64, event inventory.AuditEvent) (*inventory.Host, error) {
+func (m *Store) ReplaceHost(ctx context.Context, proposed inventory.Host, expectedVersion string, event inventory.AuditEvent) (*inventory.Host, error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
@@ -405,18 +435,13 @@ func (m *Store) ReplaceHost(ctx context.Context, proposed inventory.Host, revisi
 	if err != nil {
 		return nil, err
 	}
-	h, err := inventory.Replacement(*current, proposed, revision, event.At)
+	h, err := inventory.Replacement(*current, proposed, expectedVersion, event.At)
 	if err != nil {
 		return nil, err
 	}
 	if h.Status == inventory.StatusActive {
 		if err = checkNames(ctx, tx, h.Names, h.ID); err != nil {
 			return nil, err
-		}
-	}
-	if h.Status != inventory.StatusPending {
-		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET revoked=1 WHERE host_id=? AND used=0", h.ID); err != nil {
-			return nil, storageError(err)
 		}
 	}
 	if err = saveRecord(ctx, tx, &h, false); err != nil {
@@ -432,7 +457,7 @@ func (m *Store) ReplaceHost(ctx context.Context, proposed inventory.Host, revisi
 	return result, nil
 }
 
-func (m *Store) RemoveHost(ctx context.Context, id string, revision uint64, event inventory.AuditEvent) error {
+func (m *Store) RemoveHost(ctx context.Context, id string, expectedVersion string, event inventory.AuditEvent) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return storageError(err)
@@ -442,10 +467,13 @@ func (m *Store) RemoveHost(ctx context.Context, id string, revision uint64, even
 	if err != nil {
 		return err
 	}
-	if revision == 0 || revision != current.Revision {
-		return inventory.ErrRevision
+	if expectedVersion != "" && expectedVersion != current.Version {
+		return inventory.ErrVersion
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM hosts WHERE id=?", id); err != nil {
+		return storageError(err)
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM tokens WHERE host_id=?", id); err != nil {
 		return storageError(err)
 	}
 	return finish(ctx, tx, event)
@@ -488,18 +516,21 @@ func (m *Store) ListHosts(ctx context.Context, after string, limit int, pending 
 }
 
 func (m *Store) CreateToken(ctx context.Context, id string, lifetime time.Duration, event inventory.AuditEvent) (inventory.EnrollmentToken, error) {
-	reserved, token, err := inventory.Reservation(id, lifetime, event.At)
-	if err != nil {
-		return inventory.EnrollmentToken{}, err
+	if lifetime <= 0 || lifetime > 24*time.Hour {
+		return inventory.EnrollmentToken{}, fmt.Errorf("token lifetime must be positive and no more than 24h")
 	}
+	token := inventory.EnrollmentToken{ID: id, ExpiresAt: event.At.Add(lifetime)}
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return inventory.EnrollmentToken{}, storageError(err)
 	}
 	defer tx.Rollback()
-	h := &reserved
-	if err = saveRecord(ctx, tx, h, true); err != nil {
-		return inventory.EnrollmentToken{}, err
+	var exists bool
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM tokens WHERE host_id=? UNION ALL SELECT 1 FROM hosts WHERE id=?)", id, id).Scan(&exists); err != nil {
+		return inventory.EnrollmentToken{}, storageError(err)
+	}
+	if exists {
+		return inventory.EnrollmentToken{}, inventory.ErrConflict
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO tokens VALUES (?,?,0,0)", id, token.ExpiresAt.Format(time.RFC3339Nano)); err != nil {
 		return inventory.EnrollmentToken{}, storageError(err)
@@ -521,9 +552,6 @@ func (m *Store) RevokeToken(ctx context.Context, id string, event inventory.Audi
 		return inventory.ErrNotFound
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE tokens SET revoked=1 WHERE host_id=?", id); err != nil {
-		return storageError(err)
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE hosts SET revision=revision+1,updated=? WHERE id=?", event.At.UTC().Format(time.RFC3339Nano), id); err != nil {
 		return storageError(err)
 	}
 	return finish(ctx, tx, event)
