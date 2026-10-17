@@ -119,7 +119,7 @@ func TestInventoryManagementOption(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close()
 	id1 := inventory.NewID()
-	_, err = writer.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusActive, Names: []string{"old-*.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
+	_, err = writer.UpsertHost(t.Context(), inventory.Host{ID: id1, Status: inventory.StatusActive, Names: []string{"old-*.example"}, Accounts: []string{"root"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id1))
 	require.NoError(t, err)
 	cfg := tlsconfig.Config{Insecure: true}
 	readonly, err := factserver.InventoryHandler(reader, caPublic, controlPublic)

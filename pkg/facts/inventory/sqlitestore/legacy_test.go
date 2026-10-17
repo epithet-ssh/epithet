@@ -32,7 +32,7 @@ func (m *Store) Change(ctx context.Context, actor, action, id string, expectedVe
 	if err != nil {
 		return nil, err
 	}
-	return m.ReplaceHost(ctx, *h, expectedVersion, event)
+	return m.UpsertHost(ctx, *h, inventory.WriteConditions{ExpectedVersion: expectedVersion}, event)
 }
 
 // Tokens inspects stored credentials for persistence tests, not for clients.

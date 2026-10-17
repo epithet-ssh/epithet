@@ -167,7 +167,7 @@ func TestInventoryListIncludesWildcardNames(t *testing.T) {
 		id := fmt.Sprintf("%064x", i)
 		allIDs = append(allIDs, id)
 		if i%2 == 0 {
-			_, err = store.CreateHost(t.Context(), id, inventory.Host{Status: inventory.StatusActive, Names: []string{fmt.Sprintf("*.%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id))
+			_, err = store.UpsertHost(t.Context(), inventory.Host{ID: id, Status: inventory.StatusActive, Names: []string{fmt.Sprintf("*.%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id))
 		} else {
 			_, err = inventory.Enroll(t.Context(), store, id, inventory.Host{Names: []string{fmt.Sprintf("host-%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, "", inventory.NewAuditEvent("host", "enroll", id))
 			hostIDs = append(hostIDs, id)

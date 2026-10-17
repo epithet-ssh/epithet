@@ -44,7 +44,8 @@ rc.d scripts, disabled by default; installation does not start a server.
 ### Debian Linux
 
 Packages are available for amd64. Run the following as root to install the
-repository and then epithet:
+repository and then epithet. This is client/agent only for now, no service
+definitions.
 
 ```sh
 install -d -m 0755 /etc/apt/keyrings

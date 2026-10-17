@@ -293,17 +293,17 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 	// real stores and both HTTP planes must preserve cursors and page limits.
 	for n := 0; n < 130; n++ {
 		id1 := inventory.NewID()
-		_, err = hosts.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusPending, Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent(strings.Repeat("x", 70<<10), "enroll", id1))
+		_, err = hosts.UpsertHost(t.Context(), inventory.Host{ID: id1, Status: inventory.StatusPending, Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent(strings.Repeat("x", 70<<10), "enroll", id1))
 		require.NoError(t, err)
 	}
 	first, err := hosts.ListHosts(t.Context(), "", 1, false)
 	require.NoError(t, err)
 	p := inventory.Host{Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
 	first[0].Names, first[0].Accounts, first[0].PrincipalMode = p.Names, p.Accounts, p.PrincipalMode
-	h, err := hosts.ReplaceHost(t.Context(), first[0], first[0].Version, inventory.NewAuditEvent("admin", "edit", (first[0]).ID))
+	h, err := hosts.UpsertHost(t.Context(), first[0], inventory.WriteConditions{ExpectedVersion: first[0].Version}, inventory.NewAuditEvent("admin", "edit", (first[0]).ID))
 	require.NoError(t, err)
 	h.Status = "active"
-	_, err = hosts.ReplaceHost(t.Context(), *h, h.Version, inventory.NewAuditEvent("admin", "edit", h.ID))
+	_, err = hosts.UpsertHost(t.Context(), *h, inventory.WriteConditions{ExpectedVersion: h.Version}, inventory.NewAuditEvent("admin", "edit", h.ID))
 	require.NoError(t, err)
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(t.Context(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, TLSConfig: tlsconfig.Config{Insecure: true}})

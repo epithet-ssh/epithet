@@ -184,7 +184,8 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		host := inventoryHost(create.Host)
 		host.Status = inventory.StatusActive
 		id := inventory.NewID()
-		result, err := h.store.CreateHost(ctx, id, host, inventory.NewAuditEvent(actor, "add", id))
+		host.ID = id
+		result, err := h.store.UpsertHost(ctx, host, inventory.WriteConditions{}, inventory.NewAuditEvent(actor, "add", id))
 		if err != nil {
 			return err
 		}
@@ -280,7 +281,7 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 			return err
 		}
 		event.Action = action
-		result, err := h.store.ReplaceHost(ctx, proposed, expectedVersion, event)
+		result, err := h.store.UpsertHost(ctx, proposed, inventory.WriteConditions{ExpectedVersion: expectedVersion}, event)
 		if err != nil {
 			return err
 		}

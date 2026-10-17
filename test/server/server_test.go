@@ -216,6 +216,8 @@ state-dir = %q
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+		// Recovery is what this test exercises; use a valid credential after the wait.
+		token = idp.MintIDToken("test@example.com", time.Now().Add(time.Minute))
 		requestCert(t, token, http.StatusOK)
 		requestCert(t, "invalid-token", http.StatusUnauthorized)
 		idp.SetDiscoveryAvailable(false)
@@ -476,7 +478,7 @@ func seedManagedPattern(t *testing.T, state string, accounts []string) {
 	}
 	defer store.Close()
 	id1 := inventory.NewID()
-	_, err = store.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusActive, Names: []string{"*"}, Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "add", id1))
+	_, err = store.UpsertHost(t.Context(), inventory.Host{ID: id1, Status: inventory.StatusActive, Names: []string{"*"}, Accounts: accounts, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id1))
 	if err != nil {
 		t.Fatal(err)
 	}

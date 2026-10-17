@@ -101,7 +101,8 @@ func Enroll(ctx context.Context, store Store, id string, host Host, token string
 		}
 		host.Status = StatusActive
 	}
-	return store.EnrollHost(ctx, id, host, event)
+	host.ID = id
+	return store.UpsertHost(ctx, host, WriteConditions{CreateOnly: true, ConsumeToken: token != ""}, event)
 }
 
 // Creation prepares storage metadata without deciding the host's status.

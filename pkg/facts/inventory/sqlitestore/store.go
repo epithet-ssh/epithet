@@ -324,130 +324,78 @@ func checkNames(ctx context.Context, tx *sql.Tx, names []string, except string) 
 	return nil
 }
 
-// CreateHost persists the status selected by Epithet.
-func (m *Store) CreateHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
-	h, err := inventory.Creation(id, host, event.At)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := m.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, storageError(err)
-	}
-	defer tx.Rollback()
-	if h.Status == inventory.StatusActive {
-		if err = checkNames(ctx, tx, h.Names, ""); err != nil {
-			return nil, err
-		}
-	}
-	if err = saveRecord(ctx, tx, &h, true); err != nil {
-		return nil, err
-	}
-	result, err := readHost(ctx, tx, id)
-	if err != nil {
-		return nil, err
-	}
-	if err = finish(ctx, tx, event); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-// EnrollHost keeps creation, token consumption, and audit in one SQLite transaction.
-func (m *Store) EnrollHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
-	preapproved := host.Status == inventory.StatusActive
+// UpsertHost applies the write conditions and commits host, token, and audit
+// changes in one SQLite transaction. Enrollment and review policy stay upstream.
+func (m *Store) UpsertHost(ctx context.Context, proposed inventory.Host, conditions inventory.WriteConditions, event inventory.AuditEvent) (*inventory.Host, error) {
+	id := proposed.ID
 	if !validID(id) {
-		if preapproved {
+		if conditions.ConsumeToken {
 			return nil, inventory.ErrToken
 		}
 		return nil, fmt.Errorf("invalid host id")
 	}
-	if host.Status != inventory.StatusPending && !preapproved {
-		return nil, fmt.Errorf("enrollment must be pending or preapproved")
-	}
-	h, err := inventory.Creation(id, host, event.At)
-	if err != nil {
-		return nil, err
-	}
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, storageError(err)
 	}
 	defer tx.Rollback()
-	token, err := readToken(ctx, tx, id)
-	if err != nil {
-		return nil, err
-	}
 	current, err := readHost(ctx, tx, id)
 	if err != nil && !errors.Is(err, inventory.ErrNotFound) {
 		return nil, err
 	}
-	if current != nil {
-		if preapproved && (token == nil || token.UsedBy == "") {
+	if conditions.ExpectedVersion != "" && (current == nil || current.Version != conditions.ExpectedVersion) {
+		return nil, inventory.ErrVersion
+	}
+	var token *inventory.EnrollmentToken
+	if current == nil || conditions.ConsumeToken {
+		token, err = readToken(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if current != nil && (conditions.CreateOnly || conditions.ConsumeToken) {
+		if conditions.ConsumeToken && (token == nil || token.UsedBy == "") {
 			return nil, inventory.ErrToken
 		}
-		if inventory.SameHostFacts(*current, h) {
+		if inventory.SameHostFacts(*current, proposed) {
 			return current, nil
 		}
-		if preapproved {
+		if conditions.ConsumeToken {
 			return nil, inventory.ErrToken
 		}
 		return nil, inventory.ErrConflict
 	}
-	if preapproved {
-		if token == nil || token.Revoked || token.UsedBy != "" || !time.Now().UTC().Before(token.ExpiresAt) {
-			return nil, inventory.ErrToken
+	var h inventory.Host
+	if current == nil {
+		if conditions.ConsumeToken {
+			if token == nil || token.Revoked || token.UsedBy != "" || !time.Now().UTC().Before(token.ExpiresAt) {
+				return nil, inventory.ErrToken
+			}
+		} else if token != nil {
+			// An issued token ID can only be claimed by consuming that token.
+			return nil, inventory.ErrConflict
 		}
+		h, err = inventory.Creation(id, proposed, event.At)
+	} else {
+		h, err = inventory.Replacement(*current, proposed, conditions.ExpectedVersion, event.At)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if h.Status == inventory.StatusActive {
 		if err = checkNames(ctx, tx, h.Names, id); err != nil {
 			return nil, err
 		}
-	} else {
-		// Pending enrollment cannot claim an ID issued as a preapproval token.
-		if token != nil {
-			return nil, inventory.ErrConflict
-		}
 	}
-	if err = saveRecord(ctx, tx, &h, true); err != nil {
+	if err = saveRecord(ctx, tx, &h, current == nil); err != nil {
 		return nil, err
 	}
-	if preapproved {
+	if conditions.ConsumeToken {
 		if _, err = tx.ExecContext(ctx, "UPDATE tokens SET used=1 WHERE host_id=?", id); err != nil {
 			return nil, storageError(err)
 		}
 	}
 	result, err := readHost(ctx, tx, id)
-	if err != nil {
-		return nil, err
-	}
-	if err = finish(ctx, tx, event); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func (m *Store) ReplaceHost(ctx context.Context, proposed inventory.Host, expectedVersion string, event inventory.AuditEvent) (*inventory.Host, error) {
-	tx, err := m.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, storageError(err)
-	}
-	defer tx.Rollback()
-	current, err := readHost(ctx, tx, proposed.ID)
-	if err != nil {
-		return nil, err
-	}
-	h, err := inventory.Replacement(*current, proposed, expectedVersion, event.At)
-	if err != nil {
-		return nil, err
-	}
-	if h.Status == inventory.StatusActive {
-		if err = checkNames(ctx, tx, h.Names, h.ID); err != nil {
-			return nil, err
-		}
-	}
-	if err = saveRecord(ctx, tx, &h, false); err != nil {
-		return nil, err
-	}
-	result, err := readHost(ctx, tx, h.ID)
 	if err != nil {
 		return nil, err
 	}

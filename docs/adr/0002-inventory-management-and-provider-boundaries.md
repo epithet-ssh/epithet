@@ -276,8 +276,18 @@ Both enrollment paths use PUT to a stable host ID. The client stores that ID in
 `id` beside the default `realm` file and CA public key before its first request.
 The ID is generated for pending enrollment or taken from the single-use token.
 Control confines the shared enrollment bearer to pending submissions and never
-forwards it to inventory. `EnrollHost` performs creation and any token consumption
+forwards it to inventory. `UpsertHost` performs creation or replacement and any token consumption
 in one storage call; SQLite commits them with the caller-supplied audit event.
 Identical retries return the existing host without mutation; differing facts
 cannot replace it. Administrative review remains separate. SQLite schema 5 removes
 the token-to-host foreign key because unused tokens no longer create reservations.
+
+
+## Amendment: one inventory host write
+
+`Store.UpsertHost` replaces separate creation, enrollment, and replacement
+methods. `WriteConditions` expresses an optional expected version, creation-only
+retry behavior, and consumption of the token matching the host ID. This keeps
+one persistence path without granting enrollment permission to overwrite an
+existing host. Validation, status selection, and administrator review stay above
+storage; backends apply write conditions and persist the supplied audit event.

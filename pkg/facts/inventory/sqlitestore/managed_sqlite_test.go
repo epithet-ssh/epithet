@@ -208,7 +208,9 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 		}},
 		{"add", func() error {
 			id14 := inventory.NewID()
-			_, err := m.CreateHost(ctx, id14, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id14))
+			input1 := patternInput("*.example")
+			input1.ID = id14
+			_, err := m.UpsertHost(ctx, input1, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id14))
 			return err
 		}},
 		{"approve", func() error { _, err := m.Change(ctx, "admin", "approve", host.ID, host.Version, nil); return err }},

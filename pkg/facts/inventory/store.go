@@ -39,7 +39,7 @@ const MaxPageLimit = 1000
 // HTTP handlers never close it. Callers construct audit events before storage,
 // supplying the authenticated actor, action, resource and operation timestamp.
 // Storage preserves all event fields. Callers also assign IDs
-// before creation using NewID; collisions return ErrConflict. Mutation timestamps
+// before creation using NewID. Mutation timestamps
 // use event.At. Storage never generates IDs or completes audit events.
 // Version is an opaque, backend-owned token, compared only for equality. Stores
 // without versioning return empty Host.Version and receive empty expectedVersion.
@@ -51,16 +51,11 @@ type Store interface {
 	// ETags. When false, versions and mutation preconditions are empty.
 	SupportsVersioning() bool
 
-	// CreateHost persists a new host with the supplied ID and status. It assigns
-	// a version according to SupportsVersioning and uses event.At for timestamps.
-	// Duplicate IDs return ErrConflict. Epithet chooses pending or active before
-	// calling storage.
-	CreateHost(ctx context.Context, id string, host Host, event AuditEvent) (*Host, error)
-	// ReplaceHost persists the supplied facts and status. It does not enforce
-	// enrollment/review workflow rules. ID and timestamps must be echoed unchanged;
-	// expectedVersion is the optional concurrency precondition, independent of the
-	// supplied Host.Version. Storage owns the new version and update time.
-	ReplaceHost(ctx context.Context, host Host, expectedVersion string, event AuditEvent) (*Host, error)
+	// UpsertHost creates or replaces host.ID, subject to the supplied conditions.
+	// Storage owns versions and timestamps; an update retains CreatedAt. The
+	// supplied audit event accompanies the write; an unchanged retry appends none.
+	// A nonempty expected version cannot match a missing host.
+	UpsertHost(ctx context.Context, host Host, conditions WriteConditions, event AuditEvent) (*Host, error)
 	// Removal retains audit history and appends the supplied event. A missing ID
 	// returns ErrNotFound; a failed version precondition returns ErrVersion.
 	RemoveHost(ctx context.Context, id string, expectedVersion string, event AuditEvent) error
@@ -72,15 +67,6 @@ type Store interface {
 	// filters host records before applying the limit. A short page ends that read.
 	// Each page is independent; later calls may observe changes.
 	ListHosts(ctx context.Context, after string, limit int, pending bool) ([]Host, error)
-	// EnrollHost creates a host at the client-selected ID. Epithet supplies pending
-	// for a submission awaiting review, or active for single-use preapproval;
-	// active creation must validate and consume the token whose secret is id.
-	// An identical retry returns the existing host without changing its status,
-	// version, timestamps, or audit. Enrollment never edits existing host facts.
-	// Different facts at the same ID return ErrConflict (pending) or ErrToken
-	// (preapproved). Token validation, creation, and audit are one storage call;
-	// consistency remains a backend property.
-	EnrollHost(ctx context.Context, id string, host Host, event AuditEvent) (*Host, error)
 	// CreateToken stores a single-use credential without creating a host.
 	// Its supplied ID becomes the host ID on enrollment. Lifetime must be
 	// positive and at most 24 hours.
@@ -92,6 +78,22 @@ type Store interface {
 	// Ordering, visibility and cursor lifetime belong to the backend. Timestamps
 	// need not be unique or monotonic. Zero limit defaults to 100; maximum 1,000.
 	Audit(ctx context.Context, cursor string, limit int) (events []AuditEvent, next string, err error)
+}
+
+// WriteConditions constrain an upsert without exposing backend transactions.
+// The zero value allows creation or replacement without a version precondition.
+// Epithet checks enrollment and administrator-review policy before storage.
+type WriteConditions struct {
+	ExpectedVersion string
+	// CreateOnly forbids replacing an existing host. Identical facts return the
+	// stored host unchanged, including its status, metadata, and audit history.
+	// Different facts return ErrConflict. Enrollment uses this for safe retries.
+	CreateOnly bool
+	// ConsumeToken requires the single-use token whose secret is host.ID and
+	// consumes it with creation. It never authorizes replacement. An identical
+	// retry of a host created with that token returns the stored host unchanged;
+	// invalid credentials or different facts return ErrToken.
+	ConsumeToken bool
 }
 
 // EnrollmentToken's ID is also its secret and the resulting host ID.

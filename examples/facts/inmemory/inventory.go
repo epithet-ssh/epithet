@@ -15,22 +15,12 @@ type memInv struct {
 
 func (m *memInv) SupportsVersioning() bool { return false }
 
-func (m *memInv) CreateHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *memInv) EnrollHost(ctx context.Context, id string, host inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
+func (m *memInv) UpsertHost(ctx context.Context, host inventory.Host, conditions inventory.WriteConditions, event inventory.AuditEvent) (*inventory.Host, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
 func (m *memInv) LookupHost(ctx context.Context, s string) (*inventory.Host, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *memInv) ReplaceHost(ctx context.Context, record inventory.Host, expectedVersion string, event inventory.AuditEvent) (*inventory.Host, error) {
 	//TODO implement me
 	panic("implement me")
 }

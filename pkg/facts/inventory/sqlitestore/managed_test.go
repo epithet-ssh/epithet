@@ -37,7 +37,8 @@ func managedFixture(t *testing.T, initialYAML string) (*Store, string) {
 	for _, h := range initial.Hosts {
 		id := inventory.NewID()
 		p := inventory.Host{Status: inventory.StatusActive, Names: h.Names, Labels: h.Labels, Accounts: h.Accounts, PrincipalMode: h.PrincipalMode.Effective(), Realm: principal.Realm(h.Realm)}
-		_, err := m.CreateHost(t.Context(), id, p, inventory.NewAuditEvent("admin", "add", id))
+		p.ID = id
+		_, err := m.UpsertHost(t.Context(), p, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id))
 		require.NoError(t, err)
 	}
 	t.Cleanup(func() { m.Close() })

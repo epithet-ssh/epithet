@@ -15,7 +15,9 @@ func patternInput(pattern string) inventory.Host {
 func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 	m, path := managedFixture(t, "")
 	id1 := inventory.NewID()
-	pattern, err := m.CreateHost(t.Context(), id1, patternInput("Runner-*.EXAMPLE"), inventory.NewAuditEvent("admin", "add", id1))
+	input1 := patternInput("Runner-*.EXAMPLE")
+	input1.ID = id1
+	pattern, err := m.UpsertHost(t.Context(), input1, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id1))
 	require.NoError(t, err)
 	require.Equal(t, "runner-*.example", pattern.Names[0])
 	for _, name := range []string{"runner-one.example", "RUNNER-TWO.EXAMPLE"} {
@@ -76,10 +78,14 @@ func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 func TestManagedAmbiguousPatternsFailUntilDisambiguated(t *testing.T) {
 	m, _ := managedFixture(t, "")
 	id3 := inventory.NewID()
-	first, err := m.CreateHost(t.Context(), id3, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id3))
+	input2 := patternInput("*.example")
+	input2.ID = id3
+	first, err := m.UpsertHost(t.Context(), input2, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id3))
 	require.NoError(t, err)
 	id4 := inventory.NewID()
-	second, err := m.CreateHost(t.Context(), id4, patternInput("runner-*.*"), inventory.NewAuditEvent("admin", "add", id4))
+	input3 := patternInput("runner-*.*")
+	input3.ID = id4
+	second, err := m.UpsertHost(t.Context(), input3, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id4))
 	require.NoError(t, err)
 	_, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.ErrorIs(t, err, inventory.ErrConflict)
@@ -99,7 +105,9 @@ func TestManagedAmbiguousPatternsFailUntilDisambiguated(t *testing.T) {
 	_, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	id6 := inventory.NewID()
-	_, err = m.CreateHost(t.Context(), id6, patternInput(second.Names[0]), inventory.NewAuditEvent("admin", "add", id6))
+	input4 := patternInput(second.Names[0])
+	input4.ID = id6
+	_, err = m.UpsertHost(t.Context(), input4, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id6))
 	require.ErrorIs(t, err, inventory.ErrConflict)
 }
 
@@ -110,13 +118,16 @@ func TestManagedPatternValidationAndCreationRollback(t *testing.T) {
 		patternInput("bad-**.example"),
 	} {
 		id7 := inventory.NewID()
-		_, err := m.CreateHost(t.Context(), id7, p, inventory.NewAuditEvent("admin", "add", id7))
+		p.ID = id7
+		_, err := m.UpsertHost(t.Context(), p, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id7))
 		require.Error(t, err)
 	}
 	_, err := m.db.Exec("CREATE TRIGGER fail_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'simulated failure'); END")
 	require.NoError(t, err)
 	id8 := inventory.NewID()
-	_, err = m.CreateHost(t.Context(), id8, patternInput("*.example"), inventory.NewAuditEvent("admin", "add", id8))
+	input5 := patternInput("*.example")
+	input5.ID = id8
+	_, err = m.UpsertHost(t.Context(), input5, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id8))
 	require.ErrorIs(t, err, inventory.ErrStorage)
 	records, err := m.ListHosts(t.Context(), "", 0, false)
 	require.NoError(t, err)

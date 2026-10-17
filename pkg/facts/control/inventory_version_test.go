@@ -30,8 +30,8 @@ func (f *inventoryVersionFixture) GetHost(context.Context, string) (*inventory.H
 	copy := f.record
 	return &copy, nil
 }
-func (f *inventoryVersionFixture) ReplaceHost(_ context.Context, h inventory.Host, expectedVersion string, _ inventory.AuditEvent) (*inventory.Host, error) {
-	f.expectedVersion = expectedVersion
+func (f *inventoryVersionFixture) UpsertHost(_ context.Context, h inventory.Host, conditions inventory.WriteConditions, _ inventory.AuditEvent) (*inventory.Host, error) {
+	f.expectedVersion = conditions.ExpectedVersion
 	if f.SupportsVersioning() {
 		h.Version = "next:opaque/version"
 	}

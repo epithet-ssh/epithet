@@ -19,7 +19,7 @@ data and management views. The factory owns its cleanup.
 Resource versioning is optional. `SupportsVersioning()` declares whether the
 store returns nonempty `Host.Version` values. Versions are opaque strings;
 callers compare them only for equality and pass them back as `expectedVersion`
-to `ReplaceHost` and `RemoveHost`. Empty `expectedVersion` requests no version
+in `UpsertHost` write conditions and to `RemoveHost`. An empty expected version requests no version
 check. Stores without versioning return empty versions and callers pass empty
 preconditions. Enforcement and atomicity are backend properties. SQLite supports
 versioning and keeps its numeric counter entirely inside the adapter.
@@ -27,9 +27,9 @@ versioning and keeps its numeric counter entirely inside the adapter.
 `Host` contains names, authorization facts, and enrollment metadata. Names may be
 exact hostnames or wildcard expressions in the same collection. There is no
 separate pattern resource or proposal object. `Enroll` accepts exact names and
-creates pending state (or redeems a token); `CreateHost` lets administrators create
-active hosts with exact or wildcard names. All records use `GetHost`, `ListHosts`,
-`ReplaceHost`, and `RemoveHost`.
+creates pending state (or redeems a token). All creation and updates use
+`UpsertHost`; reads and removal use `GetHost`, `ListHosts`, and `RemoveHost`.
+Administrator creation may include exact or wildcard names.
 
 Storage owns the distinction between exact and wildcard names. SQLite indexes
 that distinction per name: lookup checks exact names first, then reads only
@@ -45,6 +45,15 @@ Storage preserves every field; it does not construct or
 complete audit events. Record timestamps use the supplied event time. Removal
 retains audit history and appends the supplied removal event.
 
+`UpsertHost(ctx, host, conditions, event)` addresses `host.ID`. Its
+`WriteConditions` carries an optional `ExpectedVersion`, `CreateOnly` to forbid
+replacing existing facts, and `ConsumeToken` to require the single-use credential
+matching the host ID. The zero value permits an ordinary upsert. Enrollment sets
+`CreateOnly` and, for preapproval, `ConsumeToken`; identical retries return the
+stored host without changing its status or audit history. Administrator writes
+use the optional version condition. Validation and review policy stay above
+storage; the backend applies these write conditions with persistence.
+
 SQLite uses schema version 5, with indexed exact/wildcard names, retained audit
 history, and no inventory-wide revision counter. Older schema
 versions are rejected without modification; there is no automatic migration.
@@ -52,7 +61,7 @@ versions are rejected without modification; there is no automatic migration.
 Epithet owns enrollment and review policy:
 
 - `Enroll` validates the submitted facts and creates a pending host, or calls
-  `EnrollHost` to create the host and consume its token in one storage operation.
+  `UpsertHost` to create the host and consume its token in one storage operation.
   SQLite commits activation, token consumption, and the supplied audit event in
   one transaction; a failed operation leaves the token usable.
 - `Review` validates administrator edits and approval/denial transitions before
@@ -67,7 +76,7 @@ Adapters enforce active exact-name/pattern uniqueness. Realms may be shared
 across records with independent labels and account restrictions, including
 generated realms. Pending and denied records do not reserve names. Enrollment
 retries with the same ID and facts return the existing record unchanged; different
-facts cannot overwrite it. Administrator edits use `ReplaceHost`.
+facts cannot overwrite it. Administrator edits use the same `UpsertHost` operation.
 
 Lookups return host facts without an inventory-wide revision. Exact names win
 over patterns; multiple matching active patterns are a conflict. Pattern facts

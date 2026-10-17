@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design inventory management interface and provider discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-17T23:42:58.007195Z
+updated: 2026-10-18T17:30:11.745139Z
 author: Brian McCallister
 priority: high
 tags:
@@ -897,3 +897,8 @@ Made inventory resource versions opaque and optional: Host.Version string, mutat
 # Log: 2026-10-17T23:42:58Z Brian McCallister
 
 Completed retryable enrollment PUT through client, control, router, provider, and EnrollHost storage operation. Pending enrollment uses a client-generated ID; preapproval uses the token as ID. Client persists id beside realm and the CA public key before submission. Identical retries preserve host state and audit; SQLite commits token consumption, creation, and the supplied event together. Token creation no longer creates empty hosts; schema 5 removes the token-to-host foreign key. Renamed default domain file and sshd metadata to realm. Removed the control import of inventory implementation status constants without weakening the dependency guard. Updated obsolete reservation fixtures and added restart/lost-response retry coverage. make -B build and full make test pass; no live data was modified.
+
+---
+# Log: 2026-10-18T17:30:11Z Brian McCallister
+
+Consolidated inventory Store host writes into UpsertHost(ctx, host, WriteConditions, event), removing CreateHost, EnrollHost, and ReplaceHost from all implementations and callers. Conditions carry optional expected version, creation-only retry behavior, and consumption of the single-use token matching host.ID. SQLite uses one persistence path while enrollment/review validation remains above storage. Updated contract fixtures and verified missing-resource version preconditions cannot recreate a deleted host. Refreshed the outage-recovery integration token after readiness to avoid testing an expired pre-recovery credential. make -B build and full make test pass.

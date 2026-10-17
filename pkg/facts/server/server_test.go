@@ -91,10 +91,9 @@ type alternateInventoryStore struct {
 
 func (s *alternateInventoryStore) SupportsVersioning() bool { return false }
 
-func (s *alternateInventoryStore) CreateHost(ctx context.Context, id string, p inventory.Host, event inventory.AuditEvent) (*inventory.Host, error) {
+func (s *alternateInventoryStore) UpsertHost(ctx context.Context, p inventory.Host, _ inventory.WriteConditions, event inventory.AuditEvent) (*inventory.Host, error) {
 	s.event, s.contextValue = event, ctx.Value(inventoryContextKey{})
 	s.record = p
-	s.record.ID = id
 	return &s.record, nil
 }
 

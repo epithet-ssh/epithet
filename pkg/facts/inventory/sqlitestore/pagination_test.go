@@ -14,7 +14,7 @@ func TestInventoryRecordPagesAndPendingFilter(t *testing.T) {
 	m, _ := managedFixture(t, "")
 	for n := 0; n < 125; n++ {
 		id1 := fmt.Sprintf("%064x", n+1)
-		_, err := m.CreateHost(t.Context(), id1, inventory.Host{Status: inventory.StatusPending, Names: []string{"page.example"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.NewAuditEvent("admin", "create", id1))
+		_, err := m.UpsertHost(t.Context(), inventory.Host{ID: id1, Status: inventory.StatusPending, Names: []string{"page.example"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "create", id1))
 		require.NoError(t, err)
 	}
 	first, err := m.ListHosts(t.Context(), "", 0, false)
@@ -83,9 +83,9 @@ func TestAuditCursorSurvivesDeletionRestartAndTimestampTies(t *testing.T) {
 	firstID, secondID := inventory.NewID(), inventory.NewID()
 	firstEvent := inventory.AuditEvent{At: stamp, Actor: "admin", Action: "token-create", Resource: firstID}
 	secondEvent := inventory.AuditEvent{At: stamp, Actor: "admin", Action: "token-create", Resource: secondID}
-	_, err := m.CreateHost(t.Context(), firstID, inventory.Host{Status: inventory.StatusPending, Names: []string{"page.example"}, PrincipalMode: inventory.AccountNamePrincipals}, firstEvent)
+	_, err := m.UpsertHost(t.Context(), inventory.Host{ID: firstID, Status: inventory.StatusPending, Names: []string{"page.example"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, firstEvent)
 	require.NoError(t, err)
-	_, err = m.CreateHost(t.Context(), secondID, inventory.Host{Status: inventory.StatusPending, Names: []string{"page.example"}, PrincipalMode: inventory.AccountNamePrincipals}, secondEvent)
+	_, err = m.UpsertHost(t.Context(), inventory.Host{ID: secondID, Status: inventory.StatusPending, Names: []string{"page.example"}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, secondEvent)
 	require.NoError(t, err)
 	first, cursor, err := m.Audit(t.Context(), "", 1)
 	require.NoError(t, err)
