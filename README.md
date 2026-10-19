@@ -47,20 +47,20 @@ Packages are available for amd64. Run the following as root to install the
 repository and then epithet:
 
 ```sh
-sudo install -d -m 0755 /etc/apt/keyrings
-sudo curl -fsS https://pkg.epithet.dev/keys/epithet-debian.asc \
+install -d -m 0755 /etc/apt/keyrings
+curl -fsS https://pkg.epithet.dev/keys/epithet-debian.asc \
   -o /etc/apt/keyrings/epithet-debian.asc
-sudo chmod 0644 /etc/apt/keyrings/epithet-debian.asc
+chmod 0644 /etc/apt/keyrings/epithet-debian.asc
 
-sudo tee /etc/apt/sources.list.d/epithet.sources >/dev/null <<'SOURCES'
+cat > /etc/apt/sources.list.d/epithet.sources <<'EOF'
 Types: deb
 URIs: https://pkg.epithet.dev/debian
 Suites: ./
 Architectures: amd64
 Signed-By: /etc/apt/keyrings/epithet-debian.asc
-SOURCES
+EOF
 
-sudo apt-get update && sudo apt-get install -y epithet
+apt-get update && apt-get install -y epithet
 ```
 
 ### Arch Linux
