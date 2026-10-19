@@ -40,6 +40,29 @@ pkg install -r Epithet epithet
 Keep the literal `${ABI}` in the repository URL. The package includes server
 rc.d scripts, disabled by default; installation does not start a server.
 
+
+### Debian Linux
+
+Packages are available for amd64. Run the following as root to install the
+repository and then epithet:
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsS https://pkg.epithet.dev/keys/epithet-debian.asc \
+  -o /etc/apt/keyrings/epithet-debian.asc
+sudo chmod 0644 /etc/apt/keyrings/epithet-debian.asc
+
+sudo tee /etc/apt/sources.list.d/epithet.sources >/dev/null <<'SOURCES'
+Types: deb
+URIs: https://pkg.epithet.dev/debian
+Suites: ./
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/epithet-debian.asc
+SOURCES
+
+sudo apt-get update && sudo apt-get install -y epithet
+```
+
 ### Arch Linux
 
 Packages are available for x86_64. Import and trust the repository signing key:
