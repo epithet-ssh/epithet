@@ -66,7 +66,13 @@ func Run(t *testing.T, open Factory) {
 		require.Equal(t, input, u, "CreateUser must preserve all supplied profile fields, including spelling and Active")
 		stored, err := store.GetUser(ctx, u.ID)
 		require.NoError(t, err, "GetUser must find the newly created user by resource ID")
-		require.Equal(t, &u, stored, "GetUser must return the same provisioning record that CreateUser returned")
+		require.NotNil(t, stored)
+		require.True(t, u.Created.Equal(stored.Created), "GetUser must preserve the Created instant")
+		require.True(t, u.Modified.Equal(stored.Modified), "GetUser must preserve the Modified instant")
+		// Storage may change a timestamp's location while preserving its instant.
+		record := *stored
+		record.Created, record.Modified = u.Created, u.Modified
+		require.Equal(t, u, record, "GetUser must return the same provisioning record that CreateUser returned")
 		facts, err := store.LookupUser(ctx, "subject")
 		require.NoError(t, err, "LookupUser must find the newly created user by ID")
 
