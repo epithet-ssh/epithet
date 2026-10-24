@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design SCIM directory management and CLI access through control
 id: ywxp1g89
 created: 2026-10-13T15:43:29.263132Z
-updated: 2026-10-17T18:04:17Z
+updated: 2026-10-24T04:15:13.151291177Z
 author: Brian McCallister
 priority: low
 tags:
@@ -352,3 +352,8 @@ and next, with --cursor for continuation. Validation: make -B build and affected
 make test run passes all other packages but fails in the unfinished in-memory
 inventory implementation at memInv.Enroll (panic("implement me")). Cursor transport
 coverage verifies that nonnumeric tokens are forwarded unchanged.
+
+---
+# Log: 2026-10-24T04:15:13Z Brian McCallister
+
+Planning discussion captured in mf2js8xw: inventory federation and partial control-plane capabilities may later inform directory capabilities/federation. Multiple-IdP support is distinct from directory federation; issuer-scoped identity, deliberate linking, and group identity need their own design. This follow-up is lower priority, no directory federation contract is selected, and no implementation is authorized by this update.

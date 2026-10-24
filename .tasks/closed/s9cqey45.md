@@ -3,7 +3,7 @@ yatl_version: 1
 title: Design inventory management interface and provider discovery
 id: s9cqey45
 created: 2026-10-11T16:56:56.536024Z
-updated: 2026-10-18T17:30:11.745139Z
+updated: 2026-10-24T04:15:13.246217671Z
 author: Brian McCallister
 priority: high
 tags:
@@ -902,3 +902,8 @@ Completed retryable enrollment PUT through client, control, router, provider, an
 # Log: 2026-10-18T17:30:11Z Brian McCallister
 
 Consolidated inventory Store host writes into UpsertHost(ctx, host, WriteConditions, event), removing CreateHost, EnrollHost, and ReplaceHost from all implementations and callers. Conditions carry optional expected version, creation-only retry behavior, and consumption of the single-use token matching host.ID. SQLite uses one persistence path while enrollment/review validation remains above storage. Updated contract fixtures and verified missing-resource version preconditions cannot recreate a deleted host. Refreshed the outage-recovery integration token after readiness to avoid testing an expired pre-recovery credential. make -B build and full make test pass.
+
+---
+# Log: 2026-10-24T04:15:13Z Brian McCallister
+
+Planning-only successor mf2js8xw records the proposed stateless signed-grant enrollment model, independent host configure command, inventory federation, and partial capability discovery. This revisits the completed design assumptions without reopening its implementation work. Current code remains unchanged; implementation has not been authorized.
