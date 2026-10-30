@@ -57,6 +57,8 @@ func TestResolveLoginMethod(t *testing.T) {
 		{name: "local auto", configured: "auto", want: oidc.LoginBrowser},
 		{name: "SSH connection", configured: "auto", environment: map[string]string{"SSH_CONNECTION": "client 1 server 2"}, want: oidc.LoginDevice, wantInferredDevice: true},
 		{name: "SSH tty", configured: "auto", environment: map[string]string{"SSH_TTY": "/dev/pts/1"}, want: oidc.LoginDevice, wantInferredDevice: true},
+		{name: "Rex session", configured: "auto", environment: map[string]string{"REX_SESSION": "session:example"}, want: oidc.LoginDevice, wantInferredDevice: true},
+		{name: "explicit browser overrides Rex", configured: "browser", environment: map[string]string{"REX_SESSION": "session:example"}, want: oidc.LoginBrowser},
 		{name: "explicit browser overrides SSH", configured: "browser", environment: map[string]string{"SSH_CONNECTION": "set"}, want: oidc.LoginBrowser},
 		{name: "explicit device", configured: "device", want: oidc.LoginDevice},
 	}

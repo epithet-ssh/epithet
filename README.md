@@ -124,8 +124,9 @@ ssh server.example.com
 ```
 
 First connection authenticates through your browser (~2-5 seconds). In an SSH
-session, Epithet automatically uses the OIDC device flow instead. Subsequent
-connections reuse the refreshed token.
+or Rex session, Epithet automatically uses the OIDC device flow instead. Rex
+sessions use device flow for both local and remote connections so login stays
+location independent. Subsequent connections reuse the refreshed token.
 
 To scope the agent to a shell or another command, pass that command to the
 agent. It starts only after the broker is ready, and the agent exits when the

@@ -283,7 +283,9 @@ func resolveLoginMethod(configured string, getenv func(string) string) (method o
 	case "browser":
 		return oidc.LoginBrowser, false
 	default: // Kong restricts this field to auto, browser, or device.
-		if getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" {
+		// Rex sessions can move between local and remote viewers, so always
+		// use device login there regardless of the current connection.
+		if getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" || getenv("REX_SESSION") != "" {
 			return oidc.LoginDevice, true
 		}
 		return oidc.LoginBrowser, false
