@@ -6,6 +6,12 @@ import (
 	"io"
 )
 
+// IdentityRequest optionally overrides the interactive method for this request.
+// An empty method uses the running agent's configured default.
+type IdentityRequest struct {
+	LoginMethod string `json:"loginMethod,omitempty"`
+}
+
 // Identity reports selected claims from a verified token, never bearer credentials.
 // EmailVerified is the issuer assertion, not an inventory authorization decision.
 type Identity struct {
@@ -29,10 +35,10 @@ type IdentityVerifier func(context.Context, string) (*Identity, error)
 // IdentityWithUserOutput authenticates through the same cache and in-flight
 // login as SSH requests. It does not request a certificate or require an
 // inventory record, so administrators can use it to prepare that record.
-func (b *Broker) IdentityWithUserOutput(ctx context.Context, out io.Writer) IdentityResponse {
+func (b *Broker) IdentityWithUserOutput(ctx context.Context, out io.Writer, method LoginMethod) IdentityResponse {
 	session, ctx, cancel := b.sessionRequest(ctx)
 	defer cancel()
-	token, err := session.auth.Token(ctx, out)
+	token, err := session.auth.Login(ctx, out, method)
 	if err != nil {
 		return IdentityResponse{Error: fmt.Sprintf("agent authentication failed: %v", err)}
 	}

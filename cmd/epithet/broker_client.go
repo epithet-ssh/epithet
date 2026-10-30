@@ -69,8 +69,11 @@ func (c brokerClient) exchange(ctx context.Context, request broker.Request, prog
 	return nil, fmt.Errorf("agent closed connection without a response")
 }
 
-func (c brokerClient) identity(ctx context.Context, progress io.Writer) (*broker.Identity, error) {
-	event, err := c.exchange(ctx, broker.Request{Identity: &struct{}{}}, progress)
+func (c brokerClient) identity(ctx context.Context, progress io.Writer, loginMethod string) (*broker.Identity, error) {
+	if loginMethod == "auto" {
+		loginMethod = ""
+	}
+	event, err := c.exchange(ctx, broker.Request{Identity: &broker.IdentityRequest{LoginMethod: loginMethod}}, progress)
 	if err != nil {
 		return nil, err
 	}

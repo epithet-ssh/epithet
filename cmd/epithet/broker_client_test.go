@@ -89,7 +89,7 @@ func TestBrokerClientCancellationClosesConnection(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := client.identity(ctx, nil)
+		_, err := client.identity(ctx, nil, "")
 		done <- err
 	}()
 	select {

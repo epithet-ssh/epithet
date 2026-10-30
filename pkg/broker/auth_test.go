@@ -20,7 +20,7 @@ func mintValid(t *testing.T, idp *oidctest.IdP, d time.Duration) string {
 func TestTokenFetchesOnceWhileValid(t *testing.T) {
 	idp := oidctest.New(t)
 	var calls atomic.Int32
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		calls.Add(1)
 		return mintValid(t, idp, time.Hour), nil
 	})
@@ -28,13 +28,40 @@ func TestTokenFetchesOnceWhileValid(t *testing.T) {
 		_, err := a.Token(context.Background(), nil)
 		require.NoError(t, err)
 	}
+	_, err := a.Login(t.Context(), nil, LoginDevice)
+	require.NoError(t, err, "selecting a login method must not invalidate a usable token")
 	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestLoginMethodAppliesOnlyToItsAttempt(t *testing.T) {
+	idp := oidctest.New(t)
+	var requests []TokenRequest
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
+		requests = append(requests, request)
+		// Each operation must acquire again so cache reuse cannot hide a
+		// login override leaking into subsequent attempts.
+		return mintValid(t, idp, expiryBuffer/2), nil
+	})
+	_, err := a.Login(t.Context(), nil, LoginDevice)
+	require.NoError(t, err)
+	_, err = a.Token(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = a.Login(t.Context(), nil, LoginBrowser)
+	require.NoError(t, err)
+	_, err = a.ForceRefresh(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, []TokenRequest{
+		{LoginMethod: LoginDevice},
+		{LoginMethod: LoginDefault},
+		{LoginMethod: LoginBrowser},
+		{ForceRefresh: true},
+	}, requests)
 }
 
 func TestTokenRefreshesProactivelyNearExpiry(t *testing.T) {
 	idp := oidctest.New(t)
 	var calls atomic.Int32
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		calls.Add(1)
 		// Expires inside expiryBuffer: every call must refetch.
 		return mintValid(t, idp, expiryBuffer/2), nil
@@ -50,7 +77,7 @@ func TestConcurrentTokenCallsShareOneFetch(t *testing.T) {
 	idp := oidctest.New(t)
 	var calls atomic.Int32
 	release := make(chan struct{})
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		calls.Add(1)
 		fmt.Fprint(out, "visit: https://example/auth\n")
 		<-release
@@ -75,7 +102,7 @@ func TestConcurrentTokenCallsShareOneFetch(t *testing.T) {
 func TestForceRefreshDiscardsCachedToken(t *testing.T) {
 	idp := oidctest.New(t)
 	var calls atomic.Int32
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		calls.Add(1)
 		return mintValid(t, idp, time.Hour), nil
 	})
@@ -97,13 +124,13 @@ func TestForceRefreshReturnsAndCachesTheFetchedToken(t *testing.T) {
 	first := mintValid(t, idp, time.Hour)
 	second := mintValid(t, idp, time.Hour)
 	var calls atomic.Int32
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		n := calls.Add(1)
 		if n == 1 {
-			require.False(t, force, "the initial fetch is not a forced one")
+			require.False(t, request.ForceRefresh, "the initial fetch is not a forced one")
 			return first, nil
 		}
-		require.True(t, force, "ForceRefresh must invoke fetch with force=true")
+		require.True(t, request.ForceRefresh, "ForceRefresh must invoke fetch with force=true")
 		return second, nil
 	})
 
@@ -167,7 +194,7 @@ func TestAbandonedFlightRetriesOnSameAuth(t *testing.T) {
 	var calls atomic.Int32
 	var fetchCtxDone atomic.Bool
 	fresh := mintValid(t, idp, time.Hour)
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		if calls.Add(1) == 1 {
 			close(started)
 			<-ctx.Done() // Observe the flight's own context being canceled...
@@ -240,7 +267,10 @@ func TestJoinerKeepsFlightAliveAfterLeaderCancels(t *testing.T) {
 	idp := oidctest.New(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	a := NewAuth(func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	a := NewAuth(func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
+		if request.LoginMethod != LoginDefault {
+			t.Errorf("joining login changed the active method: %v", request.LoginMethod)
+		}
 		close(started)
 		fmt.Fprint(out, "visit: https://example/auth\n")
 		<-release
@@ -260,7 +290,7 @@ func TestJoinerKeepsFlightAliveAfterLeaderCancels(t *testing.T) {
 	joinerResult := make(chan string, 1)
 	joinerErrCh := make(chan error, 1)
 	go func() {
-		token, err := a.Token(context.Background(), &joinerOut)
+		token, err := a.Login(context.Background(), &joinerOut, LoginDevice)
 		joinerResult <- token
 		joinerErrCh <- err
 	}()

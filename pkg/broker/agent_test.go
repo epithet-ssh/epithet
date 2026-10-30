@@ -24,7 +24,7 @@ func testClient(t *testing.T, url string) *caclient.Client {
 
 // stubTokenFunc always fails. Used by tests that never reach the auth step,
 // or that only need the match path to fail past it (e.g. no CA reachable).
-func stubTokenFunc(ctx context.Context, out io.Writer, force bool) (string, error) {
+func stubTokenFunc(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 	return "", fmt.Errorf("auth not configured for this test")
 }
 

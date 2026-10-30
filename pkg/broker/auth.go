@@ -12,14 +12,30 @@ import (
 	"time"
 )
 
-// TokenFunc acquires a fresh JWT. force is true when the caller has already
-// determined the current credential was rejected (ForceRefresh) and a
-// genuinely new token is required, not merely "no cached token yet".
-// Implementations backed by refreshable state (e.g. an oauth2.Token) must
-// not treat force=true as an ordinary call and hand back a still-"valid"
-// credential — that would silently defeat the 401 safety net. Invocations
-// are serialized by Auth, so a stateful closure needs no locking of its own.
-type TokenFunc func(ctx context.Context, out io.Writer, force bool) (string, error)
+// LoginMethod selects how to authenticate if interactive login is necessary.
+// LoginDefault preserves the fetcher's configured method.
+type LoginMethod uint8
+
+const (
+	LoginDefault LoginMethod = iota
+	LoginBrowser
+	LoginDevice
+)
+
+// TokenRequest describes one acquisition attempt, not persistent configuration.
+type TokenRequest struct {
+	// ForceRefresh requires a replacement for a rejected credential. A fetcher
+	// with refreshable state must not return that same credential, even if its
+	// expiry still says it is valid.
+	ForceRefresh bool
+	// LoginMethod applies only if interactive authentication is necessary;
+	// it does not prevent token reuse or refresh.
+	LoginMethod LoginMethod
+}
+
+// TokenFunc acquires a JWT according to request. Auth serializes invocations,
+// so a stateful closure needs no locking of its own.
+type TokenFunc func(ctx context.Context, out io.Writer, request TokenRequest) (string, error)
 
 // Auth caches a JWT obtained from fetch and refreshes it proactively before
 // it expires.
@@ -118,9 +134,21 @@ func NewAuth(fetch TokenFunc) *Auth {
 }
 
 // Token returns a JWT valid for at least expiryBuffer, fetching or
-// refreshing it if needed. Concurrent callers share one in-flight fetch;
-// joiners get a replay of its user-visible output so far.
+// refreshing it if needed using the configured login method. Concurrent callers
+// share one in-flight fetch; joiners get a replay of its user-visible output.
 func (a *Auth) Token(ctx context.Context, out io.Writer) (string, error) {
+	return a.getToken(ctx, out, LoginDefault)
+}
+
+// Login returns a usable token, using method if interactive authentication is
+// needed. It does not change the configured default or discard cached tokens.
+// If authentication is already in progress, callers share that attempt and
+// its method, including a replay of its user-visible progress.
+func (a *Auth) Login(ctx context.Context, out io.Writer, method LoginMethod) (string, error) {
+	return a.getToken(ctx, out, method)
+}
+
+func (a *Auth) getToken(ctx context.Context, out io.Writer, method LoginMethod) (string, error) {
 	a.mu.Lock()
 	if a.token != "" && time.Now().Add(expiryBuffer).Before(a.expiresAt) {
 		tok := a.token
@@ -128,34 +156,34 @@ func (a *Auth) Token(ctx context.Context, out io.Writer) (string, error) {
 		return tok, nil
 	}
 	a.mu.Unlock()
-	return a.acquire(ctx, out, false)
+	return a.acquire(ctx, out, TokenRequest{LoginMethod: method})
 }
 
 // ForceRefresh discards the cached token and fetches a new one. This is the
 // 401 safety net: the CA rejected a token we believed was still valid
 // (server-side revocation, clock skew), so we bypass the cache once and tell
-// fetch (via force=true) that it must not hand back that same credential.
+// fetch that it must not hand back that same credential.
 func (a *Auth) ForceRefresh(ctx context.Context, out io.Writer) (string, error) {
 	a.mu.Lock()
 	a.token = ""
 	a.expiresAt = time.Time{}
 	a.mu.Unlock()
-	return a.acquire(ctx, out, true)
+	return a.acquire(ctx, out, TokenRequest{ForceRefresh: true})
 }
 
 // acquire joins an in-flight fetch or starts a new one, waiting for it to
 // finish. Canceling ctx abandons this caller's wait; fetch itself is
 // canceled only when every waiting caller has canceled.
 //
-// A force=true caller (ForceRefresh) never joins a flight that was started
+// A ForceRefresh caller never joins a flight that was started
 // without force: that flight's fetch was never told to bypass its own
 // cached/refreshable state, so its result could be the very credential the
 // CA just rejected — joining it would silently defeat the safety net. It
 // waits for that flight to finish (without attaching to it, so it doesn't
-// keep it alive) and then starts its own forced flight. A force=true caller
+// keep it alive) and then starts its own forced flight. A ForceRefresh caller
 // DOES join an existing forced flight — two concurrent ForceRefresh callers
 // should share one fetch, same as any other case.
-func (a *Auth) acquire(ctx context.Context, out io.Writer, force bool) (string, error) {
+func (a *Auth) acquire(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 	for {
 		a.mu.Lock()
 		flight := a.inflight
@@ -167,17 +195,17 @@ func (a *Auth) acquire(ctx context.Context, out io.Writer, force bool) (string, 
 				writers: make(map[int]io.Writer),
 				cancel:  cancel,
 				done:    make(chan struct{}),
-				forced:  force,
+				forced:  request.ForceRefresh,
 			}
 			a.inflight = flight
 			// Attach before starting the fetch so the flight cannot be
 			// abandoned out from under its first waiter.
 			id, _ := flight.attach(out)
-			go a.runFlight(flightCtx, flight, force)
+			go a.runFlight(flightCtx, flight, request)
 			a.mu.Unlock()
 			return a.wait(ctx, flight, id)
 		}
-		if force && !flight.forced {
+		if request.ForceRefresh && !flight.forced {
 			a.mu.Unlock()
 			select {
 			case <-flight.done:
@@ -215,8 +243,8 @@ func (a *Auth) wait(ctx context.Context, flight *authFlight, id int) (string, er
 }
 
 // runFlight fetches a token and publishes the result to the flight.
-func (a *Auth) runFlight(ctx context.Context, flight *authFlight, force bool) {
-	token, err := a.fetch(ctx, flight, force)
+func (a *Auth) runFlight(ctx context.Context, flight *authFlight, request TokenRequest) {
+	token, err := a.fetch(ctx, flight, request)
 	var expiresAt time.Time
 	if err == nil {
 		expiresAt, err = parseJWTExpiry(token)

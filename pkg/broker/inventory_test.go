@@ -78,8 +78,8 @@ func TestSCIMPageRefreshesOnlyRejectedAuthentication(t *testing.T) {
 					client, err := facts.NewAdminClient(server.URL+"/manage", tlsconfig.Config{Insecure: true})
 					require.NoError(t, err)
 					session := newAuthSession(func() TokenFunc {
-						return func(_ context.Context, out io.Writer, force bool) (string, error) {
-							require.True(t, force)
+						return func(_ context.Context, out io.Writer, request TokenRequest) (string, error) {
+							require.True(t, request.ForceRefresh)
 							refreshes++
 							io.WriteString(out, "refresh progress\n")
 							return freshToken, nil

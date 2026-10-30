@@ -63,7 +63,7 @@ type AgentCLI struct {
 	CaURL       []string      `placeholder:"URL" help:"CA URL (repeatable, format: priority=N:https://url or https://url)" name:"ca" short:"c"`
 	CaTimeout   time.Duration `help:"Per-request timeout for CA requests" name:"ca-timeout" default:"15s"`
 	CaCooldown  time.Duration `help:"Circuit breaker cooldown for failed CAs" name:"ca-cooldown" default:"10m"`
-	LoginMethod string        `help:"Interactive login method" name:"login-method" enum:"auto,browser,device" default:"auto"`
+	LoginMethod string        `help:"Interactive login method: auto, browser, or device" name:"login-method" enum:"auto,browser,device" default:"auto"`
 
 	Login    AgentLoginCLI    `cmd:"login" help:"Authenticate the running agent without requesting a certificate"`
 	Logout   AgentLogoutCLI   `cmd:"logout" help:"Clear this profile's certificate agents and login state"`
@@ -175,31 +175,7 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 		TLSConfig:    tlsCfg,
 		LoginMethod:  loginMethod,
 	}
-	// Each login session owns its refresh state. Logout discards the entire
-	// session; Auth serializes calls within that session.
-	tokenFactory := func() broker.TokenFunc {
-		var oauthState *oauth2.Token
-		return func(ctx context.Context, out io.Writer, force bool) (string, error) {
-			if force && oauthState != nil {
-				// The broker calls us with force=true only after the CA rejected a
-				// token, i.e. after 401'ing on the id_token derived from this exact
-				// oauthState. Authenticate treats a time-valid access token as
-				// reusable and would hand back that same rejected id_token, so we
-				// backdate its expiry to force the refresh-token (or full re-auth)
-				// path, which mints a genuinely new id_token.
-				oauthState.Expiry = time.Now().Add(-time.Minute)
-			}
-			idToken, next, err := oidc.Authenticate(ctx, oidcCfg, oauthState, out)
-			if err != nil {
-				if inferredDevice && errors.Is(err, oidc.ErrDeviceAuthorizationUnsupported) {
-					return "", fmt.Errorf("automatic device login is unavailable: %w; use --login-method browser to use a local callback", err)
-				}
-				return "", err
-			}
-			oauthState = next
-			return idToken, nil
-		}
-	}
+	tokenFactory := makeAgentTokenFactory(oidcCfg, inferredDevice)
 
 	// Bind inventory management to the endpoint advertised by the CA.
 	inventoryClient, err := facts.NewAdminClient(discovery.InventoryURL, tlsCfg)
@@ -257,6 +233,45 @@ func (s *AgentStartCLI) Run(parent *AgentCLI, logger *slog.Logger, tlsCfg tlscon
 
 	logger.Info("broker shutdown complete")
 	return nil
+}
+
+// makeAgentTokenFactory binds OIDC configuration to independent login sessions.
+// Each fetcher owns its refresh state; Auth serializes calls and logout discards
+// the fetcher. Request overrides apply to a configuration copy for that attempt.
+func makeAgentTokenFactory(oidcCfg oidc.LoginConfig, inferredDevice bool) broker.TokenFactory {
+	return func() broker.TokenFunc {
+		var oauthState *oauth2.Token
+		return func(ctx context.Context, out io.Writer, request broker.TokenRequest) (string, error) {
+			if request.ForceRefresh && oauthState != nil {
+				// The broker calls us with ForceRefresh only after the CA rejected a
+				// token, i.e. after 401'ing on the id_token derived from this exact
+				// oauthState. Authenticate treats a time-valid access token as
+				// reusable and would hand back that same rejected id_token, so we
+				// backdate its expiry to force the refresh-token (or full re-auth)
+				// path, which mints a genuinely new id_token.
+				oauthState.Expiry = time.Now().Add(-time.Minute)
+			}
+			cfg := oidcCfg
+			switch request.LoginMethod {
+			case broker.LoginDefault:
+			case broker.LoginBrowser:
+				cfg.LoginMethod = oidc.LoginBrowser
+			case broker.LoginDevice:
+				cfg.LoginMethod = oidc.LoginDevice
+			default:
+				return "", fmt.Errorf("invalid login method %d", request.LoginMethod)
+			}
+			idToken, next, err := oidc.Authenticate(ctx, cfg, oauthState, out)
+			if err != nil {
+				if request.LoginMethod == broker.LoginDefault && inferredDevice && errors.Is(err, oidc.ErrDeviceAuthorizationUnsupported) {
+					return "", fmt.Errorf("automatic device login is unavailable: %w; use --login-method browser to use a local callback", err)
+				}
+				return "", err
+			}
+			oauthState = next
+			return idToken, nil
+		}
+	}
 }
 
 // resolveLoginMethod keeps environment detection at the command boundary and

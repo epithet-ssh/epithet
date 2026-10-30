@@ -89,8 +89,8 @@ func TestCAErrorsControlRefreshAndFailover(t *testing.T) {
 			if tc.name == "user authentication" {
 				token = idp.MintIDTokenWithAudience("user", "wrong-client", time.Now().Add(time.Hour))
 			}
-			tokenFn := func(_ context.Context, _ io.Writer, force bool) (string, error) {
-				if force {
+			tokenFn := func(_ context.Context, _ io.Writer, request TokenRequest) (string, error) {
+				if request.ForceRefresh {
 					refreshes.Add(1)
 				}
 				return token, nil

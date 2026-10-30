@@ -94,10 +94,13 @@ func TestAgentControlCommandsResolveBrokerFromProfileWithoutCAURL(t *testing.T) 
 func TestAgentSessionCommands(t *testing.T) {
 	for _, tc := range []struct {
 		name, output, errorText string
+		method                  string
 		logout                  bool
 		event                   broker.Event
 	}{
 		{name: "login", event: broker.Event{Identity: &broker.IdentityResponse{Identity: &broker.Identity{Subject: "alice"}}}, output: "Logged in.\n"},
+		{name: "device login", method: "device", event: broker.Event{Identity: &broker.IdentityResponse{Identity: &broker.Identity{Subject: "alice"}}}, output: "Logged in.\n"},
+		{name: "browser login", method: "browser", event: broker.Event{Identity: &broker.IdentityResponse{Identity: &broker.Identity{Subject: "alice"}}}, output: "Logged in.\n"},
 		{name: "login-failed", event: broker.Event{Identity: &broker.IdentityResponse{Error: "login denied"}}, errorText: "login denied"},
 		{name: "login-empty", event: broker.Event{Identity: &broker.IdentityResponse{}}, errorText: "no identity"},
 		{name: "logout", logout: true, event: broker.Event{Logout: &broker.LogoutResponse{AgentsCleared: 2}}, output: "Logged out; cleared 2 certificate agents.\n"},
@@ -132,6 +135,9 @@ func TestAgentSessionCommands(t *testing.T) {
 				}
 				enc := json.NewEncoder(conn)
 				if !tc.logout {
+					if req.Identity.LoginMethod != tc.method {
+						t.Errorf("login method = %q, want %q", req.Identity.LoginMethod, tc.method)
+					}
 					_ = enc.Encode(broker.Event{Output: "visit login URL\n"})
 				}
 				_ = enc.Encode(tc.event)
@@ -142,7 +148,18 @@ func TestAgentSessionCommands(t *testing.T) {
 			if tc.logout {
 				err = (&AgentLogoutCLI{}).run(ctx, socket, &out)
 			} else {
-				err = (&AgentLoginCLI{}).run(ctx, socket, &out, &progress)
+				var command struct {
+					Agent AgentCLI `cmd:""`
+				}
+				parser, parseErr := kong.New(&command)
+				require.NoError(t, parseErr)
+				args := []string{"agent", "login"}
+				if tc.method != "" {
+					args = append(args, "--login-method="+tc.method)
+				}
+				_, parseErr = parser.Parse(args)
+				require.NoError(t, parseErr)
+				err = command.Agent.Login.run(ctx, socket, &out, &progress, command.Agent.LoginMethod)
 				require.Equal(t, "visit login URL\n", progress.String())
 			}
 			<-done

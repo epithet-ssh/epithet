@@ -32,11 +32,11 @@ func (c *AgentIdentityCLI) Run(parent *AgentCLI) error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	return c.run(ctx, socket, os.Stdout, os.Stderr)
+	return c.run(ctx, socket, os.Stdout, os.Stderr, parent.LoginMethod)
 }
 
-func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress io.Writer) error {
-	identity, err := (brokerClient{socket: socket}).identity(ctx, progress)
+func (c *AgentIdentityCLI) run(ctx context.Context, socket string, out, progress io.Writer, loginMethod string) error {
+	identity, err := (brokerClient{socket: socket}).identity(ctx, progress, loginMethod)
 	if err != nil {
 		return err
 	}

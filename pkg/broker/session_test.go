@@ -27,7 +27,7 @@ func TestLogoutClearsAgentsAndStartsFreshAuthentication(t *testing.T) {
 		// Model refresh state which survives an ID token cache miss. A new
 		// interactive login requires a new fetcher, not merely an empty Auth.
 		var refreshState string
-		return func(context.Context, io.Writer, bool) (string, error) {
+		return func(context.Context, io.Writer, TokenRequest) (string, error) {
 			if refreshState == "" {
 				logins.Add(1)
 				refreshState = idp.MintIDToken("test@example.com", time.Now().Add(time.Hour))
@@ -74,8 +74,8 @@ func TestLogoutClearsAgentsAndStartsFreshAuthentication(t *testing.T) {
 	// agent. The session check must run before credential installation.
 	require.ErrorIs(t, b.ensureAgent(oldSession, one, oldCredential), context.Canceled)
 
-	require.Empty(t, b.IdentityWithUserOutput(t.Context(), io.Discard).Error)
-	require.Empty(t, b.IdentityWithUserOutput(t.Context(), io.Discard).Error)
+	require.Empty(t, b.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault).Error)
+	require.Empty(t, b.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault).Error)
 	require.Equal(t, int32(2), logins.Load(), "login after logout must discard refresh state, then reuse its new token")
 	require.Empty(t, b.agents, "authentication alone must not create a certificate agent")
 	require.Equal(t, int32(2), atomic.LoadInt32(hits), "authentication alone must not contact the CA")
@@ -95,13 +95,13 @@ func TestLogoutCancelsPendingLoginAndIsolatesLateResult(t *testing.T) {
 	factory := func() TokenFunc {
 		sessions++
 		if sessions == 1 {
-			return func(context.Context, io.Writer, bool) (string, error) {
+			return func(context.Context, io.Writer, TokenRequest) (string, error) {
 				close(started)
 				<-release // Deliberately finish successfully after cancellation.
 				return oldToken, nil
 			}
 		}
-		return func(context.Context, io.Writer, bool) (string, error) { return newToken, nil }
+		return func(context.Context, io.Writer, TokenRequest) (string, error) { return newToken, nil }
 	}
 	verify := func(_ context.Context, token string) (*Identity, error) {
 		if token == newToken {
@@ -115,7 +115,7 @@ func TestLogoutCancelsPendingLoginAndIsolatesLateResult(t *testing.T) {
 	t.Cleanup(b.Close)
 	oldSession := b.session
 	done := make(chan IdentityResponse, 1)
-	go func() { done <- b.IdentityWithUserOutput(t.Context(), io.Discard) }()
+	go func() { done <- b.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault) }()
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
@@ -131,7 +131,7 @@ func TestLogoutCancelsPendingLoginAndIsolatesLateResult(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("logout did not cancel the pending login")
 	}
-	response := b.IdentityWithUserOutput(t.Context(), io.Discard)
+	response := b.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault)
 	require.Empty(t, response.Error)
 	require.Equal(t, "new", response.Identity.Subject)
 	release <- struct{}{}
@@ -140,7 +140,7 @@ func TestLogoutCancelsPendingLoginAndIsolatesLateResult(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("old authentication did not finish")
 	}
-	response = b.IdentityWithUserOutput(t.Context(), io.Discard)
+	response = b.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault)
 	require.Empty(t, response.Error)
 	require.Equal(t, "new", response.Identity.Subject)
 	require.Empty(t, b.agents)
@@ -164,19 +164,19 @@ func TestLogoutProtocolIsIdempotentAndKeepsBrokerRunning(t *testing.T) {
 func TestLogoutDoesNotResetAnotherBroker(t *testing.T) {
 	idp := oidctest.New(t)
 	var calls atomic.Int32
-	fetch := func(context.Context, io.Writer, bool) (string, error) {
+	fetch := func(context.Context, io.Writer, TokenRequest) (string, error) {
 		calls.Add(1)
 		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
 	}
 	verify := func(context.Context, string) (*Identity, error) { return &Identity{Subject: "test"}, nil }
 	first := newTestBroker(t, fetch, verify)
 	second := newTestBroker(t, fetch, verify)
-	require.Empty(t, first.IdentityWithUserOutput(t.Context(), io.Discard).Error)
-	require.Empty(t, second.IdentityWithUserOutput(t.Context(), io.Discard).Error)
+	require.Empty(t, first.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault).Error)
+	require.Empty(t, second.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault).Error)
 	require.Equal(t, int32(2), calls.Load())
 	require.Empty(t, first.Logout().Error)
-	require.Empty(t, second.IdentityWithUserOutput(t.Context(), io.Discard).Error)
+	require.Empty(t, second.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault).Error)
 	require.Equal(t, int32(2), calls.Load())
-	require.Empty(t, first.IdentityWithUserOutput(t.Context(), io.Discard).Error)
+	require.Empty(t, first.IdentityWithUserOutput(t.Context(), io.Discard, LoginDefault).Error)
 	require.Equal(t, int32(3), calls.Load())
 }

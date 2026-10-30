@@ -22,11 +22,11 @@ func (c *AgentLoginCLI) Run(parent *AgentCLI) error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	return c.run(ctx, socket, os.Stdout, os.Stderr)
+	return c.run(ctx, socket, os.Stdout, os.Stderr, parent.LoginMethod)
 }
 
-func (c *AgentLoginCLI) run(ctx context.Context, socket string, out, progress io.Writer) error {
-	if _, err := (brokerClient{socket: socket}).identity(ctx, progress); err != nil {
+func (c *AgentLoginCLI) run(ctx context.Context, socket string, out, progress io.Writer, loginMethod string) error {
+	if _, err := (brokerClient{socket: socket}).identity(ctx, progress, loginMethod); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(out, "Logged in.")

@@ -144,7 +144,7 @@ func TestAgentIdentityStreamsProgressSeparately(t *testing.T) {
 			}
 			_, err = parser.Parse(args)
 			require.NoError(t, err)
-			err = root.Agent.Identity.run(ctx, socket, &out, &progress)
+			err = root.Agent.Identity.run(ctx, socket, &out, &progress, "")
 			<-done
 			require.Equal(t, "visit login URL\n", progress.String())
 			if tc.fail {

@@ -95,7 +95,7 @@ func startFullStack(t *testing.T, ctx context.Context) *fullStack {
 	t.Cleanup(caHTTPServer.Close)
 
 	// TokenFunc mints a real JWT via the in-process fake IdP.
-	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	tokenFn := func(ctx context.Context, out io.Writer, request broker.TokenRequest) (string, error) {
 		return idp.MintIDToken(oidctest.TokenEmail, time.Now().Add(time.Hour)), nil
 	}
 

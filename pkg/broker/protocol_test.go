@@ -20,11 +20,6 @@ import (
 // broker_test.go (shortTempDir, testLogger, testCAClientOK) and tears it
 // down at test end. tokenFn stands in for the auth flow; nil falls back to
 // stubTokenFunc for tests that never reach auth (e.g. malformed requests).
-//
-// Adapted from the task brief's newTestBroker sketch: that snippet's
-// TokenFunc took (ctx, out), but this codebase's real TokenFunc (see
-// pkg/broker/auth.go) also carries a `force` bool, so tokenFn here matches
-// the real signature instead.
 func newTestBroker(t *testing.T, tokenFn TokenFunc, verifyIdentity IdentityVerifier) *Broker {
 	t.Helper()
 	if tokenFn == nil {
@@ -75,7 +70,7 @@ func dialBroker(t *testing.T, b *Broker) net.Conn {
 func TestMatchStreamsOutputThenResult(t *testing.T) {
 	t.Parallel()
 	idp := oidctest.New(t)
-	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	tokenFn := func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		fmt.Fprintln(out, "visit: https://example/auth")
 		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
 	}
@@ -162,7 +157,7 @@ func TestClientCloseCancelsMatch(t *testing.T) {
 	t.Parallel()
 	started := make(chan struct{})
 	canceled := make(chan struct{})
-	tokenFn := func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	tokenFn := func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		close(started)
 		<-ctx.Done()
 		close(canceled)
@@ -285,7 +280,10 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 	idp := oidctest.New(t)
 	token := idp.MintIDToken("test@example.com", time.Now().Add(time.Hour))
 	var fetches atomic.Int32
-	b := newTestBroker(t, func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	b := newTestBroker(t, func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
+		if request.LoginMethod != LoginDevice {
+			return "", fmt.Errorf("expected device login, got %v", request.LoginMethod)
+		}
 		fetches.Add(1)
 		fmt.Fprintln(out, "authenticate agent")
 		return token, nil
@@ -298,7 +296,7 @@ func TestIdentitySharesAgentAuthentication(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		conn := dialBroker(t, b)
 		require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
-		require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &struct{}{}}))
+		require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &IdentityRequest{LoginMethod: "device"}}))
 		sc := bufio.NewScanner(conn)
 		var terminal *IdentityResponse
 		var progress string
@@ -333,15 +331,29 @@ func TestIdentityVerificationFailureReturnsNoIdentity(t *testing.T) {
 	b := newTestBroker(t, testTokenFunc(t, idp), func(context.Context, string) (*Identity, error) {
 		return nil, fmt.Errorf("invalid issuer")
 	})
-	resp := b.IdentityWithUserOutput(context.Background(), io.Discard)
+	resp := b.IdentityWithUserOutput(context.Background(), io.Discard, LoginDefault)
 	require.Nil(t, resp.Identity)
 	require.Contains(t, resp.Error, "invalid issuer")
+}
+
+func TestIdentityRejectsUnknownLoginMethod(t *testing.T) {
+	b := newTestBroker(t, func(context.Context, io.Writer, TokenRequest) (string, error) {
+		t.Error("invalid login method reached authentication")
+		return "", fmt.Errorf("unexpected authentication")
+	}, testIdentityVerifier)
+	conn := dialBroker(t, b)
+	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &IdentityRequest{LoginMethod: "typo"}}))
+	var event Event
+	require.NoError(t, json.NewDecoder(conn).Decode(&event))
+	require.NotNil(t, event.Identity)
+	require.Contains(t, event.Identity.Error, "invalid login method")
 }
 
 func TestClosingIdentityClientCancelsAuthentication(t *testing.T) {
 	started := make(chan struct{})
 	canceled := make(chan struct{})
-	b := newTestBroker(t, func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	b := newTestBroker(t, func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		close(started)
 		<-ctx.Done()
 		close(canceled)
@@ -351,7 +363,7 @@ func TestClosingIdentityClientCancelsAuthentication(t *testing.T) {
 		return nil, fmt.Errorf("unexpected verification")
 	})
 	conn := dialBroker(t, b)
-	require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &struct{}{}}))
+	require.NoError(t, json.NewEncoder(conn).Encode(Request{Identity: &IdentityRequest{}}))
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):

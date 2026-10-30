@@ -16,7 +16,7 @@ import (
 type Request struct {
 	DirectoryList *DirectoryListRequest `json:"directory-list,omitempty"`
 	Inventory     *facts.ControlRequest `json:"inventory,omitempty"`
-	Identity      *struct{}             `json:"identity,omitempty"`
+	Identity      *IdentityRequest      `json:"identity,omitempty"`
 	Match         *wire.Connection      `json:"match,omitempty"`
 	Inspect       *InspectRequest       `json:"inspect,omitempty"`
 	Logout        *struct{}             `json:"logout,omitempty"`
@@ -163,7 +163,19 @@ func (b *Broker) handleConn(ctx context.Context, conn net.Conn) {
 		resp := b.InventoryWithUserOutput(connCtx, *req.Inventory, w)
 		_ = w.writeEvent(Event{Inventory: resp})
 	case req.Identity != nil:
-		resp := b.IdentityWithUserOutput(connCtx, w)
+		var method LoginMethod
+		switch req.Identity.LoginMethod {
+		case "":
+			method = LoginDefault
+		case "browser":
+			method = LoginBrowser
+		case "device":
+			method = LoginDevice
+		default:
+			_ = w.writeEvent(Event{Identity: &IdentityResponse{Error: fmt.Sprintf("invalid login method %q", req.Identity.LoginMethod)}})
+			return
+		}
+		resp := b.IdentityWithUserOutput(connCtx, w, method)
 		_ = w.writeEvent(Event{Identity: &resp})
 	case req.Inspect != nil:
 		var resp InspectResponse

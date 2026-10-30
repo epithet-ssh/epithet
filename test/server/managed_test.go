@@ -114,7 +114,7 @@ state-dir = "%s/state"
 		return nil, fmt.Errorf("unexpected identity request in inventory test")
 	}
 	b, err := broker.New(*slog.New(slog.NewTextHandler(io.Discard, nil)), socket, func() broker.TokenFunc {
-		return func(context.Context, io.Writer, bool) (string, error) { return token, nil }
+		return func(context.Context, io.Writer, broker.TokenRequest) (string, error) { return token, nil }
 	}, client, root.FinalURL, inventoryClient, verifyIdentity, filepath.Join(dir, "agents"))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())

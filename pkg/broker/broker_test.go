@@ -60,7 +60,7 @@ func testCAClientOK(t *testing.T) *caclient.Client {
 // every call, with no user-visible output.
 func testTokenFunc(t *testing.T, idp *oidctest.IdP) TokenFunc {
 	t.Helper()
-	return func(ctx context.Context, out io.Writer, force bool) (string, error) {
+	return func(ctx context.Context, out io.Writer, request TokenRequest) (string, error) {
 		return idp.MintIDToken("test@example.com", time.Now().Add(time.Hour)), nil
 	}
 }
