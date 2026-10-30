@@ -3,14 +3,19 @@ info:
   title: Epithet Directory Fact API
   version: 1.0.0
   description: >-
-    A single active-object lookup, independent of control-plane APIs. Responses
+    Active-object lookup and optional management discovery. SCIM and private
+    control-plane operations are documented separately in fact-services.md. Responses
     are limited to 64 KiB and all responses must include Cache-Control no-store.
-    Requests have exactly one query parameter and no body. Configure the complete
+    GET requests have exactly one query parameter and no body. Configure the complete
     fact endpoint URL; Unix socket URLs use /lookup. See fact-services.md.
 paths:
   /lookup:
     get:
       operationId: lookupDirectory
+      description: >-
+        Return current facts for the exact opaque identity. Return 404 only for
+        unknown or inactive users; authentication and service failures must not
+        masquerade as absence. Clients perform fresh reads and follow no redirects.
       security: [{ServiceJWT: []}]
       parameters:
         - in: query
@@ -21,16 +26,70 @@ paths:
         '200':
           description: Active User; never null
           headers:
-            Cache-Control:
-              schema: {type: string, enum: [no-store]}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
           content:
             application/json:
               schema: {$ref: '#/components/schemas/User'}
-        '400': {description: Invalid lookup request}
-        '403': {description: Invalid service authentication}
-        '404': {description: Unknown or inactive entity}
-        '503': {description: Provider unavailable}
+        '400':
+          description: Invalid lookup request
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '403':
+          description: Invalid service authentication
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '404':
+          description: Unknown or inactive user
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '500':
+          description: Invalid or oversized facts
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '503':
+          description: Provider unavailable
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+    options:
+      operationId: discoverDirectoryManagement
+      security: [{ServiceJWT: []}]
+      description: >-
+        Control signs a bodyless request to the configured fact endpoint, without
+        the lookup query. The built-in provider requires the control key, not the
+        CA reader key. Discovery is refreshed per operation. Any initial 4xx or
+        successful response without the SCIM relation means lookup-only support.
+        Transport failures, redirects, 5xx, and invalid advertised URLs are errors.
+        Later SCIM operation failures do not trigger discovery fallback.
+      responses:
+        '204':
+          description: Discovery succeeded; the SCIM relation advertises optional management
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Allow:
+              schema: {type: string}
+              example: GET, OPTIONS
+            Link:
+              description: >-
+                RFC 8288 link with relation https://epithet.dev/rel/scim. The target
+                is an absolute or relative SCIM base URI, without query, fragment,
+                or credentials. Relative targets resolve against the fact URL;
+                Unix services use same-service references. SCIM resource paths
+                are appended to this base. Omission means lookup-only support.
+              schema: {type: string}
+              example: '</scim/v2/>; rel="https://epithet.dev/rel/scim"'
+        '4XX':
+          description: Discovery unavailable or refused; control treats the provider as lookup-only
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        default:
+          description: Other successful responses use the same discovery semantics; redirects and 5xx are errors
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
 components:
+  headers:
+    NoStore:
+      required: true
+      schema: {type: string, enum: [no-store]}
   securitySchemes:
     ServiceJWT:
       type: http
@@ -40,7 +99,11 @@ components:
         Request-bound JWT signed with a configured reader key. Audience is
         epithet-directory. Verify the signature, audience, expiry, issued-at
         freshness, exact HTTP method, authority plus escaped path and raw query,
-        and unpadded base64url SHA256 body digest. See pkg/facts.
+        unpadded base64url SHA256 body digest (the empty-body digest for GET and
+        OPTIONS), and exact If-Match and Content-Type header values via if_match
+        and content_type claims (omitted when empty). Tokens are minted with a
+        60-second lifetime. Lookup trusts configured CA and control reader keys;
+        discovery requires the control key. See pkg/serviceauth and fact-services.md.
   schemas:
     Revision:
       type: string
@@ -63,7 +126,15 @@ components:
         revision: {$ref: '#/components/schemas/Revision'}
     Attributes:
       type: object
-      description: Flat selectable fields; name and id are reserved for defined fields
+      nullable: true
+      description: >-
+        Flat selectable fields; name and id are reserved for defined fields.
+        Omitted or null attributes provide no values. Null values and empty arrays
+        provide no values; an empty string is a value.
+      not:
+        anyOf:
+          - {type: object, required: [name]}
+          - {type: object, required: [id]}
       additionalProperties:
         oneOf:
           - {type: string, nullable: true}
@@ -71,6 +142,7 @@ components:
             items: {type: string}
     Group:
       type: object
+      additionalProperties: false
       properties:
         id: {type: string, description: Optional provider identity; SCIM resource ID when available}
         name:

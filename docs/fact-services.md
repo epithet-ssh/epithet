@@ -14,7 +14,7 @@ Configure the **complete fact endpoint URL** for both directory and inventory,
 including its path (the built-in HTTP endpoint is `/lookup`). Unix socket URLs
 select the built-in `/lookup` path. Use standard URL query encoding, exactly one named query
 parameter, and no request body. Directory IDs are opaque. Host lookup names are
-ASCII case-folded, with a trailing dot removed. Return `404` for unknown or inactive
+ASCII case-folded; other characters, including trailing dots, are preserved. Return `404` for unknown or inactive
 records. Authentication errors and service failures must use their own non-200,
 non-404 status; they must not masquerade as an absent record.
 

@@ -3,35 +3,107 @@ info:
   title: Epithet Inventory Fact API
   version: 1.0.0
   description: >-
-    A single active-object lookup, independent of control-plane APIs. Responses
+    Active-object lookup and optional management discovery. Management resources
+    are documented separately in pkg/facts/inventory/README.md. Responses
     are limited to 64 KiB and all responses must include Cache-Control no-store.
-    Requests have exactly one query parameter and no body. Configure the complete
+    GET requests have exactly one query parameter and no body. Configure the complete
     lookup URL; /lookup is the built-in location. Optional management is discovered
-    using OPTIONS at that URL. See pkg/facts/inventory/README.md.
+    using OPTIONS at that URL. Unix socket URLs use /lookup.
 paths:
   /lookup:
     get:
       operationId: lookupInventory
+      description: >-
+        Return current facts for a normalized host name. ASCII uppercase letters
+        must be folded to lowercase before lookup;
+        the built-in handler rejects unnormalized requests. Return 404 only for
+        unknown or inactive hosts. Authentication and service failures must not
+        masquerade as absence. Clients perform fresh reads and follow no redirects.
       security: [{ServiceJWT: []}]
       parameters:
         - in: query
           name: host
           required: true
+          description: Host name with ASCII uppercase letters folded to lowercase; other characters are preserved
           schema: {type: string, minLength: 1}
       responses:
         '200':
           description: Active Host; never null
           headers:
-            Cache-Control:
-              schema: {type: string, enum: [no-store]}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Host'}
-        '400': {description: Invalid lookup request}
-        '403': {description: Invalid service authentication}
-        '404': {description: Unknown or inactive entity}
-        '503': {description: Provider unavailable}
+        '400':
+          description: Invalid lookup request, including an unnormalized host name
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '403':
+          description: Invalid service authentication
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '404':
+          description: Unknown or inactive host
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '409':
+          description: Conflicting inventory matches, including multiple matching active patterns
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '500':
+          description: Invalid or oversized facts
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '503':
+          description: Provider unavailable
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+    options:
+      operationId: discoverInventoryManagement
+      security: [{ServiceJWT: []}]
+      description: >-
+        Control signs a bodyless request to the configured fact endpoint, without
+        the lookup query. The built-in provider requires the control key, not the
+        CA reader key. Discovery is refreshed per operation. Any initial 4xx or
+        successful response without inventory relations means lookup-only support.
+        Transport failures, redirects, 5xx, malformed templates, duplicate inventory
+        relations, and partial inventory relation sets are errors, never fallback.
+      responses:
+        '204':
+          description: Discovery succeeded; all three inventory relations advertise optional management
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Allow:
+              schema: {type: string}
+              example: GET, OPTIONS
+            Link-Template:
+              description: >-
+                RFC 9652 structured list of RFC 6570 URI templates. May be sent
+                as repeated headers or a combined list. Advertise all three
+                relations shown in the example, or none for lookup-only support.
+                Templates must describe this fact endpoint (no anchor parameter).
+                Clients expand the templates and resolve relative URLs against
+                the fact URL; paths belong to the provider. Records use id, after,
+                limit, and pending variables; tokens use token; audit uses cursor
+                and limit. See pkg/facts/inventory/README.md for resource operations.
+              schema: {type: string}
+              example: >-
+                "/inventory/records{/id}{?after,limit,pending}"; rel="https://epithet.dev/rel/inventory-records",
+                "/inventory/tokens{?token}"; rel="https://epithet.dev/rel/inventory-tokens",
+                "/inventory/audit{?cursor,limit}"; rel="https://epithet.dev/rel/inventory-audit"
+        '4XX':
+          description: Discovery unavailable or refused; control treats the provider as lookup-only
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        default:
+          description: Other successful responses use the same discovery semantics; redirects and 5xx are errors
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
 components:
+  headers:
+    NoStore:
+      required: true
+      schema: {type: string, enum: [no-store]}
   securitySchemes:
     ServiceJWT:
       type: http
@@ -41,11 +113,12 @@ components:
         Request-bound JWT signed with a configured reader key. Audience is
         epithet-inventory. Verify the signature, audience, expiry, issued-at
         freshness, exact HTTP method, authority plus escaped path and raw query,
-        and unpadded base64url SHA256 body digest. See pkg/facts.
+        unpadded base64url SHA256 body digest (the empty-body digest for GET and
+        OPTIONS), and exact If-Match and Content-Type header values via if_match
+        and content_type claims (omitted when empty). Tokens are minted with a
+        60-second lifetime. Lookup trusts configured CA and control reader keys;
+        discovery requires the control key. See pkg/serviceauth and fact-services.md.
   schemas:
-    Revision:
-      type: string
-      description: Optional opaque logging metadata, at most 256 UTF-8 bytes; never used for authorization or caching
     Host:
       type: object
       required: [name, accounts, principal]
@@ -75,12 +148,32 @@ components:
                 mode: {type: string, enum: [epithet-principal-v1]}
                 realm:
                   type: string
-                  minLength: 1
-                  description: Opaque principal realm, not a hostname
-        revision: {$ref: '#/components/schemas/Revision'}
+                  not:
+                    pattern: '[\r\n]'
+                  description: >-
+                    Case-sensitive principal realm, not a hostname or policy selector.
+                    Named realms use 1-253 ASCII letters/digits with '.', '_', or '-'
+                    only internally, and cannot start with epithet-host-id-v1.
+                    Generated realms use epithet-host-id-v1: followed by the canonical
+                    unpadded base64url encoding of 32 bytes (43 characters).
+                  oneOf:
+                    - minLength: 1
+                      maxLength: 253
+                      pattern: '^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$'
+                      not:
+                        pattern: '^epithet-host-id-v1'
+                    - pattern: '^epithet-host-id-v1:[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'
     Attributes:
       type: object
-      description: Flat selectable fields; name and id are reserved for defined fields
+      nullable: true
+      description: >-
+        Flat selectable fields; name and id are reserved for defined fields.
+        Omitted or null attributes provide no values. Null values and empty arrays
+        provide no values; an empty string is a value.
+      not:
+        anyOf:
+          - {type: object, required: [name]}
+          - {type: object, required: [id]}
       additionalProperties:
         oneOf:
           - {type: string, nullable: true}
