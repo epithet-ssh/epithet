@@ -4,6 +4,14 @@
 - Status: Accepted.
 - Scope: Inventory and SCIM provider management, authentication, and backend ownership.
 
+## Subsequent enrollment decision
+
+[ADR 0003](0003-control-issued-enrollment-tokens.md) supersedes the pending-enrollment bearer and
+inventory-owned single-use credential design below with control-issued reusable
+tokens. That decision is accepted but not yet implemented. This ADR retains the
+historical behavior; provider boundaries and atomic creation-only writes remain
+applicable.
+
 ## Context
 
 Directory management has an industry-standard API in SCIMv2. Host inventory needs
