@@ -16,7 +16,7 @@ Parent: [mf2js8xw](mf2js8xw.md).
 
 # Status and dependency
 
-Deferred design. Builds on [unrestricted enrollment tokens](f1ljvrhn.md)
+Deferred design. Builds on [unrestricted enrollment tokens](../closed/f1ljvrhn.md)
 and [ADR 0003](../../docs/adr/0003-control-issued-enrollment-tokens.md); it is not a prerequisite for v1.
 Implementation and a future claim format are not authorized by this planning update.
 

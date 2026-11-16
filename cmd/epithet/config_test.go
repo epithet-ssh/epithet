@@ -22,7 +22,8 @@ insecure = false
 oidc-issuer = "https://issuer.example/"
 certificate-extension = { permit-pty = "", permit-port-forwarding = "" }
 cursor = "backend/page:+/= token"
-enrollment-token-file = "/path/to/enrollment-token"
+token-file = "/path/to/enrollment-token"
+denied-subject = ["revoked", "Revoked"]
 `))
 	require.NoError(t, err)
 	parse := func(args ...string) {
@@ -40,9 +41,9 @@ enrollment-token-file = "/path/to/enrollment-token"
 	require.False(t, root.Insecure)
 	parse("control", "--directory", "https://directory.example/")
 	require.Equal(t, "https://issuer.example/", root.Control.OIDC.Issuer)
-	require.Equal(t, "/path/to/enrollment-token", root.Control.EnrollmentTokenFile)
+	require.Equal(t, []string{"revoked", "Revoked"}, root.Control.DeniedSubjects)
 	parse("host", "enroll", "--ca", "https://ca.example/")
-	require.Equal(t, "/path/to/enrollment-token", root.Host.Enroll.EnrollmentTokenFile)
+	require.Equal(t, "/path/to/enrollment-token", root.Host.Enroll.TokenFile)
 	parse("ca", "--directory", "https://directory.example/", "--inventory", "https://inventory.example/")
 	require.Equal(t, "https://issuer.example/", root.CA.OIDC.Issuer)
 	require.Equal(t, map[string]string{"permit-pty": "", "permit-port-forwarding": ""}, root.CA.Extension)

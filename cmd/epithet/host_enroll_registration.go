@@ -22,12 +22,11 @@ import (
 )
 
 type hostRegistration struct {
-	id              string
-	idFile          string
-	endpoint        string
-	token           string
-	enrollmentToken string
-	proposal        inventory.Host
+	id       string
+	idFile   string
+	endpoint string
+	token    string
+	proposal inventory.Host
 }
 
 func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnrollment, settings *sshdSettings, cfg tlsconfig.Config) (*hostRegistration, error) {
@@ -50,7 +49,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 		}
 	}
 	if endpoint == "" {
-		if c.Token != "" || c.TokenFile != "" || c.EnrollmentToken != "" || c.EnrollmentTokenFile != "" {
+		if c.Token != "" || c.TokenFile != "" {
 			return nil, fmt.Errorf("CA does not advertise managed inventory enrollment")
 		}
 		return nil, nil
@@ -69,22 +68,15 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 			return nil, fmt.Errorf("token file is empty")
 		}
 	}
-	enrollmentToken, err := readBearerToken(c.EnrollmentToken, c.EnrollmentTokenFile, "enrollment")
-	if err != nil {
-		return nil, err
-	}
-	if token == "" && enrollmentToken == "" {
-		return nil, fmt.Errorf("managed enrollment requires --enrollment-token or --enrollment-token-file for pending approval, or --token or --token-file for single-use preapproval")
+	if token == "" {
+		return nil, fmt.Errorf("managed enrollment requires --token or --token-file")
 	}
 	idFile := filepath.Join(filepath.Dir(result.RealmFile), "id")
-	id := token
+	id := ""
 	if data, err := os.ReadFile(idFile); err == nil {
 		stored := strings.TrimSpace(string(data))
 		if stored == "" {
 			return nil, fmt.Errorf("host id file %s is empty", idFile)
-		}
-		if id != "" && id != stored {
-			return nil, fmt.Errorf("enrollment token conflicts with the stored host id in %s", idFile)
 		}
 		id = stored
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -126,7 +118,7 @@ func (c *HostEnrollCLI) prepareRegistration(ctx context.Context, result *hostEnr
 	// The reviewed proposal chooses the identity installed locally and submitted
 	// to inventory. No realm has been written before review completes.
 	result.Realm = principal.Realm(proposal.Realm)
-	return &hostRegistration{id: id, idFile: idFile, endpoint: endpoint, token: token, enrollmentToken: enrollmentToken, proposal: proposal}, nil
+	return &hostRegistration{id: id, idFile: idFile, endpoint: endpoint, token: token, proposal: proposal}, nil
 }
 
 func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, cfg tlsconfig.Config, logger *slog.Logger) error {
@@ -138,11 +130,10 @@ func (r *hostRegistration) submit(ctx context.Context, result *hostEnrollment, c
 		return err
 	}
 	proposal := controlHost(r.proposal)
-	response, _, err := client.Control(ctx, r.enrollmentToken, facts.ControlRequest{
-		Action: "enroll",
+	response, _, err := client.Control(ctx, r.token, facts.ControlRequest{
+		Action: "create",
 		ID:     r.id,
 		Host:   &proposal,
-		Token:  r.token,
 	})
 	if err != nil {
 		return fmt.Errorf("local sshd is configured, but registration did not complete: %w", err)

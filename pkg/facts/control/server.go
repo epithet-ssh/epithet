@@ -65,12 +65,13 @@ type Config struct {
 	DirectoryAdmins, InventoryAdmins                       Admins
 	SCIMToken                                              string
 	InventoryToken                                         string
-	// EnrollmentToken authorizes pending submissions only. Empty disables that
-	// path; single-use preapproval credentials are validated by inventory.
-	EnrollmentToken string
-	TLS             tlsconfig.Config
+	// DeniedSubjects rejects issuance and enrollment for exact,
+	// case-sensitive subjects. Changes require restart; retain entries to revoke.
+	DeniedSubjects []string
+	TLS            tlsconfig.Config
 }
 type Server struct {
+	enrollment       *enrollmentAuthority
 	config           Config
 	data             *facts.DataClient
 	directoryBackend *servicehttp.Client
@@ -95,14 +96,16 @@ func New(config Config) (*Server, error) {
 	if config.InventoryToken != "" && (config.InventoryBackendURL == "" || strings.ContainsAny(config.InventoryToken, " \t\r\n")) {
 		return nil, fmt.Errorf("inventory token requires an inventory fact endpoint and no whitespace")
 	}
-	if config.EnrollmentToken != "" && (config.InventoryBackendURL == "" || strings.ContainsAny(config.EnrollmentToken, " \t\r\n")) {
-		return nil, fmt.Errorf("enrollment token requires an inventory fact endpoint and no whitespace")
-	}
 	directory, err := servicehttp.New(config.DirectoryURL, "/lookup", config.Key, serviceauth.DirectoryAudience, config.TLS)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{config: config, data: data, directory: directory}
+	enrollment, err := newEnrollmentAuthority(config.Key)
+	if err != nil {
+		return nil, err
+	}
+	config.DeniedSubjects = slices.Clone(config.DeniedSubjects)
+	s := &Server{config: config, data: data, directory: directory, enrollment: enrollment}
 	if config.DirectoryBackendURL != "" {
 		s.directoryBackend, err = servicehttp.New(config.DirectoryBackendURL, "", config.Key, serviceauth.DirectoryAudience, config.TLS)
 		if err != nil {
@@ -177,16 +180,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.scim(w, r)
 		return
 	}
-	enrollmentPath := strings.HasPrefix(r.URL.Path, "/manage/")
-	if r.URL.Path != "/manage" && !enrollmentPath {
+	hostPath := strings.HasPrefix(r.URL.Path, "/manage/")
+	if r.URL.Path != "/manage" && !hostPath {
 		http.NotFound(w, r)
 		return
 	}
-	if !enrollmentPath && r.Method == "GET" {
+	if !hostPath && r.Method == "GET" {
 		s.capabilities(w, r)
 		return
 	}
-	if (enrollmentPath && r.Method != "PUT") || (!enrollmentPath && r.Method != "POST") {
+	if r.Method != "POST" {
 		controlError(w, 405, "method not allowed")
 		return
 	}
@@ -207,66 +210,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		controlError(w, 400, "invalid inventory request")
 		return
 	}
-	if (req.Action == "enroll") != enrollmentPath {
-		controlError(w, 405, "enrollment requires PUT to the host id")
+	if (req.Action == "create") != hostPath {
+		controlError(w, 405, "host creation requires POST to the host id")
 		return
 	}
-	if enrollmentPath {
+	if hostPath {
 		id := strings.TrimPrefix(r.URL.Path, "/manage/")
-		if id == "" || strings.Contains(id, "/") || req.ID != id || (req.Token != "" && req.Token != id) {
-			controlError(w, 400, "enrollment id must match its URL and token")
+		if id == "" || strings.Contains(id, "/") || req.ID != id {
+			controlError(w, 400, "host id must match its URL")
 			return
 		}
 	}
-	isDirectory := strings.HasPrefix(req.Action, "directory-")
-	endpoint, admins := s.config.InventoryBackendURL, s.config.InventoryAdmins
-	role := "inventory-admin"
-	if isDirectory {
-		endpoint, admins = s.config.DirectoryBackendURL, s.config.DirectoryAdmins
-		role = "directory-admin"
-	}
-	if endpoint == "" {
-		controlError(w, 404, "requested inventory capability is not configured")
+	auth, rejected := s.authorizeManagement(r, req.Action)
+	if rejected != nil {
+		if hostPath && rejected.Status == http.StatusUnauthorized {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="enrollment"`)
+		}
+		controlError(w, rejected.Status, rejected.Message)
 		return
 	}
-	actor := ""
-	if req.Action == "enroll" {
-		// A single-use credential authorizes activation at the provider. Without
-		// one, require the shared credential before forwarding a pending submission.
-		if req.Token == "" {
-			fields := strings.Fields(r.Header.Get("Authorization"))
-			if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || !matchesSecret(fields[1], s.config.EnrollmentToken) {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="enrollment"`)
-				controlError(w, http.StatusUnauthorized, "enrollment authentication required")
-				return
-			}
-		}
-		if !s.admit() {
-			controlError(w, 429, "enrollment rate limit; retry later")
-			return
-		}
-	} else {
-		raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || raw == "" {
-			controlError(w, 401, "authentication required")
-			return
-		}
-		if matchesSecret(raw, s.config.EnrollmentToken) {
-			controlError(w, http.StatusForbidden, "enrollment credential cannot authorize this operation")
-			return
-		}
-		if !isDirectory && matchesSecret(raw, s.config.InventoryToken) {
-			actor = "inventory-token"
-		} else {
-			auth, rejected := s.authorizeAdmin(r.Context(), raw, admins, role)
-			if rejected != nil {
-				controlError(w, rejected.Status, rejected.Message)
-				return
-			}
-			actor = auth.Actor
-		}
-	}
-	result, err := s.execute(r.Context(), req, authorization{Actor: actor})
+	result, err := s.execute(r.Context(), req, auth)
 	if err != nil {
 		var rejected *facts.ServiceError
 		if errors.As(err, &rejected) {
@@ -277,9 +240,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if req.Action == "enroll" && result.Host.Status == "pending" {
-		w.WriteHeader(http.StatusAccepted)
-	}
 	json.NewEncoder(w).Encode(result)
 }
 
@@ -292,18 +252,13 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth aut
 		return nil, &facts.ServiceError{Status: 400, Message: message}
 	}
 	switch req.Action {
-	case "enroll":
+	case "create":
 		if req.Host == nil {
 			return invalid("host is required")
 		}
-		result.Host, err = s.enroll(ctx, req.ID, *req.Host, req.Token)
-	case "add":
-		if req.Host == nil {
-			return invalid("host is required")
-		}
-		result.Host, err = s.addHost(ctx, auth, *req.Host)
+		result.Host, err = s.createHost(ctx, auth, req.ID, *req.Host)
 	case "list":
-		result.Hosts, err = s.hosts(ctx, auth, req.After, req.Limit, req.Pending)
+		result.Hosts, err = s.hosts(ctx, auth, req.After, req.Limit)
 	case "get":
 		result.Host, err = s.host(ctx, auth, req.ID)
 	case "edit":
@@ -311,16 +266,10 @@ func (s *Server) execute(ctx context.Context, req facts.ControlRequest, auth aut
 			return invalid("host is required")
 		}
 		result.Host, err = s.editHost(ctx, auth, req.ID, req.ExpectedVersion, *req.Host)
-	case "approve":
-		result.Host, err = s.approveHost(ctx, auth, req.ID, req.ExpectedVersion)
-	case "deny":
-		result.Host, err = s.denyHost(ctx, auth, req.ID, req.ExpectedVersion)
 	case "remove":
 		err = s.removeHost(ctx, auth, req.ID, req.ExpectedVersion)
 	case "token-create":
-		result.Token, err = s.createToken(ctx, auth, req.LifetimeSeconds)
-	case "token-revoke":
-		err = s.revokeToken(ctx, auth, req.ID)
+		result.Token, err = s.createToken(req.Subject, req.LifetimeSeconds)
 	case "audit":
 		result.Audit, err = s.hostAudit(ctx, auth, req.AuditCursor, req.AuditLimit)
 	case "directory-audit":
@@ -357,6 +306,38 @@ func matchesSecret(actual, expected string) bool {
 	}
 	a, b := sha256.Sum256([]byte(actual)), sha256.Sum256([]byte(expected))
 	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+}
+
+// Host creation also accepts a provisioning credential. The provider receives
+// the authenticated actor and the same create operation for either credential.
+func (s *Server) authorizeManagement(r *http.Request, action string) (authorization, *facts.ServiceError) {
+	directory := strings.HasPrefix(action, "directory-")
+	if (directory && s.directoryBackend == nil) || (!directory && s.inventory == nil) {
+		return authorization{}, &facts.ServiceError{Status: 404, Message: "requested management capability is not configured"}
+	}
+	fields := strings.Fields(r.Header.Get("Authorization"))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return authorization{}, &facts.ServiceError{Status: 401, Message: "authentication required"}
+	}
+	token := fields[1]
+	if directory {
+		return s.authorizeAdmin(r.Context(), token, s.config.DirectoryAdmins, "directory-admin")
+	}
+	if action == "create" {
+		if subject, err := s.enrollment.verify(token); err == nil {
+			if slices.Contains(s.config.DeniedSubjects, subject) {
+				return authorization{}, &facts.ServiceError{Status: 403, Message: "enrollment subject is denied"}
+			}
+			if !s.admit() {
+				return authorization{}, &facts.ServiceError{Status: 429, Message: "enrollment rate limit; retry later"}
+			}
+			return authorization{Actor: subject}, nil
+		}
+	}
+	if matchesSecret(token, s.config.InventoryToken) {
+		return authorization{Actor: "inventory-token"}, nil
+	}
+	return s.authorizeAdmin(r.Context(), token, s.config.InventoryAdmins, "inventory-admin")
 }
 
 // authorizeAdmin is shared by SCIM and command administration: public identity

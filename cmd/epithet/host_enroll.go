@@ -19,11 +19,10 @@ import (
 
 // HostEnrollCLI bootstraps the durable local state needed to enroll a host.
 type HostEnrollCLI struct {
-	Token               string   `name:"token" help:"Single-use enrollment token"`
-	TokenFile           string   `name:"token-file" help:"File containing a single-use enrollment token"`
-	EnrollmentToken     string   `name:"enrollment-token" help:"Control-plane bearer token for enrollment pending administrator approval"`
-	EnrollmentTokenFile string   `name:"enrollment-token-file" help:"File containing the pending enrollment bearer token"`
-	Names               []string `name:"host-name" help:"Proposed DNS name (repeatable; overrides detection)"`
+	Token     string `name:"token" help:"Control-issued enrollment token"`
+	TokenFile string `name:"token-file" help:"File containing a control-issued enrollment token"`
+
+	Names []string `name:"host-name" help:"Proposed DNS name (repeatable; overrides detection)"`
 
 	CAURL                           string `name:"ca" placeholder:"URL" help:"CA bootstrap URL" required:""`
 	PrincipalRealm                  string `name:"principal-realm" help:"Proposed principal realm (default: reuse the local realm file's value or generate one)"`

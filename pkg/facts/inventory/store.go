@@ -12,7 +12,6 @@ var (
 	ErrStorage  = errors.New("managed inventory storage unavailable")
 	ErrConflict = errors.New("inventory conflict")
 	ErrNotFound = errors.New("inventory record not found")
-	ErrToken    = errors.New("invalid, expired, revoked, or used enrollment token")
 	ErrVersion  = errors.New("record changed; reload before retrying")
 )
 
@@ -20,9 +19,9 @@ const DefaultPageLimit = 100
 const MaxPageLimit = 1000
 
 // Store is the inventory management contract, independent of Hosts fact lookup.
-// Epithet owns enrollment and review policy; implementations persist host and
-// token operations. Enrollment and any token consumption form one
-// storage call. Consistency is backend-specific.
+// Epithet owns enrollment authorization; implementations persist host and audit
+// operations. Creation-only checks and writes are atomic, including concurrent
+// callers. Other consistency properties are backend-specific.
 //
 // Only active records contribute lookup facts or reserve authorization names.
 // Active exact names and identical patterns are unique. Overlapping patterns are
@@ -63,16 +62,10 @@ type Store interface {
 	GetHost(ctx context.Context, id string) (*Host, error)
 	// ListHosts returns hosts ordered by ID, strictly after the cursor.
 	// Empty after starts a read; nonempty after is a full resource ID. Zero limit
-	// defaults to 100; negative limits and limits above 1,000 are invalid. Pending
-	// filters host records before applying the limit. A short page ends that read.
+	// defaults to 100; negative limits and limits above 1,000 are invalid.
+	// A short page ends that read.
 	// Each page is independent; later calls may observe changes.
-	ListHosts(ctx context.Context, after string, limit int, pending bool) ([]Host, error)
-	// CreateToken stores a single-use credential without creating a host.
-	// Its supplied ID becomes the host ID on enrollment. Lifetime must be
-	// positive and at most 24 hours.
-	CreateToken(ctx context.Context, id string, lifetime time.Duration, event AuditEvent) (EnrollmentToken, error)
-	// RevokeToken prevents unused credentials from authorizing enrollment.
-	RevokeToken(ctx context.Context, id string, event AuditEvent) error
+	ListHosts(ctx context.Context, after string, limit int) ([]Host, error)
 	// Audit returns events and a backend-owned continuation cursor. Empty input
 	// starts a read; empty next completes it. Callers forward cursors unchanged.
 	// Ordering, visibility and cursor lifetime belong to the backend. Timestamps
@@ -82,27 +75,13 @@ type Store interface {
 
 // WriteConditions constrain an upsert without exposing backend transactions.
 // The zero value allows creation or replacement without a version precondition.
-// Epithet checks enrollment and administrator-review policy before storage.
+// Epithet checks enrollment authorization and administrator edits before storage.
 type WriteConditions struct {
 	ExpectedVersion string
 	// CreateOnly forbids replacing an existing host. Identical facts return the
 	// stored host unchanged, including its status, metadata, and audit history.
 	// Different facts return ErrConflict. Enrollment uses this for safe retries.
 	CreateOnly bool
-	// ConsumeToken requires the single-use token whose secret is host.ID and
-	// consumes it with creation. It never authorizes replacement. An identical
-	// retry of a host created with that token returns the stored host unchanged;
-	// invalid credentials or different facts return ErrToken.
-	ConsumeToken bool
-}
-
-// EnrollmentToken's ID is also its secret and the resulting host ID.
-// Unused tokens retain an empty UsedBy value.
-type EnrollmentToken struct {
-	ID        string    `yaml:"id"`
-	ExpiresAt time.Time `yaml:"expires-at"`
-	UsedBy    string    `yaml:"used-by,omitempty"`
-	Revoked   bool      `yaml:"revoked"`
 }
 
 // AuditEvent is supplied by the caller alongside a mutation. Storage preserves
@@ -120,7 +99,7 @@ func NewAuditEvent(actor, action, resource string) AuditEvent {
 	return AuditEvent{At: time.Now().UTC(), Actor: actor, Action: action, Resource: resource}
 }
 
-// NewID creates an inventory resource ID or single-use enrollment credential.
+// NewID creates an independent inventory resource ID.
 func NewID() string {
 	var b [32]byte
 	rand.Read(b[:])

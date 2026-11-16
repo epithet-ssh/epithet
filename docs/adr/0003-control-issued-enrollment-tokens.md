@@ -1,10 +1,11 @@
 # ADR 0003: Control-issued unrestricted enrollment tokens
 
 - Date: 2026-11-16
-- Status: Accepted; not yet implemented.
+- Status: Accepted; implemented.
 - Scope: Managed enrollment token issuance, verification, attribution, and subject revocation.
-- Supersedes: ADR 0002's pending-enrollment bearer and inventory-owned single-use
-  credential decisions. Its provider boundaries and atomic creation-only write
+- Supersedes: ADR 0002's pending-enrollment bearer, inventory-owned single-use
+  credential, enrollment PUT, and separate administrator creation decisions.
+  Its provider boundaries and atomic creation-only write
   semantics remain applicable.
 
 ## Context
@@ -48,7 +49,9 @@ Issue signed JWTs with three required claims:
   tokens may share a subject. Subjects do not change the token's enrollment
   authority, except for the subject denylist below.
 
-Use control's existing signing key. Enrollment verification checks the signature
+Use control's existing signing key and the same JWT signature algorithm used
+for service requests. The configured key determines the accepted algorithm.
+Enrollment verification checks the signature
 against its configured key, audience, expiration, and nonempty subject before
 accepting the credential. The fixed audience distinguishes enrollment from other
 uses of the key. Signing keys separate deployments: deployments sharing a key
@@ -105,10 +108,18 @@ authorized creation-only write. Do not forward the public token to inventory.
 Preserve an independent random host ID locally across retries; it is neither the
 token nor the subject, and knowing it conveys no authority.
 
+`host enroll` and `inventory add` both POST the `create` action to the public
+control URL plus `/HOST_ID`. Both clients choose the ID. Control accepts
+an enrollment token or inventory administrator credential for exact or wildcard
+names. It signs a POST to the provider's discovered record URL for that ID with
+the authenticated actor and body `{"host": {...}}`. The provider records one
+`create` audit event for a new host. Administrative replacement uses PUT.
+
 Creation atomically produces an active record. An identical retry returns the
 existing record unchanged; different facts conflict. Preserve these semantics
 through the provider HTTP boundary and storage operation, including concurrent
-requests. Enrollment never becomes administrative replacement.
+requests. Retry safety is an explicit enrollment contract, not a guarantee of
+POST in general. Enrollment never becomes administrative replacement.
 
 Record the verified subject as the provisioning principal in enrollment audit
 events. Attribution means that a credential issued to that subject was used;
@@ -123,7 +134,7 @@ flows. Existing active hosts remain active.
 
 There is one deployment and it has no pending enrollments. Do not add pending
 record migration, recovery, transition modes, or compatibility workflows. This
-ADR records the intended replacement; it does not claim the code has changed.
+ADR records the replacement implemented by task f1ljvrhn.
 
 ## Alternatives and reasoning
 
@@ -171,11 +182,11 @@ not prerequisites for these tokens. Directory federation is also outside scope.
 ## Tracking
 
 - [Parent plan](../../.tasks/open/mf2js8xw.md)
-- [Implement unrestricted tokens](../../.tasks/open/f1ljvrhn.md)
+- [Implement unrestricted tokens](../../.tasks/closed/f1ljvrhn.md)
 - [Design constrained grants](../../.tasks/open/7oeid3c2.md)
 - [Independent host configuration](../../.tasks/open/ttxxxg3i.md)
 - [Inventory federation](../../.tasks/open/yrwrrbyf.md)
 
-Implementation will update the existing service documentation and API contracts
-to describe actual behavior. This ADR records an accepted design, while YATL owns
-implementation status and deferred work.
+The service documentation and API contracts describe the implemented behavior.
+This ADR records an accepted design, while YATL owns implementation status and
+deferred work.

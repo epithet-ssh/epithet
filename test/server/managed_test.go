@@ -53,7 +53,7 @@ oidc-issuer = %q
 oidc-client-id = %q
 directory-static-file = ["%s/static.yaml"]
 inventory-admin-group = ["operators"]
-enrollment-token = "enrollment-secret"
+denied-subject = ["revoked-provisioner"]
 state-dir = "%s/state"
 `, dir, controlPath, dir, idp.Issuer(), oidctest.ClientID, dir, dir)
 
@@ -99,15 +99,20 @@ state-dir = "%s/state"
 	require.Error(t, err)
 	require.Equal(t, http.StatusUnauthorized, status, "the router must leave admin authentication to inventory")
 	proposal := facts.InventoryInput{Names: []string{"managed.example"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	enrolled, status, err := inventoryClient.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", ID: inventory.NewID(), Host: &proposal})
-	require.NoError(t, err)
-	require.Equal(t, 202, status)
 	token := idp.MintIDToken("admin", time.Now().Add(time.Hour))
+	issued, _, err := inventoryClient.Control(t.Context(), token, facts.ControlRequest{Action: "token-create", Subject: "provisioner", LifetimeSeconds: 90 * 24 * 3600})
+	require.NoError(t, err)
+	_, status, err = inventoryClient.Control(t.Context(), token, facts.ControlRequest{Action: "token-create", Subject: "revoked-provisioner", LifetimeSeconds: 3600})
+	require.Error(t, err)
+	require.Equal(t, 403, status)
+	enrolled, status, err := inventoryClient.Control(t.Context(), issued.Token.Token, facts.ControlRequest{Action: "create", ID: inventory.NewID(), Host: &proposal})
+	require.NoError(t, err)
+	require.Equal(t, 200, status)
 	pub, _, err := sshcert.GenerateKeys()
 	require.NoError(t, err)
 	request := wire.CreateCertRequest{PublicKey: pub, Connection: wire.Connection{RemoteHost: "managed.example", RemoteUser: "root", Port: 22}}
 	_, err = client.GetCert(t.Context(), token, &request)
-	require.NoError(t, err, "pending must preserve existing wildcard-based issuance")
+	require.NoError(t, err, "active enrollment permits certificate issuance")
 	// Run the real admin CLI through the broker's Unix socket and existing login.
 	socket := filepath.Join(dir, "broker.sock")
 	verifyIdentity := func(context.Context, string) (*broker.Identity, error) {
@@ -124,31 +129,30 @@ state-dir = "%s/state"
 	defer b.Close()
 	admin := func(args ...string) []byte {
 		cmd := exec.Command(binary, append([]string{"inventory", "--broker-socket", socket}, args...)...)
-		cmd.Stdin = strings.NewReader("approve\n")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))
 		return out
 	}
-	listing := admin("list", "--pending")
+	listing := admin("list")
 	lines := strings.Split(strings.TrimSpace(string(listing)), "\n")
-	require.Len(t, lines, 2, "a header and one line per pending host")
+	require.Len(t, lines, 3, "a header and two active records")
 	require.Equal(t, []string{"ID", "STATUS", "NAMES"}, strings.Split(lines[0], "\t"))
-	fields := strings.Split(lines[1], "\t")
-	require.Equal(t, []string{enrolled.Host.ID[:12], "pending", "managed.example"}, fields)
+	require.Contains(t, string(listing), enrolled.Host.ID[:12]+"\tactive\tmanaged.example")
 	require.NotContains(t, string(listing), token)
-	approved := admin("approve", fields[0])
-	require.Contains(t, string(approved), "active")
 	cert, err := client.GetCert(t.Context(), token, &request)
 	require.NoError(t, err)
 	require.NotEmpty(t, cert.Certificate)
-	created := strings.TrimSpace(string(admin("token", "create", "--quiet")))
-	require.Len(t, created, 64)
+	created := strings.TrimSpace(string(admin("token", "create", "--subject", "production-provisioner", "--expires-in", "2160h", "--quiet")))
+	require.Len(t, strings.Split(created, "."), 3)
+	_, err = client.GetCert(t.Context(), created, &request)
+	require.Error(t, err, "enrollment tokens cannot authorize user SSH login")
 	proposal.Names = []string{"second.example"}
-	second, status, err := inventoryClient.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Host: &proposal, Token: created})
+	second, status, err := inventoryClient.Control(t.Context(), created, facts.ControlRequest{Action: "create", ID: inventory.NewID(), Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", second.Host.Status)
-	require.Equal(t, created, second.Host.ID, "the enrollment token reserves the eventual host ID")
+	require.NotEqual(t, created, second.Host.ID)
+	require.Len(t, second.Host.ID, 64)
 	lines = strings.Split(strings.TrimSpace(string(admin("list"))), "\n")
 	var listedNames []string
 	for _, line := range lines[1:] {

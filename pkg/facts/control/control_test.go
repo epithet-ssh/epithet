@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -29,8 +30,9 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 	store, err := inventorysqlite.Open(filepath.Join(t.TempDir(), "inventory.db"))
 	require.NoError(t, err)
 	defer store.Close()
-	fixture := controltest.New(t, nil, nil, store, control.Config{EnrollmentToken: "enrollment-secret"})
+	fixture := controltest.New(t, nil, nil, store, control.Config{})
 	control := fixture.Control
+	credential := enrollmentCredential(t, fixture.ControlKey, "provisioner")
 	for _, tc := range []struct {
 		field  string
 		want   []string
@@ -38,19 +40,19 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 	}{
 		{"", nil, 400},
 		{`,"accounts":"deploy"`, nil, 400},
-		{`,"accounts":null`, nil, 202},
-		{`,"accounts":[]`, []string{}, 202},
-		{`,"accounts":["deploy"]`, []string{"deploy"}, 202},
+		{`,"accounts":null`, nil, 200},
+		{`,"accounts":[]`, []string{}, 200},
+		{`,"accounts":["deploy"]`, []string{"deploy"}, 200},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			id := inventory.NewID()
-			body := `{"id":"` + id + `","action":"enroll","host":{"names":["host"],"principal-mode":"account-name"` + tc.field + `}}`
-			request := httptest.NewRequest("PUT", "/manage/"+id, strings.NewReader(body))
-			request.Header.Set("Authorization", "Bearer enrollment-secret")
+			body := `{"id":"` + id + `","action":"create","host":{"names":["host-` + id[:12] + `"],"principal-mode":"account-name"` + tc.field + `}}`
+			request := httptest.NewRequest("POST", "/manage/"+id, strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer "+credential)
 			response := httptest.NewRecorder()
 			control.ServeHTTP(response, request)
 			require.Equal(t, tc.status, response.Code, response.Body.String())
-			if tc.status == 202 {
+			if tc.status == 200 {
 				var result facts.ControlResponse
 				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
 				require.NotNil(t, result.Host)
@@ -58,7 +60,7 @@ func TestEnrollmentDecodesAccountRestrictions(t *testing.T) {
 			}
 		})
 	}
-	hosts, err := store.ListHosts(t.Context(), "", 0, false)
+	hosts, err := store.ListHosts(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Len(t, hosts, 3, "invalid input must never reach enrollment")
 }
@@ -86,7 +88,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 	idp := oidctest.New(t)
 	validator, err := oidc.NewValidator(context.Background(), oidc.ValidatorConfig{Issuer: idp.Issuer(), ClientID: oidctest.ClientID, UserIDClaim: "oid", TLSConfig: tlsconfig.Config{Insecure: true}})
 	require.NoError(t, err)
-	server := controltest.New(t, inv, nil, m, control.Config{Validator: validator, InventoryAdmins: control.Admins{Users: []string{"directory-admin"}, Groups: []string{"ops"}}, EnrollmentToken: "enrollment-secret"})
+	server := controltest.New(t, inv, nil, m, control.Config{Validator: validator, InventoryAdmins: control.Admins{Users: []string{"directory-admin"}, Groups: []string{"ops"}}})
 	client, err := facts.NewAdminClient(server.URL+"/manage?route=inventory", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
 	for _, tc := range []struct {
@@ -94,12 +96,14 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 		want int
 	}{{"directory-admin", 200}, {"directory-group", 200}, {"directory-user", 403}, {"directory-disabled", 403}, {"missing", 403}} {
 		token := idp.MintIDTokenWithClaims("different-subject", time.Now().Add(time.Hour), map[string]any{"oid": tc.id})
-		_, status, err := client.Control(t.Context(), token, facts.ControlRequest{Action: "list"})
-		require.Equal(t, tc.want, status)
-		if status == 200 {
-			require.NoError(t, err)
-		} else {
-			require.Error(t, err)
+		for _, action := range []string{"list", "token-create"} {
+			_, status, err := client.Control(t.Context(), token, facts.ControlRequest{Action: action, Subject: "provisioner", LifetimeSeconds: 3600})
+			require.Equal(t, tc.want, status)
+			if status == 200 {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
 		}
 	}
 	for _, token := range []string{"", "not-a-token", idp.MintIDTokenWithAudience("admin", "wrong-audience", time.Now().Add(time.Hour))} {
@@ -108,12 +112,12 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 		require.Error(t, err)
 	}
 	p := facts.InventoryInput{Names: []string{"new-host"}, Accounts: []string{}, PrincipalMode: "account-name"}
-	response, status, err := client.Control(t.Context(), "enrollment-secret", facts.ControlRequest{Action: "enroll", ID: inventory.NewID(), Host: &p})
+	response, status, err := client.Control(t.Context(), enrollmentCredential(t, server.ControlKey, "provisioner"), facts.ControlRequest{Action: "create", ID: inventory.NewID(), Host: &p})
 	require.NoError(t, err)
-	require.Equal(t, 202, status)
-	require.Equal(t, "pending", response.Host.Status)
+	require.Equal(t, 200, status)
+	require.Equal(t, "active", response.Host.Status)
 	token := idp.MintIDTokenWithClaims("unrelated-subject", time.Now().Add(time.Hour), map[string]any{"oid": "directory-admin"})
-	response, status, err = client.Control(t.Context(), token, facts.ControlRequest{Action: "approve", ID: response.Host.ID, ExpectedVersion: response.Host.Version})
+	response, status, err = client.Control(t.Context(), token, facts.ControlRequest{Action: "edit", ID: response.Host.ID, ExpectedVersion: response.Host.Version, Host: &p})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	require.Equal(t, "active", response.Host.Status)
@@ -129,7 +133,7 @@ func TestControlUsesDirectoryIdentityAndAdminGrants(t *testing.T) {
 		if tc.id != "" {
 			bearer = idp.MintIDTokenWithClaims("unrelated-subject", time.Now().Add(time.Hour), map[string]any{"oid": tc.id})
 		}
-		result, status, err := client.Control(t.Context(), bearer, facts.ControlRequest{Action: "add", Host: &pattern})
+		result, status, err := client.Control(t.Context(), bearer, facts.ControlRequest{Action: "create", ID: inventory.NewID(), Host: &pattern})
 		require.Equal(t, tc.want, status)
 		if status == 200 {
 			require.NoError(t, err)
@@ -215,7 +219,7 @@ func TestDirectoryUserListingAuthorizationAndSource(t *testing.T) {
 				require.Equal(t, "subject:admin", byName["admin-scim"]["id"])
 				require.Equal(t, false, byName["disabled-scim"]["active"])
 			}
-			_, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", ID: inventory.NewID()})
+			_, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "create", ID: inventory.NewID()})
 			require.Error(t, err)
 			require.Equal(t, 404, status, "listing users must not enable host enrollment")
 			if source == "static" {
@@ -293,10 +297,10 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 	// real stores and both HTTP planes must preserve cursors and page limits.
 	for n := 0; n < 130; n++ {
 		id1 := inventory.NewID()
-		_, err = hosts.UpsertHost(t.Context(), inventory.Host{ID: id1, Status: inventory.StatusPending, Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent(strings.Repeat("x", 70<<10), "enroll", id1))
+		_, err = hosts.UpsertHost(t.Context(), inventory.Host{ID: id1, Status: inventory.StatusActive, Names: []string{fmt.Sprintf("host-%d", n)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent(strings.Repeat("x", 70<<10), "enroll", id1))
 		require.NoError(t, err)
 	}
-	first, err := hosts.ListHosts(t.Context(), "", 1, false)
+	first, err := hosts.ListHosts(t.Context(), "", 1)
 	require.NoError(t, err)
 	p := inventory.Host{Names: []string{"host"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
 	first[0].Names, first[0].Accounts, first[0].PrincipalMode = p.Names, p.Accounts, p.PrincipalMode
@@ -354,11 +358,11 @@ func TestInventoryPaginationThroughPublicControl(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, 401, status)
 	}
-	r, _, err := client.Control(t.Context(), token, facts.ControlRequest{Action: "list", Pending: true, Limit: 3})
+	r, _, err := client.Control(t.Context(), token, facts.ControlRequest{Action: "list", Limit: 3})
 	require.NoError(t, err)
 	require.Len(t, r.Hosts, 3)
 	for _, h := range r.Hosts {
-		require.Equal(t, "pending", h.Status)
+		require.Equal(t, "active", h.Status)
 	}
 	for _, req := range []facts.ControlRequest{
 		{Action: "audit", AuditLimit: inventory.MaxPageLimit + 1},

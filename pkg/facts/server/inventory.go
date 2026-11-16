@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts"
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
@@ -71,7 +70,6 @@ func inventoryHandler(store inventory.Store, key sshcert.RawPublicKey) (http.Han
 	mux.HandleFunc("/lookup", h.discovery)
 	mux.HandleFunc("/inventory/records", h.serve)
 	mux.HandleFunc("/inventory/records/{id}", h.serve)
-	mux.HandleFunc("/inventory/tokens", h.serve)
 	mux.HandleFunc("/inventory/audit", h.serve)
 	return mux, nil
 }
@@ -87,8 +85,7 @@ func (h *inventoryHTTP) discovery(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Allow", "GET, OPTIONS")
-	w.Header().Add("Link-Template", `"/inventory/records{/id}{?after,limit,pending}"; rel="`+facts.InventoryRecordsRelation+`"`)
-	w.Header().Add("Link-Template", `"/inventory/tokens{?token}"; rel="`+facts.InventoryTokensRelation+`"`)
+	w.Header().Add("Link-Template", `"/inventory/records{/id}{?after,limit}"; rel="`+facts.InventoryRecordsRelation+`"`)
 	w.Header().Add("Link-Template", `"/inventory/audit{?cursor,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
 	w.WriteHeader(204)
 }
@@ -106,8 +103,6 @@ func inventoryFailure(w http.ResponseWriter, err error) {
 		status = 409
 	case errors.Is(err, inventory.ErrNotFound):
 		status = 404
-	case errors.Is(err, inventory.ErrToken):
-		status = 403
 	case errors.Is(err, inventory.ErrStorage):
 		status = 503
 	}
@@ -143,10 +138,8 @@ func (h *inventoryHTTP) serve(w http.ResponseWriter, r *http.Request) {
 		inventoryFailure(w, &facts.ServiceError{Status: 403, Message: "invalid control authentication"})
 		return
 	}
-	// Actor presence is trusted only after signature verification. Enrollment
-	// has no actor; a signed administrator may create active hosts.
-	enrollment := r.Method == "PUT" && r.PathValue("id") != "" && actor == ""
-	if !enrollment && actor == "" {
+	// Both enrollment subjects and administrators are authenticated by control.
+	if actor == "" {
 		inventoryFailure(w, &facts.ServiceError{Status: 403, Message: "authenticated actor is required"})
 		return
 	}
@@ -170,40 +163,12 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 	query := r.URL.Query()
 	id := r.PathValue("id")
 	switch {
-	case r.URL.Path == "/inventory/records" && r.Method == "POST":
-		var create facts.InventoryCreate
-		if err := facts.DecodeInventoryJSON(body, &create); err != nil {
-			return err
-		}
-		if create.Host == nil {
-			return fmt.Errorf("host is required")
-		}
-		if create.Token != "" {
-			return fmt.Errorf("administrator host creation cannot use an enrollment token")
-		}
-		host := inventoryHost(create.Host)
-		host.Status = inventory.StatusActive
-		id := inventory.NewID()
-		host.ID = id
-		result, err := h.store.UpsertHost(ctx, host, inventory.WriteConditions{}, inventory.NewAuditEvent(actor, "add", id))
-		if err != nil {
-			return err
-		}
-		h.writeInventoryRecord(w, 201, hostRecord(result), result.Version)
-		return nil
 	case r.URL.Path == "/inventory/records" && r.Method == "GET":
 		limit, err := pageLimit(r)
 		if err != nil {
 			return err
 		}
-		pending := false
-		if raw := query.Get("pending"); raw != "" {
-			pending, err = strconv.ParseBool(raw)
-			if err != nil {
-				return fmt.Errorf("invalid pending filter")
-			}
-		}
-		hosts, err := h.store.ListHosts(ctx, query.Get("after"), limit, pending)
+		hosts, err := h.store.ListHosts(ctx, query.Get("after"), limit)
 		if err != nil {
 			return err
 		}
@@ -220,7 +185,7 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		}
 		h.writeInventoryRecord(w, 200, hostRecord(host), host.Version)
 		return nil
-	case id != "" && r.Method == "PUT" && actor == "":
+	case id != "" && r.Method == "POST":
 		var submission facts.InventoryCreate
 		if err := facts.DecodeInventoryJSON(body, &submission); err != nil {
 			return err
@@ -228,7 +193,7 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		if submission.Host == nil {
 			return fmt.Errorf("host is required")
 		}
-		result, err := inventory.Enroll(ctx, h.store, id, inventoryHost(submission.Host), submission.Token, inventory.NewAuditEvent("host", "enroll", id))
+		result, err := inventory.CreateHost(ctx, h.store, id, inventoryHost(submission.Host), inventory.NewAuditEvent(actor, "create", id))
 		if err != nil {
 			return err
 		}
@@ -275,45 +240,15 @@ func (h *inventoryHTTP) execute(w http.ResponseWriter, r *http.Request, body []b
 		}
 		proposed := inventoryHost(record.Host)
 		proposed.ID, proposed.Status, proposed.CreatedAt, proposed.UpdatedAt = record.ID, record.Status, record.CreatedAt, record.UpdatedAt
-		event := inventory.NewAuditEvent(actor, "", id)
-		_, action, err := inventory.Review(*current, proposed, expectedVersion, event.At)
-		if err != nil {
+		event := inventory.NewAuditEvent(actor, "edit", id)
+		if err := proposed.ValidateEdit(*current, expectedVersion); err != nil {
 			return err
 		}
-		event.Action = action
 		result, err := h.store.UpsertHost(ctx, proposed, inventory.WriteConditions{ExpectedVersion: expectedVersion}, event)
 		if err != nil {
 			return err
 		}
 		h.writeInventoryRecord(w, 200, hostRecord(result), result.Version)
-		return nil
-	case r.URL.Path == "/inventory/tokens" && r.Method == "POST":
-		var create facts.InventoryTokenCreate
-		if err := facts.DecodeInventoryJSON(body, &create); err != nil {
-			return err
-		}
-		seconds := create.LifetimeSeconds
-		if seconds == 0 {
-			seconds = 3600
-		}
-		if seconds < 1 || seconds > 86400 {
-			return fmt.Errorf("token lifetime must be between 1s and 24h")
-		}
-		id := inventory.NewID()
-		token, err := h.store.CreateToken(ctx, id, time.Duration(seconds)*time.Second, inventory.NewAuditEvent(actor, "token-create", id))
-		if err != nil {
-			return err
-		}
-		inventoryJSON(w, 201, facts.InventoryToken{Token: token.ID, ExpiresAt: token.ExpiresAt})
-		return nil
-	case r.URL.Path == "/inventory/tokens" && r.Method == "DELETE":
-		if query.Get("token") == "" {
-			return fmt.Errorf("token is required")
-		}
-		if err := h.store.RevokeToken(ctx, query.Get("token"), inventory.NewAuditEvent(actor, "token-revoke", query.Get("token"))); err != nil {
-			return err
-		}
-		w.WriteHeader(204)
 		return nil
 	case r.URL.Path == "/inventory/audit" && r.Method == "GET":
 		limit, err := pageLimit(r)

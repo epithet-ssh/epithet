@@ -9,42 +9,33 @@ import (
 )
 
 type InventoryTokenCLI struct {
-	Create InventoryTokenCreateCLI `cmd:"create" help:"Create an expiring single-use preapproval token"`
-	Revoke InventoryTokenRevokeCLI `cmd:"revoke" help:"Revoke an unused token"`
+	Create InventoryTokenCreateCLI `cmd:"create" help:"Create a reusable enrollment token"`
 }
 
 type InventoryTokenCreateCLI struct {
-	ExpiresIn time.Duration `name:"expires-in" default:"1h" help:"Lifetime (maximum 24h)"`
+	Subject   string        `required:"true" help:"Provisioning principal recorded in enrollment audit"`
+	ExpiresIn time.Duration `name:"expires-in" required:"true" help:"Explicit lifetime of at least 1s (for example 2160h)"`
 	Quiet     bool          `help:"Print only the token value"`
 }
 
 func (c *InventoryTokenCreateCLI) Run(p *InventoryCLI) error {
-	if c.ExpiresIn < time.Second || c.ExpiresIn > 24*time.Hour {
-		return fmt.Errorf("expires-in must be between 1s and 24h")
+	if c.Subject == "" || c.ExpiresIn < time.Second {
+		return fmt.Errorf("subject and expires-in of at least 1s are required")
 	}
-	r, err := p.request(facts.ControlRequest{Action: "token-create", LifetimeSeconds: int64(c.ExpiresIn / time.Second)})
+	r, err := p.request(facts.ControlRequest{Action: "token-create", Subject: c.Subject, LifetimeSeconds: int64(c.ExpiresIn / time.Second)})
 	if err != nil {
 		return err
 	}
 	if c.Quiet {
-		fmt.Println(r.Token.ID)
+		fmt.Println(r.Token.Token)
 		return nil
 	}
 	if r.CAURL == "" {
-		fmt.Printf("Token %s expires %s\n", r.Token.ID, r.Token.ExpiresAt.Format(time.RFC3339))
+		fmt.Printf("Token %s expires %s\n", r.Token.Token, r.Token.ExpiresAt.Format(time.RFC3339))
 		return nil
 	}
-	fmt.Printf("Token %s expires %s\n\nepithet host enroll --ca %s --token %s\n", r.Token.ID, r.Token.ExpiresAt.Format(time.RFC3339), shellQuote(r.CAURL), shellQuote(r.Token.ID))
+	fmt.Printf("Token %s expires %s\n\nepithet host enroll --ca %s --token %s\n", r.Token.Token, r.Token.ExpiresAt.Format(time.RFC3339), shellQuote(r.CAURL), shellQuote(r.Token.Token))
 	return nil
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-
-type InventoryTokenRevokeCLI struct {
-	ID string `arg:""`
-}
-
-func (c *InventoryTokenRevokeCLI) Run(p *InventoryCLI) error {
-	_, err := p.request(facts.ControlRequest{Action: "token-revoke", ID: c.ID})
-	return err
-}

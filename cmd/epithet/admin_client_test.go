@@ -90,11 +90,10 @@ func TestInventoryPaginationFlags(t *testing.T) {
 	require.Equal(t, "backend/page:+/= token", root.Inventory.Audit.Cursor)
 	require.Equal(t, 25, root.Inventory.Audit.Limit)
 	id := strings.Repeat("a", 64)
-	_, err = parser.Parse([]string{"inventory", "list", "--after", id, "--limit", "25", "--pending"})
+	_, err = parser.Parse([]string{"inventory", "list", "--after", id, "--limit", "25"})
 	require.NoError(t, err)
 	require.Equal(t, id, root.Inventory.List.After)
 	require.Equal(t, 25, root.Inventory.List.Limit)
-	require.True(t, root.Inventory.List.Pending)
 	_, err = parser.Parse([]string{"inventory", "token", "list", "--after", id, "--limit", "25"})
 	require.Error(t, err)
 }

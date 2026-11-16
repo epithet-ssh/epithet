@@ -48,7 +48,7 @@ func TestInventoryOptionalOpaqueVersions(t *testing.T) {
 			public, key, err := sshcert.GenerateKeys()
 			require.NoError(t, err)
 			now := time.Now().UTC()
-			fixture := &inventoryVersionFixture{record: inventory.Host{ID: inventory.NewID(), Version: version, Status: inventory.StatusPending, Names: []string{"host.example"}, PrincipalMode: inventory.AccountNamePrincipals, CreatedAt: now, UpdatedAt: now}}
+			fixture := &inventoryVersionFixture{record: inventory.Host{ID: inventory.NewID(), Version: version, Status: inventory.StatusActive, Names: []string{"host.example"}, PrincipalMode: inventory.AccountNamePrincipals, CreatedAt: now, UpdatedAt: now}}
 			handler, err := factserver.InventoryHandler(fixture, "", public, factserver.WithInventoryManagement(fixture))
 			require.NoError(t, err)
 			var match string
@@ -65,16 +65,16 @@ func TestInventoryOptionalOpaqueVersions(t *testing.T) {
 			h, err := client.host(t.Context(), auth, fixture.record.ID)
 			require.NoError(t, err)
 			require.Equal(t, version, h.Version)
-			approved, err := client.approveHost(t.Context(), auth, h.ID, h.Version)
+			edited, err := client.editHost(t.Context(), auth, h.ID, h.Version, h.Host)
 			require.NoError(t, err)
-			require.Equal(t, inventory.StatusActive, approved.Status)
+			require.Equal(t, inventory.StatusActive, edited.Status)
 			require.Equal(t, version, fixture.expectedVersion)
 			if version == "" {
 				require.Empty(t, match)
-				require.Empty(t, approved.Version)
+				require.Empty(t, edited.Version)
 			} else {
 				require.Equal(t, `"`+version+`"`, match)
-				require.Equal(t, "next:opaque/version", approved.Version)
+				require.Equal(t, "next:opaque/version", edited.Version)
 			}
 			// A precondition is required only for versioned providers;
 			// an unversioned provider cannot honor an explicit version match.

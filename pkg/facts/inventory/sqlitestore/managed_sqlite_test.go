@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 	"github.com/stretchr/testify/require"
@@ -26,7 +25,7 @@ func TestManagedSQLitePermissionsAndSchema(t *testing.T) {
 	}
 	var version int
 	require.NoError(t, m.db.QueryRow("PRAGMA user_version").Scan(&version))
-	require.Equal(t, 5, version)
+	require.Equal(t, 6, version)
 	_, err = m.db.Exec("PRAGMA user_version=99")
 	require.NoError(t, err)
 	require.NoError(t, m.Close())
@@ -43,21 +42,17 @@ func TestManagedRejectsSchemaWithCascadingAuditDeletion(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported inventory database version 1")
 }
 
-func TestManagedTokenRedemptionRollsBackAllState(t *testing.T) {
+func TestManagedCreationRollsBackAllState(t *testing.T) {
 	m, path := managedFixture(t, "")
 	id1 := inventory.NewID()
-	token, err := m.CreateToken(t.Context(), id1, time.Hour, inventory.NewAuditEvent("admin", "token-create", id1))
-	require.NoError(t, err)
-	_, err = m.GetHost(t.Context(), token.ID)
-	require.ErrorIs(t, err, inventory.ErrNotFound)
 	auditBefore, _, err := m.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
-	// Audit is written after the host, collections, and token. Failing here
-	// must undo the entire redemption, not just the audit insert.
+	// Audit is written after the host and collections. Failing here
+	// must undo the entire creation, not just the audit insert.
 	_, err = m.db.Exec("CREATE TRIGGER fail_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END")
 	require.NoError(t, err)
-	id2 := token.ID
-	_, err = inventory.Enroll(t.Context(), m, id2, proposal("host"), token.ID, inventory.NewAuditEvent("host", "enroll", id2))
+	id2 := id1
+	_, err = inventory.CreateHost(t.Context(), m, id2, proposal("host"), inventory.NewAuditEvent("host", "enroll", id2))
 	require.ErrorIs(t, err, inventory.ErrStorage)
 	_, err = m.db.Exec("DROP TRIGGER fail_audit")
 	require.NoError(t, err)
@@ -65,34 +60,28 @@ func TestManagedTokenRedemptionRollsBackAllState(t *testing.T) {
 	restarted, err := Open(path)
 	require.NoError(t, err)
 	defer restarted.Close()
-	_, err = restarted.GetHost(t.Context(), token.ID)
+	_, err = restarted.GetHost(t.Context(), id1)
 	require.ErrorIs(t, err, inventory.ErrNotFound)
-	tokens, err := restarted.Tokens(t.Context(), "", 0)
-	require.NoError(t, err)
-	require.Equal(t, []inventory.EnrollmentToken{token}, tokens)
 	auditAfter, _, err := restarted.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, auditBefore, auditAfter)
 	got, err := restarted.LookupHost(t.Context(), "host")
 	require.NoError(t, err)
 	require.Nil(t, got)
-	id3 := token.ID
-	h, err := inventory.Enroll(t.Context(), restarted, id3, proposal("host"), token.ID, inventory.NewAuditEvent("host", "enroll", id3))
+	id3 := id1
+	h, err := inventory.CreateHost(t.Context(), restarted, id3, proposal("host"), inventory.NewAuditEvent("host", "enroll", id3))
 	require.NoError(t, err)
-	require.Equal(t, token.ID, h.ID)
+	require.Equal(t, id1, h.ID)
 	require.Equal(t, "active", h.Status)
 }
 
 func TestManagedRemovalRollsBackAndCascades(t *testing.T) {
 	m, _ := managedFixture(t, "")
-	id4 := inventory.NewID()
-	token, err := m.CreateToken(t.Context(), id4, time.Hour, inventory.NewAuditEvent("admin", "token-create", id4))
-	require.NoError(t, err)
 	p := proposal("host")
 	p.Names = []string{"host", "alias"}
 	p.Labels = map[string]string{"env": "test"}
-	id5 := token.ID
-	h, err := inventory.Enroll(t.Context(), m, id5, p, token.ID, inventory.NewAuditEvent("host", "enroll", id5))
+	id5 := inventory.NewID()
+	h, err := inventory.CreateHost(t.Context(), m, id5, p, inventory.NewAuditEvent("host", "enroll", id5))
 	require.NoError(t, err)
 	auditBefore, _, err := m.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
@@ -108,15 +97,11 @@ func TestManagedRemovalRollsBackAndCascades(t *testing.T) {
 	auditAfter, _, err := m.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, auditBefore, auditAfter)
-	tokens, err := m.Tokens(t.Context(), "", 0)
-	require.NoError(t, err)
-	require.Len(t, tokens, 1)
-	require.Equal(t, h.ID, tokens[0].UsedBy)
 	_, err = m.db.Exec("DROP TRIGGER fail_remove")
 	require.NoError(t, err)
 	_, err = m.Change(t.Context(), "admin", "remove", h.ID, h.Version, nil)
 	require.NoError(t, err)
-	for _, table := range []string{"hosts", "names", "labels", "accounts", "tokens"} {
+	for _, table := range []string{"hosts", "names", "labels", "accounts"} {
 		var count int
 		require.NoError(t, m.db.QueryRow("SELECT count(*) FROM "+table).Scan(&count))
 		require.Zero(t, count, table)
@@ -129,9 +114,7 @@ func TestManagedConnectionsReadCurrentState(t *testing.T) {
 	require.NoError(t, err)
 	defer other.Close()
 	id6 := inventory.NewID()
-	h, err := inventory.Enroll(t.Context(), m, id6, proposal("old"), "", inventory.NewAuditEvent("host", "enroll", id6))
-	require.NoError(t, err)
-	h, err = m.Change(t.Context(), "admin", "approve", h.ID, h.Version, nil)
+	h, err := inventory.CreateHost(t.Context(), m, id6, proposal("old"), inventory.NewAuditEvent("host", "enroll", id6))
 	require.NoError(t, err)
 	got, err := other.LookupHost(t.Context(), "OLD")
 	require.NoError(t, err)
@@ -158,23 +141,10 @@ func TestManagedConnectionsReadCurrentState(t *testing.T) {
 	require.Equal(t, []string{"current"}, got.Names)
 }
 
-func TestManagedIDCollisionDoesNotOverwriteHost(t *testing.T) {
-	m, _ := managedFixture(t, "")
-	id := inventory.NewID()
-	event := inventory.NewAuditEvent("admin", "token-create", id)
-	original, err := m.CreateToken(t.Context(), id, time.Hour, event)
-	require.NoError(t, err)
-	_, err = m.CreateToken(t.Context(), id, time.Hour, event)
-	require.ErrorIs(t, err, inventory.ErrConflict)
-	tokens, err := m.Tokens(t.Context(), "", 0)
-	require.NoError(t, err)
-	require.Equal(t, []inventory.EnrollmentToken{original}, tokens)
-}
-
 func TestManagedStartupValidatesRecords(t *testing.T) {
 	m, path := managedFixture(t, "hosts:\n - names: [static]\n   accounts: [root]\n")
 	id10 := inventory.NewID()
-	h, err := inventory.Enroll(t.Context(), m, id10, proposal("host"), "", inventory.NewAuditEvent("host", "enroll", id10))
+	h, err := inventory.CreateHost(t.Context(), m, id10, proposal("host"), inventory.NewAuditEvent("host", "enroll", id10))
 	require.NoError(t, err)
 	_, err = m.db.Exec("UPDATE hosts SET principal_mode='invalid' WHERE id=?", h.ID)
 	require.NoError(t, err)
@@ -186,12 +156,9 @@ func TestManagedStartupValidatesRecords(t *testing.T) {
 func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 	m, _ := managedFixture(t, "")
 	id11 := inventory.NewID()
-	host, err := inventory.Enroll(t.Context(), m, id11, proposal("host"), "", inventory.NewAuditEvent("host", "enroll", id11))
+	host, err := inventory.CreateHost(t.Context(), m, id11, proposal("host"), inventory.NewAuditEvent("host", "enroll", id11))
 	require.NoError(t, err)
-	id12 := inventory.NewID()
-	token, err := m.CreateToken(t.Context(), id12, time.Hour, inventory.NewAuditEvent("admin", "token-create", id12))
-	require.NoError(t, err)
-	records, err := m.ListHosts(t.Context(), "", 0, false)
+	records, err := m.ListHosts(t.Context(), "", 0)
 	require.NoError(t, err)
 	audit, _, err := m.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
@@ -203,7 +170,7 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 	}{
 		{"enroll", func() error {
 			id13 := inventory.NewID()
-			_, err := inventory.Enroll(ctx, m, id13, proposal("new"), "", inventory.NewAuditEvent("host", "enroll", id13))
+			_, err := inventory.CreateHost(ctx, m, id13, proposal("new"), inventory.NewAuditEvent("host", "enroll", id13))
 			return err
 		}},
 		{"add", func() error {
@@ -213,18 +180,9 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 			_, err := m.UpsertHost(ctx, input1, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id14))
 			return err
 		}},
-		{"approve", func() error { _, err := m.Change(ctx, "admin", "approve", host.ID, host.Version, nil); return err }},
+		{"edit", func() error { _, err := m.Change(ctx, "admin", "edit", host.ID, host.Version, nil); return err }},
 		{"get", func() error { _, err := m.GetHost(ctx, host.ID); return err }},
-		{"list", func() error { _, err := m.ListHosts(ctx, "", 0, false); return err }},
-		{"create-token", func() error {
-			id15 := inventory.NewID()
-			_, err := m.CreateToken(ctx, id15, time.Hour, inventory.NewAuditEvent("admin", "token-create", id15))
-			return err
-		}},
-		{"tokens", func() error { _, err := m.Tokens(ctx, "", 0); return err }},
-		{"revoke-token", func() error {
-			return m.RevokeToken(ctx, token.ID, inventory.NewAuditEvent("admin", "token-revoke", token.ID))
-		}},
+		{"list", func() error { _, err := m.ListHosts(ctx, "", 0); return err }},
 		{"audit", func() error { _, _, err := m.Audit(ctx, "", 0); return err }},
 		{"lookup", func() error { _, err := m.LookupHost(ctx, "host"); return err }},
 	} {
@@ -234,13 +192,10 @@ func TestCanceledOperationsLeaveInventoryUnchanged(t *testing.T) {
 			require.ErrorIs(t, err, inventory.ErrStorage)
 		})
 	}
-	after, err := m.ListHosts(t.Context(), "", 0, false)
+	after, err := m.ListHosts(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, records, after)
 	auditAfter, _, err := m.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Equal(t, audit, auditAfter)
-	tokens, err := m.Tokens(t.Context(), "", 0)
-	require.NoError(t, err)
-	require.Equal(t, []inventory.EnrollmentToken{token}, tokens)
 }

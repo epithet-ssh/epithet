@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -58,7 +59,7 @@ func (c *Server) inventoryTemplates(ctx context.Context) (map[string]*uritemplat
 			return nil, fmt.Errorf("%w: invalid template relation", facts.ErrUnavailable)
 		}
 		for _, rel := range strings.Fields(rel) {
-			if rel != facts.InventoryRecordsRelation && rel != facts.InventoryTokensRelation && rel != facts.InventoryAuditRelation {
+			if rel != facts.InventoryRecordsRelation && rel != facts.InventoryAuditRelation {
 				continue
 			}
 			if _, ok := item.Params.Get("anchor"); ok {
@@ -74,7 +75,7 @@ func (c *Server) inventoryTemplates(ctx context.Context) (map[string]*uritemplat
 			result[rel] = template
 		}
 	}
-	if len(result) != 0 && len(result) != 3 {
+	if len(result) != 0 && len(result) != 2 {
 		return nil, fmt.Errorf("%w: incomplete inventory relations", facts.ErrUnavailable)
 	}
 	return result, nil
@@ -132,7 +133,7 @@ func inventoryRecordResult(resp *servicehttp.Response, err error) (*facts.HostRe
 	if err != nil {
 		return nil, err
 	}
-	if resp.Status != 200 && resp.Status != 201 {
+	if resp.Status != 200 {
 		return nil, fmt.Errorf("%w: unexpected record status", facts.ErrUnavailable)
 	}
 	var record facts.InventoryRecord
@@ -146,24 +147,27 @@ func inventoryRecordResult(resp *servicehttp.Response, err error) (*facts.HostRe
 	result := controlRecord(record, version)
 	return &result, nil
 }
-func (c *Server) enroll(ctx context.Context, id string, proposal facts.InventoryInput, token string) (*facts.HostRecord, error) {
-	return inventoryRecordResult(c.inventoryCall(ctx, authorization{}, facts.InventoryRecordsRelation, "PUT", map[string]string{"id": id}, facts.InventoryCreate{Host: inventoryHost(proposal), Token: token}, ""))
+
+func (c *Server) createHost(ctx context.Context, auth authorization, id string, proposal facts.InventoryInput) (*facts.HostRecord, error) {
+	return c.requestHostRecord(ctx, auth, "POST", id, facts.InventoryCreate{Host: inventoryHost(proposal)})
 }
-func (c *Server) addHost(ctx context.Context, auth authorization, proposal facts.InventoryInput) (*facts.HostRecord, error) {
-	return inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "POST", nil, facts.InventoryCreate{Host: inventoryHost(proposal)}, ""))
-}
+
 func (c *Server) host(ctx context.Context, auth authorization, id string) (*facts.HostRecord, error) {
-	h, err := inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "GET", map[string]string{"id": id}, nil, ""))
+	return c.requestHostRecord(ctx, auth, "GET", id, nil)
+}
+
+func (c *Server) requestHostRecord(ctx context.Context, auth authorization, method, id string, input any) (*facts.HostRecord, error) {
+	h, err := inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, method, map[string]string{"id": id}, input, ""))
 	if err == nil && h.ID != id {
 		return nil, fmt.Errorf("%w: inventory record identity mismatch", facts.ErrUnavailable)
 	}
 	return h, err
 }
 
-// replaceHost adapts the agent's reviewed version to a whole PUT document. The
+// editHost adapts the agent's reviewed version to a whole PUT document. The
 // read does not authorize a write: If-Match still binds PUT to the reviewed version,
 // and the provider checks every precondition inside its atomic mutation.
-func (c *Server) replaceHost(ctx context.Context, auth authorization, id string, expectedVersion string, proposal *facts.InventoryInput, status string) (*facts.HostRecord, error) {
+func (c *Server) editHost(ctx context.Context, auth authorization, id string, expectedVersion string, proposal facts.InventoryInput) (*facts.HostRecord, error) {
 	h, err := c.host(ctx, auth, id)
 	if err != nil {
 		return nil, err
@@ -171,22 +175,8 @@ func (c *Server) replaceHost(ctx context.Context, auth authorization, id string,
 	if h.Version != expectedVersion {
 		return nil, &facts.ServiceError{Status: 412, Message: "record changed; reload before retrying"}
 	}
-	if proposal != nil {
-		h.Host = *proposal
-	}
-	if status != "" {
-		h.Status = status
-	}
+	h.Host = proposal
 	return inventoryRecordResult(c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "PUT", map[string]string{"id": id}, inventoryRecord(*h), facts.InventoryETag(expectedVersion)))
-}
-func (c *Server) editHost(ctx context.Context, auth authorization, id string, expectedVersion string, p facts.InventoryInput) (*facts.HostRecord, error) {
-	return c.replaceHost(ctx, auth, id, expectedVersion, &p, "")
-}
-func (c *Server) approveHost(ctx context.Context, auth authorization, id string, expectedVersion string) (*facts.HostRecord, error) {
-	return c.replaceHost(ctx, auth, id, expectedVersion, nil, "active")
-}
-func (c *Server) denyHost(ctx context.Context, auth authorization, id string, expectedVersion string) (*facts.HostRecord, error) {
-	return c.replaceHost(ctx, auth, id, expectedVersion, nil, "denied")
 }
 func (c *Server) removeHost(ctx context.Context, auth authorization, id string, expectedVersion string) error {
 	resp, err := c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "DELETE", map[string]string{"id": id}, nil, facts.InventoryETag(expectedVersion))
@@ -214,11 +204,8 @@ func inventoryPageVariables(after string, limit int) map[string]string {
 
 // Hosts returns ID-ordered records. List results have no version: fetch the
 // selected item before editing/reviewing to obtain its ETag.
-func (c *Server) hosts(ctx context.Context, auth authorization, after string, limit int, pending bool) ([]facts.HostRecord, error) {
+func (c *Server) hosts(ctx context.Context, auth authorization, after string, limit int) ([]facts.HostRecord, error) {
 	vars := inventoryPageVariables(after, limit)
-	if pending {
-		vars["pending"] = "true"
-	}
 	resp, err := c.inventoryCall(ctx, auth, facts.InventoryRecordsRelation, "GET", vars, nil, "")
 	if err != nil {
 		return nil, err
@@ -233,20 +220,15 @@ func (c *Server) hosts(ctx context.Context, auth authorization, after string, li
 	}
 	return result, nil
 }
-func (c *Server) createToken(ctx context.Context, auth authorization, seconds int64) (*facts.EnrollmentToken, error) {
-	resp, err := c.inventoryCall(ctx, auth, facts.InventoryTokensRelation, "POST", nil, facts.InventoryTokenCreate{LifetimeSeconds: seconds}, "")
+func (c *Server) createToken(subject string, seconds int64) (*facts.EnrollmentToken, error) {
+	if slices.Contains(c.config.DeniedSubjects, subject) {
+		return nil, &facts.ServiceError{Status: 403, Message: "enrollment subject is denied"}
+	}
+	raw, expiry, err := c.enrollment.issue(subject, seconds)
 	if err != nil {
-		return nil, err
+		return nil, &facts.ServiceError{Status: 400, Message: err.Error()}
 	}
-	var token facts.InventoryToken
-	if resp.Status != 201 || json.Unmarshal(resp.Body, &token) != nil || token.Token == "" || token.ExpiresAt.IsZero() {
-		return nil, fmt.Errorf("%w: invalid enrollment token", facts.ErrUnavailable)
-	}
-	return &facts.EnrollmentToken{ID: token.Token, ExpiresAt: token.ExpiresAt}, nil
-}
-func (c *Server) revokeToken(ctx context.Context, auth authorization, token string) error {
-	resp, err := c.inventoryCall(ctx, auth, facts.InventoryTokensRelation, "DELETE", map[string]string{"token": token}, nil, "")
-	return inventoryNoContent(resp, err)
+	return &facts.EnrollmentToken{Token: raw, ExpiresAt: expiry}, nil
 }
 func (c *Server) hostAudit(ctx context.Context, auth authorization, cursor string, limit int) (*facts.AuditPage[facts.HostAuditEvent], error) {
 	vars := map[string]string{}

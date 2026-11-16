@@ -144,10 +144,10 @@ func TestInventoryManagementOption(t *testing.T) {
 	defer server.Close()
 	management, err = newSignedTestClient(server.URL, controlKey, serviceauth.InventoryAudience)
 	require.NoError(t, err)
-	response, err = management.Do(t.Context(), "POST", "/inventory/records", nil, []byte(`{"host":{"name":["new-*.example"],"attributes":null,"accounts":["deploy"],"principal":{"mode":"account-name"}}}`), "admin")
+	response, err = management.Do(t.Context(), "POST", "/inventory/records/"+inventory.NewID(), nil, []byte(`{"host":{"name":["new-*.example"],"attributes":null,"accounts":["deploy"],"principal":{"mode":"account-name"}}}`), "admin")
 	require.NoError(t, err)
 	response.Body.Close()
-	require.Equal(t, 201, response.StatusCode)
+	require.Equal(t, 200, response.StatusCode)
 
 	data, err = facts.NewDataClient("", server.URL+"/lookup", caKey, cfg)
 	require.NoError(t, err)

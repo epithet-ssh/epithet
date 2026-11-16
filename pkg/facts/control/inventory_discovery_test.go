@@ -21,7 +21,7 @@ func TestInventoryDiscoveryAtArbitraryFactURL(t *testing.T) {
 	require.NoError(t, err)
 	verifier, err := serviceauth.NewVerifierFor(public, serviceauth.InventoryAudience)
 	require.NoError(t, err)
-	token := "opaque+/=&?# 日本語"
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
@@ -36,7 +36,7 @@ func TestInventoryDiscoveryAtArbitraryFactURL(t *testing.T) {
 			}
 			require.Equal(t, "OPTIONS", r.Method)
 			// Multiple links in one field: commas inside quoted templates are not separators.
-			w.Header().Add("Link-Template", `"items{?id,after,limit,pending}"; rel="`+facts.InventoryRecordsRelation+`", "credentials{?token}"; rel="`+facts.InventoryTokensRelation+`", "events{?cursor,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
+			w.Header().Add("Link-Template", `"items{?id,after,limit}"; rel="`+facts.InventoryRecordsRelation+`", "events{?cursor,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
 			w.WriteHeader(204)
 			return
 		}
@@ -46,11 +46,7 @@ func TestInventoryDiscoveryAtArbitraryFactURL(t *testing.T) {
 			require.Equal(t, "GET", r.Method)
 			require.Equal(t, "opaque/id", r.URL.Query().Get("id"))
 			w.Header().Set("ETag", `"backend:opaque/9"`)
-			json.NewEncoder(w).Encode(facts.InventoryRecord{ID: "opaque/id", Status: "pending", CreatedAt: time.Now(), UpdatedAt: time.Now()})
-		case "/tenant/credentials":
-			require.Equal(t, "DELETE", r.Method)
-			require.Equal(t, token, r.URL.Query().Get("token"))
-			w.WriteHeader(204)
+			json.NewEncoder(w).Encode(facts.InventoryRecord{ID: "opaque/id", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 		default:
 			t.Errorf("unexpected provider URL %s", r.URL)
 			w.WriteHeader(404)
@@ -63,7 +59,7 @@ func TestInventoryDiscoveryAtArbitraryFactURL(t *testing.T) {
 	h, err := c.host(t.Context(), authorization{Actor: "admin"}, "opaque/id")
 	require.NoError(t, err)
 	require.Equal(t, "backend:opaque/9", h.Version)
-	require.NoError(t, c.revokeToken(t.Context(), authorization{Actor: "admin"}, token))
+
 	data, err := facts.NewDataClient("", server.URL+"/tenant/facts", key, cfg)
 	require.NoError(t, err)
 	host, err := data.Host(t.Context(), "host")
@@ -117,7 +113,7 @@ func TestInventoryDiscoveryFallbackAndFailures(t *testing.T) {
 	// An operation-level 4xx is a rejection, not discovery fallback.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "OPTIONS" {
-			w.Header().Set("Link-Template", `"/items{/id}"; rel="`+facts.InventoryRecordsRelation+`", "/tokens{?token}"; rel="`+facts.InventoryTokensRelation+`", "/events"; rel="`+facts.InventoryAuditRelation+`"`)
+			w.Header().Set("Link-Template", `"/items{/id}"; rel="`+facts.InventoryRecordsRelation+`", "/events"; rel="`+facts.InventoryAuditRelation+`"`)
 			w.WriteHeader(204)
 			return
 		}
@@ -127,7 +123,7 @@ func TestInventoryDiscoveryFallbackAndFailures(t *testing.T) {
 	defer server.Close()
 	c, err := newProviderTestServer("", server.URL, key, tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	_, err = c.createToken(t.Context(), authorization{Actor: "admin"}, 60)
+	_, err = c.host(t.Context(), authorization{Actor: "admin"}, "host")
 	require.ErrorIs(t, err, facts.ErrDenied)
 	require.ErrorContains(t, err, "provider rejected operation")
 }

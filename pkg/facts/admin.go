@@ -52,18 +52,11 @@ func (c *AdminClient) Control(ctx context.Context, bearer string, request Contro
 	if c.endpoint == "" {
 		return nil, 0, fmt.Errorf("CA does not advertise managed inventory")
 	}
-	method, endpoint := "POST", c.endpoint
-	if request.Action == "enroll" {
-		if request.Token != "" {
-			if request.ID != "" && request.ID != request.Token {
-				return nil, 0, fmt.Errorf("enrollment token must equal host id")
-			}
-			request.ID = request.Token
-		}
+	endpoint := c.endpoint
+	if request.Action == "create" {
 		if request.ID == "" {
-			return nil, 0, fmt.Errorf("enrollment requires a stable host id")
+			return nil, 0, fmt.Errorf("host creation requires a stable host id")
 		}
-		method = "PUT"
 		u, err := url.Parse(endpoint)
 		if err != nil {
 			return nil, 0, err
@@ -75,7 +68,7 @@ func (c *AdminClient) Control(ctx context.Context, bearer string, request Contro
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -99,7 +92,7 @@ func (c *AdminClient) Control(ctx context.Context, bearer string, request Contro
 	if err = json.Unmarshal(body, &result); err != nil {
 		return nil, response.StatusCode, fmt.Errorf("invalid inventory response (HTTP %d)", response.StatusCode)
 	}
-	if response.StatusCode != 200 && response.StatusCode != 202 {
+	if response.StatusCode != 200 {
 		return &result, response.StatusCode, fmt.Errorf("inventory: %s (HTTP %d)", strings.TrimSpace(result.Error), response.StatusCode)
 	}
 	return &result, response.StatusCode, nil
@@ -195,23 +188,23 @@ type ActorSnapshot struct {
 // persisted directory and inventory records. Service adapters convert between them.
 
 // ControlRequest is one operation at the complete advertised inventory URL.
-// An optional single-use token preapproves enrollment. Admin authentication is
-// the OIDC bearer header. ExpectedVersion binds review/edit to the displayed
+// Create addresses the caller's host ID and accepts an enrollment or inventory
+// administrator bearer credential.
+// ExpectedVersion binds an edit to the displayed
 // record when the provider supports versioning.
 // Host lists use exclusive After IDs and Limit (0 defaults to 100,
-// maximum 1000); Pending filters host lists. Audits use opaque AuditCursor values
+// maximum 1000). Audits use opaque AuditCursor values
 // and AuditLimit with the same bounds. Cursor fields survive JSON as exact values.
 type ControlRequest struct {
 	After           string          `json:"after,omitempty"`
 	Limit           int             `json:"limit,omitempty"`
-	Pending         bool            `json:"pending,omitempty"`
 	AuditCursor     string          `json:"audit-cursor,omitempty"`
 	AuditLimit      int             `json:"audit-limit,omitempty"`
 	Action          string          `json:"action"`
 	ID              string          `json:"id,omitempty"`
 	ExpectedVersion string          `json:"expected-version,omitempty"`
 	Host            *InventoryInput `json:"host,omitempty"`
-	Token           string          `json:"token,omitempty"`
+	Subject         string          `json:"subject,omitempty"`
 	LifetimeSeconds int64           `json:"lifetime-seconds,omitempty"`
 }
 
@@ -276,12 +269,10 @@ type HostRecord struct {
 	UpdatedAt time.Time      `json:"updated-at"`
 }
 
-// EnrollmentToken is a single-use preapproval for host enrollment.
+// EnrollmentToken is a reusable control-signed provisioning credential.
 type EnrollmentToken struct {
-	ID        string    `json:"id"`
+	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires-at"`
-	UsedBy    string    `json:"used-by,omitempty"`
-	Revoked   bool      `json:"revoked"`
 }
 
 // AuditPage contains events and a backend-owned continuation cursor. Empty Next

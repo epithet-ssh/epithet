@@ -2,15 +2,14 @@ package inmemory
 
 import (
 	"context"
-	"time"
 
 	"github.com/epithet-ssh/epithet/pkg/facts/inventory"
 )
 
 type memInv struct {
-	hosts  map[string]inventory.Host
-	tokens map[string]struct{}
-	audit  []inventory.AuditEvent
+	hosts map[string]inventory.Host
+
+	audit []inventory.AuditEvent
 }
 
 func (m *memInv) SupportsVersioning() bool { return false }
@@ -35,17 +34,7 @@ func (m *memInv) GetHost(ctx context.Context, id string) (*inventory.Host, error
 	panic("implement me")
 }
 
-func (m *memInv) ListHosts(ctx context.Context, after string, limit int, pending bool) ([]inventory.Host, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *memInv) CreateToken(ctx context.Context, id string, lifetime time.Duration, event inventory.AuditEvent) (inventory.EnrollmentToken, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *memInv) RevokeToken(ctx context.Context, id string, event inventory.AuditEvent) error {
+func (m *memInv) ListHosts(ctx context.Context, after string, limit int) ([]inventory.Host, error) {
 	//TODO implement me
 	panic("implement me")
 }

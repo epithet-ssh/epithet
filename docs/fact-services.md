@@ -153,7 +153,7 @@ credentials. Its requests and responses are also defined in `pkg/facts`.
 | Claim | Meaning |
 |---|---|
 | `iss` | OpenSSH SHA256 fingerprint of the signing key |
-| `sub` | Authenticated actor for management; omitted for service-only reads/enrollment |
+| `sub` | Authenticated administrator or enrollment subject; omitted for service-only reads |
 | `aud` | `epithet-directory` or `epithet-inventory` |
 | `iat`, `exp` | Unix seconds; token lifetime is 60 seconds |
 | `jti` | Random request identifier |
@@ -164,8 +164,9 @@ credentials. Its requests and responses are also defined in `pkg/facts`.
 | `bh` | Unpadded base64url SHA256 digest of the body; empty-body digest for GET |
 
 Verify signature, audience, expiry and issued-at freshness, method, target including query,
-body digest, If-Match, and Content-Type. Algorithms follow the SSH key type: Ed25519 uses EdDSA, RSA
-uses PS256, and supported ECDSA curves use ES256/ES384. Preserve authority, escaped
+body digest, If-Match, and Content-Type. For service requests and enrollment tokens,
+Ed25519 uses EdDSA, RSA uses PS256, and ECDSA P-256 and P-384 use ES256 and ES384
+respectively. Preserve authority, escaped
 path, and query through proxies. Rewriting any of them invalidates the signature.
 Tokens are request-bound but do not use a replay database. TLS remains necessary
 for remote services; Unix sockets are supported for local services.
@@ -224,23 +225,20 @@ database under `state-dir`: `directory/directory.db` for SCIM users and
 foreign keys, WAL journaling, and fully synchronous transactions. Static directory
 facts remain YAML configuration; the host proposal editor also continues to use YAML.
 
-Managed inventory stores typed host records, names, labels, accounts, enrollment
-tokens, and audit events. Mutations check admission rules and commit the host,
-token state and audit together. Lookups return current host facts without an
-inventory-wide revision. Pending and denied hosts supply no facts;
-exact records take precedence over pattern records. A pattern match exposes the
+Managed inventory stores typed host records, names, labels, accounts, and audit events. Mutations check admission rules and commit the host
+and audit together. Lookups return current host facts without an
+inventory-wide revision. Enrollment creates active records; exact records take precedence over pattern records. A pattern match exposes the
 requested hostname as its resource name. If multiple active patterns match, lookup
 fails with a conflict rather than selecting one by order.
-Removing a managed host deletes its names and token metadata, retains audit history,
+Removing a managed host deletes its names and facts, retains audit history,
 and appends the supplied removal event.
 
 Inventory administration returns bounded pages: 100 records by default, with a
 maximum of 1,000. `inventory list` accepts `--after FULL_ID`
-and `--limit N`; `inventory list --pending` filters before applying the page limit.
+and `--limit N`.
 Host pages are selected by ID, then sorted by name for display. A full host page
 prints its continuation ID to stderr, preserving the concise stdout table.
-Use the continuation ID rather than the last displayed name. Tokens have no
-retrieval operation; create returns a credential and revoke takes that credential.
+Use the continuation ID rather than the last displayed name.
 
 `inventory audit --cursor CURSOR --limit N` uses the same page bounds. Audit
 pages contain `events` and an optional `next` cursor. Events retain their supplied
@@ -248,7 +246,7 @@ timestamps and have no sequence field. Pass `next` back unchanged; its format is
 owned by the backend. Empty `next` ends enumeration. Ordering, consistency during
 writes, and cursor lifetime are backend properties.
 
-CLI/control requests use `after`, `limit`, and `pending` for host lists,
+CLI/control requests use `after` and `limit` for host lists,
 and `audit-cursor` and `audit-limit` for inventory or directory audit. Zero limits
 select the default; negative or oversized limits are rejected. Audit pagination
 does not require global ordering or unique timestamps.
@@ -266,7 +264,9 @@ database; schema or storage errors fail startup. The old `inventory-mode`,
 Principal mode is explicit on each managed record.
 
 Use `epithet inventory add 'ci-*.example'` to declare an active host with a wildcard name
-through the YAML editor. Creation requires inventory-admin authorization. Choose
+through the YAML editor. The command uses the same host creation API as
+`epithet host enroll`. Either an inventory administrator credential or an
+enrollment token can create records with exact or wildcard names. Choose
 its labels, explicit accounts (`null`, `[]`, or a list), principal mode, and realm.
 Existing `edit`, `show`, and
 `remove` commands operate on the same host records by ID or name, including wildcard
@@ -289,12 +289,32 @@ provider. See the [inventory provider contract](../pkg/facts/inventory/README.md
 for resources, JSON, preconditions, automation credentials and backend integration.
 The inventory provider no longer exposes the private `/manage` action envelope.
 
-Pending enrollment requires a shared bearer token configured on control with
-`enrollment-token` or `enrollment-token-file`; omitting both disables pending
-submissions. `epithet host enroll --enrollment-token-file FILE` sends the credential
-to control, which accepts it only for pending enrollment and never forwards it to
-the inventory provider. Administrator approval remains necessary. Single-use
-preapproval tokens remain a separate enrollment path.
+Control issues reusable enrollment JWTs with its existing signing key and the
+minimal `aud`, `exp`, `sub` contract in [ADR 0003](adr/0003-control-issued-enrollment-tokens.md).
+`epithet inventory token create --subject production-provisioner --expires-in 2160h`
+uses the existing administrative authentication flow. Both options are required;
+there is no default lifetime or 24-hour policy cap. Enroll with
+`epithet host enroll --ca URL --token-file FILE`. Control checks the signature,
+enrollment audience, strict expiry, required subject, and subject denylist.
+It sends inventory a signed POST to the discovered record URL for the
+client-generated host ID, carrying the verified
+subject for audit, never the public JWT. Host IDs are independent and persisted
+locally across retries. Identical retries do not mutate records or audit history;
+differing facts conflict, including concurrent requests.
+
+Control's `denied-subject = ["retired-provisioner"]` configuration
+rejects issuance and enrollment for exact, case-sensitive subject matches.
+Distribute the same configuration to every control instance and restart them.
+Keep entries permanently as an operational convention, and issue replacement
+credentials to a new subject; removing an entry re-enables unexpired tokens.
+Expiration and revocation do not deactivate existing hosts. Tokens grant
+unrestricted authority over otherwise-valid host facts, including realm, but
+cannot authorize administrative operations or user SSH login.
+
+The pending shared bearer, inventory-owned single-use tokens, manual approval,
+and individual token revocation have been removed. Inventory schema version 6
+retires the old credential table while preserving existing active hosts and audit.
+There is no pending-record transition or compatibility workflow.
 
 ## Optional SCIM management
 

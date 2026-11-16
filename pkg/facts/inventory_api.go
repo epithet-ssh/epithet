@@ -9,7 +9,6 @@ import (
 )
 
 const InventoryRecordsRelation = "https://epithet.dev/rel/inventory-records"
-const InventoryTokensRelation = "https://epithet.dev/rel/inventory-tokens"
 const InventoryAuditRelation = "https://epithet.dev/rel/inventory-audit"
 
 // InventoryHost uses the fact vocabulary while retaining the managed store's
@@ -51,16 +50,11 @@ type InventoryRecord struct {
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 }
+
+// InventoryCreate is posted to the caller's record ID. An identical retry
+// returns the stored record. The signed request subject is the actor.
 type InventoryCreate struct {
-	Host  *InventoryHost `json:"host"`
-	Token string         `json:"token,omitempty"`
-}
-type InventoryTokenCreate struct {
-	LifetimeSeconds int64 `json:"lifetimeSeconds"`
-}
-type InventoryToken struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Host *InventoryHost `json:"host"`
 }
 
 // DecodeInventoryJSON rejects unknown fields and trailing documents at the wire boundary.

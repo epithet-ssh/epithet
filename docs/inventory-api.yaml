@@ -70,7 +70,7 @@ paths:
         relations, and partial inventory relation sets are errors, never fallback.
       responses:
         '204':
-          description: Discovery succeeded; all three inventory relations advertise optional management
+          description: Discovery succeeded; both inventory relations advertise optional management
           headers:
             Cache-Control: {$ref: '#/components/headers/NoStore'}
             Allow:
@@ -79,17 +79,17 @@ paths:
             Link-Template:
               description: >-
                 RFC 9652 structured list of RFC 6570 URI templates. May be sent
-                as repeated headers or a combined list. Advertise all three
+                as repeated headers or a combined list. Advertise both
                 relations shown in the example, or none for lookup-only support.
                 Templates must describe this fact endpoint (no anchor parameter).
                 Clients expand the templates and resolve relative URLs against
                 the fact URL; paths belong to the provider. Records use id, after,
-                limit, and pending variables; tokens use token; audit uses cursor
-                and limit. See pkg/facts/inventory/README.md for resource operations.
+                and limit variables. Host creation uses POST to the records URL
+                with the caller's id. Audit uses cursor and limit.
+                See pkg/facts/inventory/README.md for resource operations.
               schema: {type: string}
               example: >-
-                "/inventory/records{/id}{?after,limit,pending}"; rel="https://epithet.dev/rel/inventory-records",
-                "/inventory/tokens{?token}"; rel="https://epithet.dev/rel/inventory-tokens",
+                "/inventory/records{/id}{?after,limit}"; rel="https://epithet.dev/rel/inventory-records",
                 "/inventory/audit{?cursor,limit}"; rel="https://epithet.dev/rel/inventory-audit"
         '4XX':
           description: Discovery unavailable or refused; control treats the provider as lookup-only

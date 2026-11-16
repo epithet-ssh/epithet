@@ -3,7 +3,7 @@ yatl_version: 1
 title: Coordinate enrollment tokens, host configuration, and inventory federation
 id: mf2js8xw
 created: 2026-10-24T04:13:35.453651303Z
-updated: 2026-11-16T04:45:01Z
+updated: 2026-11-16T05:05:22Z
 author: Brian McCallister
 priority: medium
 tags:
@@ -16,8 +16,9 @@ tags:
 # Planning status
 
 Parent plan for four independently scoped work items. The user authorized this
-split and an architecture decision record on 2026-11-16. Production implementation
-has not started and is not authorized by this documentation update.
+split and an architecture decision record on 2026-11-16. The unrestricted-token
+implementation is complete following a separate explicit implementation request.
+The remaining sibling tasks retain their deferred scope.
 
 [ADR 0003](../../docs/adr/0003-control-issued-enrollment-tokens.md) records the accepted unrestricted-enrollment
 decision and reasoning. Child tasks own implementation scope and deferred design;
@@ -28,7 +29,7 @@ at once.
 
 | Work item | Status and relationship |
 | --- | --- |
-| [Control-issued unrestricted tokens](f1ljvrhn.md) | Design agreed; implementation not started. First enrollment phase. |
+| [Control-issued unrestricted tokens](../closed/f1ljvrhn.md) | Implemented; ADR 0003 and acceptance tests complete. |
 | [Constrained grants and destination identity](7oeid3c2.md) | Deferred design building on unrestricted tokens. |
 | [Independent host configuration](ttxxxg3i.md) | Separate work; remaining configuration contracts need design. |
 | [Inventory federation](yrwrrbyf.md) | Separate design covering lookup, partial capabilities, and listing. |
@@ -39,10 +40,11 @@ to implement cloud or hypervisor providers.
 
 ## Problem and deployment model
 
-The current enrollment model has two credentials with different lifecycles,
+The former enrollment model had two credentials with different lifecycles,
 transport, and owners: a control-configured bearer permits pending submissions,
 while an inventory-stored single-use token permits activation and becomes the
-host ID. This is confusing and couples credentials to resource identity.
+host ID. ADR 0003 replaces that coupling with control-issued JWTs and independent
+host identity.
 
 Support mixed environments with independent authoritative inventory sources:
 
@@ -111,3 +113,11 @@ Split into four linked tasks at the user's request. Recorded the agreed minimal
 unrestricted-token and subject-denylist decision in ADR 0003. Moved outstanding
 configuration, constraint, identity, and federation design into the children;
 marked superseded proposals explicitly. No production behavior changed.
+
+
+---
+# Log: 2026-11-16T05:05:22Z Codex
+
+Completed f1ljvrhn in jj change vmyyktul after explicit user authorization.
+Unrestricted enrollment tokens and subject denial are implemented and validated.
+Constraints, host configuration, and federation remain outside this implementation.

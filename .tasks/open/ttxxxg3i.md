@@ -18,7 +18,7 @@ Parent: [mf2js8xw](mf2js8xw.md).
 
 Separate work with open design details; implementation not started or authorized
 by this planning update. This is not a prerequisite for
-[control-issued enrollment tokens](f1ljvrhn.md). See
+[control-issued enrollment tokens](../closed/f1ljvrhn.md). See
 [ADR 0003](../../docs/adr/0003-control-issued-enrollment-tokens.md) for the enrollment boundary.
 
 ## Agreed direction

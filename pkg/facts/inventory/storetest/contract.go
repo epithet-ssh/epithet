@@ -38,12 +38,12 @@ func Run(t *testing.T, open Factory) {
 			return e
 		}
 		id := inventory.NewID()
-		h, err := inventory.Enroll(ctx, store, id, proposal("audit.example"), "", event("enroll", id))
+		h, err := inventory.CreateHost(ctx, store, id, proposal("audit.example"), event("enroll", id))
 		require.NoError(t, err)
 		require.Equal(t, id, h.ID)
 		require.Equal(t, expected[0].At, h.CreatedAt)
-		h.Status = "active"
-		h, err = store.UpsertHost(ctx, *h, inventory.WriteConditions{ExpectedVersion: h.Version}, event("approve", id))
+		h.Labels = map[string]string{"environment": "edited"}
+		h, err = store.UpsertHost(ctx, *h, inventory.WriteConditions{ExpectedVersion: h.Version}, event("edit", id))
 		require.NoError(t, err)
 		patternID := inventory.NewID()
 		p := inventory.Host{Status: inventory.StatusActive, Names: []string{"*.audit.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}
@@ -51,11 +51,6 @@ func Run(t *testing.T, open Factory) {
 		pattern, err := store.UpsertHost(ctx, p, inventory.WriteConditions{}, event("pattern", patternID))
 		require.NoError(t, err)
 		require.Equal(t, patternID, pattern.ID)
-		tokenID := inventory.NewID()
-		token, err := store.CreateToken(ctx, tokenID, time.Hour, event("token", tokenID))
-		require.NoError(t, err)
-		require.Equal(t, tokenID, token.ID)
-		require.NoError(t, store.RevokeToken(ctx, tokenID, event("revoke", tokenID)))
 		require.NoError(t, store.RemoveHost(ctx, id, h.Version, event("remove", id)))
 		var actual []inventory.AuditEvent
 		var cursor string
@@ -79,15 +74,15 @@ func Run(t *testing.T, open Factory) {
 		for i := count - 1; i >= 0; i-- {
 			id := fmt.Sprintf("%064x", i+1)
 			ids[i] = id
-			_, err := store.UpsertHost(ctx, inventory.Host{ID: id, Status: inventory.StatusPending, Names: []string{"page.example"}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "create", id))
+			_, err := store.UpsertHost(ctx, inventory.Host{ID: id, Status: inventory.StatusActive, Names: []string{fmt.Sprintf("page-%d.example", i)}, Accounts: []string{}, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "create", id))
 			require.NoError(t, err)
 		}
-		first, err := store.ListHosts(ctx, "", 0, false)
+		first, err := store.ListHosts(ctx, "", 0)
 		require.NoError(t, err)
 		require.Len(t, first, inventory.DefaultPageLimit)
 		var after string
 		for start := 0; start < count; start += 17 {
-			page, err := store.ListHosts(ctx, after, 17, false)
+			page, err := store.ListHosts(ctx, after, 17)
 			require.NoError(t, err)
 			require.Len(t, page, min(17, count-start))
 			for i, h := range page {
@@ -95,25 +90,17 @@ func Run(t *testing.T, open Factory) {
 			}
 			after = page[len(page)-1].ID
 		}
-		empty, err := store.ListHosts(ctx, after, 17, false)
+		empty, err := store.ListHosts(ctx, after, 17)
 		require.NoError(t, err)
 		require.Empty(t, empty)
-		// Filter before applying the limit, even when the cursor has been deleted.
-		h, err := store.GetHost(ctx, ids[0])
-		require.NoError(t, err)
-		h.Status = "denied"
-		_, err = store.UpsertHost(ctx, *h, inventory.WriteConditions{ExpectedVersion: h.Version}, inventory.NewAuditEvent("admin", "deny", h.ID))
-		require.NoError(t, err)
 		removed, err := store.GetHost(ctx, ids[1])
 		require.NoError(t, err)
 		require.NoError(t, store.RemoveHost(ctx, ids[1], removed.Version, inventory.NewAuditEvent("admin", "remove", ids[1])))
-		for _, cursor := range []string{"", ids[1]} {
-			page, err := store.ListHosts(ctx, cursor, 2, true)
-			require.NoError(t, err)
-			require.Len(t, page, 2)
-			require.Equal(t, ids[2], page[0].ID)
-			require.Equal(t, ids[3], page[1].ID)
-		}
+		page, err := store.ListHosts(ctx, ids[1], 2)
+		require.NoError(t, err)
+		require.Len(t, page, 2)
+		require.Equal(t, ids[2], page[0].ID)
+		require.Equal(t, ids[3], page[1].ID)
 		firstEvents, _, err := store.Audit(ctx, "", 0)
 		require.NoError(t, err)
 		require.LessOrEqual(t, len(firstEvents), inventory.DefaultPageLimit)
@@ -135,19 +122,19 @@ func Run(t *testing.T, open Factory) {
 				createdIDs = append(createdIDs, e.Resource)
 			}
 		}
-		require.Len(t, events, count+2)
+		require.Len(t, events, count+1)
 		require.ElementsMatch(t, ids, createdIDs)
 	})
-	t.Run("review and removal", func(t *testing.T) {
+	t.Run("edit and removal", func(t *testing.T) {
 		store := open(t)
 		id1 := inventory.NewID()
-		h, err := inventory.Enroll(t.Context(), store, id1, proposal("one.example"), "", inventory.NewAuditEvent("host", "enroll", id1))
+		h, err := inventory.CreateHost(t.Context(), store, id1, proposal("one.example"), inventory.NewAuditEvent("host", "enroll", id1))
 		require.NoError(t, err)
 		got, err := store.LookupHost(t.Context(), "one.example")
 		require.NoError(t, err)
-		require.Nil(t, got)
-		h.Status = "active"
-		active, err := store.UpsertHost(t.Context(), *h, inventory.WriteConditions{ExpectedVersion: h.Version}, inventory.NewAuditEvent("admin", "approve", h.ID))
+		require.NotNil(t, got)
+		h.Labels = map[string]string{"environment": "edited"}
+		active, err := store.UpsertHost(t.Context(), *h, inventory.WriteConditions{ExpectedVersion: h.Version}, inventory.NewAuditEvent("admin", "edit", h.ID))
 		require.NoError(t, err)
 		if store.SupportsVersioning() {
 			require.NotEmpty(t, h.Version)
@@ -181,10 +168,7 @@ func Run(t *testing.T, open Factory) {
 				firstHost.PrincipalMode, firstHost.Realm = inventory.EpithetPrincipalV1, principal.Realm(realm)
 				firstHost.Labels = map[string]string{"role": "first"}
 				firstID := inventory.NewID()
-				first, err := inventory.Enroll(ctx, store, firstID, firstHost, "", inventory.NewAuditEvent("host", "enroll", firstID))
-				require.NoError(t, err)
-				first.Status = "active"
-				first, err = store.UpsertHost(ctx, *first, inventory.WriteConditions{ExpectedVersion: first.Version}, inventory.NewAuditEvent("admin", "approve", firstID))
+				first, err := inventory.CreateHost(ctx, store, firstID, firstHost, inventory.NewAuditEvent("host", "enroll", firstID))
 				require.NoError(t, err)
 
 				secondHost := proposal("second.example")
@@ -192,9 +176,7 @@ func Run(t *testing.T, open Factory) {
 				secondHost.Labels = map[string]string{"role": "second"}
 				secondHost.Accounts = nil
 				secondID := inventory.NewID()
-				token, err := store.CreateToken(ctx, secondID, time.Hour, inventory.NewAuditEvent("admin", "token-create", secondID))
-				require.NoError(t, err)
-				_, err = inventory.Enroll(ctx, store, secondID, secondHost, token.ID, inventory.NewAuditEvent("host", "enroll", secondID))
+				_, err = inventory.CreateHost(ctx, store, secondID, secondHost, inventory.NewAuditEvent("host", "enroll", secondID))
 				require.NoError(t, err)
 
 				first.Labels = map[string]string{"role": "edited"}
@@ -227,22 +209,16 @@ func Run(t *testing.T, open Factory) {
 			})
 		}
 	})
-	t.Run("concurrent approval", func(t *testing.T) {
+	t.Run("concurrent creation with the same name", func(t *testing.T) {
 		store := open(t)
-		id2 := inventory.NewID()
-		first, err := inventory.Enroll(t.Context(), store, id2, proposal("same.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
-		require.NoError(t, err)
-		id3 := inventory.NewID()
-		second, err := inventory.Enroll(t.Context(), store, id3, proposal("same.example"), "", inventory.NewAuditEvent("host", "enroll", id3))
-		require.NoError(t, err)
 		var wg sync.WaitGroup
 		errs := make(chan error, 2)
 		start := make(chan struct{})
-		for _, h := range []*inventory.Host{first, second} {
+		for range 2 {
 			wg.Go(func() {
 				<-start
-				h.Status = "active"
-				_, err := store.UpsertHost(t.Context(), *h, inventory.WriteConditions{ExpectedVersion: h.Version}, inventory.NewAuditEvent("admin", "approve", h.ID))
+				id := inventory.NewID()
+				_, err := inventory.CreateHost(t.Context(), store, id, proposal("same.example"), inventory.NewAuditEvent("provisioner", "enroll", id))
 				errs <- err
 			})
 		}
@@ -262,21 +238,17 @@ func Run(t *testing.T, open Factory) {
 		require.Equal(t, 1, success)
 		require.Equal(t, 1, conflict)
 	})
-	t.Run("single-use token", func(t *testing.T) {
+	t.Run("concurrent creation with the same ID", func(t *testing.T) {
 		store := open(t)
 		id4 := inventory.NewID()
-		token, err := store.CreateToken(t.Context(), id4, time.Hour, inventory.NewAuditEvent("admin", "token-create", id4))
-		require.NoError(t, err)
-		_, err = store.GetHost(t.Context(), token.ID)
-		require.ErrorIs(t, err, inventory.ErrNotFound)
 		errs := make(chan error, 2)
 		start := make(chan struct{})
 		var wg sync.WaitGroup
 		for _, name := range []string{"a.example", "b.example"} {
 			wg.Go(func() {
 				<-start
-				id5 := token.ID
-				_, err := inventory.Enroll(t.Context(), store, id5, proposal(name), token.ID, inventory.NewAuditEvent("host", "enroll", id5))
+				id5 := id4
+				_, err := inventory.CreateHost(t.Context(), store, id5, proposal(name), inventory.NewAuditEvent("host", "enroll", id5))
 				errs <- err
 			})
 		}
@@ -287,7 +259,7 @@ func Run(t *testing.T, open Factory) {
 		for err := range errs {
 			if err == nil {
 				success++
-			} else if errors.Is(err, inventory.ErrToken) {
+			} else if errors.Is(err, inventory.ErrConflict) {
 				rejected++
 			} else {
 				t.Fatal(err)
@@ -295,7 +267,7 @@ func Run(t *testing.T, open Factory) {
 		}
 		require.Equal(t, 1, success)
 		require.Equal(t, 1, rejected)
-		admitted, err := store.GetHost(t.Context(), token.ID)
+		admitted, err := store.GetHost(t.Context(), id4)
 		require.NoError(t, err)
 		require.Equal(t, "active", admitted.Status)
 	})
@@ -312,7 +284,7 @@ func Run(t *testing.T, open Factory) {
 		stored, err := store.GetHost(ctx, id)
 		require.NoError(t, err)
 		require.ElementsMatch(t, host.Names, stored.Names)
-		page, err := store.ListHosts(ctx, "", 10, false)
+		page, err := store.ListHosts(ctx, "", 10)
 		require.NoError(t, err)
 		require.Len(t, page, 1)
 		require.ElementsMatch(t, host.Names, page[0].Names)
@@ -360,10 +332,7 @@ func Run(t *testing.T, open Factory) {
 		_, err = store.LookupHost(t.Context(), "one.example")
 		require.ErrorIs(t, err, inventory.ErrConflict)
 		id8 := inventory.NewID()
-		h, err := inventory.Enroll(t.Context(), store, id8, proposal("one.example"), "", inventory.NewAuditEvent("host", "enroll", id8))
-		require.NoError(t, err)
-		h.Status = "active"
-		_, err = store.UpsertHost(t.Context(), *h, inventory.WriteConditions{ExpectedVersion: h.Version}, inventory.NewAuditEvent("admin", "approve", h.ID))
+		_, err = inventory.CreateHost(t.Context(), store, id8, proposal("one.example"), inventory.NewAuditEvent("host", "enroll", id8))
 		require.NoError(t, err)
 		got, err := store.LookupHost(t.Context(), "one.example")
 		require.NoError(t, err)

@@ -11,7 +11,7 @@ turns off management. The shared packages have no cloud SDK dependencies.
 
 `Store` exposes complete operations rather than transactions or database rows.
 An adapter implements its database schema, queries, conditional writes and
-transactions. Every mutation commits records, token state, and audit together. Run `storetest.Run` with one fresh inventory to exercise the
+transactions. Every mutation commits records and audit together. Run `storetest.Run` with one fresh inventory to exercise the
 contract against another backend. The factory returns one
 `storetest.Backend{Hosts: data, Store: management}` value pairing the independent
 data and management views. The factory owns its cleanup.
@@ -21,15 +21,16 @@ store returns nonempty `Host.Version` values. Versions are opaque strings;
 callers compare them only for equality and pass them back as `expectedVersion`
 in `UpsertHost` write conditions and to `RemoveHost`. An empty expected version requests no version
 check. Stores without versioning return empty versions and callers pass empty
-preconditions. Enforcement and atomicity are backend properties. SQLite supports
+preconditions. Other enforcement and consistency properties belong to the backend.
+Creation-only writes must atomically create, return an identical retry unchanged,
+or conflict on differing facts, including concurrent calls. SQLite supports
 versioning and keeps its numeric counter entirely inside the adapter.
 
 `Host` contains names, authorization facts, and enrollment metadata. Names may be
 exact hostnames or wildcard expressions in the same collection. There is no
-separate pattern resource or proposal object. `Enroll` accepts exact names and
-creates pending state (or redeems a token). All creation and updates use
+separate pattern resource or proposal object. `CreateHost` accepts both kinds
+of name and creates active records. All creation and updates use
 `UpsertHost`; reads and removal use `GetHost`, `ListHosts`, and `RemoveHost`.
-Administrator creation may include exact or wildcard names.
 
 Storage owns the distinction between exact and wildcard names. SQLite indexes
 that distinction per name: lookup checks exact names first, then reads only
@@ -38,8 +39,7 @@ requested hostname and the matching record's facts, without assigning that
 record's management identity to the synthesized host. Multiple matching names on
 one record are unambiguous; matching different records is a conflict.
 
-Epithet generates IDs with `inventory.NewID` before calling storage. Token
-credentials become the enrolled host ID. Tokens do not create host reservations. Each mutation receives an `AuditEvent`
+Epithet generates IDs with `inventory.NewID` before calling storage. Host IDs are independent random identities; knowing one grants no authority. Each mutation receives an `AuditEvent`
 containing the authenticated actor, action, resource ID and operation timestamp.
 Storage preserves every field; it does not construct or
 complete audit events. Record timestamps use the supplied event time. Removal
@@ -47,34 +47,31 @@ retains audit history and appends the supplied removal event.
 
 `UpsertHost(ctx, host, conditions, event)` addresses `host.ID`. Its
 `WriteConditions` carries an optional `ExpectedVersion`, `CreateOnly` to forbid
-replacing existing facts, and `ConsumeToken` to require the single-use credential
-matching the host ID. The zero value permits an ordinary upsert. Enrollment sets
-`CreateOnly` and, for preapproval, `ConsumeToken`; identical retries return the
-stored host without changing its status or audit history. Administrator writes
+replacing existing facts. The zero value permits an ordinary upsert. Host creation sets
+`CreateOnly`; identical retries return the
+stored host without changing its status or audit history. Administrator edits
 use the optional version condition. Validation and review policy stay above
 storage; the backend applies these write conditions with persistence.
 
-SQLite uses schema version 5, with indexed exact/wildcard names, retained audit
-history, and no inventory-wide revision counter. Older schema
-versions are rejected without modification; there is no automatic migration.
+SQLite uses schema version 6, with indexed exact/wildcard names and retained audit
+history. Opening version 5 drops its obsolete credential table and advances the
+version, preserving host records and audit history. Other older versions are
+rejected. There is no pending-record migration or transition workflow.
 
-Epithet owns enrollment and review policy:
+Epithet owns enrollment authorization and edit policy:
 
-- `Enroll` validates the submitted facts and creates a pending host, or calls
-  `UpsertHost` to create the host and consume its token in one storage operation.
-  SQLite commits activation, token consumption, and the supplied audit event in
-  one transaction; a failed operation leaves the token usable.
-- `Review` validates administrator edits and approval/denial transitions before
-  storage, and selects the audit action.
-- `Creation` and `Replacement` prepare records for persistence.
-  `Replacement` checks metadata and an optional expected version; it does not
-  impose the administrator review workflow on storage.
-- `NewAuditEvent` constructs events before storage. Each mutation persists the
-  supplied event, including token activation, without a separate redemption event.
+- `CreateHost` validates names and host facts, assigns the caller's ID and
+  active status, and calls `UpsertHost` with `CreateOnly`. The provider owns host
+  validation and normalization; control forwards the submitted facts unchanged.
+  SQLite commits the host and its supplied audit event in one transaction.
+- `Host.ValidateEdit` validates administrator edits; lifecycle transitions are not supported.
+- `Creation` and `Replacement` prepare persistence metadata and validate records.
+- `NewAuditEvent` constructs events with the authenticated actor. Enrollment uses
+  the verified JWT subject; unchanged retries produce no duplicate event.
 
 Adapters enforce active exact-name/pattern uniqueness. Realms may be shared
 across records with independent labels and account restrictions, including
-generated realms. Pending and denied records do not reserve names. Enrollment
+generated realms. Enrollment
 retries with the same ID and facts return the existing record unchanged; different
 facts cannot overwrite it. Administrator edits use the same `UpsertHost` operation.
 
@@ -96,8 +93,7 @@ inventory relation sets are errors, never fallback. Discovery is not cached.
 HTTP/1.1 204 No Content
 Allow: GET, OPTIONS
 Cache-Control: no-store
-Link-Template: "/inventory/records{/id}{?after,limit,pending}"; rel="https://epithet.dev/rel/inventory-records"
-Link-Template: "/inventory/tokens{?token}"; rel="https://epithet.dev/rel/inventory-tokens"
+Link-Template: "/inventory/records{/id}{?after,limit}"; rel="https://epithet.dev/rel/inventory-records"
 Link-Template: "/inventory/audit{?cursor,limit}"; rel="https://epithet.dev/rel/inventory-audit"
 ```
 
@@ -108,16 +104,13 @@ relative results against the discovery URL. No resource-level OPTIONS is needed.
 | Template / target | Methods | Result |
 |---|---|---|
 | records, no id | GET | 200, JSON array of records |
-| records, no id | POST | administrator creation, 201 |
-| records, id | PUT without actor | enrollment or identical retry, 200 |
-| records, id | GET, PUT | 200, complete record plus ETag |
+| records, id | POST | create an active host or return an identical retry, 200 |
+| records, id | GET; PUT with a complete record | 200, complete record plus ETag |
 | records, id | DELETE | 204 |
-| tokens, no token | POST | 201, new token and expiry |
-| tokens, token | DELETE | 204 |
 | audit | GET | 200, audit page with `events` and optional `next` |
 
-There is no token retrieval. Record list uses `after` (exclusive record ID),
-`limit` (0/default 100, max 1000), and `pending`. Audit uses an opaque `cursor` and `limit`. Empty cursor starts a read;
+Record list uses `after` (exclusive record ID),
+`limit` (0/default 100, max 1000). Audit uses an opaque `cursor` and `limit`. Empty cursor starts a read;
 pass the returned `next` back unchanged. Empty `next` means no further page.
 Ordering, consistency during writes, and cursor lifetime are backend properties.
 Event timestamps need not be unique or monotonic. The CLI accepts `--cursor` and
@@ -128,7 +121,7 @@ GET and PUT share this representation:
 ```json
 {
   "id": "record-id",
-  "status": "pending",
+  "status": "active",
   "host": {
     "name": ["web.example"],
     "attributes": {"environment": "production"},
@@ -153,30 +146,21 @@ records. Mutation requests carry `expected-version`. Control preserves the token
 without interpreting it numerically; an absent provider ETag yields no version
 and no outgoing If-Match.
 
-Administrator PUT echoes id and timestamps unchanged. It either replaces host attributes while
-retaining status or changes a pending record to active/denied without modifying
-host attributes. Combined edit and review is rejected. A successful mutation
-returns the committed record and a new ETag when versioning is supported. Name/pattern conflicts return 409.
+Administrator PUT echoes id, active status, and timestamps unchanged while replacing
+host facts. A successful mutation returns the committed record and a new ETag
+when versioning is supported. Name/pattern conflicts return 409.
 
-Enrollment uses PUT to the records URL with the client-selected `id`. It carries
-`{"host": {...}}` and, for preapproval, `"token": "credential"` equal to that ID.
-Control signs the request without an administrator actor. Pending submissions
-require the shared enrollment bearer at control; it never reaches inventory.
-Preapproved enrollment validates and consumes the token while creating an active
-host. Both paths accept identical retries without another write or audit event.
-Enrollment accepts exact names only and does not use If-Match. It cannot edit an
-existing host or undo an administrator's review.
-
-Administrator POST to the collection accepts `{"host": {...}}` and creates an
-active host with exact or wildcard names. Responses include the record, ETag when
-supported, and Location.
-
-POST tokens accepts `{"lifetimeSeconds": 3600}` (0 defaults to one hour; maximum
-24 hours), returning `{"token": "credential", "expiresAt": "..."}`. DELETE
-expands the known credential into the template's `token` variable. Invalid,
-expired or revoked credentials cannot create a host (403). A consumed credential
-only permits an identical retry of its existing host. Missing resources
-return 404; storage failures return 503. Errors use `{"error": "message"}`.
+Host creation uses POST to the records URL with the client-selected `id` and
+body `{"host": {...}}`. Control signs the request with the authenticated actor.
+Inventory accepts exact and wildcard names and records a `create` audit event.
+An identical retry returns the existing record without another audit event.
+Different facts conflict (409), including under concurrent requests.
+Responses include the record, ETag when supported, and Location. If the returned
+record ID differs from the requested ID, control reports HTTP 503. All mutations
+require a nonempty signed actor.
+Missing resources return 404; storage failures return 503. Errors use
+`{"error": "message"}`. Inventory has no token resources or credential storage. Token issuance no longer
+produces inventory audit events; enrollment mutations retain their audit events.
 
 ## Authentication and CLI
 
@@ -185,35 +169,60 @@ Providers accept request-bound service JWTs signed by control, with audience
 CA reader credentials cannot mutate. Control owns OIDC and the `inventory-admin`
 grant. Human CLI operations continue through the agent.
 
-Pending host enrollment requires the control plane's shared bearer credential,
-configured with `--enrollment-token-file FILE` or `--enrollment-token SECRET`.
-Without it, pending enrollment is disabled. This credential permits only submitting
-pending hosts; it grants no inventory reads, edits, approval, token management, or
-SCIM access. Control validates it and sends the ordinary signed enrollment request
-to the provider. The shared secret never reaches inventory or its storage adapter.
+Control issues reusable enrollment JWTs with the same key and algorithm it uses
+for provider requests. The payload
+contains only `aud: "epithet-enrollment"`, required `exp` (Unix seconds), and a
+required nonempty `sub` naming the provisioning principal. Verification checks
+the configured key, audience, expiration without a grace period, and subject.
+Enrollment tokens authorize only host creation. Inventory administrators can
+create hosts using OIDC or the configured inventory automation credential.
+Deployments sharing a signing key share enrollment trust.
 
-Configure the control service (including when launched by `epithet server`) with:
-
-```toml
-enrollment-token-file = "/etc/epithet/enrollment-token"
-```
-
-The public client sends PUT to the control URL followed by the host ID. Host
-enrollment persists that ID in an `id` file beside `realm` and the CA public key
-before submitting. Pending enrollment generates it once; preapproval uses the
-single-use credential. Rerunning enrollment reuses the stored ID.
-
-Supply the same secret on an enrolling host:
+Issue through the existing administrator/agent flow:
 
 ```sh
-epithet host enroll --ca https://ca.example/ \
-  --enrollment-token-file /path/to/enrollment-token
+epithet inventory token create --subject production-provisioner --expires-in 2160h
+epithet host enroll --ca https://ca.example/ --token-file /path/to/enrollment.jwt
 ```
 
-The client sends this secret in `Authorization: Bearer ...` to control. The host
-remains pending until an administrator approves it. The existing `--token` and
-`--token-file` options carry a single-use preapproval credential instead; that
-path does not require the shared pending-enrollment secret.
+Both `--subject` and an explicit positive `--expires-in` are required. Lifetimes
+are expressed with Go duration syntax and must be at least one second; there is
+no default or 24-hour policy cap. `--quiet` prints only the JWT. `--token` accepts
+the same credential directly. The host sends `Authorization: Bearer JWT` and
+persists an independent random host ID in `id` beside its realm and CA public key
+before submitting. Reruns reuse this ID even when the credential changes.
+
+Both `host enroll` and `inventory add` POST to the advertised control URL plus
+`/HOST_ID` with `{"action":"create","id":"HOST_ID","host":{...}}`. Host facts use the
+control vocabulary (`names`, `labels`, explicit `accounts`, `principal-mode`,
+optional `realm`). Success returns HTTP 200 with an active `host` record.
+There is no credential in the body. Issuance is an administratively authenticated
+POST with `{"action":"token-create","subject":"production-provisioner",
+"lifetime-seconds":7776000}`. Its response contains
+`{"token":{"token":"JWT","expires-at":"..."}}`.
+
+Each token authorizes multiple otherwise-valid hosts, including supplied labels,
+accounts, principal mode, and realm. Audit attributes enrollment to `sub`; it
+identifies the credential's provisioning principal, not a unique token or the
+person or machine holding it. Expiry limits new enrollment only; existing hosts
+remain active and normal user authentication and Writ policy still apply.
+
+Revoke a subject through normal control configuration and restart (including
+control launched by `epithet server`):
+
+```toml
+denied-subject = ["retired-provisioner", "compromised-provisioner"]
+```
+
+The equivalent repeatable flag is `--denied-subject SUBJECT`. Matching
+is exact and case-sensitive. All instances must receive the same list. Denied
+subjects cannot receive new tokens or enroll using any existing token. Retain
+entries operationally: removing one re-enables that subject's unexpired tokens.
+Issue replacement credentials to a new subject. There is no individual token
+revocation, use counter, history store, or configuration reload mechanism.
+
+The shared pending-enrollment bearer, single-use tokens, pending approval/denial,
+and per-token revocation are removed. Existing active hosts remain active.
 
 Control may configure `--inventory-token-file FILE` (or `--inventory-token`) for
 automation. This is separate from the SCIM credential and enrollment tokens.
@@ -227,5 +236,5 @@ epithet inventory --control-url https://control.example/manage \
 
 The public control/agent command envelope remains the CLI transport; control's
 provider hop uses the REST contract above. No provider implements that command
-envelope. `inventory token list` has been removed. Use token create to receive a
-credential and token revoke with the known credential to withdraw it.
+envelope. Token issuance belongs to control; providers implement only authorized
+host writes and audit retrieval.

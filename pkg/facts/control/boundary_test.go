@@ -73,8 +73,8 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 	for _, key := range []sshcert.RawPrivateKey{f.CAKey, f.ControlKey} {
 		signer, err := serviceauth.NewSignerFor(key, serviceauth.InventoryAudience)
 		require.NoError(t, err)
-		body := []byte(`{"lifetimeSeconds":0}`)
-		endpoint := strings.TrimSuffix(f.InventoryURL, "/lookup") + "/inventory/tokens"
+		body := []byte(`{"host":{"name":["backend.example"],"accounts":[],"principal":{"mode":"account-name"}}}`)
+		endpoint := strings.TrimSuffix(f.InventoryURL, "/lookup") + "/inventory/records/" + inventory.NewID()
 		req, err := http.NewRequestWithContext(t.Context(), "POST", endpoint, bytes.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
@@ -85,7 +85,7 @@ func TestSeparateRolesAndBackendAuthority(t *testing.T) {
 		if key == f.CAKey {
 			require.Equal(t, 403, response.StatusCode)
 		} else {
-			require.Equal(t, 201, response.StatusCode)
+			require.Equal(t, 200, response.StatusCode)
 		}
 
 	}
@@ -161,18 +161,17 @@ func TestCustomDirectoryNeedsOnlyLookup(t *testing.T) {
 	defer server.Close()
 	client, err := facts.NewAdminClient(server.URL+"/manage", tlsconfig.Config{Insecure: true})
 	require.NoError(t, err)
-	created, status, err := client.Control(t.Context(), idp.MintIDToken("admin", time.Now().Add(time.Hour)), facts.ControlRequest{Action: "token-create"})
+	created, status, err := client.Control(t.Context(), idp.MintIDToken("admin", time.Now().Add(time.Hour)), facts.ControlRequest{Action: "token-create", Subject: "provisioner", LifetimeSeconds: 3600})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	_, err = hosts.GetHost(t.Context(), created.Token.ID)
-	require.ErrorIs(t, err, inventory.ErrNotFound)
+	id := inventory.NewID()
 	proposal := facts.InventoryInput{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	enrolled, status, err := client.Control(t.Context(), "", facts.ControlRequest{Action: "enroll", Token: created.Token.ID, Host: &proposal})
+	enrolled, status, err := client.Control(t.Context(), created.Token.Token, facts.ControlRequest{Action: "create", ID: id, Host: &proposal})
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	require.Equal(t, created.Token.ID, enrolled.Host.ID)
+	require.Equal(t, id, enrolled.Host.ID)
 	require.Equal(t, "active", enrolled.Host.Status)
 	events, _, err := hosts.Audit(t.Context(), "", 0)
 	require.NoError(t, err)
-	require.Equal(t, "host", events[len(events)-1].Actor)
+	require.Equal(t, "provisioner", events[len(events)-1].Actor)
 }

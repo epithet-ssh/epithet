@@ -20,9 +20,9 @@ func TestControlResponseWireShape(t *testing.T) {
 			Host:      facts.InventoryInput{Names: []string{"*.example"}, Labels: map[string]string{"k": "v"}, Accounts: []string{}, PrincipalMode: "account-name", Realm: "d"},
 			CreatedAt: ts, UpdatedAt: ts,
 		},
-		Hosts: []facts.HostRecord{{ID: "h2", Version: "backend-1", Status: "pending", Host: facts.InventoryInput{Names: []string{"c"}, PrincipalMode: "account-name"}, CreatedAt: ts, UpdatedAt: ts}},
-		Token: &facts.EnrollmentToken{ID: "t1", ExpiresAt: ts, UsedBy: "h1", Revoked: true},
-		Audit: &facts.AuditPage[facts.HostAuditEvent]{Events: []facts.HostAuditEvent{{At: ts, Actor: "admin", Action: "approve", Resource: "h1"}}, Next: "inventory-next"},
+		Hosts: []facts.HostRecord{{ID: "h2", Version: "backend-1", Status: "active", Host: facts.InventoryInput{Names: []string{"c"}, PrincipalMode: "account-name"}, CreatedAt: ts, UpdatedAt: ts}},
+		Token: &facts.EnrollmentToken{Token: "signed.jwt", ExpiresAt: ts},
+		Audit: &facts.AuditPage[facts.HostAuditEvent]{Events: []facts.HostAuditEvent{{At: ts, Actor: "admin", Action: "edit", Resource: "h1"}}, Next: "inventory-next"},
 		Error: "boom",
 	}
 	out, err := json.Marshal(resp)
@@ -30,18 +30,18 @@ func TestControlResponseWireShape(t *testing.T) {
 	require.Equal(t, `{`+
 		`"directory-audit":{"events":[{"time":"2026-09-18T12:00:00Z","actor":"admin","action":"rebind","id":"g1","alias":"ops","previous-id":"g0"}],"next":"directory-next"},`+
 		`"host":{"id":"h1","version":"backend-3","status":"active","host":{"names":["*.example"],"labels":{"k":"v"},"accounts":[],"principal-mode":"account-name","realm":"d"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"},`+
-		`"hosts":[{"id":"h2","version":"backend-1","status":"pending","host":{"names":["c"],"labels":null,"accounts":null,"principal-mode":"account-name"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"}],`+
-		`"token":{"id":"t1","expires-at":"2026-09-18T12:00:00Z","used-by":"h1","revoked":true},`+
-		`"audit":{"events":[{"at":"2026-09-18T12:00:00Z","actor":"admin","action":"approve","resource":"h1"}],"next":"inventory-next"},`+
+		`"hosts":[{"id":"h2","version":"backend-1","status":"active","host":{"names":["c"],"labels":null,"accounts":null,"principal-mode":"account-name"},"created-at":"2026-09-18T12:00:00Z","updated-at":"2026-09-18T12:00:00Z"}],`+
+		`"token":{"token":"signed.jwt","expires-at":"2026-09-18T12:00:00Z"},`+
+		`"audit":{"events":[{"at":"2026-09-18T12:00:00Z","actor":"admin","action":"edit","resource":"h1"}],"next":"inventory-next"},`+
 		`"error":"boom"}`, string(out))
 }
 
 func TestControlRequestWireShape(t *testing.T) {
 	req := facts.ControlRequest{AuditCursor: "backend-cursor", AuditLimit: 10, Action: "edit", ID: "h1", ExpectedVersion: "backend-3",
-		Host: &facts.InventoryInput{Names: []string{"a"}, Accounts: nil, PrincipalMode: "account-name"}, Token: "tok", LifetimeSeconds: 60}
+		Host: &facts.InventoryInput{Names: []string{"a"}, Accounts: nil, PrincipalMode: "account-name"}, Subject: "provisioner", LifetimeSeconds: 60}
 	out, err := json.Marshal(req)
 	require.NoError(t, err)
-	require.Equal(t, `{"audit-cursor":"backend-cursor","audit-limit":10,"action":"edit","id":"h1","expected-version":"backend-3","host":{"names":["a"],"labels":null,"accounts":null,"principal-mode":"account-name"},"token":"tok","lifetime-seconds":60}`, string(out))
+	require.Equal(t, `{"audit-cursor":"backend-cursor","audit-limit":10,"action":"edit","id":"h1","expected-version":"backend-3","host":{"names":["a"],"labels":null,"accounts":null,"principal-mode":"account-name"},"subject":"provisioner","lifetime-seconds":60}`, string(out))
 }
 
 func TestActorSnapshotWireShape(t *testing.T) {

@@ -27,8 +27,7 @@ type ControlCLI struct {
 	InventoryTokenFile   string            `help:"Inventory automation bearer token file" name:"inventory-token-file"`
 	SCIMToken            string            `help:"Optional SCIM provisioning bearer token" name:"scim-token"`
 	SCIMTokenFile        string            `help:"SCIM provisioning bearer token file" name:"scim-token-file"`
-	EnrollmentToken      string            `help:"Bearer token permitting pending host enrollment (disabled when unset)" name:"enrollment-token"`
-	EnrollmentTokenFile  string            `help:"Pending host enrollment bearer token file" name:"enrollment-token-file"`
+	DeniedSubjects       []string          `help:"Revoked token subjects (exact, case-sensitive; retain entries)" name:"denied-subject"`
 }
 
 func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
@@ -44,15 +43,11 @@ func (c *ControlCLI) Run(logger *slog.Logger, tlsCfg tlsconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	enrollmentToken, err := readBearerToken(c.EnrollmentToken, c.EnrollmentTokenFile, "enrollment")
-	if err != nil {
-		return err
-	}
 	_, validator, err := oidc.PrepareService(oidc.ValidatorConfig{Issuer: c.OIDC.Issuer, ClientID: c.OIDC.ClientID, IdentityMode: c.OIDC.IdentityMode, UserIDClaim: c.OIDC.UserIDClaim, TLSConfig: tlsCfg})
 	if err != nil {
 		return err
 	}
-	handler, err := control.New(control.Config{Key: sshcert.RawPrivateKey(key), DirectoryURL: c.Directory, DirectoryBackendURL: c.DirectoryBackend, InventoryBackendURL: c.InventoryBackend, Validator: validator, DirectoryAdmins: control.Admins{Users: c.DirectoryAdminUsers, Groups: c.DirectoryAdminGroups}, InventoryAdmins: control.Admins{Users: c.InventoryAdminUsers, Groups: c.InventoryAdminGroups}, SCIMToken: token, InventoryToken: inventoryToken, EnrollmentToken: enrollmentToken, TLS: tlsCfg})
+	handler, err := control.New(control.Config{Key: sshcert.RawPrivateKey(key), DirectoryURL: c.Directory, DirectoryBackendURL: c.DirectoryBackend, InventoryBackendURL: c.InventoryBackend, Validator: validator, DirectoryAdmins: control.Admins{Users: c.DirectoryAdminUsers, Groups: c.DirectoryAdminGroups}, InventoryAdmins: control.Admins{Users: c.InventoryAdminUsers, Groups: c.InventoryAdminGroups}, SCIMToken: token, InventoryToken: inventoryToken, DeniedSubjects: c.DeniedSubjects, TLS: tlsCfg})
 	if err != nil {
 		return err
 	}

@@ -8,7 +8,9 @@
 
 [ADR 0003](0003-control-issued-enrollment-tokens.md) supersedes the pending-enrollment bearer and
 inventory-owned single-use credential design below with control-issued reusable
-tokens. That decision is accepted but not yet implemented. This ADR retains the
+tokens. Enrollment and administrator creation now share one POST with
+client-generated IDs, identical-retry semantics, and support for exact and wildcard names.
+That replacement is implemented. This ADR retains the
 historical behavior; provider boundaries and atomic creation-only writes remain
 applicable.
 

@@ -3,11 +3,7 @@
 package serviceauth
 
 import (
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -17,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/epithet-ssh/epithet/internal/jwtkey"
 	"github.com/epithet-ssh/epithet/pkg/sshcert"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -71,28 +68,15 @@ func NewSignerFor(privateKey sshcert.RawPrivateKey, audience string) (*Signer, e
 	if audience == "" {
 		return nil, fmt.Errorf("service audience is required")
 	}
-	sshSigner, err := ssh.ParsePrivateKey([]byte(privateKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse SSH private key: %w", err)
-	}
-	fingerprint := ssh.FingerprintSHA256(sshSigner.PublicKey())
-
-	rawKey, err := ssh.ParseRawPrivateKey([]byte(privateKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse raw private key: %w", err)
-	}
-
-	signingKey, alg, err := signParamsFor(rawKey)
+	signer, key, err := jwtkey.NewSigner(privateKey)
 	if err != nil {
 		return nil, err
 	}
-
-	joseSigner, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: signingKey}, nil)
+	sshKey, err := ssh.NewPublicKey(key.Public)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create JWT signer: %w", err)
+		return nil, err
 	}
-
-	return &Signer{signer: joseSigner, fingerprint: fingerprint, audience: audience}, nil
+	return &Signer{signer: signer, fingerprint: ssh.FingerprintSHA256(sshKey), audience: audience}, nil
 }
 
 // Authorize mints a request-bound JWT and sets the Authorization header.
@@ -101,8 +85,8 @@ func (s *Signer) Authorize(req *http.Request, body []byte) error {
 	return s.authorizeAt(req, body, time.Now())
 }
 
-// AuthorizeActor binds an authenticated human actor to this backend request.
-// An empty actor is used for service operations such as enrollment.
+// AuthorizeActor binds the authenticated actor to this backend request.
+// Control supplies an administrator identity or a verified enrollment subject.
 func (s *Signer) AuthorizeActor(req *http.Request, body []byte, actor string) error {
 	return s.authorizeActorAt(req, body, actor, time.Now())
 }
@@ -145,10 +129,7 @@ func (s *Signer) authorizeActorAt(req *http.Request, body []byte, actor string, 
 
 // Verifier checks request-bound JWTs against the CA's SSH public key.
 type Verifier struct {
-	// key is a concrete crypto public key (ed25519.PublicKey, *rsa.PublicKey,
-	// or *ecdsa.PublicKey); go-jose type-switches on it, so `any` is fine.
-	key      any
-	alg      jose.SignatureAlgorithm
+	key      jwtkey.VerificationKey
 	audience string
 }
 
@@ -165,14 +146,16 @@ func NewVerifierFor(publicKey sshcert.RawPublicKey, audience string) (*Verifier,
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse SSH public key: %w", err)
 	}
-	cryptoKey := pubKey.(ssh.CryptoPublicKey).CryptoPublicKey()
-
-	verifyKey, alg, err := verifyParamsFor(cryptoKey)
+	cryptoKey, ok := pubKey.(ssh.CryptoPublicKey)
+	if !ok {
+		return nil, fmt.Errorf("unsupported SSH public key type: %s", pubKey.Type())
+	}
+	key, err := jwtkey.ForPublicKey(cryptoKey.CryptoPublicKey())
 	if err != nil {
 		return nil, err
 	}
 
-	return &Verifier{key: verifyKey, alg: alg, audience: audience}, nil
+	return &Verifier{key: key, audience: audience}, nil
 }
 
 // Verify checks the request's Authorization header JWT: signature, aud,
@@ -192,15 +175,8 @@ func (v *Verifier) VerifyActor(req *http.Request, body []byte) (string, error) {
 		return "", fmt.Errorf("missing or malformed Authorization header")
 	}
 
-	// Restrict parsing to the single expected algorithm so a token signed
-	// with a weaker or unexpected alg can't be smuggled through.
-	token, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{v.alg})
-	if err != nil {
-		return "", fmt.Errorf("failed to parse request token: %w", err)
-	}
-
 	var claims requestClaims
-	if err := token.Claims(v.key, &claims); err != nil {
+	if err := v.key.Verify(raw, &claims); err != nil {
 		return "", fmt.Errorf("failed to verify request token: %w", err)
 	}
 
@@ -266,54 +242,4 @@ func requestTarget(primary, secondary, path string) string {
 		path = "/"
 	}
 	return host + path
-}
-
-// signParamsFor maps a raw SSH private key to the key value and JWS
-// algorithm go-jose needs to sign with it. This is the one part of
-// httpsig's key-type switch that survives the RFC 9421 removal: go-jose
-// still needs to know which alg matches a key's type/curve.
-func signParamsFor(rawKey any) (signingKey any, alg jose.SignatureAlgorithm, err error) {
-	switch key := rawKey.(type) {
-	case *ed25519.PrivateKey:
-		// go-jose wants the value type, ssh.ParseRawPrivateKey gives a pointer.
-		return *key, jose.EdDSA, nil
-	case ed25519.PrivateKey:
-		return key, jose.EdDSA, nil
-	case *rsa.PrivateKey:
-		return key, jose.PS256, nil
-	case *ecdsa.PrivateKey:
-		switch key.Curve {
-		case elliptic.P256():
-			return key, jose.ES256, nil
-		case elliptic.P384():
-			return key, jose.ES384, nil
-		default:
-			return nil, "", fmt.Errorf("unsupported ECDSA curve: %v", key.Curve.Params().Name)
-		}
-	default:
-		return nil, "", fmt.Errorf("unsupported key type for signing: %T", rawKey)
-	}
-}
-
-// verifyParamsFor maps a crypto public key (as returned by
-// ssh.CryptoPublicKey().CryptoPublicKey()) to the key value and JWS
-// algorithm used to verify it.
-func verifyParamsFor(cryptoKey any) (verifyKey any, alg jose.SignatureAlgorithm, err error) {
-	switch key := cryptoKey.(type) {
-	case ed25519.PublicKey:
-		return key, jose.EdDSA, nil
-	case *rsa.PublicKey:
-		return key, jose.PS256, nil
-	case *ecdsa.PublicKey:
-		switch key.Curve {
-		case elliptic.P256():
-			return key, jose.ES256, nil
-		case elliptic.P384():
-			return key, jose.ES384, nil
-		default:
-			return nil, "", fmt.Errorf("unsupported ECDSA curve: %v", key.Curve.Params().Name)
-		}
-	default:
-		return nil, "", fmt.Errorf("unsupported key type for verification: %T", cryptoKey)
-	}
 }

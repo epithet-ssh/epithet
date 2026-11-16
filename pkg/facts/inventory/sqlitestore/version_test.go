@@ -14,7 +14,7 @@ func TestOptionalVersionPreconditions(t *testing.T) {
 	defer store.Close()
 	require.True(t, store.SupportsVersioning())
 	id := inventory.NewID()
-	h, err := store.UpsertHost(t.Context(), inventory.Host{ID: id, Version: "caller-cannot-choose", Names: []string{"host.example"}, Status: inventory.StatusPending, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "create", id))
+	h, err := store.UpsertHost(t.Context(), inventory.Host{ID: id, Version: "caller-cannot-choose", Names: []string{"host.example"}, Status: inventory.StatusActive, PrincipalMode: inventory.AccountNamePrincipals}, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "create", id))
 	require.NoError(t, err)
 	require.NotEmpty(t, h.Version)
 	require.NotEqual(t, "caller-cannot-choose", h.Version)

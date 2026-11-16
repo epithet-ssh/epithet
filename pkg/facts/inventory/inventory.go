@@ -46,9 +46,7 @@ func (m PrincipalMode) Effective() PrincipalMode {
 
 // Host enrollment statuses. Status remains a string in storage and API records.
 const (
-	StatusPending = "pending"
-	StatusActive  = "active"
-	StatusDenied  = "denied"
+	StatusActive = "active"
 )
 
 // Host contains inventory names, authorization facts, and enrollment metadata.

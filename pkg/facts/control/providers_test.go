@@ -32,7 +32,6 @@ func TestAuditCursorsAreForwardedUnchanged(t *testing.T) {
 		switch {
 		case r.Method == "OPTIONS":
 			w.Header().Add("Link-Template", `"/records{/id}"; rel="`+facts.InventoryRecordsRelation+`"`)
-			w.Header().Add("Link-Template", `"/tokens{?token}"; rel="`+facts.InventoryTokensRelation+`"`)
 			w.Header().Add("Link-Template", `"/audit{?cursor,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
 			w.WriteHeader(204)
 		case r.URL.Path == "/audit":
@@ -111,17 +110,17 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, directoryEvents.Events)
 	proposal := facts.InventoryInput{Names: []string{"host"}, Accounts: []string{"root"}, PrincipalMode: "account-name"}
-	host, err := control.enroll(t.Context(), inventory.NewID(), proposal, "")
+	host, err := control.createHost(t.Context(), authorization{Actor: "provisioner"}, inventory.NewID(), proposal)
 	require.NoError(t, err)
-	require.Equal(t, "pending", host.Status)
+	require.Equal(t, "active", host.Status)
 	resolved, err := data.Host(t.Context(), "host")
 	require.NoError(t, err)
-	require.Nil(t, resolved)
-	_, err = control.approveHost(t.Context(), auth, host.ID, "stale-version")
+	require.NotNil(t, resolved)
+	_, err = control.editHost(t.Context(), auth, host.ID, "stale-version", proposal)
 	var rejected *facts.ServiceError
 	require.ErrorAs(t, err, &rejected)
 	require.Equal(t, http.StatusPreconditionFailed, rejected.Status)
-	host, err = control.approveHost(t.Context(), auth, host.ID, host.Version)
+	host, err = control.editHost(t.Context(), auth, host.ID, host.Version, proposal)
 	require.NoError(t, err)
 	resolved, err = data.Host(t.Context(), "host")
 	require.NoError(t, err)
@@ -133,35 +132,28 @@ func TestClientPlanesRouteAndPreserveAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Host.Accounts)
 	require.Empty(t, got.Host.Accounts)
-	records, err := control.hosts(t.Context(), auth, "", 0, false)
+	records, err := control.hosts(t.Context(), auth, "", 0)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
-	pattern, err := control.addHost(t.Context(), auth, facts.InventoryInput{Names: []string{"ci-*"}, Accounts: []string{"root"}, PrincipalMode: "account-name"})
+	pattern, err := control.createHost(t.Context(), auth, inventory.NewID(), facts.InventoryInput{Names: []string{"ci-*"}, Accounts: []string{"root"}, PrincipalMode: "account-name"})
 	require.NoError(t, err)
 	require.Equal(t, "active", pattern.Status)
-	token, err := control.createToken(t.Context(), auth, 60)
-	require.NoError(t, err)
-	require.NoError(t, control.revokeToken(t.Context(), auth, token.ID))
 	events, err := control.hostAudit(t.Context(), auth, "", 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, events.Events)
 	for _, event := range events.Events {
-		if event.Action != "enroll" {
+		if event.Action == "create" && event.Resource == host.ID {
+			require.Equal(t, "provisioner", event.Actor)
+		} else {
 			require.Equal(t, "admin", event.Actor)
 		}
 	}
 	require.NoError(t, control.removeHost(t.Context(), auth, host.ID, host.Version))
 	_, err = control.host(t.Context(), auth, host.ID)
 	require.ErrorIs(t, err, facts.ErrNotFound)
-	proposal.Names = []string{"denied"}
-	pending, err := control.enroll(t.Context(), inventory.NewID(), proposal, "")
-	require.NoError(t, err)
-	denied, err := control.denyHost(t.Context(), auth, pending.ID, pending.Version)
-	require.NoError(t, err)
-	require.Equal(t, "denied", denied.Status)
 	wrong, err := newProviderTestServer(dir.URL, inv.URL+"/lookup", readerKey, cfg)
 	require.NoError(t, err)
-	_, err = wrong.createToken(t.Context(), auth, 60)
+	_, err = wrong.host(t.Context(), auth, host.ID)
 	require.ErrorIs(t, err, facts.ErrNotFound)
 }
 
@@ -194,7 +186,6 @@ func TestProviderOperationsRejectMalformedAndOversizedResults(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "OPTIONS" {
 				w.Header().Add("Link-Template", `"/records{/id}"; rel="`+facts.InventoryRecordsRelation+`"`)
-				w.Header().Add("Link-Template", `"/tokens{?token}"; rel="`+facts.InventoryTokensRelation+`"`)
 				w.Header().Add("Link-Template", `"/audit{?cursor,limit}"; rel="`+facts.InventoryAuditRelation+`"`)
 				w.WriteHeader(204)
 				return

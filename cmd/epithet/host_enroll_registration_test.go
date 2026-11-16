@@ -25,15 +25,15 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 		realm, editedRealm                   string
 		rejected, localFailure, lostResponse bool
 	}{
-		{name: "pending", status: "pending"},
-		{name: "token admission", token: "one-use-token", status: "active"},
-		{name: "rejection then rerun", status: "pending", rejected: true},
-		{name: "lost response then rerun", status: "pending", lostResponse: true},
-		{name: "lost preapproval response then rerun", token: "one-use-token", status: "active", lostResponse: true},
+		{name: "token file", status: "active"},
+		{name: "token admission", token: "signed.jwt", status: "active"},
+		{name: "rejection then rerun", status: "active", rejected: true},
+		{name: "lost response then rerun", status: "active", lostResponse: true},
+		{name: "lost token response then rerun", token: "signed.jwt", status: "active", lostResponse: true},
 		{name: "local failure", localFailure: true},
-		{name: "named realm flag", status: "pending", realm: "fleet"},
-		{name: "edited realm", status: "pending", editedRealm: "fleet"},
-		{name: "edited flag realm", status: "pending", realm: "initial", editedRealm: "fleet"},
+		{name: "named realm flag", status: "active", realm: "fleet"},
+		{name: "edited realm", status: "active", editedRealm: "fleet"},
+		{name: "edited flag realm", status: "active", realm: "initial", editedRealm: "fleet"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, local, env, runner, main, fragment := newSSHDConfigurationTest(t)
@@ -41,8 +41,8 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			cmd.Names = []string{"one.example"}
 			cmd.Token = tc.token
 			if tc.token == "" {
-				cmd.EnrollmentTokenFile = filepath.Join(t.TempDir(), "enrollment-token")
-				require.NoError(t, os.WriteFile(cmd.EnrollmentTokenFile, []byte("shared-enrollment-secret\n"), 0600))
+				cmd.TokenFile = filepath.Join(t.TempDir(), "enrollment-token")
+				require.NoError(t, os.WriteFile(cmd.TokenFile, []byte("signed.jwt\n"), 0600))
 			}
 			cmd.PrincipalRealm = tc.realm
 			cmd.sshdEnv = env
@@ -66,6 +66,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			// The first review sees no installed state. Capture the actual proposal
 			// so the test can compare its in-memory realm with the installed one.
 			t.Setenv("EDITOR", `sh -c 'if [ ! -e "$REVIEW" ]; then test ! -e "$REALM" && test ! -e "$CA_KEY" && test ! -e "$FRAGMENT" || exit 9; fi; if [ -n "$EDIT_REALM" ]; then sed "/^realm:/d" "$1" > "$1.edit"; printf "realm: %s\n" "$EDIT_REALM" >> "$1.edit"; mv "$1.edit" "$1"; fi; cp "$1" "$REVIEW"' editor`)
+			credential := "signed.jwt"
 			pub := newTestCAPublicKey(t)
 			requests := make(chan facts.ControlRequest, 2)
 			mux := http.NewServeMux()
@@ -78,11 +79,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 					json.NewEncoder(w).Encode(facts.Capabilities{Version: 1, Capabilities: []string{"enroll", "admin"}})
 					return
 				}
-				if cmd.Token == "" {
-					require.Equal(t, "Bearer shared-enrollment-secret", r.Header.Get("Authorization"))
-				} else {
-					require.Empty(t, r.Header.Get("Authorization"))
-				}
+				require.Equal(t, "Bearer "+credential, r.Header.Get("Authorization"))
 				var req facts.ControlRequest
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					t.Error(err)
@@ -99,7 +96,8 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 					json.NewEncoder(w).Encode(facts.ControlResponse{Error: "rejected"})
 					return
 				}
-				require.Equal(t, "PUT", r.Method)
+				require.Equal(t, "POST", r.Method)
+				require.Equal(t, "create", req.Action)
 				require.Equal(t, "/manage/"+req.ID, r.URL.Path)
 				id, err := os.ReadFile(filepath.Join(filepath.Dir(cmd.RealmFile), "id"))
 				require.NoError(t, err)
@@ -144,13 +142,18 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			} else if tc.realm != "" {
 				require.Equal(t, tc.realm, string(reviewed.Realm))
 			}
-			require.Equal(t, tc.token, req.Token)
+			require.NotEqual(t, "signed.jwt", req.ID)
+			require.Len(t, req.ID, 64)
 			requireFileContents(t, cmd.CAPubkeyFile, string(pub))
 			// A rerun reviews and submits anew, reusing local identity and skipping
 			// reload when sshd is already configured. The same host ID is reused.
 			tc.rejected = false
 			tc.lostResponse = false
 			cmd.PrincipalRealm = ""
+			// Replacing the credential must preserve the local host identity.
+			credential = "replacement.jwt"
+			cmd.Token = credential
+			cmd.TokenFile = ""
 			second, err := cmd.enroll(t.Context(), nil, tlsconfig.Config{Insecure: true})
 			require.NoError(t, err)
 			require.Equal(t, tc.status, second.Status)
@@ -161,7 +164,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 			require.Equal(t, reviewed.Realm, second.Realm)
 			resubmitted := <-requests
 			require.Equal(t, controlHost(reviewed), *resubmitted.Host)
-			require.Equal(t, req.Token, resubmitted.Token)
+
 			require.Equal(t, req.ID, resubmitted.ID)
 			require.Equal(t, req.ID, second.RecordID)
 			require.NoFileExists(t, filepath.Join(filepath.Dir(cmd.RealmFile), "enrollment.key"))
@@ -172,7 +175,7 @@ func TestManagedEnrollmentLifecycle(t *testing.T) {
 func TestEnrollmentCancelLeavesPersistentStateUnchanged(t *testing.T) {
 	t.Setenv("EDITOR", `sh -c ': > "$1"' editor`)
 	cmd, enrollment, env, runner, main, fragment := newSSHDConfigurationTest(t)
-	cmd.EnrollmentToken = "shared-enrollment-secret"
+	cmd.Token = "signed.jwt"
 	pub := newTestCAPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/manage" {

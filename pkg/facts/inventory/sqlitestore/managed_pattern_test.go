@@ -31,15 +31,13 @@ func TestManagedPatternResolutionAndLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, h)
 
-	// Pending exact records leave the fleet rule in effect.
+	// Enrolled exact records take precedence over fleet rules.
 	id2 := inventory.NewID()
-	exact, err := inventory.Enroll(t.Context(), m, id2, proposal("runner-one.example"), "", inventory.NewAuditEvent("host", "enroll", id2))
+	exact, err := inventory.CreateHost(t.Context(), m, id2, proposal("runner-one.example"), inventory.NewAuditEvent("host", "enroll", id2))
 	require.NoError(t, err)
 	h, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
-	require.Equal(t, []string{"root"}, h.Accounts)
-	exact, err = m.Change(t.Context(), "admin", "approve", exact.ID, exact.Version, nil)
-	require.NoError(t, err)
+	require.Equal(t, []string{"alice"}, h.Accounts)
 	h, err = m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alice"}, h.Accounts)
@@ -91,9 +89,7 @@ func TestManagedAmbiguousPatternsFailUntilDisambiguated(t *testing.T) {
 	require.ErrorIs(t, err, inventory.ErrConflict)
 	// An exact record resolves the name even when patterns overlap.
 	id5 := inventory.NewID()
-	exact, err := inventory.Enroll(t.Context(), m, id5, proposal("runner-one.example"), "", inventory.NewAuditEvent("host", "enroll", id5))
-	require.NoError(t, err)
-	exact, err = m.Change(t.Context(), "admin", "approve", exact.ID, exact.Version, nil)
+	exact, err := inventory.CreateHost(t.Context(), m, id5, proposal("runner-one.example"), inventory.NewAuditEvent("host", "enroll", id5))
 	require.NoError(t, err)
 	h, err := m.LookupHost(t.Context(), "runner-one.example")
 	require.NoError(t, err)
@@ -129,7 +125,7 @@ func TestManagedPatternValidationAndCreationRollback(t *testing.T) {
 	input5.ID = id8
 	_, err = m.UpsertHost(t.Context(), input5, inventory.WriteConditions{}, inventory.NewAuditEvent("admin", "add", id8))
 	require.ErrorIs(t, err, inventory.ErrStorage)
-	records, err := m.ListHosts(t.Context(), "", 0, false)
+	records, err := m.ListHosts(t.Context(), "", 0)
 	require.NoError(t, err)
 	require.Empty(t, records)
 	events, _, err := m.Audit(t.Context(), "", 0)
